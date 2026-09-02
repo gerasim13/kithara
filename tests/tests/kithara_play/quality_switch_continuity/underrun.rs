@@ -103,8 +103,12 @@ async fn prepare_tiny_ring_player(
     let abr = audio
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
-    let mut player = OfflinePlayer::new(SAMPLE_RATE);
-    player.load_and_fadein(resource_from_reader(audio), label);
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource_from_reader(audio));
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;

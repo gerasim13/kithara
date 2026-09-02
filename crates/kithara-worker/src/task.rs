@@ -58,7 +58,7 @@ pub enum TickResult {
 }
 
 /// Domain task executed in short quanta by one dispatcher thread.
-pub trait Task: Send + 'static {
+pub trait Task: 'static {
     /// Release domain state after cancellation or panic.
     fn on_cancel(&mut self) {}
 

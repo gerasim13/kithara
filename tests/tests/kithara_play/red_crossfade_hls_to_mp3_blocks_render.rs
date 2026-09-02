@@ -1,10 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     audio::AudioConfig,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
+    host::OfflineSessionConfig,
     platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, Resource},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -25,7 +28,7 @@ use crate::{
 struct Consts;
 impl Consts {
     const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
-    const BLOCK: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK: usize = 512;
     const SR: u32 = Shared::SAMPLE_RATE;
 }
 
@@ -71,7 +74,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     let hls_url = hls_server.url("/master.m3u8");
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let mut player = OfflinePlayer::new(Consts::SR);
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools.clone())
+            .sample_rate(NonZeroU32::new(Consts::SR).expect("sample rate is non-zero"))
+            .build(),
+    );
 
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
@@ -122,7 +129,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        player.load_and_fadein(hls, &format!("red_hls_{iter}"));
+        player.load_and_fadein(hls);
         let _hls_warmup = render_offline_window(
             &mut player,
             40,
@@ -137,7 +144,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             .expect("MP3 preload")
             .expect("MP3 preload result");
         let before_fade = Instant::now();
-        player.load_and_fadein(mp3, &format!("red_mp3_{iter}"));
+        player.load_and_fadein(mp3);
         let fade_stats = render_offline_window(
             &mut player,
             60,

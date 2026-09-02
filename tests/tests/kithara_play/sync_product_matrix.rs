@@ -7,10 +7,8 @@ use kithara::{
     encode::EncodeConfig,
     events::TrackStatus,
     hls::AbrMode,
-    host::{HostConfig, HostOwned, OfflineHost, testing::HostProbe},
-    output::{
-        OfflineRenderConfig, OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError,
-    },
+    host::{Host, HostConfig, HostOwned, OfflineSessionConfig, SessionConfig, testing::HostProbe},
+    output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
         sync::Arc,
@@ -21,6 +19,7 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     record::{RecordingConfig, RecordingCore, RecordingSink},
+    signal::AudioSpec,
     warp::{
         AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
         SyncGroup, SyncIntent, SyncOperation,
@@ -229,7 +228,8 @@ pub(super) struct ProductHarness {
     pub(super) decks: Vec<HostOwned<Queue<TestPools>>>,
     pub(super) failures: Vec<String>,
     block_frames: usize,
-    host: OfflineHost<TestPools>,
+    host: Host<TestPools>,
+    spec: AudioSpec,
     output_frames: u64,
     paced: bool,
 }
@@ -294,18 +294,19 @@ fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
         .build()
 }
 
-fn offline_render(
-    sample_rate: NonZeroU32,
-    frames: u64,
-) -> (OfflineHost<TestPools>, OfflineRenderRequest) {
-    let host = OfflineHost::new(
-        HostConfig::builder().sample_rate(sample_rate).build(),
-        OfflineRenderConfig::builder().build(),
-        pools(),
+fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
+    let spec = AudioSpec::new(CHANNELS, sample_rate);
+    let session = OfflineSessionConfig::builder(pools())
+        .sample_rate(sample_rate)
+        .build();
+    let host = Host::new(
+        HostConfig::builder()
+            .session(SessionConfig::offline(session))
+            .build(),
     )
     .unwrap_or_else(|error| panic!("create offline Host: {error}"));
     let request = OfflineRenderRequest::builder()
-        .spec(host.spec())
+        .spec(spec)
         .frames(0..frames)
         .build();
     (host, request)
@@ -341,12 +342,15 @@ impl ProductHarness {
             u32::try_from(block_frames).expect("offline render block count fits u32"),
         )
         .expect("offline render block count is non-zero");
-        let mut host = OfflineHost::new(
-            HostConfig::builder().sample_rate(sample_rate).build(),
-            OfflineRenderConfig::builder()
-                .block_frames(render_block_frames)
+        let spec = AudioSpec::new(CHANNELS, sample_rate);
+        let session = OfflineSessionConfig::builder(pools)
+            .sample_rate(sample_rate)
+            .max_block_frames(render_block_frames)
+            .build();
+        let mut host = Host::new(
+            HostConfig::builder()
+                .session(SessionConfig::offline(session))
                 .build(),
-            pools,
         )
         .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
         let mut decks = Vec::with_capacity(sources.len());
@@ -385,6 +389,7 @@ impl ProductHarness {
             host,
             output_frames: 0,
             paced,
+            spec,
         };
         harness.wait_loaded(case, &ids).await;
         for (index, (deck, id)) in harness.decks.iter().zip(ids).enumerate() {
@@ -435,12 +440,12 @@ impl ProductHarness {
     pub(super) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
         let started = Instant::now();
         self.tick_all(case);
-        let start = self.host.position();
+        let start = self.output_frames;
         let end = start
             .checked_add(u64::try_from(frames).expect("render frame count fits u64"))
             .expect("offline render timeline fits u64");
         let request = OfflineRenderRequest::builder()
-            .spec(self.host.spec())
+            .spec(self.spec)
             .frames(start..end)
             .build();
         let cancel = CancelScope::new(None);
@@ -454,7 +459,7 @@ impl ProductHarness {
             u64::try_from(frames).expect("frame count fits u64")
         );
         self.tick_all(case);
-        self.output_frames = self.host.position();
+        self.output_frames = end;
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())

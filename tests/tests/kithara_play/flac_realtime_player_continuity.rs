@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -157,8 +160,12 @@ async fn run_case(
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
     let abr = resource.abr_handle();
 
-    let mut player = OfflinePlayer::new(out_rate);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools())
+            .sample_rate(NonZeroU32::new(out_rate).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let chan = CHANNELS as usize;
     let wall_budget_ms = num_traits::cast::<f64, u64>(PLAY_SECS * 1000.0 / 4.0).unwrap_or(u64::MAX)

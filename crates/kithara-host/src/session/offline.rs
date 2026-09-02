@@ -1,263 +1,262 @@
 use std::num::NonZeroU32;
 
-use firewheel::{
-    StreamInfo,
-    backend::{AudioBackend, BackendProcessInfo},
-    node::StreamStatus,
-    processor::FirewheelProcessor,
-};
-use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
-    sync::{Arc, Mutex, mpsc},
-    thread::spawn_named,
+    sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 use kithara_play::{GroupState, PlayError, player::PlayerMember};
+use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
 use tracing::warn;
 
 use super::{
     dispatch::run_host_cmd,
-    protocol::{
-        Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
-        SessionDispatcher,
-    },
+    protocol::{HostCmd, HostCmdMsg, HostReply},
     state::{RootView, SessionState, ensure_ctx},
 };
 
+mod backend;
+mod client;
+
+use backend::{BackendConfig, OfflineBackend};
+pub(crate) use client::OfflineSessionClient;
+
 const CHANNELS: usize = 2;
-
-#[derive(Clone, Copy)]
-struct BackendConfig {
-    block_frames: NonZeroU32,
-    sample_rate: NonZeroU32,
-}
-
-impl Default for BackendConfig {
-    fn default() -> Self {
-        Self {
-            block_frames: NonZeroU32::new(512).unwrap_or(NonZeroU32::MIN),
-            sample_rate: NonZeroU32::new(44_100).unwrap_or(NonZeroU32::MIN),
-        }
-    }
-}
-
-struct OfflineBackend {
-    frames_rendered: u64,
-    processor: Option<FirewheelProcessor<Self>>,
-    sample_rate: NonZeroU32,
-}
-
-impl OfflineBackend {
-    fn render(&mut self, frames: usize, output: &mut [f32]) -> Result<(), OfflineSessionError> {
-        let processor = self
-            .processor
-            .as_mut()
-            .ok_or(OfflineSessionError::ProcessorUnavailable)?;
-        let rate = u64::from(self.sample_rate.get());
-        let whole_seconds = self.frames_rendered / rate;
-        let remainder = u32::try_from(self.frames_rendered % rate)
-            .map_err(|_| OfflineSessionError::TimelineOverflow)?;
-        let process_info = BackendProcessInfo {
-            frames,
-            num_in_channels: 0,
-            num_out_channels: CHANNELS,
-            process_timestamp: Instant::now(),
-            duration_since_stream_start: Duration::from_secs(whole_seconds)
-                + Duration::from_secs_f64(f64::from(remainder) / f64::from(self.sample_rate.get())),
-            input_stream_status: StreamStatus::empty(),
-            output_stream_status: StreamStatus::empty(),
-            dropped_frames: 0,
-        };
-        processor.process_interleaved(&[], output, process_info);
-        self.frames_rendered = self
-            .frames_rendered
-            .checked_add(u64::try_from(frames).map_err(|_| OfflineSessionError::TimelineOverflow)?)
-            .ok_or(OfflineSessionError::TimelineOverflow)?;
-        Ok(())
-    }
-}
-
-impl AudioBackend for OfflineBackend {
-    type Config = BackendConfig;
-    type Enumerator = ();
-    type Instant = Instant;
-    type StartStreamError = OfflineSessionError;
-    type StreamError = OfflineSessionError;
-
-    fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
-        None
-    }
-
-    fn enumerator() -> Self::Enumerator {}
-
-    fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-        Ok(())
-    }
-
-    fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
-        self.processor = Some(processor);
-    }
-
-    fn start_stream(config: Self::Config) -> Result<(Self, StreamInfo), Self::StartStreamError> {
-        let stream = StreamInfo {
-            sample_rate: config.sample_rate,
-            sample_rate_recip: 1.0 / f64::from(config.sample_rate.get()),
-            prev_sample_rate: config.sample_rate,
-            max_block_frames: config.block_frames,
-            num_stream_in_channels: 0,
-            num_stream_out_channels: u32::try_from(CHANNELS)
-                .map_err(|_| OfflineSessionError::ChannelCountOverflow)?,
-            input_to_output_latency_seconds: 0.0,
-            declick_frames: config.block_frames,
-            output_device_id: "offline".to_owned(),
-            input_device_id: None,
-        };
-        Ok((
-            Self {
-                frames_rendered: 0,
-                processor: None,
-                sample_rate: config.sample_rate,
-            },
-            stream,
-        ))
-    }
-}
 
 enum OfflineMsg<S> {
     Host(HostCmdMsg<S>),
+    Position {
+        reply_tx: mpsc::Sender<u64>,
+    },
     Render {
+        position: u64,
         frames: u32,
         reply_tx: mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
     },
 }
 
-pub(crate) struct OfflineSessionClient<S> {
-    cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
+struct OfflineSessionTask<S> {
+    cmd_rx: mpsc::Receiver<OfflineMsg<S>>,
+    max_block_frames: NonZeroU32,
+    pools: PoolRegion<S>,
+    position: u64,
+    state: Option<SessionState<OfflineBackend, S>>,
+    #[cfg(any(test, feature = "probe"))]
+    pacing: Option<(Duration, Instant)>,
 }
 
-impl<S> OfflineSessionClient<S> {
-    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let message = OfflineMsg::Host(HostCmdMsg { cmd, reply_tx });
-        if let Err(error) = self.cmd_tx.lock().send(message) {
-            let OfflineMsg::Host(message) = error.0 else {
-                return Err(HostDispatchError::after_send(PlayError::Internal(
-                    "offline Host command changed protocol variant before send".into(),
-                )));
-            };
-            return Err(HostDispatchError::before_send(
-                PlayError::SessionGone {
-                    reason: "offline session stopped accepting commands",
-                },
-                message.cmd,
-            ));
-        }
-        reply_rx.recv().map_err(|_| {
-            HostDispatchError::after_send(PlayError::SessionGone {
-                reason: "offline session dropped the reply channel",
-            })
-        })
-    }
-
-    pub(crate) fn render(&self, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.cmd_tx
-            .lock()
-            .send(OfflineMsg::Render { frames, reply_tx })
-            .map_err(|_| OfflineSessionError::SessionGone)?;
-        reply_rx
-            .recv()
-            .map_err(|_| OfflineSessionError::SessionGone)?
-    }
+pub(crate) struct OfflineTaskConfig<S> {
+    pub(crate) pools: PoolRegion<S>,
+    pub(crate) sample_rate: NonZeroU32,
+    pub(crate) max_block_frames: NonZeroU32,
+    pub(crate) declick_frames: NonZeroU32,
+    pub(crate) declared_latency: Duration,
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) pacing: Option<Duration>,
 }
 
-impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected offline Host reply for player command".into(),
-            )),
+impl<S> OfflineSessionTask<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn tick_message(&mut self, message: OfflineMsg<S>) -> TickResult {
+        match message {
+            OfflineMsg::Host(message) => self.tick_host(message),
+            OfflineMsg::Position { reply_tx } => self.tick_position(&reply_tx),
+            OfflineMsg::Render {
+                position,
+                frames,
+                reply_tx,
+            } => self.tick_render(position, frames, &reply_tx),
         }
     }
 
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
+    fn tick_host(&mut self, message: HostCmdMsg<S>) -> TickResult {
+        let HostCmdMsg { cmd, reply_tx } = message;
+        if matches!(&cmd, HostCmd::Shutdown) {
+            self.state.take();
+            if reply_tx.send(HostReply::Ok).is_err() {
+                warn!("offline Host shutdown reply receiver dropped");
+            }
+            return TickResult::Done;
+        }
+        let reply = self.state.as_mut().map_or_else(
+            || {
+                HostReply::Err(PlayError::SessionGone {
+                    reason: "offline session state is unavailable",
+                })
+            },
+            |state| run_host_cmd(state, cmd),
+        );
+        if reply_tx.send(reply).is_err() {
+            warn!("offline Host command reply receiver dropped");
+        }
+        TickResult::Progress
+    }
+
+    fn tick_position(&self, reply_tx: &mpsc::Sender<u64>) -> TickResult {
+        if reply_tx.send(self.position).is_err() {
+            warn!("offline position reply receiver dropped");
+        }
+        TickResult::Progress
+    }
+
+    fn tick_render(
+        &mut self,
+        position: u64,
+        frames: u32,
+        reply_tx: &mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
+    ) -> TickResult {
+        let reply = self.render(position, frames);
+        if reply_tx.send(reply).is_err() {
+            warn!("offline render reply receiver dropped");
+        }
+        TickResult::Progress
+    }
+
+    fn render(&mut self, position: u64, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
+        if position != self.position {
+            return Err(OfflineSessionError::CursorChanged {
+                expected: position,
+                actual: self.position,
+            });
+        }
+        if frames == 0 || frames > self.max_block_frames.get() {
+            return Err(OfflineSessionError::InvalidBlockFrames {
+                requested: frames,
+                maximum: self.max_block_frames.get(),
+            });
+        }
+        let state = self
+            .state
+            .as_mut()
+            .ok_or(OfflineSessionError::SessionGone)?;
+        let output = render_block(state, frames, self.position, &self.pools)?;
+        self.position = self
+            .position
+            .checked_add(u64::from(frames))
+            .ok_or(OfflineSessionError::TimelineOverflow)?;
+        Ok(output)
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    fn tick_pacing(&mut self) -> TickResult {
+        let Some((pacing, deadline)) = self.pacing else {
+            return TickResult::Waiting;
+        };
+        if Instant::now() < deadline {
+            return TickResult::Waiting;
+        }
+        self.pacing = Some((pacing, Instant::now() + pacing));
+        match self.render(self.position, self.max_block_frames.get()) {
+            Ok(_) => TickResult::Progress,
+            Err(error) => {
+                warn!(%error, "paced offline render failed");
+                TickResult::Done
+            }
+        }
     }
 }
 
-impl<S: Send + Sync + 'static> HostDispatcher<S> for OfflineSessionClient<S> {
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        self.call(cmd)
+impl<S> Task for OfflineSessionTask<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn on_cancel(&mut self) {
+        self.state.take();
+    }
+
+    fn tick(&mut self) -> TickResult {
+        match self.cmd_rx.try_recv() {
+            Ok(message) => self.tick_message(message),
+            Err(mpsc::TryRecvError::Disconnected) => TickResult::Done,
+            Err(mpsc::TryRecvError::Empty) => {
+                #[cfg(any(test, feature = "probe"))]
+                {
+                    self.tick_pacing()
+                }
+                #[cfg(not(any(test, feature = "probe")))]
+                TickResult::Waiting
+            }
+            #[cfg(target_arch = "wasm32")]
+            Err(_) => TickResult::Waiting,
+        }
     }
 }
 
 pub(crate) fn spawn<S>(
+    dispatcher: &Dispatcher,
+    task_config: TaskConfig,
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
-    block_frames: NonZeroU32,
-    pools: PoolRegion<S>,
-) -> Arc<OfflineSessionClient<S>>
+    config: OfflineTaskConfig<S>,
+) -> Result<(Arc<OfflineSessionClient<S>>, TaskHandle), PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel();
-    spawn_named("kithara-engine-offline", move || {
-        let start_stream = move |ctx: &mut firewheel::FirewheelCtx<OfflineBackend>, rate: u32| {
-            let rate = NonZeroU32::new(rate)
-                .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
-            ctx.start_stream(BackendConfig {
-                block_frames,
-                sample_rate: rate,
-            })
-            .map_err(|error| error.to_string())
-        };
-        let mut state = SessionState::new(root, root_view, sample_rate, start_stream);
-        run(&cmd_rx, &mut state, &pools);
-    });
-    Arc::new(OfflineSessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
-    })
-}
-
-fn run<S>(
-    cmd_rx: &mpsc::Receiver<OfflineMsg<S>>,
-    state: &mut SessionState<OfflineBackend, S>,
-    pools: &PoolRegion<S>,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    while let Ok(message) = cmd_rx.recv() {
-        match message {
-            OfflineMsg::Host(HostCmdMsg { cmd, reply_tx }) => {
-                if matches!(cmd, HostCmd::Shutdown) {
-                    if reply_tx.send(HostReply::Ok).is_err() {
-                        warn!("offline Host shutdown reply receiver dropped");
-                    }
-                    return;
-                }
-                let reply = run_host_cmd(state, cmd);
-                if reply_tx.send(reply).is_err() {
-                    warn!("offline Host command reply receiver dropped");
-                }
-            }
-            OfflineMsg::Render { frames, reply_tx } => {
-                let reply = render_block(state, frames, pools);
-                if reply_tx.send(reply).is_err() {
-                    warn!("offline render reply receiver dropped");
-                }
-            }
-        }
+    #[cfg(any(test, feature = "probe"))]
+    if config.pacing.is_some_and(|interval| interval.is_zero()) {
+        return Err(PlayError::SessionCategoryUnsupported {
+            reason: "offline pacing interval must be non-zero".to_owned(),
+        });
     }
+    let OfflineTaskConfig {
+        pools,
+        sample_rate,
+        max_block_frames,
+        declick_frames,
+        declared_latency,
+        #[cfg(any(test, feature = "probe"))]
+        pacing,
+    } = config;
+    let backend_config = BackendConfig {
+        block_frames: max_block_frames,
+        declick_frames,
+        declared_latency,
+        sample_rate,
+    };
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let pending = dispatcher.reserve(task_config).map_err(|error| {
+        PlayError::Internal(format!("offline session task reservation: {error}"))
+    })?;
+    let control = pending.context().control();
+    let client = Arc::new(OfflineSessionClient::new(cmd_tx, control));
+    let task = pending
+        .start_local(move |_| {
+            let start_stream = move |ctx: &mut firewheel::FirewheelCtx<OfflineBackend>,
+                                     rate: u32| {
+                let rate = NonZeroU32::new(rate)
+                    .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
+                ctx.start_stream(BackendConfig {
+                    sample_rate: rate,
+                    ..backend_config
+                })
+                .map_err(|error| error.to_string())
+            };
+            OfflineSessionTask {
+                cmd_rx,
+                max_block_frames,
+                pools,
+                position: 0,
+                state: Some(SessionState::new(
+                    root,
+                    root_view,
+                    sample_rate,
+                    start_stream,
+                )),
+                #[cfg(any(test, feature = "probe"))]
+                pacing: pacing.map(|interval| (interval, Instant::now() + interval)),
+            }
+        })
+        .map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
+    Ok((client, task))
 }
 
 fn render_block<S>(
     state: &mut SessionState<OfflineBackend, S>,
     frames: u32,
+    position: u64,
     pools: &PoolRegion<S>,
 ) -> Result<SampleBuffer, OfflineSessionError>
 where
@@ -283,6 +282,7 @@ where
     ctx.active_backend_mut()
         .ok_or(OfflineSessionError::BackendUnavailable)?
         .render(
+            position,
             usize::try_from(frames).map_err(|_| OfflineSessionError::TimelineOverflow)?,
             &mut output,
         )?;
@@ -295,10 +295,14 @@ pub(crate) enum OfflineSessionError {
     BackendUnavailable,
     #[error("offline channel count cannot be represented")]
     ChannelCountOverflow,
+    #[error("offline render expected cursor {expected}, but the session is at {actual}")]
+    CursorChanged { expected: u64, actual: u64 },
     #[error("offline graph failed: {0}")]
     Graph(String),
     #[error("offline graph has not started")]
     GraphUnavailable,
+    #[error("offline block requests {requested} frames, maximum is {maximum}")]
+    InvalidBlockFrames { requested: u32, maximum: u32 },
     #[error("offline processor is unavailable")]
     ProcessorUnavailable,
     #[error("offline output pool failed: {0}")]

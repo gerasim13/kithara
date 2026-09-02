@@ -1,7 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{io::Read, num::NonZeroUsize};
+use std::{
+    io::Read,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -9,6 +12,7 @@ use kithara::{
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
+    host::OfflineSessionConfig,
     platform::{
         CancelScope, CancelToken,
         sync::Arc,
@@ -24,7 +28,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PackagedSignal,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    offline::{OfflineSession, resource_from_reader},
+    offline::resource_from_reader,
     temp_dir,
 };
 use kithara_test_fixtures::{
@@ -600,13 +604,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let hls_server = open_audio_hls_server().await;
     let (ok_url, bad_url) = mp3_endpoints().await;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .session(OfflineSession::arc_manual())
-            .build(),
-    );
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
@@ -954,8 +952,12 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         .await
         .expect("packaged HLS preload must complete")
         .expect("packaged HLS preload must succeed");
-    let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
-    player.load_and_fadein(resource, "packaged_single_variant");
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(region.clone())
+            .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
     let _warmup = render_offline_window(
         &mut player,
         24,
@@ -1015,13 +1017,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .session(OfflineSession::arc_manual())
-            .build(),
-    );
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
@@ -1101,7 +1097,11 @@ async fn stress_offline_crossfade_no_gaps() {
     let master_scope = CancelScope::new(None);
     let master_cancel = master_scope.token();
     let worker = play_worker_with_cancel(&region, master_cancel.child());
-    let mut player = OfflinePlayer::new(SR);
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(region.clone())
+            .sample_rate(NonZeroU32::new(SR).expect("sample rate is non-zero"))
+            .build(),
+    );
 
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
@@ -1156,7 +1156,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_1 preload deadline")
         .expect("mp3_1 preload");
-    player.load_and_fadein(mp3_1, "mp3_1");
+    player.load_and_fadein(mp3_1);
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
 
     let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1164,7 +1164,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("hls_1 preload deadline")
         .expect("hls_1 preload");
-    player.load_and_fadein(hls_1, "hls_1");
+    player.load_and_fadein(hls_1);
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
     let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1172,7 +1172,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_2 preload deadline")
         .expect("mp3_2 preload");
-    player.load_and_fadein(mp3_2, "mp3_2");
+    player.load_and_fadein(mp3_2);
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
     let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1180,7 +1180,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_3 preload deadline")
         .expect("mp3_3 preload");
-    player.load_and_fadein(mp3_3, "mp3_3");
+    player.load_and_fadein(mp3_3);
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
 
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
@@ -1199,7 +1199,7 @@ async fn stress_offline_crossfade_no_gaps() {
             .await
             .expect("hls_n preload deadline")
             .expect("hls_n preload");
-        player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
+        player.load_and_fadein(hls_n);
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
         let mut mp3_n = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1207,7 +1207,7 @@ async fn stress_offline_crossfade_no_gaps() {
             .await
             .expect("mp3_n preload deadline")
             .expect("mp3_n preload");
-        player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
+        player.load_and_fadein(mp3_n);
         let sm = render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR);
 
         info!("  {sm}");

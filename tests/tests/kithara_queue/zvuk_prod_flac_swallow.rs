@@ -1,9 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, Resource},
@@ -12,7 +15,8 @@ use kithara::{
 };
 use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
+    TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer,
+    swallow_detector::assert_no_committed_swallow,
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use tracing::info;
@@ -148,8 +152,12 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     // playhead in nanoseconds.
     let recorder = probe_capture::install();
 
-    let mut player = OfflinePlayer::new(OUT_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools())
+            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     // Pace each render window at ~1x wall clock so the real-time deadline is
     // exercised — the condition under which the playhead swallows.

@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
@@ -5,6 +7,7 @@ use kithara::{
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -405,8 +408,12 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
-    let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
-    player.load_and_fadein(resource, "packaged_abr");
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools.clone())
+            .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
     let _warmup = render_offline_window(
         &mut player,
         24,

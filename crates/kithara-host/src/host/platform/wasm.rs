@@ -3,20 +3,20 @@ use std::{collections::HashMap, mem};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
-    PlayError,
+    GroupState, PlayError,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
     BeatGridId, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
 };
 
-use super::super::{Host, HostConfig, HostOwned, SessionRoot};
+use super::super::{Host, HostOwned, SessionRuntime};
 use crate::{
     session::{HostDispatcher, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
-
 type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
+type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
 
 pub(in crate::host) struct Platform<S> {
     web_state: Option<WebSessionState<S>>,
@@ -118,6 +118,7 @@ impl<S> Platform<S> {
     }
 
     pub(in crate::host) fn transact(
+        _platform: &Self,
         dispatcher: &Arc<dyn HostDispatcher<S>>,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
@@ -131,33 +132,34 @@ impl<S> Platform<S> {
         }
         dispatcher.transact(operation)
     }
+
+    pub(in crate::host) fn realtime(
+        group: GroupState<PlayerMember>,
+        view: RootView,
+        sample_rate: std::num::NonZeroU32,
+    ) -> Result<StartedPlatform<S>, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        let (dispatcher, web_state) = crate::session::web::spawn::<S>(group, view, sample_rate)?;
+        Ok((dispatcher, Self::owner(web_state)))
+    }
+
+    #[cfg(feature = "offline")]
+    pub(in crate::host) fn offline() -> Result<Self, PlayError> {
+        if kithara_platform::thread::is_main_thread() {
+            return Err(PlayError::SessionCategoryUnsupported {
+                reason: "offline Host must run in a Web Worker".to_owned(),
+            });
+        }
+        Ok(Self::remote())
+    }
 }
 
 impl<S> Host<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    /// Creates the platform session and its canonical synchronization root.
-    ///
-    /// # Errors
-    /// Returns an error when a canonical grid identity cannot be allocated.
-    pub fn new(config: HostConfig) -> Result<Self, PlayError> {
-        let SessionRoot {
-            id,
-            sample_rate,
-            group,
-            view,
-        } = Self::session_root(config)?;
-        let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view.clone(), sample_rate)?;
-        Ok(Self::owner(
-            id,
-            view,
-            dispatcher,
-            Platform::owner(web_state),
-        ))
-    }
-
     pub(crate) fn remote(
         id: BeatGridId,
         root_view: RootView,
@@ -168,12 +170,12 @@ where
             owns_session: false,
             root_view,
             dispatcher,
-            platform: Platform::remote(),
+            session: SessionRuntime::realtime(Platform::remote()),
         }
     }
 
     pub(crate) fn web_state(&self) -> Option<&WebSessionState<S>> {
-        self.platform.web_state.as_ref()
+        self.session.platform().web_state.as_ref()
     }
 
     pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
@@ -181,7 +183,7 @@ where
     }
 
     pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {
-        self.platform.remote_routes.lock().push(route);
+        self.session.platform().remote_routes.lock().push(route);
     }
 
     /// Attaches and transfers one fully configured player or decorator into
@@ -193,12 +195,16 @@ where
     where
         P: PlayerControlSource<Schema = S>,
     {
-        self.platform.require_remote()?;
+        self.session.platform().require_remote()?;
         let (grid_id, control) = self.bind_player(&mut player)?;
         let member = player.take_host_member()?;
         self.attach_member(member)?;
         let resident: Resident = Box::new(move || player.close());
-        if let Some(replaced) = self.platform.insert_resident(grid_id, resident)? {
+        if let Some(replaced) = self
+            .session
+            .platform_mut()
+            .insert_resident(grid_id, resident)?
+        {
             mem::forget(replaced);
             return Err(PlayError::Internal(
                 "wasm player residence changed during insertion".into(),
@@ -221,11 +227,15 @@ where
     }
 
     fn remove_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let close_result = self.platform.close_resident(id);
-        self.platform.release_on_session_gone(id, close_result)?;
+        let close_result = self.session.platform_mut().close_resident(id);
+        self.session
+            .platform_mut()
+            .release_on_session_gone(id, close_result)?;
         let detach_result = self.detach_member(id);
-        self.platform.release_on_session_gone(id, detach_result)?;
-        self.platform.release_resident(id)
+        self.session
+            .platform_mut()
+            .release_on_session_gone(id, detach_result)?;
+        self.session.platform_mut().release_resident(id)
     }
 }
 

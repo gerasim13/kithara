@@ -9,17 +9,17 @@ use kithara::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
         TrackId, TrackStatus,
     },
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
-        SeekOutcome, SessionDispatcher, player::PlayerControlSource,
+        SeekOutcome,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -29,8 +29,7 @@ use url::Url;
 use crate::{
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
-    test_defaults::Consts,
+    offline::OfflineQueue,
     user_sim::actions::Action,
 };
 
@@ -56,7 +55,6 @@ const STAGNATION_TICKS: u32 = 75;
 /// Producer-tick wakes a quality switch is given to land before the harness
 /// stops waiting for it.
 const SWITCH_PROGRESS_TICKS: u32 = 200;
-const RENDER_BLOCK_FRAMES: usize = 512;
 const RENDER_BATCH_BLOCKS: usize = 16;
 const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 
@@ -88,8 +86,7 @@ async fn run_tick_driver(queue: QueueControl<TestPools>) {
 /// harness asserts the per-action invariants from the plan.
 pub struct SimHarness {
     queue: QueueControl<TestPools>,
-    queue_owner: Queue<TestPools>,
-    session: Arc<OfflineSession>,
+    queue_owner: OfflineQueue<TestPools>,
     tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
     _store: AssetStore<TestPools>,
@@ -138,7 +135,6 @@ impl SimHarness {
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
-        let session = Arc::new(OfflineSession::new());
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
@@ -146,19 +142,19 @@ impl SimHarness {
             })
             .build();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
-                .worker(worker)
-                .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let queue_owner = OfflineQueue::new(
+            OfflineSessionConfig::builder(pools.clone())
+                .pacing(Duration::from_millis(10))
                 .build(),
-        );
-        let queue_owner = Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        );
+            Queue::new(
+                QueueConfig::builder()
+                    .player(player)
+                    .store(store.clone())
+                    .build(),
+            ),
+        )
+        .expect("create product offline queue");
         let queue = queue_owner.control();
         let queue_for_tick = queue.clone();
         // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
@@ -201,7 +197,6 @@ impl SimHarness {
         Self {
             queue,
             queue_owner,
-            session,
             tick,
             _downloader: downloader,
             _store: store,
@@ -270,7 +265,6 @@ impl SimHarness {
         let _ = self.tick.await;
         drop(self.queue);
         drop(self.queue_owner);
-        drop(self.session);
         drop(self._downloader);
     }
 
@@ -918,7 +912,9 @@ impl SimHarness {
             }
 
             for _ in 0..RENDER_BATCH_BLOCKS {
-                let _ = self.session.render(RENDER_BLOCK_FRAMES);
+                let frames = usize::try_from(self.queue_owner.host().max_block_frames().get())
+                    .expect("offline render block fits usize");
+                let _ = self.queue_owner.render(frames);
             }
             rendered_blocks = rendered_blocks.saturating_add(RENDER_BATCH_BLOCKS);
             let _ = self.queue.tick();

@@ -1,10 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -15,7 +18,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
+use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer};
 use tracing::info;
 
 #[path = "source_helper.rs"]
@@ -239,8 +242,12 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         flac_idx, "loaded zvuk prod HLS master"
     );
 
-    let mut player = OfflinePlayer::new(OUT_RATE);
-    player.load_and_fadein(resource, TRACK_NAME);
+    let mut player = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools())
+            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let pre = render_until_position_at_least(
         &mut player,

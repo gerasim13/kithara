@@ -5,6 +5,6 @@
 mod offline;
 
 pub use offline::{
-    OfflineRenderConfig, OfflineRenderError, OfflineRenderReport, OfflineRenderRequest,
-    OfflineRenderer, RenderSink, RenderSinkError,
+    OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
+    RenderSinkError,
 };

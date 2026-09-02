@@ -3,9 +3,10 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, PlayerEvent},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome, SessionDispatcher},
+    platform::{CancelToken, time::Duration},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -13,7 +14,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
     waits::wait_for_loader_done_event,
 };
@@ -43,8 +44,8 @@ struct SeekEvents {
     seek_rejected: bool,
 }
 
-fn render_and_tick(session: &OfflineSession, queue: &Queue<TestPools>) {
-    let _ = session.render(BLOCK_FRAMES);
+fn render_and_tick(queue: &OfflineQueue<TestPools>) {
+    let _ = queue.render(BLOCK_FRAMES);
     queue.tick().expect("tick queue");
 }
 
@@ -99,25 +100,33 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             root: temp_dir.path().into(),
         })
         .build();
-    let session = Arc::new(OfflineSession::new_manual());
+    let sample_rate =
+        std::num::NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate must be non-zero");
+    let block_frames = std::num::NonZeroU32::new(
+        u32::try_from(BLOCK_FRAMES).expect("fixture block size fits u32"),
+    )
+    .expect("fixture block size must be non-zero");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(
-                std::num::NonZeroU32::new(SAMPLE_RATE)
-                    .expect("fixture sample rate must be non-zero"),
-            )
+            .sample_rate(sample_rate)
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools).build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build(),
     );
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        OfflineSessionConfig::builder(pools)
+            .sample_rate(sample_rate)
+            .max_block_frames(block_frames)
             .build(),
-    );
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(
         ResourceSrc::parse(fixture.master_url().as_str()).expect("valid HLS URL"),
     )
@@ -138,7 +147,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
 
     let mut warmup_position = None;
     for _ in 0..WARMUP_BLOCKS {
-        render_and_tick(&session, &queue);
+        render_and_tick(&queue);
         drain_warmup(&mut rx, &mut warmup_position);
         if warmup_position.is_some_and(|position| position >= MIN_WARMUP_SECS)
             && queue.playback_view().duration.is_some()
@@ -191,7 +200,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
 
     let mut observation = SeekEvents::default();
     for _ in 0..SEEK_BLOCKS {
-        render_and_tick(&session, &queue);
+        render_and_tick(&queue);
         drain_seek_events(&mut rx, &mut observation);
         let reached_outcome = match target_kind {
             Target::NearEnd => {

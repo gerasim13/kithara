@@ -1,6 +1,5 @@
 mod cochlea_continuity_oracle;
 #[cfg(not(target_arch = "wasm32"))]
-mod engine_offline_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod engine_session_contract;
 mod engine_tests;

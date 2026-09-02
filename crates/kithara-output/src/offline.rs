@@ -1,31 +1,9 @@
-use std::{error::Error as StdError, num::NonZeroU32, ops::Range};
+use std::{error::Error as StdError, ops::Range};
 
 use bon::Builder;
 use kithara_platform::CancelToken;
 use kithara_signal::AudioSpec;
 use thiserror::Error;
-
-const DEFAULT_BLOCK_FRAMES: NonZeroU32 = match NonZeroU32::new(512) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
-
-/// Bounded work configuration for a finite offline renderer.
-#[derive(Clone, Copy, Debug, Builder)]
-#[non_exhaustive]
-pub struct OfflineRenderConfig {
-    /// Maximum frames processed in one renderer tick.
-    #[builder(default = DEFAULT_BLOCK_FRAMES)]
-    block_frames: NonZeroU32,
-}
-
-impl OfflineRenderConfig {
-    /// Maximum frames processed in one renderer tick.
-    #[must_use]
-    pub const fn block_frames(&self) -> NonZeroU32 {
-        self.block_frames
-    }
-}
 
 /// One exact, finite output-frame range to render.
 #[derive(Clone, Debug, Builder)]
@@ -130,6 +108,9 @@ impl RenderSinkError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OfflineRenderError {
+    /// The selected Host session is not an offline renderer.
+    #[error("Host session is not configured for offline rendering")]
+    SessionModeUnavailable,
     /// The half-open frame range is reversed.
     #[error("offline render range {start}..{end} is invalid")]
     InvalidRange {

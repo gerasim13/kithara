@@ -3,26 +3,27 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
+    host::{HostOwned, OfflineSessionConfig},
     platform::{
         sync::{Arc, Mutex},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         effects::eq::EqBandConfig,
         player::{PlayerControl, PlayerControlSource},
     },
     warp::StretchControls,
 };
 
-use super::{OfflineSession, session::OFFLINE_BLOCK_FRAMES};
+use super::OfflineHostHarness;
 use crate::bufpool_ext::{TestPools, pools};
 
 pub struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
+    host: OfflineHostHarness<TestPools>,
     player: Mutex<Option<PlayerImpl<TestPools>>>,
     player_control: PlayerControl<TestPools>,
-    session: Arc<OfflineSession>,
 }
 
 #[derive(Clone, bon::Builder)]
@@ -44,21 +45,23 @@ pub struct OfflinePlayerOptions {
 
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
+        let pools = pools();
         let sample_rate =
             NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
-        let session = Arc::new(OfflineSession::new_manual_with(
-            sample_rate,
-            OFFLINE_BLOCK_FRAMES,
-        ));
-        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
-        let pools = pools();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+        let session = OfflineSessionConfig::builder(pools)
+            .sample_rate(sample_rate)
+            .build();
+        Self::new(options, session)
+    }
+
+    pub fn new(options: OfflinePlayerOptions, session: OfflineSessionConfig<TestPools>) -> Self {
+        let sample_rate = session.sample_rate();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(session.pools().clone()).build());
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
             .block_on_underrun(options.block_on_underrun)
             .sample_rate(sample_rate)
-            .session(Arc::clone(&session_dispatcher))
             .worker(worker)
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
@@ -67,12 +70,14 @@ impl OfflinePlayerHarness {
         let player = PlayerImpl::new(player_config);
         let player_control = player.control();
         let events = player.subscribe();
+        let host = OfflineHostHarness::new(session)
+            .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
         Self {
             events: Mutex::new(events),
+            host,
             player: Mutex::new(Some(player)),
             player_control,
-            session,
         }
     }
 
@@ -96,13 +101,42 @@ impl OfflinePlayerHarness {
         )
     }
 
-    pub fn session(&self) -> &Arc<OfflineSession> {
-        &self.session
+    pub fn insert<P>(&self, player: P) -> HostOwned<P>
+    where
+        P: PlayerControlSource<Schema = TestPools>,
+    {
+        self.host
+            .insert(player)
+            .unwrap_or_else(|error| panic!("insert player facade into offline Host: {error}"))
+    }
+
+    pub fn insert_control<P>(&self, player: P) -> P::Control
+    where
+        P: PlayerControlSource<Schema = TestPools>,
+    {
+        self.insert(player).control().clone()
+    }
+
+    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
+        &self.host
     }
 
     /// Synchronously render `frames` of audio.
     pub fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
+        let mut player = self.player.lock();
+        if player
+            .as_ref()
+            .is_some_and(|player| player.item_count() > 0)
+        {
+            let player = player
+                .take()
+                .expect("offline harness player disappeared before Host insertion");
+            self.host
+                .insert(player)
+                .unwrap_or_else(|error| panic!("insert offline player into Host: {error}"));
+        }
+        drop(player);
+        self.host.render(frames)
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s

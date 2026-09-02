@@ -12,22 +12,24 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
     audio::ConsumerWakeMode,
+    bufpool::PoolRegion,
     events::{EventBus, TrackId},
     hls::AbrMode,
+    host::OfflineSessionConfig,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
     play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
-        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        ResourceSrc, SeekOutcome, SelectTransition,
     },
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
     cochlea::CochleaReport, fixture_protocol::PackagedSignal, memory_asset_store,
-    offline::OfflineSession,
+    offline::OfflineHostHarness,
 };
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
@@ -262,18 +264,39 @@ async fn run_real_media_matrix(record_artifacts: bool) {
 }
 
 async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
+    let pool_region = pools();
     let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
-    let session = Arc::new(OfflineSession::new_manual_with(sample_rate, BLOCK_FRAMES));
+    let max_block_frames =
+        NonZeroU32::new(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
+            .expect("block frames must be non-zero");
+    let host = OfflineHostHarness::new(
+        OfflineSessionConfig::builder(pool_region.clone())
+            .sample_rate(sample_rate)
+            .max_block_frames(max_block_frames)
+            .build(),
+    )
+    .unwrap_or_else(|error| panic!("{}: create product offline Host: {error}", case.label));
     let mut failures = Vec::new();
 
     let media_dir = TestTempDir::new();
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(prepare_deck(case, deck_index, media, hls, &media_dir, &session).await);
+        decks.push(
+            prepare_deck(
+                case,
+                deck_index,
+                media,
+                hls,
+                &media_dir,
+                &pool_region,
+                &host,
+            )
+            .await,
+        );
     }
 
     load_decks(case, &decks, &mut failures);
-    runtime::record_transport_state(&session, "before first render", &mut failures);
+    runtime::record_transport_state(&host, "before first render", &mut failures);
     runtime::drain_all_events(
         &mut decks,
         "startup",
@@ -286,7 +309,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
     let mix_levels = vec![mix_level; decks.len()];
     let final_mix = capture_pass(
         case,
-        &session,
+        &host,
         &mut decks,
         "final-mix",
         &mix_levels,
@@ -309,7 +332,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
         runtime::validate_deck(case, deck_index, deck, &mut failures);
         runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
-    runtime::record_transport_state(&session, "after capture", &mut failures);
+    runtime::record_transport_state(&host, "after capture", &mut failures);
     let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
 
     let mut audio_levels = direct_references
@@ -414,13 +437,13 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
 
 async fn capture_pass(
     case: &Case,
-    session: &OfflineSession,
+    host: &OfflineHostHarness<TestPools>,
     decks: &mut [Deck],
     label: &str,
     levels: &[f32],
     failures: &mut Vec<String>,
 ) -> CapturedAudio {
-    let ready = reset_for_capture(case, session, decks, label, levels, failures).await;
+    let ready = reset_for_capture(case, host, decks, label, levels, failures).await;
     let capture_blocks = oracle::blocks_for_secs(case.host_rate, CAPTURE_SECS);
     let requested_frames = capture_blocks * BLOCK_FRAMES;
     if !ready {
@@ -434,7 +457,7 @@ async fn capture_pass(
         };
     }
 
-    let mut tap = session
+    let mut tap = host
         .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
         .unwrap_or_else(|error| panic!("{} {label}: enable mix tap: {error}", case.label));
     let positions_before = decks
@@ -444,7 +467,7 @@ async fn capture_pass(
     let mut pcm = Vec::with_capacity(requested_frames * usize::from(CHANNELS));
     let mut zero_blocks = Vec::new();
     for block_index in 0..capture_blocks {
-        let block = render_paced(session, decks, case.host_rate).await;
+        let block = render_paced(host, decks, case.host_rate).await;
         inspect_block(
             case.label,
             label,
@@ -478,7 +501,7 @@ async fn capture_pass(
         &zero_blocks,
         failures,
     );
-    disable_mix_tap(case.label, label, session, failures);
+    disable_mix_tap(case.label, label, host, failures);
     assess_position_advance(
         case,
         label,
@@ -500,7 +523,7 @@ async fn capture_pass(
 
 async fn reset_for_capture(
     case: &Case,
-    session: &OfflineSession,
+    host: &OfflineHostHarness<TestPools>,
     decks: &mut [Deck],
     label: &str,
     levels: &[f32],
@@ -521,14 +544,14 @@ async fn reset_for_capture(
     }
     settle_controls(
         case,
-        session,
+        host,
         decks,
         "pause",
         EventPolicy::AudiblePlayback,
         failures,
     )
     .await;
-    if let Err(error) = apply_mix(decks.iter().map(|deck| (deck.player.as_ref(), 0.0))) {
+    if let Err(error) = host.apply_mix(decks.iter().map(|deck| deck.player.level(0.0))) {
         failures.push(format!(
             "{} {label}: mute before seek failed: {error}",
             case.label,
@@ -537,7 +560,7 @@ async fn reset_for_capture(
     }
     settle_controls(
         case,
-        session,
+        host,
         decks,
         "mute",
         EventPolicy::AudiblePlayback,
@@ -601,7 +624,7 @@ async fn reset_for_capture(
     let mut completed = false;
     let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
-        let block = render_paced(session, decks, case.host_rate).await;
+        let block = render_paced(host, decks, case.host_rate).await;
         seek_blocks += 1;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
@@ -682,7 +705,7 @@ async fn reset_for_capture(
 
     settle_controls(
         case,
-        session,
+        host,
         decks,
         "post-seek pause",
         EventPolicy::MutedSeekSetup,
@@ -704,11 +727,11 @@ async fn reset_for_capture(
         ));
         return false;
     }
-    if let Err(error) = apply_mix(
+    if let Err(error) = host.apply_mix(
         decks
             .iter()
             .zip(levels.iter().copied())
-            .map(|(deck, level)| (deck.player.as_ref(), level)),
+            .map(|(deck, level)| deck.player.level(level)),
     ) {
         failures.push(format!(
             "{} {label}: apply capture levels failed: {error}",
@@ -721,7 +744,7 @@ async fn reset_for_capture(
     }
     settle_controls(
         case,
-        session,
+        host,
         decks,
         "gain settle",
         EventPolicy::AudiblePlayback,
@@ -733,14 +756,14 @@ async fn reset_for_capture(
 
 async fn settle_controls(
     case: &Case,
-    session: &OfflineSession,
+    host: &OfflineHostHarness<TestPools>,
     decks: &mut [Deck],
     phase: &str,
     policy: EventPolicy,
     failures: &mut Vec<String>,
 ) {
     for block_index in 0..CONTROL_SETTLE_BLOCKS {
-        let block = render_paced(session, decks, case.host_rate).await;
+        let block = render_paced(host, decks, case.host_rate).await;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
                 "{} {phase} block {block_index}: produced {} samples",
@@ -752,18 +775,16 @@ async fn settle_controls(
     }
 }
 
-fn disable_mix_tap(case: &str, label: &str, session: &OfflineSession, failures: &mut Vec<String>) {
-    match session.exec(Cmd::DisableMixTap) {
-        Ok(Reply::Ok) => {}
-        Ok(Reply::Err(error)) => {
-            failures.push(format!("{case} {label}: disable mix tap returned {error}",))
-        }
-        Ok(_) => failures.push(format!(
-            "{case} {label}: disable mix tap returned an unexpected reply",
-        )),
-        Err(error) => failures.push(format!(
+fn disable_mix_tap(
+    case: &str,
+    label: &str,
+    host: &OfflineHostHarness<TestPools>,
+    failures: &mut Vec<String>,
+) {
+    if let Err(error) = host.disable_mix_tap() {
+        failures.push(format!(
             "{case} {label}: disable mix tap dispatch failed: {error}",
-        )),
+        ));
     }
 }
 
@@ -855,25 +876,26 @@ async fn prepare_deck(
     media: Media,
     hls: &Url,
     media_dir: &TestTempDir,
-    session: &Arc<OfflineSession>,
+    pool_region: &PoolRegion<TestPools>,
+    host: &OfflineHostHarness<TestPools>,
 ) -> Deck {
     let controls = StretchControls::new(1.0);
     controls.set_backend(StretchKind::Signalsmith);
     controls.set_keylock(true);
     let bus = EventBus::new(16_384);
-    let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
-    let player = Arc::new(PlayerImpl::new(
+    let mut player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pool_region.clone()).build(),
+            ))
             .bus(bus)
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
             .crossfade_duration(0.0)
             .timestretch(Arc::clone(&controls))
-            .session(dispatcher)
             .build(),
-    ));
+    );
     let events = player.subscribe();
     let src = match media {
         Media::Mp3(asset) => media_path(media_dir, asset)
@@ -913,6 +935,12 @@ async fn prepare_deck(
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
     player.insert(resource, TrackId::allocate(), None);
+    let player = host.insert(player).unwrap_or_else(|error| {
+        panic!(
+            "{} deck {deck_index}: insert player into product Host: {error}",
+            case.label
+        )
+    });
 
     Deck {
         player,
@@ -966,11 +994,15 @@ async fn open_resource(
     resource
 }
 
-async fn render_paced(session: &OfflineSession, decks: &[Deck], sample_rate: u32) -> Vec<f32> {
+async fn render_paced(
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+    sample_rate: u32,
+) -> Vec<f32> {
     for deck in decks {
         deck.player.process_notifications();
     }
-    let block = session.render(BLOCK_FRAMES);
+    let block = host.render(BLOCK_FRAMES);
     time::sleep(Duration::from_secs_f64(
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
             / f64::from(sample_rate),

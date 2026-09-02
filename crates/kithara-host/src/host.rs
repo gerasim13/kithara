@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 #[cfg(any(test, feature = "probe"))]
 use kithara_play::TransportRevision;
@@ -14,13 +15,13 @@ use kithara_warp::{
     TopologyOperation,
 };
 
-#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
+#[cfg(feature = "offline")]
 mod offline;
 mod platform;
 
-#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
-pub use offline::OfflineHost;
-use platform::Platform;
+#[cfg(feature = "offline")]
+pub use offline::OfflineSessionConfig;
+use platform::{Platform, PlatformResult};
 
 #[cfg(any(test, feature = "probe"))]
 use crate::api::SessionDuckingMode;
@@ -37,19 +38,58 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     None => unreachable!(),
 };
 
-/// Configuration for the shared output session owned by [`Host`].
+/// Configuration for a platform realtime session.
 #[derive(Clone, Copy, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
-pub struct HostConfig {
+pub struct RealtimeSessionConfig {
     /// Initial device-rate hint. Physical route changes may update it later.
     #[builder(default = DEFAULT_SAMPLE_RATE)]
     #[field(get, copy)]
-    sample_rate: NonZeroU32,
-    /// Optional CPAL output callback-size override. `None` preserves Firewheel's default.
-    #[field(get, copy)]
-    output_block_frames: Option<NonZeroU32>,
+    sample_rate_hint: NonZeroU32,
+}
+
+impl Default for RealtimeSessionConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// Runtime mode and configuration for one Host-owned session.
+#[non_exhaustive]
+pub enum SessionConfig<S> {
+    /// Device-backed platform session.
+    Realtime(RealtimeSessionConfig),
+    /// Device-free finite renderer.
+    #[cfg(feature = "offline")]
+    Offline(Box<OfflineSessionConfig<S>>),
+}
+
+impl<S> SessionConfig<S> {
+    /// Configure a platform realtime session.
+    #[must_use]
+    pub const fn realtime(config: RealtimeSessionConfig) -> Self {
+        Self::Realtime(config)
+    }
+}
+
+impl<S> Default for SessionConfig<S> {
+    fn default() -> Self {
+        Self::Realtime(RealtimeSessionConfig::default())
+    }
+}
+
+/// Configuration for the shared output session owned by [`Host`].
+#[derive(Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct HostConfig<S> {
+    /// Realtime or offline session selected at Host construction.
+    #[builder(default)]
+    #[field(get)]
+    session: SessionConfig<S>,
 }
 
 /// Typed command proxy for one player value exclusively resident in a Host.
@@ -86,7 +126,51 @@ pub struct Host<S> {
     owns_session: bool,
     root_view: RootView,
     dispatcher: Arc<dyn HostDispatcher<S>>,
-    platform: Platform<S>,
+    session: SessionRuntime<S>,
+}
+
+enum SessionRuntime<S> {
+    Realtime(Platform<S>),
+    #[cfg(feature = "offline")]
+    Offline {
+        platform: Platform<S>,
+        runtime: offline::OfflineRuntime<S>,
+    },
+}
+
+impl<S> SessionRuntime<S> {
+    const fn realtime(platform: Platform<S>) -> Self {
+        Self::Realtime(platform)
+    }
+
+    #[cfg(feature = "offline")]
+    const fn offline(platform: Platform<S>, runtime: offline::OfflineRuntime<S>) -> Self {
+        Self::Offline { platform, runtime }
+    }
+
+    const fn platform(&self) -> &Platform<S> {
+        match self {
+            Self::Realtime(platform) => platform,
+            #[cfg(feature = "offline")]
+            Self::Offline { platform, .. } => platform,
+        }
+    }
+
+    const fn platform_mut(&mut self) -> &mut Platform<S> {
+        match self {
+            Self::Realtime(platform) => platform,
+            #[cfg(feature = "offline")]
+            Self::Offline { platform, .. } => platform,
+        }
+    }
+
+    #[cfg(feature = "offline")]
+    const fn offline_runtime_mut(&mut self) -> Option<&mut offline::OfflineRuntime<S>> {
+        match self {
+            Self::Offline { runtime, .. } => Some(runtime),
+            Self::Realtime(_) => None,
+        }
+    }
 }
 
 struct SessionRoot {
@@ -97,9 +181,8 @@ struct SessionRoot {
 }
 
 impl<S> Host<S> {
-    fn session_root(config: HostConfig) -> Result<SessionRoot, PlayError> {
+    fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
-        let sample_rate = config.sample_rate;
         let group = GroupState::unavailable(
             grid_id,
             sample_rate,
@@ -119,14 +202,14 @@ impl<S> Host<S> {
         id: BeatGridId,
         root_view: RootView,
         dispatcher: Arc<dyn HostDispatcher<S>>,
-        platform: Platform<S>,
+        session: SessionRuntime<S>,
     ) -> Self {
         Self {
             id,
             owns_session: true,
             root_view,
             dispatcher,
-            platform,
+            session,
         }
     }
 
@@ -138,12 +221,6 @@ impl<S> Host<S> {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(dispatcher))?;
         Ok((grid_id, player.control()))
-    }
-
-    /// Returns the session rate used before the output device is measured.
-    #[must_use]
-    pub fn requested_sample_rate(&self) -> NonZeroU32 {
-        self.root_view.grid().axis().sample_rate()
     }
 
     fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
@@ -224,7 +301,13 @@ impl<S> Host<S> {
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        self.dispatcher.sample_rate()
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
+            Reply::SampleRate(sample_rate) => Ok(sample_rate),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for sample-rate query".into(),
+            )),
+        }
     }
 
     /// Change the canonical session tempo at the next render boundary.
@@ -266,6 +349,19 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::DisableMixTap)
     }
 
+    /// Restart the current output route while preserving Host-owned graph state.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot restart its output route.
+    pub fn invalidate_audio_route<R>(&self, reason: R) -> Result<(), PlayError>
+    where
+        R: Into<String>,
+    {
+        self.exec_play_ok(Cmd::InvalidateAudioRoute {
+            reason: reason.into(),
+        })
+    }
+
     /// Updates the shared output-session ducking mode.
     ///
     /// # Errors
@@ -301,9 +397,48 @@ impl<S> Host<S> {
     }
 }
 
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Creates one Host with its configured realtime or offline session.
+    ///
+    /// # Errors
+    /// Returns an error when the session root or selected runtime cannot start.
+    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+        match config.session {
+            SessionConfig::Realtime(config) => {
+                let root = Self::session_root(config.sample_rate_hint)?;
+                let (dispatcher, platform) =
+                    Platform::realtime(root.group, root.view.clone(), root.sample_rate)
+                        .resolve()?;
+                Ok(Self::owner(
+                    root.id,
+                    root.view,
+                    dispatcher,
+                    SessionRuntime::realtime(platform),
+                ))
+            }
+            #[cfg(feature = "offline")]
+            SessionConfig::Offline(config) => {
+                let platform = Platform::offline().resolve()?;
+                let root = Self::session_root(config.sample_rate())?;
+                let (dispatcher, runtime) =
+                    offline::OfflineRuntime::new(*config, root.group, root.view.clone())?;
+                Ok(Self::owner(
+                    root.id,
+                    root.view,
+                    dispatcher,
+                    SessionRuntime::offline(platform, runtime),
+                ))
+            }
+        }
+    }
+}
+
 impl<S> Drop for Host<S> {
     fn drop(&mut self) {
-        Platform::close(&mut self.platform, self.id);
+        Platform::close(self.session.platform_mut(), self.id);
         if self.owns_session
             && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
         {
@@ -339,7 +474,7 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
         &mut self,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        Platform::transact(&self.dispatcher, operation)
+        Platform::transact(self.session.platform(), &self.dispatcher, operation)
     }
 }
 
@@ -350,33 +485,5 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
             "host topology operation did not change topology".into(),
         )),
         Err(error) => Err(error),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_bufpool::testing::TestPools;
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn host_config_preserves_output_block_default_and_allows_override() {
-        let default = HostConfig::builder().build();
-        assert_eq!(default.output_block_frames(), None);
-
-        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
-        let configured = HostConfig::builder().output_block_frames(frames).build();
-        assert_eq!(configured.output_block_frames(), Some(frames));
-    }
-
-    #[kithara::test]
-    fn host_root_owns_the_configured_sample_rate() {
-        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-        let config = HostConfig::builder().sample_rate(sample_rate).build();
-        let root = Host::<TestPools>::session_root(config).expect("host root");
-
-        assert_eq!(root.sample_rate, sample_rate);
-        assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

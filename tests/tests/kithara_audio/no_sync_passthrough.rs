@@ -1,7 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
+    host::OfflineSessionConfig,
     platform::{
         CancelToken,
         sync::{
@@ -404,13 +407,21 @@ async fn render_passthrough(
         None
     };
 
-    let mut target = OfflinePlayer::new(SAMPLE_RATE);
+    let mut target = OfflinePlayer::new(
+        OfflineSessionConfig::builder(pools())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
     target.set_fade_duration(0.0);
-    target.load_and_fadein(resource_from_reader(target_audio), "passthrough-target");
+    target.load_and_fadein(resource_from_reader(target_audio));
     let mut load = load_audio.take().map(|audio| {
-        let mut player = OfflinePlayer::new(SAMPLE_RATE);
+        let mut player = OfflinePlayer::new(
+            OfflineSessionConfig::builder(pools())
+                .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build(),
+        );
         player.set_fade_duration(0.0);
-        player.load_and_fadein(resource_from_reader(audio), "shared-worker-load");
+        player.load_and_fadein(resource_from_reader(audio));
         player
     });
     let block_period = Duration::from_secs_f64(
@@ -478,12 +489,12 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     wait_for_preload(&audio).await;
     audio.preload().expect("queue audio preload");
 
-    let queue = Queue::new(
+    let queue = harness.insert_control(Queue::new(
         QueueConfig::builder()
             .player(harness.take_player())
             .should_autoplay(false)
             .build(),
-    );
+    ));
     let id = queue.insert_loaded_for_test(resource_from_reader(audio));
     queue
         .select(id, Transition::None)

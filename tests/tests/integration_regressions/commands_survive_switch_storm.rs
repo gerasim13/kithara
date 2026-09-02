@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -13,14 +14,14 @@ use kithara::{
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -35,7 +36,7 @@ const SEEK_TOLERANCE_SECS: f64 = 1.0;
 /// swallowed. A positive fact, so no window of "nothing happened" is needed.
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -50,7 +51,7 @@ fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
 /// queue exposes converges a tick later. Waiting for that convergence is the
 /// command-took-effect fact; never converging is the reported bug.
 async fn wait_for_playing(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     expected: bool,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -134,18 +135,23 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         PlayerConfig::builder()
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools).build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        OfflineSessionConfig::builder(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let ticker = spawn_ticker(Arc::clone(&queue));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let ticker = spawn_ticker(queue.control());
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();
 

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 
 use delegate::delegate;
 use kithara_audio::ConsumerWakeMode;
@@ -10,7 +10,7 @@ use kithara_warp::{
     BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
 
-use super::{Host, HostConfig, Platform, Resident, SessionRoot};
+use super::{Host, Platform, Resident, SessionRoot, SessionRuntime};
 use crate::session::{
     HostCmd, HostDispatcher, HostReply, Reply,
     protocol::{HostDispatchError, SyncCmd},
@@ -104,7 +104,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
         sample_rate,
         group: mut root,
         view: root_view,
-    } = Host::<TestPools>::session_root(HostConfig::builder().build())
+    } = Host::<TestPools>::session_root(NonZeroU32::new(44_100).expect("fixture sample rate"))
         .expect("fixture Host session");
     let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
     let base = root.topology().expect("fixture root topology").stamp();
@@ -137,7 +137,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
         owns_session: false,
         root_view,
         dispatcher,
-        platform,
+        session: SessionRuntime::realtime(platform),
     };
     (host, resident_id, drops)
 }
@@ -187,7 +187,8 @@ fn other_errors_retain_resident() {
         ));
         assert_eq!(*drops.borrow(), 0);
         assert!(
-            host.platform
+            host.session
+                .platform()
                 .remote_residents
                 .as_ref()
                 .is_some_and(|residents| residents.contains_key(&resident))

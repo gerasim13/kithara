@@ -12,7 +12,7 @@
 //! [`PackagedTestServer`] withhold gate controls the seek-target segment's
 //! **body** (GET parked); segment-aware fMP4 deliberately does not use startup
 //! HEAD size probes. The audio graph is pulled one block at a time via the
-//! manual [`OfflineSession`] and the queue is ticked synchronously between
+//! product offline Host and the queue is ticked synchronously between
 //! blocks.
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
@@ -22,17 +22,18 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc, SessionDispatcher,
+        ResourceSrc,
     },
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
+    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineHostHarness,
 };
 
 use crate::bufpool_ext::{Pools, TestPools, pools};
@@ -75,24 +76,26 @@ struct GateMode {
 struct Harness {
     player: Option<PlayerImpl<TestPools>>,
     worker: PlayWorker<TestPools>,
-    session: Arc<OfflineSession>,
+    host: OfflineHostHarness<TestPools>,
 }
 
 impl Harness {
     fn new(pools: Pools) -> Self {
-        let session = Arc::new(OfflineSession::new_manual());
+        let session = OfflineSessionConfig::builder(pools.clone())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .build();
+        let host = OfflineHostHarness::new(session).expect("create product offline Host");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
             .worker(worker.clone())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build();
         let player = Some(PlayerImpl::new(config));
         Self {
             player,
             worker,
-            session,
+            host,
         }
     }
 
@@ -105,7 +108,7 @@ impl Harness {
     }
 
     fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
+        self.host.render(frames)
     }
 }
 
@@ -223,12 +226,15 @@ async fn run_case(mode: GateMode) {
     let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let target_src = target.src().clone();
     let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .should_autoplay(false)
-            .player(harness.take_player())
-            .build(),
-    );
+    let queue = harness
+        .host
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .should_autoplay(false)
+                .player(harness.take_player())
+                .build(),
+        ))
+        .expect("insert queue into product offline Host");
     let id0 = queue.insert_loaded_for_test(target);
     let _id1 = queue.insert_loaded_for_test(next);
 

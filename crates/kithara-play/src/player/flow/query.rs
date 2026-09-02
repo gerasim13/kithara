@@ -3,6 +3,8 @@ use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerRuntime;
+#[cfg(any(test, feature = "probe"))]
+use crate::bridge::RtMetricsSnapshot;
 use crate::{
     EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
 };
@@ -54,6 +56,20 @@ impl<S> PlayerRuntime<S> {
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
         Some(self.core.engine.slot_playback(slot_id)?.snapshot())
+    }
+
+    /// Read the active audio slot's real-time counters for tests and probes.
+    #[cfg(any(test, feature = "probe"))]
+    #[must_use]
+    pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot> {
+        let slot_id = self.slot()?;
+        Some(
+            self.core
+                .engine
+                .slot_playback(slot_id)?
+                .metrics()
+                .snapshot(),
+        )
     }
 
     /// Get current player status.

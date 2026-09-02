@@ -2,15 +2,15 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
+    platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
-    waits::wait_for_position_event,
+    TestServerHelper, kithara, offline::OfflineQueue, temp_dir, waits::wait_for_position_event,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -37,20 +37,27 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let session_pools = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(session_pools.clone()).build(),
+            ))
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        OfflineSessionConfig::builder(session_pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;

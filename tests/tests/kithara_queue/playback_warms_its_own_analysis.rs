@@ -7,8 +7,9 @@ use kithara::{
     analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     assets::{AssetStore, StorageBackend},
     events::TrackStatus,
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
+    platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     resampler::NoResamplerBackend,
@@ -16,8 +17,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, analysis_pass::stalled_reader, kithara, offline::OfflineSession, temp_dir,
-    test_defaults::Consts as Shared, waits::wait_until,
+    TestServerHelper, analysis_pass::stalled_reader, kithara, offline::OfflineQueue, temp_dir,
+    waits::wait_until,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -44,20 +45,20 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         })
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(worker)
-            .session(OfflineSession::arc_auto())
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+    let queue = OfflineQueue::new(
+        OfflineSessionConfig::builder(pools.clone())
+            .pacing(Duration::from_millis(10))
             .build(),
-    );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;

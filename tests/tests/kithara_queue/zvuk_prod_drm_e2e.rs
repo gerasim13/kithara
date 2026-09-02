@@ -4,6 +4,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -13,7 +14,7 @@ use kithara::{
         tokio::sync::OnceCell,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -22,8 +23,7 @@ use kithara_app::{
     pools::{AppPools, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineSession, test_defaults::Consts as Shared,
-    waits::wait_for_position_at_least,
+    TestTempDir, kithara, offline::OfflineQueue, waits::wait_for_position_at_least,
 };
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
@@ -39,7 +39,7 @@ const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/
 
 struct Ctx {
     config: AppConfig,
-    queue: Arc<Queue<AppPools>>,
+    queue: OfflineQueue<AppPools>,
     cache: TestTempDir,
 }
 
@@ -66,22 +66,23 @@ async fn shared_ctx() -> &'static Ctx {
                 .cancel(shutdown.child())
                 .build(),
         );
+        let session_pools = worker.pools().clone();
         let config = AppConfig::builder()
             .downloader(downloader)
             .shutdown(shutdown)
             .worker(worker.clone())
             .store(store)
             .build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-                .worker(worker)
-                .session(OfflineSession::arc_auto())
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let queue = OfflineQueue::new(
+            OfflineSessionConfig::builder(session_pools)
+                .pacing(Duration::from_millis(10))
                 .build(),
-        );
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+            Queue::new(QueueConfig::builder().player(player).build()),
+        )
+        .expect("create product offline queue");
 
-        let q = Arc::clone(&queue);
+        let q = queue.control();
         tokio::task::spawn(async move {
             loop {
                 sleep(Duration::from_millis(50)).await;
@@ -111,7 +112,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
 
 async fn wait_for_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue<AppPools>,
+    queue: &QueueControl<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {

@@ -16,9 +16,9 @@ pub mod wasm;
 
 pub use api::{CrossfaderBus, HostLevel, crossfader_gain};
 pub use error::PlayError;
-#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
-pub use host::OfflineHost;
-pub use host::{Host, HostConfig, HostOwned};
+#[cfg(feature = "offline")]
+pub use host::OfflineSessionConfig;
+pub use host::{Host, HostConfig, HostOwned, RealtimeSessionConfig, SessionConfig};
 pub use kithara_play::SessionSampleRate;
 #[cfg(any(test, feature = "probe"))]
 pub use session::testing;
