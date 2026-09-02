@@ -11,6 +11,7 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
+perf = ["kithara-stretch?/perf"]
 render = ["dep:kithara-bufpool"]
 stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith", "render"]
 stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee", "render"]
