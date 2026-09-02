@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_output::LiveOutput;
 use kithara_platform::{
@@ -9,6 +11,7 @@ use kithara_platform::{
     },
     time::Instant,
 };
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake, Worker};
 use ringbuf::{
@@ -32,6 +35,12 @@ impl Consts {
     const STEREO: usize = 2;
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct FormatChange {
+    pub(super) frame: u64,
+    pub(super) spec: AudioSpec,
+}
+
 /// Current public state of a broadcast.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -52,6 +61,7 @@ pub(super) struct Control {
     accepting: AtomicBool,
     dropped: AtomicU64,
     finish_requested: AtomicBool,
+    generation_overflowed: AtomicBool,
     writing: AtomicBool,
 }
 
@@ -81,7 +91,10 @@ pub(super) struct Counters {
 /// RT endpoint installed in the Host master-output group.
 pub struct BroadcastOutput {
     control: Arc<Control>,
+    formats: HeapProd<FormatChange>,
     pcm: HeapProd<f32>,
+    spec: AudioSpec,
+    written_frames: u64,
     wake: Wake,
 }
 
@@ -98,6 +111,25 @@ impl BroadcastOutput {
 }
 
 impl LiveOutput for BroadcastOutput {
+    fn reconfigure(&mut self, spec: AudioSpec) {
+        if spec == self.spec || !self.control.accepting.load(Ordering::Acquire) {
+            return;
+        }
+        let change = FormatChange {
+            frame: self.written_frames,
+            spec,
+        };
+        if self.formats.try_push(change).is_err() {
+            self.control
+                .generation_overflowed
+                .store(true, Ordering::Release);
+            self.control.finish();
+        } else {
+            self.spec = spec;
+        }
+        self.wake.defer();
+    }
+
     fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
         if frames == 0 || !self.control.accepting.load(Ordering::Acquire) {
             return;
@@ -123,6 +155,10 @@ impl LiveOutput for BroadcastOutput {
         if dropped > 0 {
             self.report_drop(dropped);
         }
+        let pushed_frames = pushed / Consts::STEREO;
+        self.written_frames = self
+            .written_frames
+            .saturating_add(u64::try_from(pushed_frames).unwrap_or(u64::MAX));
         self.control.writing.store(false, Ordering::Release);
         self.wake.defer();
     }
@@ -173,12 +209,20 @@ impl Broadcast {
             .ok_or(BroadcastError::CapacityOverflow)?;
         let scratch = pools.get_with_len::<f32>(tick_samples)?;
         let (pcm_tx, pcm_rx) = HeapRb::new(buffer_samples).split();
+        let (format_tx, format_rx) = HeapRb::new(config.generation_capacity.get()).split();
         let control = Arc::new(Control {
             accepting: AtomicBool::new(true),
             ..Control::default()
         });
         let (completed_tx, completed_rx) = mpsc::channel();
-        let task = BroadcastTask::new(config, pcm_rx, Arc::clone(&control), scratch, completed_tx)?;
+        let task = BroadcastTask::new(
+            config,
+            pcm_rx,
+            format_rx,
+            Arc::clone(&control),
+            scratch,
+            completed_tx,
+        )?;
         let origin = task.origin();
         let counters = task.counters();
         let scope = CancelScope::new(parent);
@@ -216,7 +260,15 @@ impl Broadcast {
         };
         let output = BroadcastOutput {
             control: Arc::clone(&control),
+            formats: format_tx,
             pcm: pcm_tx,
+            spec: AudioSpec::new(
+                config.channels,
+                NonZeroU32::new(config.sample_rate).ok_or(BroadcastError::InvalidConfig {
+                    field: "sample_rate",
+                })?,
+            ),
+            written_frames: 0,
             wake: wake.clone(),
         };
         let handle = BroadcastHandle {

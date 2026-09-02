@@ -44,6 +44,9 @@ pub enum LiveRecordingError {
     /// A configured frame or sample capacity cannot be represented.
     #[error("live recording capacity overflow")]
     CapacityOverflow,
+    /// The configured source sample rate is zero.
+    #[error("live recording sample rate must be > 0")]
+    InvalidSampleRate,
     /// The composition-owned sample pool rejected recorder scratch.
     #[error(transparent)]
     Pool(#[from] PoolError),
@@ -52,6 +55,12 @@ pub enum LiveRecordingError {
     BufferOverflow {
         /// Configured ring capacity.
         buffer_frames: usize,
+    },
+    /// The bounded format-generation queue ran out of room.
+    #[error("live recording format queue of {capacity} generations overflowed")]
+    GenerationQueueOverflow {
+        /// Configured generation queue capacity.
+        capacity: usize,
     },
     /// The destination could not open a new part.
     #[error("live recording failed to open part {part}: {source}")]

@@ -17,6 +17,10 @@ impl Defaults {
         Some(value) => value,
         None => unreachable!(),
     };
+    const GENERATION_CAPACITY: NonZeroUsize = match NonZeroUsize::new(8) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
     const TICK_FRAMES: NonZeroUsize = match NonZeroUsize::new(1_024) {
         Some(value) => value,
         None => unreachable!(),
@@ -36,6 +40,10 @@ impl RecordingConfig {
     #[must_use]
     pub const fn encode(&self) -> &EncodeConfig {
         &self.encode
+    }
+
+    pub(crate) fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.encode.sample_rate = sample_rate;
     }
 }
 
@@ -59,6 +67,9 @@ pub struct LiveRecordingConfig {
     /// Maximum stereo PCM frames encoded during one worker tick.
     #[builder(default = Defaults::TICK_FRAMES)]
     pub(crate) tick_frames: NonZeroUsize,
+    /// Maximum queued master-format generations waiting for the worker.
+    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    pub(crate) generation_capacity: NonZeroUsize,
     /// Optional exact frame count at which each part rotates automatically.
     pub(crate) rotation_frames: Option<NonZeroU64>,
     /// Maximum tasks admitted to the recorder dispatcher.

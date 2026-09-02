@@ -305,6 +305,20 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::DisableMixTap)
     }
 
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::RestartOutput { sample_rate })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for stream restart".into(),
+            )),
+        }
+    }
+
     /// Restart the current output route while preserving Host-owned graph state.
     ///
     /// # Errors

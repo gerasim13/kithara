@@ -30,7 +30,6 @@ impl PlaylistSnapshot {
 pub struct LiveWindow {
     segments: VecDeque<Segment>,
     finished: bool,
-    timescale: u32,
     discontinuity_sequence: u64,
     target_seconds: u64,
     retention: usize,
@@ -49,7 +48,6 @@ impl LiveWindow {
         Ok(Self {
             window: config.window,
             retention: config.window + config.grace,
-            timescale: config.sample_rate,
             target_seconds: config.target_seconds()?,
             discontinuity_sequence: 0,
             segments: VecDeque::with_capacity(config.window + config.grace),
@@ -95,7 +93,7 @@ impl LiveWindow {
             if segment.discontinuity {
                 playlist.push_str("#EXT-X-DISCONTINUITY\n");
             }
-            let seconds = f64::from(segment.duration_ts) / f64::from(self.timescale);
+            let seconds = f64::from(segment.duration_ts) / f64::from(segment.timescale);
             playlist.push_str(&format!("#EXTINF:{seconds:.3},\nseg/{}.aac\n", segment.seq));
         }
         if self.finished {
@@ -145,6 +143,7 @@ mod tests {
             bytes: Bytes::from(vec![u8::try_from(seq % 256).expect("fits"); 8]),
             duration_ts: Consts::DURATION_TS,
             discontinuity,
+            timescale: Consts::TIMESCALE,
         }
     }
 

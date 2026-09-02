@@ -8,7 +8,7 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-use super::{Consts, Control, LiveRecordingReport};
+use super::{Consts, Control, FormatChange, LiveRecordingReport};
 use crate::{
     LiveRecordingConfig, LiveRecordingError, PartSinkFactory, RecordingConfig, RecordingCore,
 };
@@ -22,7 +22,10 @@ where
     control: Arc<Control>,
     core: Option<RecordingCore<F::Sink>>,
     factory: F,
+    formats: HeapCons<FormatChange>,
     frames: u64,
+    generation_capacity: usize,
+    next_format: Option<FormatChange>,
     part_frames: u64,
     parts: u64,
     pcm: HeapCons<f32>,
@@ -38,21 +41,28 @@ where
         config: LiveRecordingConfig,
         factory: F,
         pcm: HeapCons<f32>,
+        formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         buffer_frames: usize,
         scratch: SampleBuffer,
     ) -> Self {
+        let generation_capacity = config.generation_capacity.get();
+        let rotation_frames = config.rotation_frames;
+        let recording = config.recording;
         Self {
             buffer_frames,
-            config: config.recording,
+            config: recording,
             control,
             core: None,
             factory,
+            formats,
             frames: 0,
+            generation_capacity,
+            next_format: None,
             part_frames: 0,
             parts: 0,
             pcm,
-            rotation_frames: config.rotation_frames,
+            rotation_frames,
             scratch: Some(scratch),
         }
     }
@@ -136,20 +146,49 @@ where
             .ok();
     }
 
+    fn next_format(&mut self) -> Option<FormatChange> {
+        if self.next_format.is_none() {
+            self.next_format = self.formats.try_pop();
+        }
+        self.next_format
+    }
+
+    fn apply_format(&mut self, change: FormatChange) -> Result<(), LiveRecordingError> {
+        if change.spec.channels != Consts::CHANNELS {
+            return Err(LiveRecordingError::ChannelCount(change.spec.channels));
+        }
+        self.finish_part()?;
+        self.config.set_sample_rate(change.spec.sample_rate.get());
+        self.next_format = None;
+        Ok(())
+    }
+
     fn process(&mut self, samples: &[f32]) -> Result<(), LiveRecordingError> {
         let mut sample = 0;
-        while sample < samples.len() {
+        loop {
+            if let Some(change) = self.next_format()
+                && change.frame <= self.frames
+            {
+                self.apply_format(change)?;
+                continue;
+            }
             let cut_at = self.control.cut_at.load(Ordering::Acquire);
             if cut_at <= self.frames {
                 self.finish_part()?;
                 self.clear_cut(cut_at);
                 continue;
             }
+            if sample >= samples.len() {
+                break;
+            }
             let available_frames = (samples.len() - sample) / Consts::STEREO;
             let mut take = u64::try_from(available_frames)
                 .map_err(|_| LiveRecordingError::FrameCountOverflow)?;
             if cut_at != Consts::NO_CUT {
                 take = take.min(cut_at - self.frames);
+            }
+            if let Some(change) = self.next_format() {
+                take = take.min(change.frame - self.frames);
             }
             if let Some(rotation) = self.rotation_frames {
                 take = take.min(rotation.get() - self.part_frames);
@@ -203,6 +242,11 @@ where
     }
 
     fn tick(&mut self) -> TickResult {
+        if self.control.generation_overflowed.load(Ordering::Acquire) {
+            return self.fail(LiveRecordingError::GenerationQueueOverflow {
+                capacity: self.generation_capacity,
+            });
+        }
         if self.control.overflowed.load(Ordering::Acquire) {
             return self.fail(LiveRecordingError::BufferOverflow {
                 buffer_frames: self.buffer_frames,

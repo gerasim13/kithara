@@ -16,6 +16,7 @@ use kithara_record::{
     LiveRecorder, LiveRecordingConfig, LiveRecordingError, LiveRecordingHandle,
     LiveRecordingReport, PartSinkFactory, RecordingConfig, RecordingSink,
 };
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 use kithara_worker::{Worker, WorkerConfig};
 
@@ -237,6 +238,8 @@ fn bounded_overflow_aborts_the_open_part() {
 struct FrameProbe(Arc<AtomicUsize>);
 
 impl LiveOutput for FrameProbe {
+    fn reconfigure(&mut self, _spec: AudioSpec) {}
+
     fn write_stereo(&mut self, frames: usize, _left: &[f32], _right: &[f32]) {
         self.0.fetch_add(frames, Ordering::Relaxed);
     }

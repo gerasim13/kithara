@@ -1,9 +1,12 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_output::LiveOutput;
 use kithara_platform::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+use kithara_signal::AudioSpec;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake, Worker};
 use ringbuf::{
     HeapProd, HeapRb,
@@ -21,6 +24,12 @@ impl Consts {
     const CHANNELS: u16 = 2;
     const NO_CUT: u64 = u64::MAX;
     const STEREO: usize = 2;
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FormatChange {
+    pub(super) frame: u64,
+    pub(super) spec: AudioSpec,
 }
 
 /// Completed live-recording counts.
@@ -41,6 +50,7 @@ struct Control {
     cut_at: AtomicU64,
     cut_requested: AtomicBool,
     finish_requested: AtomicBool,
+    generation_overflowed: AtomicBool,
     overflowed: AtomicBool,
     result: ResultSlot,
     writing: AtomicBool,
@@ -57,7 +67,9 @@ impl Control {
 /// RT endpoint copied into the Host master-output group.
 pub struct RecordingOutput {
     control: Arc<Control>,
+    formats: HeapProd<FormatChange>,
     pcm: HeapProd<f32>,
+    spec: AudioSpec,
     wake: Wake,
 }
 
@@ -70,6 +82,25 @@ impl RecordingOutput {
 }
 
 impl LiveOutput for RecordingOutput {
+    fn reconfigure(&mut self, spec: AudioSpec) {
+        if spec == self.spec || !self.control.accepting.load(Ordering::Acquire) {
+            return;
+        }
+        let change = FormatChange {
+            frame: self.control.written_frames.load(Ordering::Acquire),
+            spec,
+        };
+        if self.formats.try_push(change).is_err() {
+            self.control
+                .generation_overflowed
+                .store(true, Ordering::Release);
+            self.control.accepting.store(false, Ordering::Release);
+        } else {
+            self.spec = spec;
+        }
+        self.wake.defer();
+    }
+
     fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
         if frames == 0 || !self.control.accepting.load(Ordering::Acquire) {
             return;
@@ -208,6 +239,10 @@ impl LiveRecorder {
             .ok_or(LiveRecordingError::CapacityOverflow)?;
         let scratch = pools.get_with_len::<f32>(tick_samples)?;
         let (pcm_tx, pcm_rx) = HeapRb::new(buffer_samples).split();
+        let (format_tx, format_rx) = HeapRb::new(config.generation_capacity.get()).split();
+        let sample_rate = NonZeroU32::new(config.recording.encode().sample_rate)
+            .ok_or(LiveRecordingError::InvalidSampleRate)?;
+        let spec = AudioSpec::new(config.recording.encode().channels, sample_rate);
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
                 .name("kithara-record")
@@ -235,6 +270,7 @@ impl LiveRecorder {
                     config,
                     factory,
                     pcm_rx,
+                    format_rx,
                     task_control,
                     buffer_frames,
                     scratch,
@@ -243,7 +279,9 @@ impl LiveRecorder {
         )?;
         let output = RecordingOutput {
             control: Arc::clone(&control),
+            formats: format_tx,
             pcm: pcm_tx,
+            spec,
             wake: wake.clone(),
         };
         let handle = LiveRecordingHandle {

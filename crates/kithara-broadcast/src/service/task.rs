@@ -8,7 +8,7 @@ use ringbuf::{
     traits::{Consumer, Observer},
 };
 
-use super::{Control, Counters};
+use super::{Control, Counters, FormatChange};
 use crate::{
     BroadcastResult,
     config::BroadcastConfig,
@@ -19,10 +19,15 @@ use crate::{
 
 pub(super) struct BroadcastTask {
     completed: Option<Sender<()>>,
+    config: BroadcastConfig,
     control: Arc<Control>,
     counted_drops: u64,
     counters: Arc<Counters>,
     encoder: Option<StreamEncoder>,
+    formats: HeapCons<FormatChange>,
+    frames: u64,
+    generation_capacity: usize,
+    next_format: Option<FormatChange>,
     origin: Arc<Origin>,
     pcm: HeapCons<f32>,
     scratch: Option<SampleBuffer>,
@@ -34,6 +39,7 @@ impl BroadcastTask {
     pub(super) fn new(
         config: &BroadcastConfig,
         pcm: HeapCons<f32>,
+        formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         scratch: SampleBuffer,
         completed: Sender<()>,
@@ -41,18 +47,15 @@ impl BroadcastTask {
         let window = LiveWindow::new(config)?;
         Ok(Self {
             completed: Some(completed),
+            config: config.clone(),
             control,
             counted_drops: 0,
             counters: Arc::new(Counters::default()),
-            encoder: Some(
-                StreamEncoder::builder()
-                    .backend(StreamBackend::Fdk)
-                    .sample_rate(config.sample_rate)
-                    .channels(config.channels)
-                    .bit_rate(config.bit_rate)
-                    .timescale(config.sample_rate)
-                    .build()?,
-            ),
+            encoder: Some(Self::open_encoder(config)?),
+            formats,
+            frames: 0,
+            generation_capacity: config.generation_capacity.get(),
+            next_format: None,
             origin: Arc::new(Origin {
                 snapshot: ArcSwap::from_pointee(window.snapshot()),
                 master: Arc::from(server::master_playlist(config.bit_rate)),
@@ -72,13 +75,23 @@ impl BroadcastTask {
         Arc::clone(&self.origin)
     }
 
+    fn open_encoder(config: &BroadcastConfig) -> BroadcastResult<StreamEncoder> {
+        Ok(StreamEncoder::builder()
+            .backend(StreamBackend::Fdk)
+            .sample_rate(config.sample_rate)
+            .channels(config.channels)
+            .bit_rate(config.bit_rate)
+            .timescale(config.sample_rate)
+            .build()?)
+    }
+
     fn complete(&mut self) {
         if let Some(completed) = self.completed.take() {
             let _ = completed.send(());
         }
     }
 
-    fn finish(&mut self) -> BroadcastResult<()> {
+    fn finish_encoder(&mut self) -> BroadcastResult<()> {
         if let Some(encoder) = self.encoder.take() {
             for unit in encoder.finish()? {
                 if let Some(segment) = self.segmenter.push(&unit)? {
@@ -86,11 +99,40 @@ impl BroadcastTask {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> BroadcastResult<()> {
+        self.finish_encoder()?;
         if let Some(segment) = self.segmenter.flush() {
             self.publish(segment);
         }
         self.window.finish();
         self.publish_snapshot();
+        Ok(())
+    }
+
+    fn next_format(&mut self) -> Option<FormatChange> {
+        if self.next_format.is_none() {
+            self.next_format = self.formats.try_pop();
+        }
+        self.next_format
+    }
+
+    fn reconfigure(&mut self, change: FormatChange) -> BroadcastResult<()> {
+        if change.spec.channels != self.config.channels {
+            return Err(crate::BroadcastError::LiveChannelCount {
+                channels: change.spec.channels,
+            });
+        }
+        self.finish_encoder()?;
+        let config = self.config.with_sample_rate(change.spec.sample_rate.get());
+        if let Some(segment) = self.segmenter.reconfigure(&config)? {
+            self.publish(segment);
+        }
+        self.encoder = Some(Self::open_encoder(&config)?);
+        self.config = config;
+        self.next_format = None;
         Ok(())
     }
 
@@ -108,14 +150,45 @@ impl BroadcastTask {
     }
 
     fn process(&mut self, samples: &[f32]) -> BroadcastResult<()> {
-        if let Some(encoder) = self.encoder.as_mut()
-            && !samples.is_empty()
-        {
-            for unit in encoder.push(samples)? {
-                if let Some(segment) = self.segmenter.push(&unit)? {
-                    self.publish(segment);
+        let mut sample = 0;
+        loop {
+            if let Some(change) = self.next_format()
+                && change.frame <= self.frames
+            {
+                self.reconfigure(change)?;
+                continue;
+            }
+            if sample >= samples.len() {
+                break;
+            }
+            let available = (samples.len() - sample) / 2;
+            let mut take =
+                u64::try_from(available).map_err(|_| crate::BroadcastError::CapacityOverflow)?;
+            if let Some(change) = self.next_format() {
+                take = take.min(change.frame - self.frames);
+            }
+            let take =
+                usize::try_from(take).map_err(|_| crate::BroadcastError::CapacityOverflow)?;
+            let end = sample
+                .checked_add(
+                    take.checked_mul(2)
+                        .ok_or(crate::BroadcastError::CapacityOverflow)?,
+                )
+                .ok_or(crate::BroadcastError::CapacityOverflow)?;
+            if let Some(encoder) = self.encoder.as_mut() {
+                for unit in encoder.push(&samples[sample..end])? {
+                    if let Some(segment) = self.segmenter.push(&unit)? {
+                        self.publish(segment);
+                    }
                 }
             }
+            self.frames = self
+                .frames
+                .checked_add(
+                    u64::try_from(take).map_err(|_| crate::BroadcastError::CapacityOverflow)?,
+                )
+                .ok_or(crate::BroadcastError::CapacityOverflow)?;
+            sample = end;
         }
         Ok(())
     }
@@ -151,6 +224,11 @@ impl Task for BroadcastTask {
     }
 
     fn tick(&mut self) -> TickResult {
+        if self.control.generation_overflowed.load(Ordering::Acquire) {
+            return self.fail(&crate::BroadcastError::GenerationQueueOverflow {
+                capacity: self.generation_capacity,
+            });
+        }
         let Some(mut scratch) = self.scratch.take() else {
             return TickResult::Done;
         };

@@ -197,6 +197,10 @@ where
         self.state.lock().host.enable_outputs(outputs)
     }
 
+    pub fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+        self.state.lock().host.restart_stream(sample_rate)
+    }
+
     pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,

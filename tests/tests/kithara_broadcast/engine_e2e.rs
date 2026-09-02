@@ -97,6 +97,10 @@ struct GapOutput {
 }
 
 impl LiveOutput for GapOutput {
+    fn reconfigure(&mut self, spec: AudioSpec) {
+        self.output.reconfigure(spec);
+    }
+
     fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
         if self.gap_after_writes == Some(self.writes) {
             self.output.write_stereo(frames, &[], &[]);

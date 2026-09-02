@@ -47,6 +47,9 @@ pub struct BroadcastConfig {
     /// Maximum stereo PCM frames packaged during one worker tick.
     #[builder(default = Defaults::TICK_FRAMES)]
     pub tick_frames: NonZeroUsize,
+    /// Maximum queued master-format generations waiting for the packager.
+    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    pub generation_capacity: NonZeroUsize,
     /// Maximum tasks admitted to the broadcast dispatcher.
     #[builder(default = NonZeroUsize::MIN)]
     pub dispatcher_capacity: NonZeroUsize,
@@ -84,6 +87,10 @@ impl Defaults {
         None => unreachable!(),
     };
     const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    const GENERATION_CAPACITY: NonZeroUsize = match NonZeroUsize::new(8) {
         Some(value) => value,
         None => unreachable!(),
     };

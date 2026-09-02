@@ -28,6 +28,9 @@ where
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        #[cfg(any(test, feature = "probe"))]
+        HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
