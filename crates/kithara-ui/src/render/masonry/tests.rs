@@ -2862,6 +2862,11 @@ fn a_mounted_extension_is_drawn_in_what_the_skin_dresses_its_kind_in() {
 /// The mounted input contract, observed from both leaf adapters and the engine
 /// plan they share. Keeping this beside the paint census makes a new
 /// `ControlSpec` incomplete until it names both its picture and its gestures.
+///
+/// It enumerates kinds of control, so what a group declares over itself is
+/// outside it by construction: a stepping surface has no row here and cannot
+/// get one. Those are pinned as a gesture played to both hosts, in
+/// `render::parity::hand`.
 mod gesture_census {
     use std::rc::Rc;
 

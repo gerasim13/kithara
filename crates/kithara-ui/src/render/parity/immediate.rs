@@ -13,7 +13,10 @@ use iced::{
     advanced::{clipboard, graphics::text::font_system, mouse::Cursor},
     mouse::{self, Button},
 };
-use iced_runtime::{UserInterface, user_interface::Cache};
+use iced_runtime::{
+    UserInterface,
+    user_interface::{Cache, State},
+};
 use num_traits::cast::AsPrimitive;
 
 use super::shared::renderer;
@@ -40,7 +43,12 @@ pub(super) struct Immediate<'a, A> {
     renderer: iced::Renderer,
     size: Size,
     skin: &'a Skin,
+    /// What the tree said of itself when it last answered an event.
+    state: State,
     ui: &'a CompiledUi,
+    /// The hand the tree last asked the window to show.
+    #[field(get(copy), vis = "pub(super)")]
+    hand: mouse::Interaction,
     /// The state the screen keeps for itself, which this host owns exactly as
     /// the retained one does.
     #[field(get, vis = "pub(super)")]
@@ -61,9 +69,11 @@ impl<'a, A: App> Immediate<'a, A> {
         Self {
             app,
             cache: Cache::default(),
+            hand: mouse::Interaction::None,
             renderer: renderer(),
             size: Size::new(size.0.as_(), size.1.as_()),
             skin,
+            state: State::Outdated,
             ui,
             view: ViewState::default(),
         }
@@ -84,14 +94,65 @@ impl<'a, A: App> Immediate<'a, A> {
         }
     }
 
-    /// Builds the tree, hands it one event, and keeps what the tree remembered.
+    /// The pointer arrives at one point and stops there, pressing nothing.
+    pub(super) fn hover_at(&mut self, at: Pt) {
+        let cursor = Point::new(at.x, at.y);
+        let moved = Event::Mouse(mouse::Event::CursorMoved { position: cursor });
+        for published in self.dispatch(cursor, &moved) {
+            self.settle(published);
+        }
+    }
+
+    /// A drag still under way: the pointer arrives, presses, and travels to a
+    /// second point without letting go.
+    pub(super) fn drag_from(&mut self, at: Pt, to: Pt) {
+        let start = Point::new(at.x, at.y);
+        let end = Point::new(to.x, to.y);
+        for (cursor, event) in [
+            (
+                start,
+                Event::Mouse(mouse::Event::CursorMoved { position: start }),
+            ),
+            (
+                start,
+                Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            ),
+            (
+                end,
+                Event::Mouse(mouse::Event::CursorMoved { position: end }),
+            ),
+        ] {
+            for published in self.dispatch(cursor, &event) {
+                self.settle(published);
+            }
+        }
+    }
+
+    /// Builds the tree, hands it one event, and keeps what the tree remembered
+    /// along with the hand it asked for.
+    ///
+    /// A tree that reports itself outdated has no hand to give: its layout no
+    /// longer answers for the pointer. The runtime rebuilds and asks again, and
+    /// so does this, with no event the second time so nothing is delivered
+    /// twice.
     fn dispatch(&mut self, cursor: Point, event: &Event) -> Vec<UiEvent> {
+        let mut published = self.deliver(cursor, std::slice::from_ref(event));
+        if matches!(self.state, State::Outdated) {
+            published.extend(self.deliver(cursor, &[]));
+        }
+        published
+    }
+
+    /// Builds the tree, hands it the events, and keeps what it remembered.
+    fn deliver(&mut self, cursor: Point, events: &[Event]) -> Vec<UiEvent> {
         let Self {
             app,
             cache,
+            hand,
             renderer,
             size,
             skin,
+            state,
             ui,
             view,
         } = self;
@@ -99,13 +160,20 @@ impl<'a, A: App> Immediate<'a, A> {
             .reads(|reads| tree::render(&ui.root, ui, reads, view, skin, Clock::default(), None));
         let mut interface = UserInterface::build(element, *size, std::mem::take(cache), renderer);
         let mut published: Vec<UiEvent> = Vec::new();
-        drop(interface.update(
-            std::slice::from_ref(event),
+        let (settled, _) = interface.update(
+            events,
             Cursor::Available(cursor),
             renderer,
             &mut clipboard::Null,
             &mut published,
-        ));
+        );
+        if let State::Updated {
+            mouse_interaction, ..
+        } = &settled
+        {
+            *hand = *mouse_interaction;
+        }
+        *state = settled;
         *cache = interface.into_cache();
         published
     }
