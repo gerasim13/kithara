@@ -746,8 +746,8 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
     let channels = usize::from(Consts::CH);
     let source = sine(frames * 8);
     assert!(
-        f64::from(Consts::SR) * f64::from(WarpRenderer::RATE_SMOOTH_SECONDS) < f64_of(frames),
-        "configured rate time constant fits one output quantum"
+        WarpConfig::builder().build().rate_smooth_frames().get() < frames,
+        "configured rate smoothing fits one output quantum"
     );
 
     fx.prepare(spec());

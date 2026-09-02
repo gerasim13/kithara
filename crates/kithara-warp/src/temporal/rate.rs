@@ -1,9 +1,14 @@
+/// One coherent live rate target loaded from a single atomic word.
+///
+/// The high 32 bits carry the monotonic request revision and the low 32 bits
+/// carry the requested `f32` speed. Packing prevents the worker from pairing a
+/// new speed with an older revision.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RateTarget(u64);
 
 impl RateTarget {
     pub(super) fn pack(speed: f32, revision: u32) -> u64 {
-        (u64::from(revision) << 32) | u64::from(speed.to_bits())
+        (u64::from(revision) << u32::BITS) | u64::from(speed.to_bits())
     }
 
     pub(super) fn revision_from(packed: u64) -> u32 {

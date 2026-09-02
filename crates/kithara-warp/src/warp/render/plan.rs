@@ -129,7 +129,7 @@ where
     ) -> Result<usize, ElasticError> {
         match prepared {
             PreparedQuantum::Exact(exact) => Self::exact_source_frames(exact),
-            PreparedQuantum::Legacy { source_frames, .. } => Ok(*source_frames),
+            PreparedQuantum::FrameCount { source_frames, .. } => Ok(*source_frames),
         }
     }
 
@@ -209,7 +209,7 @@ where
             && !self.can_passthrough(target)
     }
 
-    fn legacy_quantum(
+    fn frame_count_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
@@ -220,7 +220,7 @@ where
         let (_, speed, _) =
             Self::preview_speed_from(applied_speed, target, self.output_quantum_limit())?;
         let source_frames = self.source_frames_for_quantum(meta, remaining, speed)?;
-        Ok(PreparedQuantum::Legacy {
+        Ok(PreparedQuantum::FrameCount {
             activation: None,
             source_frames,
             rate,
@@ -250,7 +250,7 @@ where
         }
         let (_, speed, _) =
             Self::preview_speed_from(self.applied_speed, target, self.output_quantum_limit())?;
-        Ok(PreparedQuantum::Legacy {
+        Ok(PreparedQuantum::FrameCount {
             activation: None,
             source_frames: frames,
             rate,
@@ -277,7 +277,7 @@ where
         {
             return Ok(PreparedQuantum::Exact(exact));
         }
-        self.legacy_quantum(meta, remaining, self.applied_speed, rate)
+        self.frame_count_quantum(meta, remaining, self.applied_speed, rate)
     }
 
     fn prepared_activation(
@@ -335,7 +335,7 @@ where
         if !stretch.is_finite() || stretch <= 0.0 {
             return Err(ElasticError::InvalidRate(stretch));
         }
-        // Legacy partitioning may carry almost one output frame from an
+        // Frame-count partitioning may carry almost one output frame from an
         // earlier sub-frame span, so leave that frame outside this block.
         let output_limit = max_output_frames
             .checked_sub(1)

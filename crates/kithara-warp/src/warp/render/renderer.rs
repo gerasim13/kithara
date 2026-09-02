@@ -7,6 +7,7 @@ use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
     ElasticCursor, ElasticEngine, ElasticError, ElasticRequest, ElasticSpanPlan, StretchKind,
 };
+use num_traits::cast::AsPrimitive;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
@@ -42,7 +43,7 @@ impl PreparedActivation {
 
 pub(super) enum PreparedQuantum {
     Exact(PreparedExact),
-    Legacy {
+    FrameCount {
         activation: Option<PreparedActivation>,
         source_frames: usize,
         rate: RateTarget,
@@ -55,7 +56,7 @@ impl PreparedQuantum {
     pub(super) fn bind(&mut self, snapshot: Option<RenderSnapshot>) {
         match self {
             Self::Exact(exact) => exact.snapshot = snapshot,
-            Self::Legacy {
+            Self::FrameCount {
                 snapshot: bound, ..
             } => *bound = snapshot,
         }
@@ -64,28 +65,28 @@ impl PreparedQuantum {
     pub(super) fn snapshot(&self) -> Option<&RenderSnapshot> {
         match self {
             Self::Exact(exact) => exact.snapshot.as_ref(),
-            Self::Legacy { snapshot, .. } => snapshot.as_ref(),
+            Self::FrameCount { snapshot, .. } => snapshot.as_ref(),
         }
     }
 
     pub(super) const fn rate(&self) -> RateTarget {
         match self {
             Self::Exact(exact) => exact.rate,
-            Self::Legacy { rate, .. } => *rate,
+            Self::FrameCount { rate, .. } => *rate,
         }
     }
 
     pub(super) const fn activation(&self) -> Option<PreparedActivation> {
         match self {
             Self::Exact(exact) => exact.activation,
-            Self::Legacy { activation, .. } => *activation,
+            Self::FrameCount { activation, .. } => *activation,
         }
     }
 
     pub(super) fn bind_activation(&mut self, activation: PreparedActivation) {
         match self {
             Self::Exact(exact) => exact.activation = Some(activation),
-            Self::Legacy {
+            Self::FrameCount {
                 activation: bound, ..
             } => *bound = Some(activation),
         }
@@ -94,7 +95,7 @@ impl PreparedQuantum {
     pub(super) const fn speed(&self) -> f32 {
         match self {
             Self::Exact(exact) => exact.speed,
-            Self::Legacy { speed, .. } => *speed,
+            Self::FrameCount { speed, .. } => *speed,
         }
     }
 }
@@ -182,7 +183,6 @@ where
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     const DIRECT_SOURCE_FRAME_LIMIT: usize = Self::MAX_OUTPUT_FRAMES * 4;
-    pub(super) const RATE_SMOOTH_SECONDS: f32 = 0.00025;
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
@@ -231,6 +231,8 @@ where
         let current_kind = controls.backend();
         let plan = controls.region_plan();
         let speed = controls.speed();
+        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
+        let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             current_kind,
             spec,
@@ -257,7 +259,7 @@ where
             applied_speed: SmoothedParam::new(
                 speed,
                 SmootherConfig {
-                    smooth_seconds: Self::RATE_SMOOTH_SECONDS,
+                    smooth_seconds: smooth_frames / sample_rate,
                     ..SmootherConfig::default()
                 },
                 spec.sample_rate,

@@ -56,7 +56,7 @@ impl RenderCell {
             };
             fence(Ordering::Acquire);
             if self.version.load(Ordering::Acquire) == before {
-                return raw.build();
+                return RenderSnapshot::try_from(raw).ok();
             }
             spin_loop();
         }
@@ -114,31 +114,36 @@ struct RawSnapshot {
     frontier_output: i64,
 }
 
-impl RawSnapshot {
-    fn build(self) -> Option<RenderSnapshot> {
-        let sample_rate = NonZeroU32::new(self.sample_rate)?;
-        let session_beats = if self.beats_present {
+impl TryFrom<RawSnapshot> for RenderSnapshot {
+    type Error = &'static str;
+
+    fn try_from(raw: RawSnapshot) -> Result<Self, Self::Error> {
+        let sample_rate = NonZeroU32::new(raw.sample_rate).ok_or("sample rate is zero")?;
+        let session_beats = if raw.beats_present {
             Some(
-                SessionBeat::new(f64::from_bits(self.beat_start)).ok()?
-                    ..SessionBeat::new(f64::from_bits(self.beat_end)).ok()?,
+                SessionBeat::new(f64::from_bits(raw.beat_start))
+                    .map_err(|_| "beat start is invalid")?
+                    ..SessionBeat::new(f64::from_bits(raw.beat_end))
+                        .map_err(|_| "beat end is invalid")?,
             )
         } else {
             None
         };
         let transport_revision =
-            NonZeroU64::new(self.transport_revision).map(TransportRevision::from_raw);
+            NonZeroU64::new(raw.transport_revision).map(TransportRevision::from_raw);
         let context = RenderContext::new(
-            SessionFrame::new(self.output_start)..SessionFrame::new(self.output_end),
+            SessionFrame::new(raw.output_start)..SessionFrame::new(raw.output_end),
             sample_rate,
             session_beats,
-            SessionEpoch::new(self.session_epoch),
+            SessionEpoch::new(raw.session_epoch),
             transport_revision,
-        )?;
+        )
+        .ok_or("render context is invalid")?;
         let frontier = PresentationFrontier::builder()
-            .source(self.frontier_source)
-            .output(SessionFrame::new(self.frontier_output))
+            .source(raw.frontier_source)
+            .output(SessionFrame::new(raw.frontier_output))
             .build();
-        Some(RenderSnapshot { context, frontier })
+        Ok(Self { context, frontier })
     }
 }
 

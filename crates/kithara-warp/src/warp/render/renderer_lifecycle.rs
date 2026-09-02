@@ -209,7 +209,7 @@ where
             PreparedQuantum::Exact(exact) => {
                 self.render_prepared_exact(meta, &samples, channels, exact, direct)
             }
-            PreparedQuantum::Legacy { rate, speed, .. } => {
+            PreparedQuantum::FrameCount { rate, speed, .. } => {
                 self.exact_cursor = None;
                 self.render_active(meta, &samples, speed, channels, frames)
                     .and_then(|()| {
@@ -296,7 +296,7 @@ where
             return None;
         }
         chunk.meta.render_revision = prepared.rate().revision();
-        if let PreparedQuantum::Legacy { rate, speed, .. } = &prepared
+        if let PreparedQuantum::FrameCount { rate, speed, .. } = &prepared
             && self.can_passthrough(*speed)
         {
             let next_speed =
