@@ -650,11 +650,15 @@ async fn latest_rate_wins_after_a_control_burst(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::signalsmith_128(StretchKind::Signalsmith, 128, 441)]
+#[case::signalsmith_128(
+    StretchKind::Signalsmith,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES
+)]
 #[case::signalsmith_512(StretchKind::Signalsmith, 512, 639)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_128(StretchKind::Bungee, 128, 441)
+    case::bungee_128(StretchKind::Bungee, BLOCK_FRAMES, INDUSTRY_RESPONSE_BUDGET_FRAMES)
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),

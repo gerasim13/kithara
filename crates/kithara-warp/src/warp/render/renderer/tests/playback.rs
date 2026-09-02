@@ -26,11 +26,15 @@ fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(controls)
 }
 
-fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
+fn render_with_tail(
+    fx: &mut WarpRenderer,
+    input: &[f32],
+    input_block_frames: usize,
+) -> (Vec<f32>, usize) {
     let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
-    let block = 4096 * usize::from(Consts::CH);
+    let block = input_block_frames * usize::from(Consts::CH);
     let mut frame_offset = 0_u64;
     for data in input.chunks(block) {
         if let Some(c) = render_serviced(fx, chunk_at(&pools, data, frame_offset)) {
@@ -64,8 +68,8 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     (out, tail_frames)
 }
 
-fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
-    render_with_tail(fx, input).0
+fn render(fx: &mut WarpRenderer, input: &[f32], input_block_frames: usize) -> Vec<f32> {
+    render_with_tail(fx, input, input_block_frames).0
 }
 
 fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64) -> usize {
@@ -101,25 +105,29 @@ fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, 128, [510, 508, 510])
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rate_transition_partitions_stay_inside_the_rate_envelope(#[case] backend: StretchKind) {
-    const QUANTUM_FRAMES: usize = 128;
-    const PARTITIONS: [usize; 3] = [510, 508, 510];
-
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, 128, [510, 508, 510])
+)]
+fn rate_transition_partitions_stay_inside_the_rate_envelope(
+    #[case] backend: StretchKind,
+    #[case] quantum_frames: usize,
+    #[case] partitions: [usize; 3],
+) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(Arc::clone(&controls))
         .render_quantum_frames(
-            NonZeroUsize::new(QUANTUM_FRAMES).expect("fixture quantum is non-zero"),
+            NonZeroUsize::new(quantum_frames).expect("fixture quantum is non-zero"),
         )
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     let mut frame_offset = 0_u64;
-    for (index, frames) in PARTITIONS.into_iter().enumerate() {
+    for (index, frames) in partitions.into_iter().enumerate() {
         if index == 1 {
             controls.set_speed(4.0);
         }
@@ -216,22 +224,32 @@ fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
     assert!(output.samples.iter().all(|sample| sample.is_finite()));
 }
 
-fn run_keylocked_with_tail(kind: StretchKind, speed: f32, in_frames: usize) -> (Vec<f32>, usize) {
+fn run_keylocked_with_tail(
+    kind: StretchKind,
+    speed: f32,
+    in_frames: usize,
+    input_block_frames: usize,
+) -> (Vec<f32>, usize) {
     let input = sine(in_frames);
-    render_with_tail(&mut keylocked(kind, speed), &input)
+    render_with_tail(&mut keylocked(kind, speed), &input, input_block_frames)
 }
 
-fn run_vinyl(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
+fn run_vinyl(
+    kind: StretchKind,
+    speed: f32,
+    in_frames: usize,
+    input_block_frames: usize,
+) -> Vec<f32> {
     let input = sine(in_frames);
-    render(&mut vinyl(kind, speed), &input)
+    render(&mut vinyl(kind, speed), &input, input_block_frames)
 }
 
 /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
 /// Shared across every compiled-in backend.
-fn assert_half_speed_contract(kind: StretchKind) {
+fn assert_half_speed_contract(kind: StretchKind, input_block_frames: usize) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
-    let (out, tail_frames) = run_keylocked_with_tail(kind, 0.5, in_frames);
+    let (out, tail_frames) = run_keylocked_with_tail(kind, 0.5, in_frames, input_block_frames);
     let out_frames = out.len() / channels;
     let timeline_frames = out_frames - tail_frames;
     let expected_timeline = in_frames * 2;
@@ -264,22 +282,22 @@ fn assert_half_speed_contract(kind: StretchKind) {
     );
 }
 
-fn assert_unity_contract(kind: StretchKind) {
+fn assert_unity_contract(kind: StretchKind, input_block_frames: usize) {
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
     let input = sine(in_frames);
-    let out = render(&mut keylocked(kind, 1.0), &input);
+    let out = render(&mut keylocked(kind, 1.0), &input, input_block_frames);
     assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
 }
 
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, 4096)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
-    assert_half_speed_contract(backend);
-    assert_unity_contract(backend);
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, 4096))]
+fn half_speed_and_unity_contracts(#[case] backend: StretchKind, #[case] input_block_frames: usize) {
+    assert_half_speed_contract(backend, input_block_frames);
+    assert_unity_contract(backend, input_block_frames);
 }
 
 #[kithara::test]
@@ -668,13 +686,16 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, 4096)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind) {
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, 4096))]
+fn vinyl_speed_scales_duration_and_pitch(
+    #[case] backend: StretchKind,
+    #[case] input_block_frames: usize,
+) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-    let out = run_vinyl(backend, 2.0, in_frames);
+    let out = run_vinyl(backend, 2.0, in_frames, input_block_frames);
     let out_frames = out.len() / channels;
     assert!(
         out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,

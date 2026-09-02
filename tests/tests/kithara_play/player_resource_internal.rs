@@ -321,29 +321,29 @@ async fn read_returns_constant_samples_full() {
 }
 
 #[kithara::test]
-fn full_read_keeps_exactly_one_callback_prefetched() {
-    const CALLBACK_FRAMES: usize = 512;
-
+#[case::industry(128)]
+#[case::large(512)]
+fn full_read_keeps_exactly_one_callback_prefetched(#[case] callback_frames: usize) {
     let emitted = Arc::new(AtomicU64::new(0));
     let reader = ChunkReader::new(Arc::clone(&emitted));
     let resource = Resource::from_reader(reader, None);
     let mut player = PlayerResource::new(resource, Arc::from("chunked"), &pools())
         .expect("player resource fits the test pool budget");
-    let mut left = vec![0.0f32; CALLBACK_FRAMES];
-    let mut right = vec![0.0f32; CALLBACK_FRAMES];
+    let mut left = vec![0.0f32; callback_frames];
+    let mut right = vec![0.0f32; callback_frames];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
 
-    let result = player.read(&mut output, 0..CALLBACK_FRAMES, &RtMetrics::default());
+    let result = player.read(&mut output, 0..callback_frames, &RtMetrics::default());
 
     assert_eq!(
         result,
         BlockReadOutcome::Full {
-            frames: CALLBACK_FRAMES
+            frames: callback_frames
         }
     );
     assert_eq!(
         emitted.load(Ordering::Relaxed),
-        2 * CALLBACK_FRAMES as u64,
+        2 * u64::try_from(callback_frames).expect("fixture callback fits u64"),
         "a successful callback consumes one block and prefetches exactly one block",
     );
 }
