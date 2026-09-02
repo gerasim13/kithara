@@ -12,19 +12,23 @@ consuming crate needs `serde` and nothing else.
 
 ## What The Derive Emits
 
-For `struct C<G> where W`, from every field not carrying `#[patch(skip)]`:
+From a configuration struct, taking every field not carrying `#[patch(skip)]`,
+the derive emits two items in the same module:
 
-- `struct CPatch`, with `C`'s own visibility, deriving `Clone`, `Debug`,
-  `Default` and `Deserialize`, and carrying `#[serde(default,
-  deny_unknown_fields)]` and `#[non_exhaustive]`.
-- `impl<G> C<G> where W { fn apply(&mut self, patch: CPatch) }`.
+- the patch struct, named after the configuration with a `Patch` suffix,
+  carrying the configuration's own visibility, deriving `Clone`, `Debug`,
+  `Default` and `Deserialize`, and attributed `#[serde(default,
+  deny_unknown_fields)]` and `#[non_exhaustive]`;
+- an inherent `apply` on the configuration itself, taking that patch by value
+  and repeating the configuration's own generics and where-clause.
 
-`CPatch` carries no generic parameters. That is the whole reason the derive
-exists: `struct-patch`, the crate this replaced, copies a struct's generics onto
-the patch it generates, so a patch of a generic configuration whose
-generic-carrying fields are skipped has a type parameter no field uses and does
-not compile. Every configuration in this workspace is generic over its pools,
-its stream, or its resampler backend, and none of those is a document key.
+The patch carries no generic parameters of its own. That is the whole reason the
+derive exists: `struct-patch`, the crate this replaced, copies a struct's
+generics onto the patch it generates, so a patch of a generic configuration
+whose generic-carrying fields are skipped has a type parameter no field uses and
+does not compile. Every configuration in this workspace is generic over its
+pools, its stream, or its resampler backend, and none of those is a document
+key.
 
 ## Field Mapping
 

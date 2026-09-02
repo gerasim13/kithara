@@ -117,50 +117,6 @@ pub struct AbrSettings {
     pub up_hysteresis_ratio: f64,
 }
 
-/// Compares every setting except `cancel`, which is runtime wiring rather
-/// than a value — `CancelToken` has no equality of its own, and the field
-/// already carries `#[patch(skip)]` for the same reason. Required so
-/// `kithara-stream` can nest `AbrSettings` behind `#[patch(name = "...")]`:
-/// `struct_patch`'s `Patch::into_patch_by_diff` diffs a nested field by
-/// comparing the pre-patch and post-patch values.
-impl PartialEq for AbrSettings {
-    fn eq(&self, other: &Self) -> bool {
-        // Destructured without `..` deliberately: a field added to this
-        // `#[non_exhaustive]` struct must not slip out of equality silently.
-        // The compiler names it here first.
-        let Self {
-            bandwidth_emit_min_interval,
-            buffer_emit_min_delta,
-            buffer_emit_min_interval,
-            min_buffer_for_up_switch,
-            min_switch_interval,
-            throughput_sample_min_interval,
-            urgent_downswitch_buffer,
-            cancel: _,
-            initial_throughput_bps,
-            max_bandwidth_bps,
-            bandwidth_emit_min_delta_ratio,
-            down_hysteresis_ratio,
-            throughput_safety_factor,
-            up_hysteresis_ratio,
-        } = self;
-
-        *bandwidth_emit_min_interval == other.bandwidth_emit_min_interval
-            && *buffer_emit_min_delta == other.buffer_emit_min_delta
-            && *buffer_emit_min_interval == other.buffer_emit_min_interval
-            && *min_buffer_for_up_switch == other.min_buffer_for_up_switch
-            && *min_switch_interval == other.min_switch_interval
-            && *throughput_sample_min_interval == other.throughput_sample_min_interval
-            && *urgent_downswitch_buffer == other.urgent_downswitch_buffer
-            && *initial_throughput_bps == other.initial_throughput_bps
-            && *max_bandwidth_bps == other.max_bandwidth_bps
-            && *bandwidth_emit_min_delta_ratio == other.bandwidth_emit_min_delta_ratio
-            && *down_hysteresis_ratio == other.down_hysteresis_ratio
-            && *throughput_safety_factor == other.throughput_safety_factor
-            && *up_hysteresis_ratio == other.up_hysteresis_ratio
-    }
-}
-
 impl Default for AbrSettings {
     fn default() -> Self {
         Self::builder().build()
@@ -312,7 +268,7 @@ impl Drop for AbrController {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::{AbrSettings, AbrSettingsPatch};
@@ -331,22 +287,6 @@ mod tests {
         assert!(
             (settings.down_hysteresis_ratio - 0.55).abs() < f64::EPSILON,
             "a silent field must keep its value"
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn equality_reads_the_settings_and_not_the_injected_token() {
-        let carrying_a_parent = AbrSettings::builder().cancel(CancelToken::never()).build();
-
-        assert_eq!(
-            carrying_a_parent,
-            AbrSettings::builder().build(),
-            "`cancel` is injected wiring, not a setting, so it stays out of equality"
-        );
-        assert_ne!(
-            AbrSettings::builder().build(),
-            AbrSettings::builder().down_hysteresis_ratio(0.55).build(),
-            "a moved knob is a different setting"
         );
     }
 

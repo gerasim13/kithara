@@ -144,16 +144,13 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 ## Configuration document entry point
 
 `FileConfig<S>` is the one configuration struct this crate has: the tunables and the per-call
-wiring live in it together. `FileConfigPatch` is the second way in: a configuration document types
-into it and `apply` writes only the fields the document names, leaving the rest of `FileConfig`
-standing. It is hand-written rather than derived, because `struct-patch` copies a struct's
-generics onto the patch it generates and `FileConfig<S>` is generic. `extension: Option<String>`
-and `look_ahead_bytes: Option<u64>` are already optional on the config, so the patch declares them
-as bare `Option` too and a document names a plain value under `extension` / `look_ahead_bytes`,
-not `Some(value)`. `tmp_claim_poll_interval` is read through
+wiring live in it together. `#[derive(Patch)]` generates `FileConfigPatch` beside it, and `apply`
+writes only the fields the document names, leaving the rest of `FileConfig` standing.
+`extension: Option<String>` and `look_ahead_bytes: Option<u64>` are already optional on the
+config, so a document names a plain value under `extension` / `look_ahead_bytes`, not
+`Some(value)`. `tmp_claim_poll_interval` is read through
 `serde(with = "humantime_serde::option")`, so a document writes `25ms` rather than a raw
-millisecond count. `Deserialize` only, never `Serialize`: a typed patch holds resolved secrets in
-the clear.
+millisecond count.
 
 `kithara-app`'s `file:` section is that document's spelling. It types into `FileConfigPatch`,
 `main` hands it to `AppConfig::file`, and every track is opened with that value:

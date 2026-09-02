@@ -243,133 +243,73 @@ its entry until the version is bumped — acceptable for a library of stable fil
 
 ## Configuration document
 
-The application is configured by a document, in two layers. `crates/kithara-app/app.yaml` is what this build
-ships with: `build.rs` embeds its text verbatim and the application parses that same text at startup, so the
-build decides nothing about what a field means. A `kithara.yaml` beside the executable is laid over it, and
-`--config <path>` names one explicitly; the explicit path must exist, the conventional one may be absent. The
-second layer is how a deployed binary is reconfigured without a rebuild.
+The application is configured by a document, in two layers. `crates/kithara-app/app.yaml` is what this build ships
+with: `build.rs` embeds its text verbatim and the application parses that same text at startup, so the build decides nothing
+about what a field means. A `kithara.yaml` beside the executable is laid over it — `--config <path>` names one
+explicitly, and the explicit path must exist where the conventional one may be absent. That second layer reconfigures a deployed
+binary without a rebuild.
 
-`app.yaml` must never name `ui:` or `draw_pool:`. Both are `#[cfg(feature = "gui")]` on `Document` —
-the first sections gated that way — so a `lib-only` build's `Document` declares neither field at all.
-That is the shape the workspace's own integration suites build against: they load this exact shipped
-document through `Config::load(None, None)` from a `lib-only` `kithara-app`. `deny_unknown_fields`
-refuses any key `Document` does not declare for the build that reads it, so either section in
-`app.yaml` would refuse to parse under `lib-only` while typing fine under `gui`. Any future
-`#[cfg(feature = "gui")]` section carries the same constraint.
+`app.yaml` must never name `ui:`, `draw_pool:`, or any future `#[cfg(feature = "gui")]` section: a `lib-only` build's
+`Document` declares no such field, and the workspace's integration suites load this exact shipped document through
+`Config::load(None, None)` from a `lib-only` build.
 
-The pipeline is merge → expand → type, and the order is what keeps secrets out of the logs. Merging and
-expansion both work on the untyped YAML tree, and only the expanded tree is deserialized into
-`document::schema::Document`. A schema failure is therefore reported from the *pre*-expansion tree, so the
-message names `$KITHARA_DRM_PROD_KEY` rather than the value behind it. `Config` keeps that pre-expansion tree
-and prints it from both `Config::dump` (`--dump-config`) and its own `Debug`; the typed tree carries resolved
-secrets and is deserialize-only, so nothing serializes it.
+The pipeline is merge → expand → type, and that order is what keeps secrets out of the logs: both earlier steps work
+on the untyped YAML tree, only the expanded tree is deserialized into `document::schema::Document`, and a schema
+failure is reported from the *pre*-expansion tree, naming `$KITHARA_DRM_PROD_KEY` rather than the value behind it.
+`Config` keeps that pre-expansion tree and prints it from `Config::dump` (`--dump-config`) and its own `Debug`; the
+typed tree carries resolved secrets and is deserialize-only, so nothing serializes it.
 
-The merge contract (`document::merge`) is: two mappings merge key by key, so a document names only what it
-changes. Every other pair replaces — a sequence such as `playlist.tracks` or `net.compression` is one
-setting taken whole, never appended to. An explicit `null` under a named key blanks that key's value and keeps
-the key; under a crate section that means the field types as `None`, which is the same as never naming it, so
-the crate's own default stands. An overlay file with nothing in it — empty, comments only, a bare `---` — contributes nothing and
-leaves the shipped document standing, because the root carries no key and so nothing there could have been
-named for blanking. An overlay whose root is a scalar or a sequence is refused as `LoadError::Schema` naming
-that one file.
+The merge contract (`document::merge`): two mappings merge key by key, so an overlay names only what it changes;
+every other pair replaces, so a sequence such as `playlist.tracks` or `net.compression` is one setting taken whole,
+never appended to. An explicit `null` blanks a key's value and keeps the key — under a crate section the field then
+types as `None`, the same as never naming it, so the crate default stands. An overlay with nothing in it (empty,
+comments only, a bare `---`) leaves the shipped document standing, its root having named no key to blank; one whose
+root is a scalar or a sequence is refused as `LoadError::Schema` naming that file.
 
-Secrets are never inlined in a document. A provider's `cipher_key`, and any header value, may be a
-`$KITHARA_...` reference; the values live in the gitignored workspace `.env` or in the build shell. At run time
-a reference resolves from the process environment first and from the table `build.rs` baked behind it second. A
-reference that resolves nowhere — unset, or set to an empty string — stops startup rather than degrading, and
-`MissingEnv` names every unresolved reference at once with the position it sits at
-(`drm.providers[0].cipher_key`). The position is load-bearing: expansion runs over the merged tree, so without
-it an operator cannot tell which of the two documents to fix.
+Secrets are never inlined. A provider's `cipher_key`, and any header value, may be a `$KITHARA_...` reference; the
+values live in the gitignored workspace `.env` or in the build shell, and a reference resolves from the process
+environment first and the table `build.rs` baked behind it second. One that resolves nowhere — unset, or empty —
+stops startup rather than degrading, and `MissingEnv` names every unresolved reference at once with its position
+(`drm.providers[0].cipher_key`). The position is load-bearing: expansion runs over the merged tree, so without it an
+operator cannot tell which document to fix.
 
-`build.rs` emits that second resolution table as the crate-private `baked::baked_env`. It carries only the
-names this build found a value for, wrapping each in `obfstr!()` so a shipped secret is not a plain run of
-bytes in `strings` output; a name it had no value for is answered `None` and refused at startup. Builds that
-talk to a real key server — today the CI `network*` lanes — set `KITHARA_DRM_REQUIRE` (any
-non-empty value): an upfront pass then validates every reference in the document, the whole tree rather than
-the DRM providers alone, and fails the build listing all missing names with their positions.
+`build.rs` emits that table as the crate-private `baked::baked_env`, carrying only the names this build found a value
+for and wrapping each in `obfstr!()` so a shipped secret is not a plain run of bytes in `strings` output; a name it had
+no value for is answered `None` and refused at startup. Builds that talk to a real key server — today the CI
+`network*` lanes — set `KITHARA_DRM_REQUIRE` to any non-empty value, and an upfront pass then validates the whole
+tree, failing the build with every missing name and its position.
 
-### Crate sections, and the transfer that is under way
+### Crate sections
 
-A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once, in
-the crate that defines it. `pools` is the one section that cannot: `pool_schema!` generates a region type per consumer,
-so there is no crate-level type to derive a patch on. It is composed here instead, out of `kithara-bufpool`'s own
-`PoolConfigPatch` — one per pool this application declares — which keeps the per-pool value spelled once even though the
-region shape is local. `net` is the first of them: it is `kithara::net::NetOptionsPatch`, and what it may say is the
-`kithara-net` contract rather than this crate's. `main` builds `NetOptions` from the crate default, applies that
-section, and only then lets `--insecure` force verification off; the flag is an override that can turn verification
-off and never back on.
+A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
+in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, and under `gui`, `ui`
+and `draw_pool`. Which knobs a section may name is the owning crate's contract, and that crate's `CONTEXT.md` holds
+the argument for each knob left out.
 
-`network` predated that shape and is now gone. `compression` and `is_insecure` moved to `net` first; `size_probe_method`
-was the field left behind, and it has now moved to `hls` — `kithara::hls::HlsConfigPatch`, what a document may say about
-`kithara-hls`'s own `HlsConfig`. Naming `network` at all is refused by `deny_unknown_fields` rather than parsed and
-ignored, which is what makes the move a move rather than a second reader going quiet. Two tests hold that refusal: one
-in `document::schema` at the type, one in `document::load` through the whole merge-expand-type pipeline.
+`pools` is the one section with no crate type to carry: `pool_schema!` generates a region type per consumer, so it is
+composed here out of `kithara-bufpool`'s `PoolConfigPatch`, one per pool this application declares. `net` is applied
+before `--insecure`, an override that can turn verification off and never back on.
 
-`hls` is `HlsConfigPatch` whole, and all eight knobs it declares travel. `file` is
-`kithara::file::FileConfigPatch`, and `audio` is `kithara::audio::AudioConfigPatch`, whose two declared knobs are
-`preload_chunks` and `audio_buffer_chunks`. `AppConfig` carries all three as patches, and
-`sources::build_resource_config` sets them on `ResourceConfig`, which holds them until a track exists: an `HlsConfig`
-needs a `url` and a `store`, a `FileConfig` needs a source, so neither can be built before then.
-`kithara-play/src/resource/build.rs` builds the real config for the track and applies the patch onto it. Nothing is
-copied field by field along the way, so a knob `kithara-audio`, `kithara-hls`, or `kithara-file` adds later reaches the
-built stream with no edit here. `Document` declares no `resource:` section at all; `resource.hls`, `resource.file`, and
-`resource.audio` are refused because the top-level `hls:`, `file:`, and `audio:` sections are already this document's
-spelling for those knobs and a second path to one value is what a configuration document exists to prevent.
+Two sections predated this shape and are gone: `network`, whose fields moved to `net` and `hls`, and `playback`,
+whose single `crossfade_seconds` was this crate's own copy of `PlayerConfig::crossfade_duration`. Naming either is
+refused rather than ignored — that is what makes a move a move instead of a second reader going quiet — and
+`a_playback_section_is_rejected` plus two `network` tests hold it.
 
-`AudioConfigPatch` leaves out three more of `AudioConfig`'s own fields, so naming them one level under `audio:` is
-refused — `consumer_wake_mode` and `block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every
-player-managed resource (and either one can put reads on, or park, the real-time render callback), and
-`host_sample_rate` because every open path writes the rate the engine actually opened.
-`ResourceConfig::preferred_peak_bitrate` is unreachable too, because nothing forwards it to an ABR controller, so a
-document key for it would be one the binary ignores. See `kithara-audio`'s and `kithara-play`'s `CONTEXT.md` for those
-arguments.
+`hls`, `file` and `audio` travel as patches all the way to the track: `AppConfig` carries all three,
+`sources::build_resource_config` sets them on `ResourceConfig`, and `kithara-play/src/resource/build.rs` applies each
+onto the configuration it builds there — nothing is copied field by field, so a knob those crates add later reaches
+the built stream with no edit here.
 
-`HlsConfig` has a ninth knob the patch does not declare at all. Naming `hls.net_options` is refused rather than
-dropped: `net:` is already this document's live spelling for those options, and a second spelling would be a second
-source of truth for one value. See `kithara-hls`'s `CONTEXT.md` for the rest of that argument, and for why
-`initial_abr_mode`, `url`, `base_url`, `discriminator` and `headers` were never document candidates.
+`assets_store` arrives the same way: `main` stops the store builder one step short with `into_config()`, applies the
+patch onto that `AssetStoreConfig`, and opens the store from it. `backend` is the one value `Config::assets_store`
+resolves first — an unnamed backend becomes `StorageBackend::default`, a stable root under the system temp directory,
+and deliberately not `AssetStore::open`'s own fallback, a fresh unique directory per launch that would move the
+on-disk cache every run.
 
-`assets_store` is `kithara::assets::AssetStoreConfigPatch`, and it is the first section the application does not pass
-through whole. Seven of its eight knobs reach `AssetStore::open` unchanged through `maybe_*` setters, where an unset
-value is byte-identical to never calling the setter. `backend` cannot: `open`'s own fallback for an absent backend is a
-fresh unique temp directory per launch, so forwarding an unset value would move the on-disk cache every run. `main`
-therefore calls `Config::store_backend`, which resolves an unnamed backend to `StorageBackend::default` — a stable root
-under the system temp directory. That resolution lives in `document::load` rather than inline at the construction site
-so a test can reach it; two in `document::load` hold it, one for the silent document and one for a named backend.
-
-`queue` is `kithara::queue::QueueConfigPatch`. `AppConfig` carries it and `Deck::build` applies it to the
-`QueueConfig` it builds. Three of the four tunables travel. `should_autoplay` is absent from the patch because a
-release build reads it nowhere — `queue/state.rs:193` drops it under
-`#[cfg(not(any(test, feature = "probe")))]` — and a document key the shipped binary ignores reads as a
-supported control while doing nothing.
-
-`player` is `kithara::play::PlayerConfigPatch`, and it replaced a section named `playback` whose one field
-`crossfade_seconds` was this crate's own copy of `PlayerConfig::crossfade_duration`. The copy is gone rather than
-kept in step, so the value is spelled once, in the crate that defines it; `app.yaml` names
-`player.crossfade_duration: 5.0` because this application has shipped that longer crossfade since before the section
-existed and the crate default is `1.0`. Naming `playback` is refused rather than parsed and ignored, held by
-`a_playback_section_is_rejected`. Engine knobs nest under `player.engine` as an `EngineConfigPatch` rather than
-repeating on the player, because `PlayerConfig` owns the resolved sample rate and hands it to `EngineConfig::builder`,
-and two structs declaring one sample rate would be two sources of truth for it.
-
-Four knobs are absent from those patches, each because something downstream already owns the value.
-`auto_advance_enabled` and `prefetch_duration` are overwritten at `queue/state.rs:202-203` for every queue-driven
-player. `engine.eq_layout` is written by `Deck::build` from `app.eq_bands`, which is itself a document key, so
-declaring both would give one value two spellings with the older one always winning; a layout that is not
-log-spaced arrives at runtime through `PlayerImpl::set_eq_layout`, which is how every construction site in the
-workspace already gets one. `gapless_mode` waits on `GaplessMode` deriving `Deserialize` for its data-carrying
-variant.
-
-`ui` and `draw_pool`, both `#[cfg(feature = "gui")]`, are `kithara::ui::source::UiConfigPatch` and
-`DrawPoolLimitsPatch`. They are two top-level sections rather than one nested pair because
-`UiConfig.draw_buffers` is a *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only
-reaches one through `DrawBuffers::try_new`. `Config::ui` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
-default, build the `DrawBuffers` from it, then build `UiConfig` through
-`UiConfig::builder().draw_buffers(...)` and apply `ui` onto that value — read before build, never
-patched onto an already-built `UiConfig`, and never routed through `UiConfig::default()`, which would
-build and immediately discard a second `PoolRegion`. `AppConfig::ui` carries the result and `AppUi::new`
-takes it by reference instead of calling
-`UiConfig::default()` itself. `main` calls `.ui(document.ui()?)` on the same builder chain as
-`.audio(document.audio())`, `.hls(document.hls())` and `.file(document.file())`;
-the `?` is there because a `draw_pool:` section can name limits the generated schema refuses, and a
-document is refused with a message rather than aborting the process.
+`ui` and `draw_pool` are two top-level sections rather than one nested pair because `UiConfig.draw_buffers` is a
+*built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only reaches one through `DrawBuffers::try_new`.
+`Config::ui` reads `draw_pool` into a `DrawPoolLimits` off the crate default, builds the `DrawBuffers` from it, then
+builds `UiConfig` through `UiConfig::builder().draw_buffers(...)` and applies `ui` onto that value — read before
+build, never onto an already-built `UiConfig`, and never through `UiConfig::default()`, which would build and discard
+a second `PoolRegion`. It returns a `Result` because a `draw_pool:` section can name limits the generated schema
+refuses, and such a document is refused with a message rather than aborting.
