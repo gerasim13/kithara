@@ -369,9 +369,11 @@ variant.
 `UiConfig.draw_buffers` is a *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only
 reaches one through `DrawBuffers::try_new` — see `kithara-ui`'s `CONTEXT.md`, "Configuration Document Entry
 Point". `Config::ui_settings` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
-default, build the `DrawBuffers` from it, then apply `ui` to a `UiConfig` off its own crate default and
-assign the built buffers in afterwards — read before build, never patched onto an already-built
-`UiConfig`. `AppConfig::ui` carries the result and `AppUi::new` takes it by reference instead of calling
+default, build the `DrawBuffers` from it, then build `UiConfig` through
+`UiConfig::builder().draw_buffers(...)` and apply `ui` onto that value — read before build, never
+patched onto an already-built `UiConfig`, and never routed through `UiConfig::default()`, which would
+build and immediately discard a second `PoolRegion`. `AppConfig::ui` carries the result and `AppUi::new`
+takes it by reference instead of calling
 `UiConfig::default()` itself, the same shape `AppConfig::resource` uses for `ResourceSettings`. `main`
 calls `.ui(document.ui_settings()?)` on the same builder chain as `.resource(document.resource_settings())`;
 the `?` is there because a `draw_pool:` section can name limits the generated schema refuses, and a

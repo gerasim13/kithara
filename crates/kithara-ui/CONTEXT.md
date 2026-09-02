@@ -102,8 +102,9 @@ an allocation failure returns `UiDocError::ArenaFull`.
   for pixels that leave the toolkit as a PNG. It is the single owner of the 256-byte row-padding
   arithmetic wgpu imposes; the conformance tests and `capture::Offscreen` both read through it.
 - `draw/pool/` is this crate's buffer home and `perf.no-component-pool-construction` exempts it, the
-  way it exempts `kithara-bufpool`: `DrawBuffers::new` builds the family a host then injects through
-  `UiConfig`, so it is the owner site rather than a component reaching for storage of its own.
+  way it exempts `kithara-bufpool`: `DrawBuffers::new` (or, for a configuration document's limits,
+  `DrawBuffers::try_new`) builds the family a host then injects through `UiConfig`, so it is the owner
+  site rather than a component reaching for storage of its own.
 - The pool family belongs to the host, not to the document. `UiConfig` carries it and every
   document compiled against that configuration shares it, because a `DrawBuffers` clone is an `Arc`
   clone. A host builds its configuration once - `app::Ui` in `new`; `kithara-app` builds one in
@@ -129,9 +130,11 @@ configuration document types into the generated `UiConfigPatch`
 because `UiConfig.draw_buffers` is a *built* value, not a patchable field --
 see "Draw Ownership". `kithara-app`'s `Config::ui_settings` reads
 `DrawPoolLimits` from the document, calls `DrawBuffers::try_new` with it, and
-only then builds `UiConfig` from the crate default plus the document's `ui:`
-overlay, assigning the built buffers in afterwards. `main.rs` is the only
-construction site a document reaches.
+builds `UiConfig` from that value directly through
+`UiConfig::builder().draw_buffers(...)`, applying the document's `ui:`
+overlay afterwards -- `draw_buffers` carries `#[patch(skip)]`, so that later
+`apply` cannot disturb it. One `PoolRegion` is built; `UiConfig::default`
+never runs. `main.rs` is the only construction site a document reaches.
 
 Two fields carry `#[patch(skip)]`, so naming either in a document is refused
 rather than parsed and silently dropped:

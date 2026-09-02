@@ -231,9 +231,10 @@ impl Config {
     pub fn ui_settings(&self) -> Result<UiConfig, PoolError> {
         let mut draw_pool = DrawPoolLimits::default();
         draw_pool.apply(self.document.draw_pool.clone());
-        let mut config = UiConfig::default();
+        let mut config = UiConfig::builder()
+            .draw_buffers(DrawBuffers::try_new(draw_pool)?)
+            .build();
         config.apply(self.document.ui.clone());
-        config.draw_buffers = DrawBuffers::try_new(draw_pool)?;
         Ok(config)
     }
 
@@ -520,12 +521,17 @@ mod tests {
     /// `UiConfig.draw_buffers` is a *built* value: `DrawPoolLimits` only
     /// reaches it through `DrawBuffers::try_new`, so `Config::ui_settings`
     /// reads `draw_pool` before building it rather than patching `ui` onto
-    /// the result afterwards. `131072`, `4`, and `7` are values no crate
-    /// default produces (`max_arena_bytes` defaults to 65536, `max_buffers`
-    /// to 64, `command_capacity` to 512): naming two draw-pool keys rather
-    /// than one is what rules out a whole-struct `apply` that silently
-    /// rebuilt every field from `Default` -- one named value alone cannot
-    /// tell that apart from the real merge, but a second one can.
+    /// the result afterwards. This test proves that both sections reach one
+    /// `UiConfig` through that same code -- the code the binary runs --
+    /// using `131072`, `4`, and `7`, values no crate default produces
+    /// (`max_arena_bytes` defaults to 65536, `max_buffers` to 64,
+    /// `command_capacity` to 512). It does not prove that an unnamed field
+    /// keeps a *merge-seeded* value rather than a whole-struct reset: the
+    /// base `Config::ui_settings` applies onto is `DrawPoolLimits::default`
+    /// itself, so a reset and a real merge are indistinguishable at this
+    /// site. That property is proved separately, by the seeded unit tests in
+    /// `kithara-ui`'s `source::config` module, which apply a patch onto a
+    /// value they seeded themselves.
     #[cfg(feature = "gui")]
     #[kithara::test(native, flash(false))]
     fn the_ui_and_draw_pool_sections_compose_one_ui_config() {
@@ -547,7 +553,9 @@ mod tests {
         assert_eq!(
             ui.draw_buffers.limits().path_capacity,
             128,
-            "a draw-pool knob the document does not name keeps the crate default"
+            "a default-vs-default check: the document never names path_capacity, and \
+             DrawPoolLimits::default already produces 128, so this does not tell a merge \
+             apart from a reset"
         );
     }
 

@@ -21,6 +21,7 @@ use crate::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent,
+        custom::CustomKinds,
         document::{Clock, Ctx},
     },
     shaping::FontPolicy,
@@ -731,6 +732,88 @@ fn a_passed_configuration_reaches_the_compiled_document() {
 
     assert!(
         matches!(error, RunError::Document(UiDocError::ArenaFull { .. })),
+        "{error}"
+    );
+}
+
+/// The invariant [`Config::settings`] documents: `custom_kinds` on a passed
+/// [`UiConfig`] must lose to [`Config::kinds`], never win, because
+/// registering an extension kind is code's business and not a configuration
+/// document's. The fixture document names `ghost-kind`; `settings` claims
+/// that kind is known while `kinds` registers nothing at all. If `Ui::new`
+/// validated against the passed value instead, the document would compile --
+/// see `mount::Custom::leaf` in `render::masonry_tree::mount`, which mounts
+/// an empty box and only logs when a kind is not actually registered, rather
+/// than refusing anything. Asserting the document is refused, and refused
+/// for the fixture's own kind name, is what tells the two sources apart.
+#[kithara::test]
+fn a_passed_configurations_custom_kinds_field_is_ignored() {
+    struct Ghost;
+
+    impl Reads for Ghost {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
+
+    impl App for Ghost {
+        fn document(&self) -> &str {
+            "ghost.klayout.ron"
+        }
+
+        fn skin(&self) -> &Skin {
+            skin()
+        }
+
+        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+            with(self)
+        }
+
+        fn update(&mut self, _event: UiEvent) {}
+    }
+
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "ghost.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "ghost",
+            root: Module(instance: "page", source: "ghost.kmodule.ron",
+                size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "ghost.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "ghost", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Custom(id: "drawn", kind: "ghost-kind",
+                    size: Some((w: Shrink, h: Shrink))),
+            ]))"#,
+    );
+    let endpoints = Registry("unused", EndpointDesc::new(ValueKind::Bool));
+    let settings = UiConfig::builder()
+        .custom_kinds(["ghost-kind".to_owned()].into_iter().collect())
+        .build();
+    let kinds = CustomKinds::default();
+
+    let error = Ui::new(
+        Ghost,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .kinds(&kinds)
+            .settings(&settings)
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .err()
+    .unwrap_or_else(|| panic!("a kind only settings.custom_kinds claims must not compile"));
+
+    assert!(
+        matches!(
+            error,
+            RunError::Document(UiDocError::UnknownCustomKind { ref kind, .. })
+                if kind == "ghost-kind"
+        ),
         "{error}"
     );
 }
