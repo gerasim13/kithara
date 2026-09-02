@@ -8,7 +8,7 @@ mod view;
 
 pub use core::{PlayerImpl, PlayerRuntime};
 
-pub use config::PlayerConfig;
+pub use config::{PlayerConfig, PlayerSettings, PlayerSettingsPatch};
 pub use control::PlayerControl;
 pub use flow::SelectTransition;
 pub use protocol::{Player, PlayerControlSource, PlayerMember};

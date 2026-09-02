@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroU32};
+use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrController;
@@ -6,16 +6,12 @@ use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, StretchControls};
+use struct_patch::Patch;
 
 use crate::{
     PlayWorker,
-    effects::eq::{EqBandConfig, generate_log_spaced_bands},
+    engine::{EngineSettings, EngineSettingsPatch},
     session::SessionDispatcher,
-};
-
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
 };
 
 fn allocate_grid_id() -> BeatGridId {
@@ -23,6 +19,64 @@ fn allocate_grid_id() -> BeatGridId {
         panic!("process-wide beat-grid identity space is exhausted");
     };
     id
+}
+
+/// Player-level knobs a configuration document can override. Engine knobs
+/// (`sample_rate`, `max_slots`, `eq_layout`) live on the nested
+/// [`EngineSettings`] rather than being repeated here: two settings structs
+/// declaring the same value would be a second mutable source of truth for
+/// one number.
+#[derive(Clone, Debug, PartialEq, Builder, Patch)]
+#[builder(state_mod(vis = "pub"))]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
+#[non_exhaustive]
+pub struct PlayerSettings {
+    /// How resources created for this player trim leading/trailing audio.
+    /// Document-unreachable until `GaplessMode` derives `Deserialize`.
+    #[builder(default)]
+    #[patch(skip)]
+    pub gapless_mode: GaplessMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
+    /// in so rendered output never stretches with inserted silence while the
+    /// decode worker catches up. Real-time hosts must keep the default
+    /// (`false`): the audio callback can never block.
+    #[builder(default)]
+    pub block_on_underrun: bool,
+    /// Built-in auto-advance handler. Every queue-driven player has this
+    /// overwritten to `false` at construction
+    /// (`crates/kithara-queue/src/queue/state.rs:202`), so it is not a
+    /// document key.
+    #[builder(default = true)]
+    #[patch(skip)]
+    pub auto_advance_enabled: bool,
+    /// Crossfade duration in seconds. Default: 1.0.
+    #[builder(default = 1.0)]
+    pub crossfade_duration: f32,
+    /// Default playback-rate target (1.0 = normal). Default: 1.0.
+    #[builder(default = 1.0)]
+    pub default_rate: f32,
+    /// Secondary lead time before EOF at which the next queued item is
+    /// loaded. The queue is the canonical owner of this knob and always
+    /// overwrites it at construction
+    /// (`crates/kithara-queue/src/queue/state.rs:203`), so it is not a
+    /// document key.
+    #[builder(default = 3.5)]
+    #[patch(skip)]
+    pub prefetch_duration: f32,
+    /// Engine-level knobs. See [`EngineSettings`] for what a document may
+    /// say under `player.engine`.
+    #[builder(default)]
+    #[patch(name = "EngineSettingsPatch")]
+    pub engine: EngineSettings,
+}
+
+impl Default for PlayerSettings {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Configuration for the player.
@@ -40,16 +94,10 @@ pub struct PlayerConfig<S> {
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     pub(crate) worker: PlayWorker<S>,
-    /// How resources created for this player trim leading/trailing audio.
+    /// Player- and engine-level knobs a configuration document can override.
+    /// See [`PlayerSettings`].
     #[builder(default)]
-    pub(crate) gapless_mode: GaplessMode,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
-    /// in so rendered output never stretches with inserted silence while the
-    /// decode worker catches up. Real-time hosts must keep the default
-    /// (`false`): the audio callback can never block.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
+    pub(crate) settings: PlayerSettings,
     /// Shared ABR controller. When `None`, a default one is created.
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
@@ -59,29 +107,6 @@ pub struct PlayerConfig<S> {
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
-    /// EQ band layout. Default: 10-band log-spaced.
-    #[builder(default = generate_log_spaced_bands(10))]
-    pub(crate) eq_layout: Vec<EqBandConfig>,
-    /// Built-in auto-advance handler. Default: `true`.
-    #[builder(default = true)]
-    pub(crate) auto_advance_enabled: bool,
-    /// Crossfade duration in seconds. Default: 1.0.
-    #[builder(default = 1.0)]
-    pub(crate) crossfade_duration: f32,
-    /// Default playback-rate target (1.0 = normal). Default: 1.0.
-    #[builder(default = 1.0)]
-    pub(crate) default_rate: f32,
-    /// Secondary lead time before EOF at which the next queued item is loaded.
-    #[builder(default = 3.5)]
-    pub(crate) prefetch_duration: f32,
-    /// Sample rate passed to the engine/runtime backend as a hint.
-    /// Default: 44100. Offline/test harnesses set this to drive
-    /// deterministic render at a known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
-    pub(crate) sample_rate: NonZeroU32,
-    /// Maximum concurrent slots in the engine. Default: 4.
-    #[builder(default = 4)]
-    pub(crate) max_slots: usize,
 }
 
 impl<S> Clone for PlayerConfig<S> {
@@ -90,19 +115,11 @@ impl<S> Clone for PlayerConfig<S> {
             grid_id: self.grid_id,
             timestretch: Arc::clone(&self.timestretch),
             worker: self.worker.clone(),
-            gapless_mode: self.gapless_mode,
-            block_on_underrun: self.block_on_underrun,
+            settings: self.settings.clone(),
             abr: self.abr.clone(),
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
             session: self.session.clone(),
-            eq_layout: self.eq_layout.clone(),
-            auto_advance_enabled: self.auto_advance_enabled,
-            crossfade_duration: self.crossfade_duration,
-            default_rate: self.default_rate,
-            prefetch_duration: self.prefetch_duration,
-            sample_rate: self.sample_rate,
-            max_slots: self.max_slots,
         }
     }
 }
@@ -110,14 +127,93 @@ impl<S> Clone for PlayerConfig<S> {
 impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
-            .field("gapless_mode", &self.gapless_mode)
-            .field("eq_layout", &self.eq_layout)
-            .field("auto_advance_enabled", &self.auto_advance_enabled)
-            .field("crossfade_duration", &self.crossfade_duration)
-            .field("default_rate", &self.default_rate)
-            .field("prefetch_duration", &self.prefetch_duration)
-            .field("max_slots", &self.max_slots)
+            .field("settings", &self.settings)
             .field("worker", &self.worker)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::PlayerSettings;
+
+    #[kithara::test]
+    fn defaults_match_the_documented_values() {
+        let settings = PlayerSettings::default();
+
+        assert!(!settings.block_on_underrun);
+        assert!(settings.auto_advance_enabled);
+        assert!((settings.crossfade_duration - 1.0).abs() < f32::EPSILON);
+        assert!((settings.default_rate - 1.0).abs() < f32::EPSILON);
+        assert!((settings.prefetch_duration - 3.5).abs() < f32::EPSILON);
+        assert_eq!(settings.engine.max_slots, 4);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::PlayerSettings;
+
+    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`,
+    /// which emits its token stream verbatim. A typo there would generate a
+    /// patch that accepts anything, and neither the compiler nor clippy
+    /// would say a word -- only a bogus key proves the attribute survived
+    /// generation. `slot_ceiling` is not a prefix of any real field (unlike
+    /// `max_slot`, which would pass this assertion vacuously because the
+    /// error message lists the real `max_slots` field among the valid
+    /// names).
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<super::PlayerSettingsPatch>("slot_ceiling: 8\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("slot_ceiling"), "{error}");
+    }
+
+    /// `prefetch_duration` is a real field on `PlayerSettings` but must not
+    /// be document-reachable: the queue always overwrites it at
+    /// construction (see the field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_queue_owned_prefetch_field_is_not_a_document_key() {
+        let error =
+            serde_yaml_ng::from_str::<super::PlayerSettingsPatch>("prefetch_duration: 8.0\n")
+                .expect_err("a queue-owned field must not be settable from a document");
+
+        assert!(error.to_string().contains("prefetch_duration"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_crossfade_it_names() {
+        let patch: super::PlayerSettingsPatch =
+            serde_yaml_ng::from_str("crossfade_duration: 2.0\n").expect("the document types");
+        let mut settings = PlayerSettings::default();
+        let default_rate = settings.default_rate;
+
+        settings.apply(patch);
+
+        assert!((settings.crossfade_duration - 2.0).abs() < f32::EPSILON);
+        assert!(
+            (settings.default_rate - default_rate).abs() < f32::EPSILON,
+            "a silent field must keep its value"
+        );
+    }
+
+    /// A document reaching `player.engine.sample_rate` lands on the exact
+    /// same `EngineSettings` that `PlayerConfig` hands to `EngineConfig`, so
+    /// the two settings trees cannot drift into two spellings of one value.
+    #[kithara::test(native, flash(false))]
+    fn a_nested_engine_patch_reaches_the_player() {
+        let patch: super::PlayerSettingsPatch =
+            serde_yaml_ng::from_str("engine:\n  sample_rate: 48000\n").expect("the document types");
+        let mut settings = PlayerSettings::default();
+
+        settings.apply(patch);
+
+        assert_eq!(settings.engine.sample_rate.get(), 48_000);
     }
 }

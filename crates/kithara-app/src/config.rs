@@ -6,7 +6,7 @@ use kithara::{
     drm::KeyProcessorRegistry,
     hls::SizeProbeMethod,
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::policy::DomainKeyPolicy,
+    play::{PlayerSettings, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     queue::QueueSettings,
     stream::dl::Downloader,
@@ -112,10 +112,13 @@ pub struct AppConfig {
     #[builder(default = false)]
     #[patch(skip)]
     pub should_accept_invalid_certs: bool,
-    /// Crossfade duration in seconds.
-    #[builder(default = 5.0)]
+    /// Player-level knobs threaded into every deck's `PlayerConfig`. A
+    /// document reaches these through `player`, the same as [`AppConfig::queue`]
+    /// reaches [`QueueSettings`] through `queue` — not through
+    /// [`AppSettings`].
+    #[builder(default)]
     #[patch(skip)]
-    pub crossfade_seconds: f32,
+    pub player: PlayerSettings,
     /// Media duration the broadcast mix tap may run ahead of the packager by.
     /// The app allocates that ring, so it owns its depth: a longer lead rides
     /// out a longer packager stall and pays for it in the memory those
@@ -159,7 +162,7 @@ impl fmt::Debug for AppConfig {
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
             )
-            .field("crossfade_seconds", &self.crossfade_seconds)
+            .field("player", &self.player)
             .field("broadcast_tap_lead", &self.broadcast_tap_lead)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)

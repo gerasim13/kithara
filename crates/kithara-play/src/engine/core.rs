@@ -48,8 +48,8 @@ impl<S> EngineImpl<S> {
             .session
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
-        let max_slots = config.max_slots;
-        let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
+        let max_slots = config.settings.max_slots;
+        let eq_layout = Mutex::new(std::mem::take(&mut config.settings.eq_layout));
         Self {
             config,
             eq_layout,
@@ -83,7 +83,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
-        self.config.sample_rate
+        self.config.settings.sample_rate.get()
     }
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -124,7 +124,7 @@ impl<S> EngineImpl<S> {
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pools().clone(),
-            self.config.sample_rate,
+            self.config.settings.sample_rate.get(),
         )?;
         *player_id = Some(id);
         drop(player_id);
@@ -256,7 +256,7 @@ impl<S> EngineImpl<S> {
 
         {
             let slots = self.slots.lock();
-            if slots.len() >= self.config.max_slots {
+            if slots.len() >= self.config.settings.max_slots {
                 return Err(PlayError::ArenaFull);
             }
         }
@@ -301,11 +301,12 @@ impl<S> EngineImpl<S> {
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
         if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate;
+            return self.config.settings.sample_rate.get();
         }
-        self.session
-            .sample_rate()
-            .map_or(self.config.sample_rate, SessionSampleRate::output)
+        self.session.sample_rate().map_or_else(
+            |_| self.config.settings.sample_rate.get(),
+            SessionSampleRate::output,
+        )
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -313,7 +314,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub const fn max_slots(&self) -> usize {
-        self.config.max_slots
+        self.config.settings.max_slots
     }
 
     #[cfg(any(test, feature = "probe"))]
@@ -356,15 +357,18 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+        self.session.start_player(
+            player_id,
+            self.config.settings.sample_rate.get(),
+            master_volume,
+        )?;
 
         self.running.store(true, Ordering::Release);
 
         info!(
-            sample_rate = self.config.sample_rate,
-            channels = self.config.channels,
-            max_slots = self.config.max_slots,
+            sample_rate = self.config.settings.sample_rate.get(),
+            channels = self.config.settings.channels,
+            max_slots = self.config.settings.max_slots,
             player_id,
             "engine started"
         );

@@ -15,7 +15,7 @@ use kithara::{
     platform::sync::Arc,
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
-        PlayerStatus, Resource, SeekOutcome, SessionDispatcher,
+        PlayerSettings, PlayerStatus, Resource, SeekOutcome, SessionDispatcher,
     },
     signal::AudioSpec,
 };
@@ -61,7 +61,11 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<O
     let session = Arc::new(OfflineSession::new_manual());
     let player_config = PlayerConfig::builder()
         .bus(bus)
-        .crossfade_duration(crossfade_duration)
+        .settings(
+            PlayerSettings::builder()
+                .crossfade_duration(crossfade_duration)
+                .build(),
+        )
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();

@@ -25,8 +25,8 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc, SessionDispatcher,
+        EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings,
+        Resource, ResourceConfig, ResourceSrc, SessionDispatcher,
     },
     queue::{Queue, QueueConfig, QueueSettings, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
@@ -83,8 +83,18 @@ impl Harness {
         let session = Arc::new(OfflineSession::new_manual());
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
-            .crossfade_duration(0.0)
-            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .settings(
+                PlayerSettings::builder()
+                    .crossfade_duration(0.0)
+                    .engine(
+                        EngineSettings::builder()
+                            .sample_rate(
+                                NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
             .worker(worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build();

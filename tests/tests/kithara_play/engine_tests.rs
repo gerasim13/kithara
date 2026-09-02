@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     self,
     audio::ConsumerWakeMode,
@@ -5,8 +7,8 @@ use kithara::{
     host::{Host, HostConfig, HostOwned, testing::HostProbe},
     platform::sync::Arc,
     play::{
-        Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionDispatcher, SessionDuckingMode, SlotId,
+        Cmd, EngineConfig, EngineImpl, EngineSettings, PlayError, PlayWorker, PlayWorkerConfig,
+        PlayerConfig, PlayerImpl, Reply, SessionDispatcher, SessionDuckingMode, SlotId,
     },
     warp::{BeatGrid, BeatGridId},
 };
@@ -78,10 +80,14 @@ fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
-        .max_slots(8)
-        .sample_rate(48000)
-        .channels(1)
-        .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
+        .settings(
+            EngineSettings::builder()
+                .max_slots(8)
+                .sample_rate(NonZeroU32::new(48000).expect("fixture sample rate"))
+                .channels(1)
+                .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
+                .build(),
+        )
         .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
@@ -136,7 +142,11 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
-        .sample_rate(48000)
+        .settings(
+            EngineSettings::builder()
+                .sample_rate(NonZeroU32::new(48000).expect("fixture sample rate"))
+                .build(),
+        )
         .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());

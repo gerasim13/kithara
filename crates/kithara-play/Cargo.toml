@@ -114,6 +114,7 @@ ringbuf = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
+struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -135,6 +136,9 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "prob
 
 bytes = { workspace = true }
 unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

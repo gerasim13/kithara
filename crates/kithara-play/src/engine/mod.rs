@@ -6,6 +6,6 @@ mod slots;
 
 pub use core::EngineImpl;
 
-pub use config::EngineConfig;
+pub use config::{EngineConfig, EngineSettings, EngineSettingsPatch};
 #[cfg(any(test, feature = "probe"))]
 pub use mix::apply_mix;

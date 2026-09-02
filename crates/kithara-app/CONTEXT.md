@@ -319,3 +319,27 @@ fresh unique temp directory per launch, so forwarding an unset value would move 
 therefore calls `Config::store_backend`, which resolves an unnamed backend to `StorageBackend::default` — a stable root
 under the system temp directory. That resolution lives in `document::load` rather than inline at the construction site
 so a test can reach it; two in `document::load` hold it, one for the silent document and one for a named backend.
+
+`queue` is `kithara::queue::QueueSettingsPatch`, and it is the first section after `net` whose value reaches a
+built object with no staged transfer in between: `main` applies it to a `QueueSettings`, `AppConfig` carries that,
+and `Deck::build` hands it to `QueueConfig::builder()` at `deck.rs:116`. Three of the four tunables travel.
+`should_autoplay` carries `#[patch(skip)]` because a release build reads it nowhere — `queue/state.rs:193` drops it
+under `#[cfg(not(any(test, feature = "probe")))]` — and a document key the shipped binary ignores reads as a
+supported control while doing nothing.
+
+`player` is `kithara::play::PlayerSettingsPatch`, and it replaced a section named `playback` whose one field
+`crossfade_seconds` was this crate's own copy of `PlayerSettings::crossfade_duration`. The copy is gone rather than
+kept in step, so the value is spelled once, in the crate that defines it; `app.yaml` names
+`player.crossfade_duration: 5.0` because this application has shipped that longer crossfade since before the section
+existed and the crate default is `1.0`. Naming `playback` is refused rather than parsed and ignored, held by
+`a_playback_section_is_rejected`. Engine knobs nest under `player.engine` as an `EngineSettingsPatch` rather than
+repeating on the player, because `PlayerConfig` builds the `EngineConfig` and two structs declaring one sample rate
+would be two sources of truth for it.
+
+Four knobs on that patch carry `#[patch(skip)]`, each because something downstream already owns the value.
+`auto_advance_enabled` and `prefetch_duration` are overwritten at `queue/state.rs:202-203` for every queue-driven
+player. `engine.eq_layout` is written by `Deck::build` from `app.eq_bands`, which is itself a document key, so
+declaring both would give one value two spellings with the older one always winning; a layout that is not
+log-spaced arrives at runtime through `PlayerImpl::set_eq_layout`, which is how every construction site in the
+workspace already gets one. `gapless_mode` waits on `GaplessMode` deriving `Deserialize` for its data-carrying
+variant.

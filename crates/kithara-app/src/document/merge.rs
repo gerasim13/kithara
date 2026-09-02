@@ -50,11 +50,11 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_section_the_overlay_never_names_is_untouched() {
-        let mut base = yaml("playback:\n  crossfade_seconds: 5.0\nplaylist:\n  tracks: [a]\n");
+        let mut base = yaml("player:\n  crossfade_duration: 5.0\nplaylist:\n  tracks: [a]\n");
 
         merge(&mut base, yaml("playlist:\n  tracks: [b]\n"));
 
-        assert_eq!(base["playback"]["crossfade_seconds"], Value::from(5.0));
+        assert_eq!(base["player"]["crossfade_duration"], Value::from(5.0));
     }
 
     #[kithara::test(native, flash(false))]

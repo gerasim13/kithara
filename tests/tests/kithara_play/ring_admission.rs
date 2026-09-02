@@ -15,8 +15,8 @@ use kithara::{
     events::EventBus,
     platform::sync::Arc,
     play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply,
-        SessionDispatcher,
+        Cmd, EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl,
+        PlayerSettings, Reply, SessionDispatcher,
     },
 };
 use kithara_integration_tests::ring::{
@@ -99,8 +99,16 @@ fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
     PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .sample_rate(session_rate())
-            .crossfade_duration(0.0)
+            .settings(
+                PlayerSettings::builder()
+                    .crossfade_duration(0.0)
+                    .engine(
+                        EngineSettings::builder()
+                            .sample_rate(session_rate())
+                            .build(),
+                    )
+                    .build(),
+            )
             .session(dispatcher)
             .build(),
     )

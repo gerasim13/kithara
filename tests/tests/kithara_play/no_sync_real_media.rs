@@ -19,8 +19,9 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
-        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
+        Cmd, EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        PlayerSettings, Reply, Resource, ResourceConfig, ResourceSrc, SeekOutcome,
+        SelectTransition, SessionDispatcher, apply_mix,
     },
     warp::{StretchControls, StretchKind},
 };
@@ -865,10 +866,19 @@ async fn prepare_deck(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .bus(bus)
-            .sample_rate(
-                NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
+            .settings(
+                PlayerSettings::builder()
+                    .crossfade_duration(0.0)
+                    .engine(
+                        EngineSettings::builder()
+                            .sample_rate(
+                                NonZeroU32::new(case.host_rate)
+                                    .expect("host sample rate must be non-zero"),
+                            )
+                            .build(),
+                    )
+                    .build(),
             )
-            .crossfade_duration(0.0)
             .timestretch(Arc::clone(&controls))
             .session(dispatcher)
             .build(),

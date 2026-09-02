@@ -126,11 +126,11 @@ impl PlayerParams {
 impl<S> From<&PlayerConfig<S>> for PlayerParams {
     fn from(config: &PlayerConfig<S>) -> Self {
         Self {
-            auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            default_rate: AtomicF32::new(config.default_rate.max(Self::MIN_PLAYBACK_RATE)),
+            auto_advance_enabled: AtomicBool::new(config.settings.auto_advance_enabled),
+            crossfade_duration: AtomicF32::new(config.settings.crossfade_duration),
+            default_rate: AtomicF32::new(config.settings.default_rate.max(Self::MIN_PLAYBACK_RATE)),
             muted: AtomicBool::new(false),
-            prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
+            prefetch_duration: AtomicF32::new(config.settings.prefetch_duration.max(0.0)),
             volume: AtomicF32::new(1.0),
         }
     }

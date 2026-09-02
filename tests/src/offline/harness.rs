@@ -8,7 +8,8 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher,
+        EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings,
+        SessionDispatcher,
         effects::eq::EqBandConfig,
         player::{PlayerControl, PlayerControlSource},
     },
@@ -49,15 +50,24 @@ impl OfflinePlayerHarness {
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player_config = PlayerConfig::builder()
-            .crossfade_duration(options.crossfade_duration)
-            .gapless_mode(options.gapless_mode)
-            .block_on_underrun(options.block_on_underrun)
-            .sample_rate(
-                NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
+            .settings(
+                PlayerSettings::builder()
+                    .crossfade_duration(options.crossfade_duration)
+                    .gapless_mode(options.gapless_mode)
+                    .block_on_underrun(options.block_on_underrun)
+                    .engine(
+                        EngineSettings::builder()
+                            .sample_rate(
+                                NonZeroU32::new(sample_rate)
+                                    .expect("offline player sample rate must be non-zero"),
+                            )
+                            .maybe_eq_layout(options.eq_layout)
+                            .build(),
+                    )
+                    .build(),
             )
             .session(Arc::clone(&session_dispatcher))
             .worker(worker)
-            .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();
 

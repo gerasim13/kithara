@@ -8,6 +8,7 @@ use kithara::{
     hls::HlsSettingsPatch,
     host::HostSettings,
     net::NetSettings,
+    play::PlayerSettingsPatch,
     queue::QueueSettingsPatch,
     stream::dl::DownloaderSettings,
     worker::{ComputePoolSettings, WorkerSettings},
@@ -40,18 +41,12 @@ pub(crate) struct Document {
     pub(crate) hls: HlsSettingsPatch,
     pub(crate) host: HostSettings,
     pub(crate) net: NetSettings,
-    pub(crate) playback: Playback,
+    pub(crate) player: PlayerSettingsPatch,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueSettingsPatch,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct Playback {
-    pub(crate) crossfade_seconds: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -146,10 +141,10 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_refused_and_named() {
-        let error = serde_yaml_ng::from_str::<Document>("playback:\n  crossfade_second: 5.0\n")
+        let error = serde_yaml_ng::from_str::<Document>("player:\n  fade_style: dj\n")
             .expect_err("a typo must not pass silently");
 
-        assert!(error.to_string().contains("crossfade_second"), "{error}");
+        assert!(error.to_string().contains("fade_style"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
@@ -247,5 +242,13 @@ mod tests {
             .expect_err("network was renamed to hls");
 
         assert!(error.to_string().contains("network"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_playback_section_is_rejected() {
+        let error = serde_yaml_ng::from_str::<Document>("playback:\n  crossfade_seconds: 5.0\n")
+            .expect_err("playback was folded into player.crossfade_duration");
+
+        assert!(error.to_string().contains("playback"), "{error}");
     }
 }

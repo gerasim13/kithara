@@ -13,7 +13,7 @@ use kithara::{
         sync::{Arc, Mutex},
     },
     play::{
-        PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        EngineSettings, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings, ResourceSrc,
         effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
@@ -198,7 +198,15 @@ impl NativeInner {
         let player_cancel = cancel.clone();
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
-            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+            .settings(
+                PlayerSettings::builder()
+                    .engine(
+                        EngineSettings::builder()
+                            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+                            .build(),
+                    )
+                    .build(),
+            )
             .cancel(player_cancel.child())
             .worker(worker)
             .build();

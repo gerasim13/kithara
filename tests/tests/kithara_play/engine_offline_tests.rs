@@ -3,7 +3,7 @@
 //! rather than a lane.
 use kithara::{
     events::EventBus,
-    play::{EngineConfig, EngineImpl},
+    play::{EngineConfig, EngineImpl, EngineSettings},
     warp::BeatGridId,
 };
 use kithara_integration_tests::offline::OfflineSession;
@@ -15,7 +15,7 @@ fn engine(max_slots: usize) -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("offline engine grid id"))
-            .max_slots(max_slots)
+            .settings(EngineSettings::builder().max_slots(max_slots).build())
             .pools(pools())
             .session(OfflineSession::arc_auto())
             .build(),

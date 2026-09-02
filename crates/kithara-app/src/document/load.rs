@@ -7,7 +7,7 @@ use kithara::{
     assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
     hls::SizeProbeMethod,
     net::NetSettings,
-    play::policy::DomainKeyPolicy,
+    play::{PlayerSettingsPatch, policy::DomainKeyPolicy},
     queue::QueueSettingsPatch,
     worker::{ComputePoolSettings, WorkerSettings},
 };
@@ -196,10 +196,11 @@ impl Config {
         self.document.hls.size_probe_method.unwrap_or_default()
     }
 
-    /// Crossfade length, when the document sets one.
+    /// Knobs the document sets on the player, threaded into every deck's
+    /// `PlayerConfig`.
     #[must_use]
-    pub fn crossfade_seconds(&self) -> Option<f32> {
-        self.document.playback.crossfade_seconds
+    pub fn player(&self) -> PlayerSettingsPatch {
+        self.document.player.clone()
     }
 
     /// Knobs the document sets on the built [`AppConfig`]. Fields the document
@@ -630,7 +631,7 @@ mod tests {
         let path = write(
             &dir,
             "typed-field",
-            "playback:\n  crossfade_seconds: $KITHARA_DRM_PROD_KEY\n",
+            "player:\n  crossfade_duration: $KITHARA_DRM_PROD_KEY\n",
         );
 
         let error =

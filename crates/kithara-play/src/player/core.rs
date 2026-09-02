@@ -245,7 +245,8 @@ mod tests {
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerMember},
+        engine::EngineSettings,
+        player::{PlayerConfig, PlayerSettings},
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
         test_pools::{TestPools, pools},
@@ -365,7 +366,11 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .gapless_mode(GaplessMode::Disabled)
+                .settings(
+                    PlayerSettings::builder()
+                        .gapless_mode(GaplessMode::Disabled)
+                        .build(),
+                )
                 .build(),
         );
         let mut config = resource_config("https://example.com/song.mp3");
@@ -503,17 +508,51 @@ mod tests {
         let config = PlayerConfig::builder()
             .worker(worker())
             .session(testing::test_session())
-            .crossfade_duration(2.0)
-            .prefetch_duration(5.0)
-            .default_rate(0.5)
-            .eq_layout(generate_log_spaced_bands(5))
-            .gapless_mode(GaplessMode::MediaOnly)
-            .max_slots(2)
-            .sample_rate(NonZeroU32::new(44_100).expect("invariant: sample rate is non-zero"))
+            .settings(
+                PlayerSettings::builder()
+                    .crossfade_duration(2.0)
+                    .prefetch_duration(5.0)
+                    .default_rate(0.5)
+                    .gapless_mode(GaplessMode::MediaOnly)
+                    .engine(
+                        EngineSettings::builder()
+                            .eq_layout(generate_log_spaced_bands(5))
+                            .max_slots(2)
+                            .sample_rate(
+                                NonZeroU32::new(44_100)
+                                    .expect("invariant: sample rate is non-zero"),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
             .timestretch(StretchControls::new(1.0))
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    /// `PlayerConfig` no longer declares its own `sample_rate`: it hands
+    /// `settings.engine` whole to the `EngineConfig` it prepares. This pins
+    /// that the value the player reports back out is the exact one the
+    /// engine runs with, so the two cannot drift into two copies of one
+    /// number.
+    #[kithara::test]
+    fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
+        let sample_rate = NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero");
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .settings(
+                    PlayerSettings::builder()
+                        .engine(EngineSettings::builder().sample_rate(sample_rate).build())
+                        .build(),
+                )
+                .build(),
+        );
+
+        assert_eq!(player.sample_rate(), sample_rate.get());
     }
 
     #[kithara::test]
@@ -522,7 +561,15 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .eq_layout(generate_log_spaced_bands(3))
+                .settings(
+                    PlayerSettings::builder()
+                        .engine(
+                            EngineSettings::builder()
+                                .eq_layout(generate_log_spaced_bands(3))
+                                .build(),
+                        )
+                        .build(),
+                )
                 .build(),
         );
         assert_eq!(player.eq_band_count(), 3);
@@ -536,17 +583,25 @@ mod tests {
         let config = PlayerConfig::builder()
             .worker(worker())
             .session(testing::test_session())
-            .max_slots(8)
-            .default_rate(0.5)
-            .crossfade_duration(2.5)
-            .prefetch_duration(7.0)
-            .eq_layout(generate_log_spaced_bands(5))
+            .settings(
+                PlayerSettings::builder()
+                    .default_rate(0.5)
+                    .crossfade_duration(2.5)
+                    .prefetch_duration(7.0)
+                    .engine(
+                        EngineSettings::builder()
+                            .max_slots(8)
+                            .eq_layout(generate_log_spaced_bands(5))
+                            .build(),
+                    )
+                    .build(),
+            )
             .build();
-        assert_eq!(config.max_slots, 8);
-        assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
-        assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
-        assert!((config.prefetch_duration - 7.0).abs() < f32::EPSILON);
-        assert_eq!(config.eq_layout.len(), 5);
+        assert_eq!(config.settings.engine.max_slots, 8);
+        assert!((config.settings.default_rate - 0.5).abs() < f32::EPSILON);
+        assert!((config.settings.crossfade_duration - 2.5).abs() < f32::EPSILON);
+        assert!((config.settings.prefetch_duration - 7.0).abs() < f32::EPSILON);
+        assert_eq!(config.settings.engine.eq_layout.len(), 5);
     }
 
     #[kithara::test]
@@ -685,7 +740,11 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .auto_advance_enabled(false)
+                .settings(
+                    PlayerSettings::builder()
+                        .auto_advance_enabled(false)
+                        .build(),
+                )
                 .build(),
         );
         assert!(!player.auto_advance_enabled());

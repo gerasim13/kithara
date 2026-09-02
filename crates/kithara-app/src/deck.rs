@@ -98,11 +98,12 @@ impl Deck {
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
         let timestretch = StretchControls::new(1.0);
+        let mut settings = config.player.clone();
+        settings.engine.eq_layout = generate_log_spaced_bands(config.eq_bands);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(cancel.clone())
-                .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(config.eq_bands))
+                .settings(settings)
                 .timestretch(Arc::clone(&timestretch))
                 .worker(config.worker.clone())
                 .build(),
