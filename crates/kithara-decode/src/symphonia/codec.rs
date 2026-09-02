@@ -191,24 +191,22 @@ impl FrameCodec for SymphoniaCodec {
             frame_data,
         );
 
-        #[cfg(feature = "perf")]
-        let decoder_label = match self.codec {
-            Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2) => {
-                "symphonia::decoder::aac"
-            }
-            Some(AudioCodec::Mp3) => "symphonia::decoder::mp3",
-            Some(AudioCodec::Flac) => "symphonia::decoder::flac",
-            Some(AudioCodec::Vorbis) => "symphonia::decoder::vorbis",
-            Some(AudioCodec::Opus) => "symphonia::decoder::opus",
-            Some(AudioCodec::Alac) => "symphonia::decoder::alac",
-            Some(AudioCodec::Pcm) => "symphonia::decoder::pcm",
-            Some(AudioCodec::Adpcm) => "symphonia::decoder::adpcm",
-            None => "symphonia::decoder::native",
-        };
-        #[cfg(feature = "perf")]
-        let decoded = hotpath::measure_block!(decoder_label, self.decoder.decode_ref(&packet_ref));
-        #[cfg(not(feature = "perf"))]
-        let decoded = self.decoder.decode_ref(&packet_ref);
+        let decoded = kithara::measure_block!(
+            match self.codec {
+                Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2) => {
+                    "symphonia::decoder::aac"
+                }
+                Some(AudioCodec::Mp3) => "symphonia::decoder::mp3",
+                Some(AudioCodec::Flac) => "symphonia::decoder::flac",
+                Some(AudioCodec::Vorbis) => "symphonia::decoder::vorbis",
+                Some(AudioCodec::Opus) => "symphonia::decoder::opus",
+                Some(AudioCodec::Alac) => "symphonia::decoder::alac",
+                Some(AudioCodec::Pcm) => "symphonia::decoder::pcm",
+                Some(AudioCodec::Adpcm) => "symphonia::decoder::adpcm",
+                None => "symphonia::decoder::native",
+            },
+            self.decoder.decode_ref(&packet_ref)
+        );
         let decoded = match decoded {
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(err)) => {
@@ -262,12 +260,9 @@ impl FrameCodec for SymphoniaCodec {
         }
 
         out.ensure_len(num_samples)?;
-        #[cfg(feature = "perf")]
-        hotpath::measure_block!("symphonia::output::copy_interleaved", {
+        kithara::measure_block!("symphonia::output::copy_interleaved", {
             decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         });
-        #[cfg(not(feature = "perf"))]
-        decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         out.truncate(num_samples);
         Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }

@@ -228,12 +228,9 @@ impl ElasticEngine for SignalsmithElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
-        #[cfg(feature = "perf")]
-        hotpath::measure_block!("signalsmith::Stretch::process", {
+        kithara::measure_block!("signalsmith::Stretch::process", {
             self.inner.process(source, output);
         });
-        #[cfg(not(feature = "perf"))]
-        self.inner.process(source, output);
         self.terminal = TerminalState::Armed { request };
         Ok(())
     }
