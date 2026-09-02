@@ -8,7 +8,7 @@ use crate::{BroadcastError, BroadcastResult};
 
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 #[derive(Clone, Debug, Builder, Patch)]
-#[patch(name = "BroadcastSettings")]
+#[patch(name = "BroadcastConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -103,7 +103,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{BroadcastConfig, BroadcastError, BroadcastSettings};
+    use super::{BroadcastConfig, BroadcastConfigPatch, BroadcastError};
 
     #[kithara::test(native, flash(false))]
     fn the_default_configuration_serves_a_long_enough_playlist() {
@@ -168,7 +168,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_the_bit_rate_and_keeps_the_seeded_channel_count() {
-        let settings: BroadcastSettings =
+        let settings: BroadcastConfigPatch =
             serde_yaml_ng::from_str("bit_rate: 256000\n").expect("the document types");
         let mut config = BroadcastConfig::builder().channels(4).build();
 
@@ -183,7 +183,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_document_can_compose_a_playlist_the_builder_would_have_refused() {
-        let settings: BroadcastSettings =
+        let settings: BroadcastConfigPatch =
             serde_yaml_ng::from_str("window: 1\n").expect("the document types");
         let mut config = BroadcastConfig::builder().build();
 

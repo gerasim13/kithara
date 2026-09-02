@@ -42,7 +42,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
-    hls::{Hls, HlsConfig, HlsSettings},
+    hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -127,7 +127,7 @@ fn audio_config(
         .cancel(cancel.clone())
         // auto(0) mirrors the F2 members (live_real_stream / hot_refetch).
         .initial_abr_mode(auto(0))
-        .settings(HlsSettings::builder().net_options(net).build())
+        .net_options(net)
         .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))

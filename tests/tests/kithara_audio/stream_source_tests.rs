@@ -4,8 +4,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ChunkOutcome,
-        ConsumerWakeMode, ReadOutcome, RubatoBackend,
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
+        ReadOutcome, RubatoBackend,
     },
     events::{AudioEvent, DecoderChangeCause, DecoderEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
@@ -162,16 +162,10 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
                 .sample_rate(SOURCE_RATE)
                 .build(),
         )
-        .settings(
-            AudioSettings::builder()
-                .host_sample_rate(source_rate)
-                .preload_chunks(
-                    NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"),
-                )
-                .audio_buffer_chunks(RING_CHUNKS)
-                .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-                .build(),
-        )
+        .host_sample_rate(source_rate)
+        .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
+        .audio_buffer_chunks(RING_CHUNKS)
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_owned())
         .build();
     let controls = StretchControls::new(0.5);

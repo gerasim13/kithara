@@ -25,10 +25,10 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{
-        EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings,
-        Resource, ResourceConfig, ResourceSrc, SessionDispatcher,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        ResourceSrc, SessionDispatcher,
     },
-    queue::{Queue, QueueConfig, QueueSettings, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -83,18 +83,8 @@ impl Harness {
         let session = Arc::new(OfflineSession::new_manual());
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
-            .settings(
-                PlayerSettings::builder()
-                    .crossfade_duration(0.0)
-                    .engine(
-                        EngineSettings::builder()
-                            .sample_rate(
-                                NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"),
-                            )
-                            .build(),
-                    )
-                    .build(),
-            )
+            .crossfade_duration(0.0)
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
             .worker(worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build();
@@ -235,7 +225,7 @@ async fn run_case(mode: GateMode) {
     let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let queue = Queue::new(
         QueueConfig::builder()
-            .settings(QueueSettings::builder().should_autoplay(false).build())
+            .should_autoplay(false)
             .player(harness.take_player())
             .build(),
     );

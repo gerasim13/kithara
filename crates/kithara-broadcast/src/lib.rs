@@ -10,7 +10,7 @@ mod server;
 mod service;
 mod window;
 
-pub use config::{BroadcastConfig, BroadcastSettings};
+pub use config::{BroadcastConfig, BroadcastConfigPatch};
 pub use error::{BroadcastError, BroadcastResult};
 pub use feed::{FeedChunk, LivePcmFeed, RingFeed};
 pub use segment::{Segment, Segmenter};

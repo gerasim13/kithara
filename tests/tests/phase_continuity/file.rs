@@ -2,7 +2,7 @@ use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::{DecodeResult, DecoderBackend},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -75,7 +75,7 @@ async fn run_case(asset: SignalAsset, backend: DecoderBackend, ephemeral: bool, 
                 .build(),
         )
         .maybe_hint(Some(asset.ext().to_owned()))
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = open_audio(audio_config, &pools)
         .await
@@ -257,12 +257,8 @@ async fn local_apple_fused_run_case() {
                 .backend(DecoderBackend::Apple)
                 .build(),
         )
-        .settings(
-            AudioSettings::builder()
-                .host_sample_rate(
-                    std::num::NonZeroU32::new(APPLE_FUSED_HOST_RATE).expect("nonzero host rate"),
-                )
-                .build(),
+        .host_sample_rate(
+            std::num::NonZeroU32::new(APPLE_FUSED_HOST_RATE).expect("nonzero host rate"),
         )
         .maybe_hint(Some("m4a".to_owned()))
         .build();
@@ -394,7 +390,7 @@ async fn decode_pcm_seconds(asset: SignalAsset, backend: DecoderBackend, secs: f
                 .build(),
         )
         .maybe_hint(Some(asset.ext().to_owned()))
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = open_audio(audio_config, &pools)
         .await
@@ -991,7 +987,7 @@ async fn build_aac_sine_audio(
                 .build(),
         )
         .maybe_hint(Some("aac".to_owned()))
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     open_audio(audio_config, &pools)
         .await

@@ -5,13 +5,13 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     events::{
         AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
         EventReceiver, HlsEvent, RequestId,
     },
-    hls::{AbrMode, Hls, HlsConfig, HlsSettings},
+    hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -1470,11 +1470,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .settings(
-            HlsSettings::builder()
-                .download_batch_size(segment_count * 2)
-                .build(),
-        )
+        .download_batch_size(segment_count * 2)
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1486,7 +1482,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let audio = worker.open(config).await.expect("create audio");
 
@@ -1616,11 +1612,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .settings(
-            HlsSettings::builder()
-                .download_batch_size(segment_count * 2)
-                .build(),
-        )
+        .download_batch_size(segment_count * 2)
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1630,7 +1622,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let audio = worker.open(config).await.expect("create audio");
 
@@ -1761,11 +1753,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .settings(
-            HlsSettings::builder()
-                .download_batch_size(segment_count * 2)
-                .build(),
-        )
+        .download_batch_size(segment_count * 2)
         .build();
 
     let wav_info = MediaInfo::builder()

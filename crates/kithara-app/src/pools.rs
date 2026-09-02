@@ -1,5 +1,5 @@
 use kithara::bufpool::{
-    OverallBudget, Percent, PoolConfig, PoolError, PoolRegion, PoolSettings, pool_schema,
+    OverallBudget, Percent, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema,
 };
 use serde::Deserialize;
 use struct_patch::Patch as _;
@@ -54,8 +54,8 @@ pub type AppTrackSource = kithara::queue::TrackSource<AppPools>;
 #[non_exhaustive]
 pub struct PoolsSection {
     pub(crate) budget_bytes: Option<usize>,
-    pub(crate) bytes: PoolSettings,
-    pub(crate) samples: PoolSettings,
+    pub(crate) bytes: PoolConfigPatch,
+    pub(crate) samples: PoolConfigPatch,
 }
 
 /// Build the application's single explicitly registered pool region.
@@ -71,7 +71,7 @@ pub fn build(section: &PoolsSection) -> Result<Pools, PoolError> {
     .build()
 }
 
-fn bytes_config(patch: &PoolSettings) -> PoolConfig {
+fn bytes_config(patch: &PoolConfigPatch) -> PoolConfig {
     let mut config = PoolConfig::builder()
         .initial_buffers(0)
         .max_buffers(usize::MAX)
@@ -82,7 +82,7 @@ fn bytes_config(patch: &PoolSettings) -> PoolConfig {
     config
 }
 
-fn samples_config(patch: &PoolSettings) -> PoolConfig {
+fn samples_config(patch: &PoolConfigPatch) -> PoolConfig {
     let mut config = PoolConfig::builder()
         .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
         .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
@@ -141,12 +141,12 @@ mod tests {
 
         assert_ne!(
             bytes_config(&section.bytes),
-            bytes_config(&PoolSettings::default()),
+            bytes_config(&PoolConfigPatch::default()),
             "the document's value reaches the bytes pool"
         );
         assert_eq!(
             samples_config(&section.samples),
-            samples_config(&PoolSettings::default()),
+            samples_config(&PoolConfigPatch::default()),
             "a pool the document does not name keeps the policy the builder set"
         );
     }

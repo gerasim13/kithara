@@ -84,7 +84,7 @@ one registered generic slot; built-in hot-path keys compile out counter updates.
 
 ## Configuration document entry point
 
-`PoolSettings` is the second way into `PoolConfig`: a configuration document
+`PoolConfigPatch` is the second way into `PoolConfig`: a configuration document
 types into it and `apply` writes only the fields the document names, leaving
 the rest of the built policy standing. Every field is patchable — this config
 holds only numbers and a `Percent`, no live handle a document could not name.

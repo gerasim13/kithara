@@ -10,9 +10,8 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{
-        Cmd, EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        PlayerSettings, Reply, ResourceConfig, ResourceSrc, SessionDispatcher, Tempo,
-        player::Player,
+        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
+        ResourceSrc, SessionDispatcher, Tempo, player::Player,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     warp::{
@@ -262,12 +261,8 @@ impl ProductHarness {
                 PlayerConfig::builder()
                     .worker(worker.clone())
                     .session(dispatcher.clone())
-                    .settings(
-                        PlayerSettings::builder()
-                            .crossfade_duration(0.0)
-                            .engine(EngineSettings::builder().sample_rate(sample_rate).build())
-                            .build(),
-                    )
+                    .crossfade_duration(0.0)
+                    .sample_rate(sample_rate)
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());

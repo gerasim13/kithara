@@ -11,7 +11,7 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
-    audio::{AudioSettings, ConsumerWakeMode},
+    audio::ConsumerWakeMode,
     events::{EventBus, TrackId},
     hls::AbrMode,
     platform::{
@@ -19,9 +19,8 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        Cmd, EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        PlayerSettings, Reply, Resource, ResourceConfig, ResourceSettings, ResourceSrc,
-        SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
+        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
+        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
     warp::{StretchControls, StretchKind},
 };
@@ -866,18 +865,9 @@ async fn prepare_deck(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .bus(bus)
-            .settings(
-                PlayerSettings::builder()
-                    .crossfade_duration(0.0)
-                    .engine(
-                        EngineSettings::builder()
-                            .sample_rate(
-                                NonZeroU32::new(case.host_rate)
-                                    .expect("host sample rate must be non-zero"),
-                            )
-                            .build(),
-                    )
-                    .build(),
+            .crossfade_duration(0.0)
+            .sample_rate(
+                NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
             .timestretch(Arc::clone(&controls))
             .session(dispatcher)
@@ -913,18 +903,8 @@ async fn prepare_deck(
         }))
         .store(memory_asset_store())
         .worker(player.worker().clone())
-        .settings(
-            ResourceSettings::builder()
-                .audio(
-                    AudioSettings::builder()
-                        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-                        .host_sample_rate(
-                            NonZeroU32::new(case.host_rate).expect("host rate is non-zero"),
-                        )
-                        .build(),
-                )
-                .build(),
-        )
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+        .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
         .initial_abr_mode(AbrMode::manual(0))
         .events(EventBus::new(16_384))
         .discriminator(format!("{}-deck-{deck_index}-reference", case.label))

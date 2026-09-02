@@ -21,7 +21,7 @@ use bytes::Bytes;
 use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    file::{File, FileConfig, FileSettings},
+    file::{File, FileConfig},
     platform::{
         sync::Arc,
         time::Duration,
@@ -146,7 +146,7 @@ async fn follower_joins_active_download_without_second_get() {
     let player_cfg = FileConfig::for_src(url.into())
         .store(store)
         .pools(pools)
-        .settings(FileSettings::builder().look_ahead_bytes(16).build())
+        .look_ahead_bytes(16)
         .build();
     let player = Stream::<File<TestPools>>::new(player_cfg)
         .await
@@ -205,7 +205,7 @@ async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
         .store(store)
         .pools(pools)
-        .settings(FileSettings::builder().look_ahead_bytes(0).build())
+        .look_ahead_bytes(0)
         .build();
     let stream = Stream::<File<TestPools>>::new(config)
         .await

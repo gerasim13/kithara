@@ -11,6 +11,7 @@ use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
+use serde::Deserialize;
 use struct_patch::Patch;
 use url::Url;
 
@@ -63,19 +64,142 @@ pub enum SizeProbeMethod {
     RangeGet,
 }
 
-/// Streaming knobs a configuration document can override. Extracted out of
-/// [`HlsConfig`] so a document reaches exactly these tunables and never the
-/// per-call wiring (`store`, `pools`, `downloader`, ...) or per-stream input
-/// (`url`, `base_url`, `discriminator`, `headers`, `initial_abr_mode`) that
-/// stay on [`HlsConfig`] itself.
-#[derive(Clone, Debug, Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
-#[patch(name = "HlsSettingsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
+/// What a configuration document may say about [`HlsConfig`].
+///
+/// Hand-written rather than derived: `struct-patch` copies a struct's generics
+/// and where-clause verbatim onto the patch it generates, so a patch of a
+/// generic configuration whose generic-carrying fields are skipped has a type
+/// parameter no field uses and does not compile. The per-call wiring
+/// (`store`, `pools`, `bus`, `cancel`, `downloader`), the per-stream input
+/// (`url`, `base_url`, `discriminator`, `headers`, `keys`,
+/// `initial_abr_mode`) and `net_options` are absent on purpose, and
+/// `deny_unknown_fields` refuses them by name rather than dropping them
+/// silently.
+///
+/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
+/// references are resolved, so the tree it merges into holds secrets in the
+/// clear.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
-pub struct HlsSettings {
+pub struct HlsConfigPatch {
+    /// See [`HlsConfig::size_probe_method`].
+    pub size_probe_method: Option<SizeProbeMethod>,
+    /// See [`HlsConfig::download_batch_size`].
+    pub download_batch_size: Option<usize>,
+    /// See [`HlsConfig::acquire_attempt_budget`].
+    pub acquire_attempt_budget: Option<u8>,
+    /// See [`HlsConfig::ephemeral_cache_max_media_window`].
+    pub ephemeral_cache_max_media_window: Option<usize>,
+    /// See [`HlsConfig::ephemeral_cache_min_media_window`].
+    pub ephemeral_cache_min_media_window: Option<usize>,
+    /// See [`HlsConfig::ephemeral_cache_non_media_reserve`].
+    pub ephemeral_cache_non_media_reserve: Option<usize>,
+    /// See [`HlsConfig::event_channel_capacity`].
+    pub event_channel_capacity: Option<usize>,
+    /// See [`HlsConfig::look_ahead_bytes`].
+    pub look_ahead_bytes: Option<u64>,
+}
+
+impl<S> Patch<HlsConfigPatch> for HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn apply(&mut self, patch: HlsConfigPatch) {
+        if let Some(size_probe_method) = patch.size_probe_method {
+            self.size_probe_method = size_probe_method;
+        }
+        if let Some(download_batch_size) = patch.download_batch_size {
+            self.download_batch_size = download_batch_size;
+        }
+        if let Some(acquire_attempt_budget) = patch.acquire_attempt_budget {
+            self.acquire_attempt_budget = acquire_attempt_budget;
+        }
+        if let Some(window) = patch.ephemeral_cache_max_media_window {
+            self.ephemeral_cache_max_media_window = window;
+        }
+        if let Some(window) = patch.ephemeral_cache_min_media_window {
+            self.ephemeral_cache_min_media_window = window;
+        }
+        if let Some(reserve) = patch.ephemeral_cache_non_media_reserve {
+            self.ephemeral_cache_non_media_reserve = reserve;
+        }
+        if let Some(event_channel_capacity) = patch.event_channel_capacity {
+            self.event_channel_capacity = event_channel_capacity;
+        }
+        if patch.look_ahead_bytes.is_some() {
+            self.look_ahead_bytes = patch.look_ahead_bytes;
+        }
+    }
+
+    fn into_patch(self) -> HlsConfigPatch {
+        HlsConfigPatch {
+            size_probe_method: Some(self.size_probe_method),
+            download_batch_size: Some(self.download_batch_size),
+            acquire_attempt_budget: Some(self.acquire_attempt_budget),
+            ephemeral_cache_max_media_window: Some(self.ephemeral_cache_max_media_window),
+            ephemeral_cache_min_media_window: Some(self.ephemeral_cache_min_media_window),
+            ephemeral_cache_non_media_reserve: Some(self.ephemeral_cache_non_media_reserve),
+            event_channel_capacity: Some(self.event_channel_capacity),
+            look_ahead_bytes: self.look_ahead_bytes,
+        }
+    }
+
+    fn into_patch_by_diff(self, previous: Self) -> HlsConfigPatch {
+        HlsConfigPatch {
+            size_probe_method: (self.size_probe_method != previous.size_probe_method)
+                .then_some(self.size_probe_method),
+            download_batch_size: (self.download_batch_size != previous.download_batch_size)
+                .then_some(self.download_batch_size),
+            acquire_attempt_budget: (self.acquire_attempt_budget
+                != previous.acquire_attempt_budget)
+                .then_some(self.acquire_attempt_budget),
+            ephemeral_cache_max_media_window: (self.ephemeral_cache_max_media_window
+                != previous.ephemeral_cache_max_media_window)
+                .then_some(self.ephemeral_cache_max_media_window),
+            ephemeral_cache_min_media_window: (self.ephemeral_cache_min_media_window
+                != previous.ephemeral_cache_min_media_window)
+                .then_some(self.ephemeral_cache_min_media_window),
+            ephemeral_cache_non_media_reserve: (self.ephemeral_cache_non_media_reserve
+                != previous.ephemeral_cache_non_media_reserve)
+                .then_some(self.ephemeral_cache_non_media_reserve),
+            event_channel_capacity: (self.event_channel_capacity
+                != previous.event_channel_capacity)
+                .then_some(self.event_channel_capacity),
+            look_ahead_bytes: (self.look_ahead_bytes != previous.look_ahead_bytes)
+                .then_some(self.look_ahead_bytes)
+                .flatten(),
+        }
+    }
+
+    fn new_empty_patch() -> HlsConfigPatch {
+        HlsConfigPatch::default()
+    }
+}
+
+/// Configuration for HLS streaming.
+///
+/// Used with `Stream::<Hls<S>>::new(config)`.
+#[derive(Builder)]
+#[builder(start_fn = for_url)]
+#[non_exhaustive]
+pub struct HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Master playlist URL.
+    #[builder(start_fn)]
+    pub url: Url,
+    /// Initial ABR mode.
+    #[builder(default)]
+    pub initial_abr_mode: AbrMode,
+    /// Shared asset store.
+    pub store: AssetStore<S>,
+    /// Buffer-pool facade shared across all components.
+    pub pools: PoolRegion<S>,
+    /// Encryption key handling configuration.
+    #[builder(default)]
+    pub keys: KeyOptions,
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
     /// compression) for the HTTP client built when no [`downloader`] is
     /// injected. Ignored when [`downloader`] is provided — the injected
@@ -90,7 +214,6 @@ pub struct HlsSettings {
     ///
     /// [`downloader`]: HlsConfig::downloader
     #[builder(default)]
-    #[patch(skip)]
     pub net_options: NetOptions,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
@@ -131,43 +254,7 @@ pub struct HlsSettings {
     /// `None` falls back to a ~2 `MiB` cap at the consumer site —
     /// production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
-    #[patch(skip_wrap)]
     pub look_ahead_bytes: Option<u64>,
-}
-
-impl Default for HlsSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-/// Configuration for HLS streaming.
-///
-/// Used with `Stream::<Hls<S>>::new(config)`.
-#[derive(Builder)]
-#[builder(start_fn = for_url)]
-#[non_exhaustive]
-pub struct HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    /// Master playlist URL.
-    #[builder(start_fn)]
-    pub url: Url,
-    /// Initial ABR mode.
-    #[builder(default)]
-    pub initial_abr_mode: AbrMode,
-    /// Shared asset store.
-    pub store: AssetStore<S>,
-    /// Buffer-pool facade shared across all components.
-    pub pools: PoolRegion<S>,
-    /// Encryption key handling configuration.
-    #[builder(default)]
-    pub keys: KeyOptions,
-    /// Streaming knobs a configuration document can override. See
-    /// [`HlsSettings`] for what a document may say.
-    #[builder(default)]
-    pub settings: HlsSettings,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
@@ -198,7 +285,15 @@ where
             store: self.store.clone(),
             pools: self.pools.clone(),
             keys: self.keys.clone(),
-            settings: self.settings.clone(),
+            net_options: self.net_options.clone(),
+            size_probe_method: self.size_probe_method,
+            download_batch_size: self.download_batch_size,
+            acquire_attempt_budget: self.acquire_attempt_budget,
+            ephemeral_cache_max_media_window: self.ephemeral_cache_max_media_window,
+            ephemeral_cache_min_media_window: self.ephemeral_cache_min_media_window,
+            ephemeral_cache_non_media_reserve: self.ephemeral_cache_non_media_reserve,
+            event_channel_capacity: self.event_channel_capacity,
+            look_ahead_bytes: self.look_ahead_bytes,
             base_url: self.base_url.clone(),
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
@@ -217,7 +312,11 @@ where
         f.debug_struct("HlsConfig")
             .field("initial_abr_mode", &self.initial_abr_mode)
             .field("keys", &self.keys)
-            .field("settings", &self.settings)
+            .field("size_probe_method", &self.size_probe_method)
+            .field("download_batch_size", &self.download_batch_size)
+            .field("acquire_attempt_budget", &self.acquire_attempt_budget)
+            .field("event_channel_capacity", &self.event_channel_capacity)
+            .field("look_ahead_bytes", &self.look_ahead_bytes)
             .field("base_url", &self.base_url)
             .field("bus", &self.bus)
             .field("cancel", &self.cancel)
@@ -231,12 +330,28 @@ where
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use kithara_assets::StorageBackend;
+mod document_tests {
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch, SizeProbeMethod};
+    use super::{HlsConfig, HlsConfigPatch, SizeProbeMethod};
+    use crate::test_pools::{TestPools, pools};
+
+    fn config() -> HlsConfig<TestPools> {
+        HlsConfig::<TestPools>::for_url(
+            "https://example.com/master.m3u8"
+                .parse()
+                .expect("a literal URL parses"),
+        )
+        .store(
+            AssetStore::builder(pools())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools())
+        .build()
+    }
 
     /// A document that does not name this knob resolves through
     /// `SizeProbeMethod::default()` — including a runtime overlay that blanks
@@ -245,40 +360,43 @@ mod tests {
     /// implementation detail.
     #[kithara::test(native, flash(false))]
     fn a_silent_document_probes_with_head() {
-        assert_eq!(
-            HlsSettings::default().size_probe_method,
-            SizeProbeMethod::Head
-        );
+        assert_eq!(config().size_probe_method, SizeProbeMethod::Head);
     }
 
     #[kithara::test(native, flash(false))]
     fn a_document_sets_the_batch_size_and_leaves_the_window() {
-        let patch: HlsSettingsPatch =
+        let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");
-        let mut settings = HlsSettings::default();
-        let window = settings.ephemeral_cache_max_media_window;
+        // Seeded off the crate default so a merge that reset every unnamed
+        // field could not pass this by coincidence.
+        let mut config = config();
+        config.ephemeral_cache_max_media_window = 41;
 
-        settings.apply(patch);
+        config.apply(patch);
 
-        assert_eq!(settings.download_batch_size, 6);
-        assert_eq!(settings.ephemeral_cache_max_media_window, window);
+        assert_eq!(config.download_batch_size, 6);
+        assert_eq!(
+            config.ephemeral_cache_max_media_window, 41,
+            "a key the document does not name must keep its seeded value"
+        );
     }
 
     #[kithara::test(native, flash(false))]
     fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
-        let patch: HlsSettingsPatch =
+        let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("look_ahead_bytes: 5000000\n").expect("the document types");
-        let mut settings = HlsSettings::builder().event_channel_capacity(4_096).build();
+        let mut config = config();
+        config.event_channel_capacity = 4_096;
 
-        settings.apply(patch);
+        config.apply(patch);
 
         assert_eq!(
-            settings.look_ahead_bytes,
+            config.look_ahead_bytes,
             Some(5_000_000),
-            "an `Option<u64>` field carries `skip_wrap`, so the document names the number bare"
+            "an `Option<u64>` field takes the number bare, not wrapped a second time"
         );
         assert_eq!(
-            settings.event_channel_capacity, 4_096,
+            config.event_channel_capacity, 4_096,
             "a silent field must keep its value"
         );
     }
@@ -289,39 +407,24 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_net_options_key_is_refused() {
         let error =
-            serde_yaml_ng::from_str::<HlsSettingsPatch>("net_options:\n  is_insecure: true\n")
+            serde_yaml_ng::from_str::<HlsConfigPatch>("net_options:\n  is_insecure: true\n")
                 .expect_err("net options belong to the embedder's own `net` section");
 
         assert!(error.to_string().contains("net_options"), "{error}");
     }
 
+    /// The per-call wiring is not reachable from a document either.
     #[kithara::test(native, flash(false))]
-    fn a_document_knob_reaches_the_built_config() {
-        let patch: HlsSettingsPatch =
-            serde_yaml_ng::from_str("download_batch_size: 7\n").expect("the document types");
-        let mut settings = HlsSettings::default();
-        settings.apply(patch);
+    fn the_per_stream_input_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<HlsConfigPatch>("discriminator: deck-0\n")
+            .expect_err("per-stream input is handed over in code, not named in a document");
 
-        let config = HlsConfig::<crate::test_pools::TestPools>::for_url(
-            "https://example.com/master.m3u8"
-                .parse()
-                .expect("master url"),
-        )
-        .store(
-            AssetStore::builder(crate::test_pools::pools())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
-        .pools(crate::test_pools::pools())
-        .settings(settings)
-        .build();
-
-        assert_eq!(config.settings.download_batch_size, 7);
+        assert!(error.to_string().contains("discriminator"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<HlsSettingsPatch>("download_batch_sizes: 6\n")
+        let error = serde_yaml_ng::from_str::<HlsConfigPatch>("download_batch_sizes: 6\n")
             .expect_err("a typo must not be silently ignored");
 
         assert!(

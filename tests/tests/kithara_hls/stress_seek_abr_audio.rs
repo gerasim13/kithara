@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -269,7 +269,7 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(fixture.media_info())
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker
         .open(config)

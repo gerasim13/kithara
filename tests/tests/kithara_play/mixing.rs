@@ -13,8 +13,8 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        Cmd, EngineSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        PlayerSettings, Reply, SelectTransition, SessionDispatcher, apply_mix,
+        Cmd, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
+        SelectTransition, SessionDispatcher, apply_mix,
     },
     signal::AudioSpec,
 };
@@ -99,18 +99,9 @@ impl MixHarness {
             .map(|_| {
                 let config = PlayerConfig::builder()
                     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                    .settings(
-                        PlayerSettings::builder()
-                            .crossfade_duration(0.0)
-                            .engine(
-                                EngineSettings::builder()
-                                    .sample_rate(
-                                        NonZeroU32::new(SAMPLE_RATE)
-                                            .expect("fixture sample rate is non-zero"),
-                                    )
-                                    .build(),
-                            )
-                            .build(),
+                    .crossfade_duration(0.0)
+                    .sample_rate(
+                        NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero"),
                     )
                     .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
                     .build();

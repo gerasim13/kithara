@@ -8,8 +8,6 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
-#[cfg(test)]
-use kithara_play::{EngineSettings, PlayerSettings};
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
     SessionDuckingMode, player::PlayerMember,
@@ -177,11 +175,7 @@ pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> Pl
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
-            .settings(
-                PlayerSettings::builder()
-                    .engine(EngineSettings::builder().sample_rate(sample_rate).build())
-                    .build(),
-            )
+            .sample_rate(sample_rate)
             .worker(worker)
             .session(Arc::new(FixtureSession))
             .build(),

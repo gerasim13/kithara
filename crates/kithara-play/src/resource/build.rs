@@ -6,6 +6,7 @@ use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
+use struct_patch::Patch as _;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -48,11 +49,7 @@ where
                     .map(str::to_lowercase),
             ),
         };
-        let extension = self
-            .hint
-            .clone()
-            .or(derived_hint)
-            .or_else(|| self.settings.file.extension.clone());
+        let named_extension = self.hint.clone().or(derived_hint);
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
             let client = HttpClient::new(NetOptions::default(), pools.clone(), dl_cancel.child());
@@ -62,9 +59,7 @@ where
                     .build(),
             )
         });
-        let mut settings = self.settings.file.clone();
-        settings.extension = extension.clone();
-        let file_config = FileConfig::for_src(file_src)
+        let mut file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
             .downloader(downloader)
             .maybe_headers(self.headers.clone())
@@ -72,15 +67,24 @@ where
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
-            .settings(settings)
             .build();
-        AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
+        file_config.apply(self.file.clone());
+        // The hint the caller passed and the one derived from the source both
+        // describe this very track, so either outranks a document's blanket
+        // `file.extension`.
+        let extension = named_extension.or_else(|| file_config.extension.clone());
+        file_config.extension = extension.clone();
+        let mut audio_config = AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_observer(observer)
-            .settings(self.settings.audio.clone())
+            .consumer_wake_mode(self.consumer_wake_mode)
+            .block_on_underrun(self.block_on_underrun)
+            .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
-            .build()
+            .build();
+        audio_config.apply(self.audio.clone());
+        audio_config
     }
 
     /// Build an `AudioConfig<Hls<S>>` from this resource configuration.
@@ -98,7 +102,7 @@ where
                 });
             }
         };
-        let hls_config = HlsConfig::for_url(url)
+        let mut hls_config = HlsConfig::for_url(url)
             .store(self.store.clone())
             .keys(self.keys)
             .maybe_downloader(self.downloader)
@@ -109,17 +113,19 @@ where
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
-            .settings(self.settings.hls.clone())
             .build();
-        Ok(
-            AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)
-                .maybe_cancel(self.cancel.clone())
-                .maybe_hint(self.hint)
-                .maybe_observer(observer)
-                .settings(self.settings.audio.clone())
-                .decoder(self.decoder)
-                .build(),
-        )
+        hls_config.apply(self.hls.clone());
+        let mut audio_config = AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)
+            .maybe_cancel(self.cancel.clone())
+            .maybe_hint(self.hint)
+            .maybe_observer(observer)
+            .consumer_wake_mode(self.consumer_wake_mode)
+            .block_on_underrun(self.block_on_underrun)
+            .maybe_host_sample_rate(self.host_sample_rate)
+            .decoder(self.decoder)
+            .build();
+        audio_config.apply(self.audio.clone());
+        Ok(audio_config)
     }
 }
 
@@ -128,12 +134,12 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
-    use kithara_audio::AudioSettings;
+    use kithara_audio::AudioConfigPatch;
     use kithara_test_utils::kithara;
 
     use crate::{
         PlayWorker, PlayWorkerConfig,
-        resource::{ResourceConfig, ResourceSettings, ResourceSrc},
+        resource::{ResourceConfig, ResourceSrc},
         test_pools::{TestPools, pools},
     };
 
@@ -141,57 +147,52 @@ mod tests {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
-    fn config(source: &str, settings: ResourceSettings) -> ResourceConfig<TestPools> {
+    fn config(source: &str) -> ResourceConfig<TestPools> {
         ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
             .store(AssetStore::builder(pools()).build())
-            .settings(settings)
             .build()
     }
 
     /// `download_batch_size` reached the built stream through no path while
     /// `ResourceConfig` re-declared HLS knobs one by one: it never mirrored
     /// this one, so a caller going through `PlayerConfig` could not set it at
-    /// all. Passing `HlsSettings` whole closes that gap for every knob the
+    /// all. Carrying the HLS patch whole closes that gap for every knob the
     /// crate declares, now and later.
     #[kithara::test]
     fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
-        let mut settings = ResourceSettings::default();
-        settings.hls.download_batch_size = 6;
+        let mut config = config("https://example.com/live.m3u8");
+        config.hls.download_batch_size = Some(6);
 
-        let built = config("https://example.com/live.m3u8", settings)
+        let built = config
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 
-        assert_eq!(built.stream().settings.download_batch_size, 6);
+        assert_eq!(built.stream().download_batch_size, 6);
     }
 
     /// The same for the file branch: `reader_event_capacity` is a
-    /// `FileSettings` knob `ResourceConfig` never mirrored.
+    /// `kithara-file` knob `ResourceConfig` never mirrored.
     #[kithara::test]
     fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
-        let mut settings = ResourceSettings::default();
-        settings.file.reader_event_capacity = 512;
+        let mut config = config("https://example.com/song.mp3");
+        config.file.reader_event_capacity = Some(512);
 
-        let built =
-            config("https://example.com/song.mp3", settings).build_file_config(&worker(), None);
+        let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().settings.reader_event_capacity, 512);
+        assert_eq!(built.stream().reader_event_capacity, 512);
     }
 
     /// The per-call `hint` still lands as the file source's extension: it is
     /// per-call input, read by the decoder as well, so it stays on
-    /// `ResourceConfig` and is mapped into `FileSettings::extension` once here.
+    /// `ResourceConfig` and is mapped into `FileConfig::extension` once here.
     #[kithara::test]
     fn the_per_call_hint_becomes_the_file_extension() {
-        let built = ResourceConfig::<TestPools>::for_src(
-            ResourceSrc::parse("https://example.com/track/stream").expect("valid test source"),
-        )
-        .store(AssetStore::builder(pools()).build())
-        .hint("flac")
-        .build()
-        .build_file_config(&worker(), None);
+        let mut config = config("https://example.com/track/stream");
+        config.hint = Some("flac".to_owned());
 
-        assert_eq!(built.stream().settings.extension.as_deref(), Some("flac"));
+        let built = config.build_file_config(&worker(), None);
+
+        assert_eq!(built.stream().extension.as_deref(), Some("flac"));
         assert_eq!(built.hint(), Some("flac"));
     }
 
@@ -199,33 +200,46 @@ mod tests {
     /// dropped: nothing more specific names one for a URL that carries no
     /// extension and no caller hint.
     #[kithara::test]
-    fn a_settings_extension_stands_when_nothing_more_specific_names_one() {
-        let mut settings = ResourceSettings::default();
-        settings.file.extension = Some("wav".to_owned());
+    fn a_document_extension_stands_when_nothing_more_specific_names_one() {
+        let mut config = config("https://example.com/track/stream");
+        config.file.extension = Some("wav".to_owned());
 
-        let built =
-            config("https://example.com/track/stream", settings).build_file_config(&worker(), None);
+        let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().settings.extension.as_deref(), Some("wav"));
+        assert_eq!(built.stream().extension.as_deref(), Some("wav"));
         assert_eq!(built.hint(), Some("wav"));
     }
 
-    fn preload_chunks(count: usize) -> ResourceSettings {
-        ResourceSettings::builder()
-            .audio(
-                AudioSettings::builder()
-                    .preload_chunks(NonZeroUsize::new(count).expect("a preload count above zero"))
-                    .build(),
-            )
-            .build()
+    /// The per-call hint describes this very track, so it outranks a
+    /// document's blanket `file.extension` rather than losing to whichever
+    /// merge ran last.
+    #[kithara::test]
+    fn the_per_call_hint_outranks_a_document_extension() {
+        let mut config = config("https://example.com/track/stream");
+        config.hint = Some("flac".to_owned());
+        config.file.extension = Some("wav".to_owned());
+
+        let built = config.build_file_config(&worker(), None);
+
+        assert_eq!(built.stream().extension.as_deref(), Some("flac"));
+        assert_eq!(built.hint(), Some("flac"));
     }
 
-    /// `preload_chunks` is the one `ResourceSettings` field that is both a
-    /// document key and read in production, so the value a document names has
-    /// to survive the whole way to the built HLS pipeline.
+    fn preload_chunks(count: usize) -> AudioConfigPatch {
+        let mut patch = AudioConfigPatch::default();
+        patch.preload_chunks = Some(NonZeroUsize::new(count).expect("a preload count above zero"));
+        patch
+    }
+
+    /// `preload_chunks` is both a document key and read in production, so the
+    /// value a document names has to survive the whole way to the built HLS
+    /// pipeline.
     #[kithara::test]
     fn the_document_preload_count_reaches_the_built_hls_config() {
-        let built = config("https://example.com/live.m3u8", preload_chunks(9))
+        let mut config = config("https://example.com/live.m3u8");
+        config.audio = preload_chunks(9);
+
+        let built = config
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 
@@ -235,22 +249,24 @@ mod tests {
     /// The file branch reads the same field from the same place.
     #[kithara::test]
     fn the_document_preload_count_reaches_the_built_file_config() {
-        let built = config("https://example.com/song.mp3", preload_chunks(9))
-            .build_file_config(&worker(), None);
+        let mut config = config("https://example.com/song.mp3");
+        config.audio = preload_chunks(9);
+
+        let built = config.build_file_config(&worker(), None);
 
         assert_eq!(built.preload_chunks().get(), 9);
     }
 
     /// `audio_buffer_chunks` reached the built `AudioConfig` through no path
     /// while `ResourceConfig` forwarded individual audio fields one by one:
-    /// it never mirrored this one. Handing `AudioSettings` whole closes that
+    /// it never mirrored this one. Carrying the audio patch whole closes that
     /// gap, the same collapse `hls` and `file` already went through.
     #[kithara::test]
     fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
-        let mut settings = ResourceSettings::default();
-        settings.audio.audio_buffer_chunks = 24;
+        let mut config = config("https://example.com/live.m3u8");
+        config.audio.audio_buffer_chunks = Some(24);
 
-        let built = config("https://example.com/live.m3u8", settings)
+        let built = config
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 

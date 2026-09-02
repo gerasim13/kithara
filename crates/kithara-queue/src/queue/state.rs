@@ -18,7 +18,7 @@ use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
 };
 use crate::{
-    config::{QueueConfig, QueueSettings},
+    config::QueueConfig,
     loader::Loader,
     navigation::NavigationState,
     track::{TrackRecord, Tracks},
@@ -62,7 +62,7 @@ where
     pub(super) crossfade_armed_for: AtomicTrackId,
     /// Whether this queue auto-starts playback once the first registered
     /// track finishes loading. Configured via
-    /// [`QueueSettings::should_autoplay`]. `false` means the user must
+    /// [`QueueConfig::should_autoplay`]. `false` means the user must
     /// call [`Queue::select`] manually.
     ///
     /// Currently consumed only by the test-utils harness — the
@@ -181,9 +181,6 @@ where
             player,
             store,
             cancel: config_cancel,
-            settings,
-        } = config;
-        let QueueSettings {
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
@@ -191,7 +188,7 @@ where
             should_autoplay,
             #[cfg(not(any(test, feature = "probe")))]
                 should_autoplay: _,
-        } = settings;
+        } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
             AssetStore::builder(player.pools().clone())
@@ -573,7 +570,7 @@ pub(crate) mod tests {
             QueueConfig::builder()
                 .player(player())
                 .store(make_store())
-                .settings(QueueSettings::builder().prefetch_duration(8.0).build())
+                .prefetch_duration(8.0)
                 .build(),
         );
 

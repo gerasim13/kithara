@@ -13,10 +13,7 @@ use kithara::{
         time::{self, Duration, sleep},
         tokio,
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings, ResourceConfig,
-        ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -142,11 +139,7 @@ fn build_queue_with_tick_cf(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
-            .settings(
-                PlayerSettings::builder()
-                    .crossfade_duration(crossfade_seconds)
-                    .build(),
-            )
+            .crossfade_duration(crossfade_seconds)
             .build(),
     );
     let queue = Arc::new(Queue::new(

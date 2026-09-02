@@ -7,6 +7,7 @@ use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
+use serde::Deserialize;
 use struct_patch::Patch;
 use url::Url;
 
@@ -19,47 +20,90 @@ pub enum FileSrc {
     Local(PathBuf),
 }
 
-/// Streaming knobs a configuration document can override. Extracted out of
-/// [`FileConfig`] so a document reaches exactly these tunables and never the
-/// per-call wiring (`store`, `pools`, `bus`, `cancel`, `downloader`) or
-/// per-stream input (`src`, `discriminator`, `headers`) that stay on
-/// [`FileConfig`] itself.
-#[derive(Clone, Debug, Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
-#[patch(name = "FileSettingsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
+/// What a configuration document may say about [`FileConfig`].
+///
+/// Hand-written rather than derived: `struct-patch` copies a struct's generics
+/// and where-clause verbatim onto the patch it generates, so a patch of a
+/// generic configuration whose generic-carrying fields are skipped has a type
+/// parameter no field uses and does not compile. The per-call wiring
+/// (`store`, `pools`, `bus`, `cancel`, `downloader`) and the per-stream input
+/// (`src`, `discriminator`, `headers`) are absent on purpose, and
+/// `deny_unknown_fields` refuses them by name rather than dropping them
+/// silently.
+///
+/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
+/// references are resolved, so the tree it merges into holds secrets in the
+/// clear.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
-pub struct FileSettings {
-    /// Explicit source-extension hint used before the URL-path extension.
-    #[patch(skip_wrap)]
+pub struct FileConfigPatch {
+    /// See [`FileConfig::extension`].
     pub extension: Option<String>,
-    /// Event bus channel capacity (used when `bus` is not provided).
-    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
-    pub event_channel_capacity: usize,
-    /// Ring depth for the decode-core to shell reader-event hand-off. A decode
-    /// pass emits at most one progress event per decoded chunk, so the default
-    /// bounds the worst-case post-seek skip burst without blocking the decode
-    /// core.
-    #[builder(default = 256)]
-    pub reader_event_capacity: usize,
-    /// Poll interval while a sibling `AssetStore` instance holds the
-    /// atomic-chunked tmp for this file's canonical path. The default is short
-    /// enough that the observed ~67 ms race window in
-    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
-    /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
-    pub tmp_claim_poll_interval: Duration,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    #[patch(skip_wrap)]
+    /// See [`FileConfig::event_channel_capacity`].
+    pub event_channel_capacity: Option<usize>,
+    /// See [`FileConfig::reader_event_capacity`].
+    pub reader_event_capacity: Option<usize>,
+    /// See [`FileConfig::tmp_claim_poll_interval`].
+    #[serde(with = "humantime_serde::option")]
+    pub tmp_claim_poll_interval: Option<Duration>,
+    /// See [`FileConfig::look_ahead_bytes`].
     pub look_ahead_bytes: Option<u64>,
 }
 
-impl Default for FileSettings {
-    fn default() -> Self {
-        Self::builder().build()
+impl<S> Patch<FileConfigPatch> for FileConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn apply(&mut self, patch: FileConfigPatch) {
+        if patch.extension.is_some() {
+            self.extension = patch.extension;
+        }
+        if let Some(event_channel_capacity) = patch.event_channel_capacity {
+            self.event_channel_capacity = event_channel_capacity;
+        }
+        if let Some(reader_event_capacity) = patch.reader_event_capacity {
+            self.reader_event_capacity = reader_event_capacity;
+        }
+        if let Some(tmp_claim_poll_interval) = patch.tmp_claim_poll_interval {
+            self.tmp_claim_poll_interval = tmp_claim_poll_interval;
+        }
+        if patch.look_ahead_bytes.is_some() {
+            self.look_ahead_bytes = patch.look_ahead_bytes;
+        }
+    }
+
+    fn into_patch(self) -> FileConfigPatch {
+        FileConfigPatch {
+            extension: self.extension,
+            event_channel_capacity: Some(self.event_channel_capacity),
+            reader_event_capacity: Some(self.reader_event_capacity),
+            tmp_claim_poll_interval: Some(self.tmp_claim_poll_interval),
+            look_ahead_bytes: self.look_ahead_bytes,
+        }
+    }
+
+    fn into_patch_by_diff(self, previous: Self) -> FileConfigPatch {
+        FileConfigPatch {
+            extension: (self.extension != previous.extension)
+                .then_some(self.extension)
+                .flatten(),
+            event_channel_capacity: (self.event_channel_capacity
+                != previous.event_channel_capacity)
+                .then_some(self.event_channel_capacity),
+            reader_event_capacity: (self.reader_event_capacity != previous.reader_event_capacity)
+                .then_some(self.reader_event_capacity),
+            tmp_claim_poll_interval: (self.tmp_claim_poll_interval
+                != previous.tmp_claim_poll_interval)
+                .then_some(self.tmp_claim_poll_interval),
+            look_ahead_bytes: (self.look_ahead_bytes != previous.look_ahead_bytes)
+                .then_some(self.look_ahead_bytes)
+                .flatten(),
+        }
+    }
+
+    fn new_empty_patch() -> FileConfigPatch {
+        FileConfigPatch::default()
     }
 }
 
@@ -91,10 +135,26 @@ where
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
-    /// Streaming knobs a configuration document can override. See
-    /// [`FileSettings`] for what a document may say.
-    #[builder(default)]
-    pub settings: FileSettings,
+    /// Explicit source-extension hint used before the URL-path extension.
+    pub extension: Option<String>,
+    /// Event bus channel capacity (used when `bus` is not provided).
+    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    pub event_channel_capacity: usize,
+    /// Ring depth for the decode-core to shell reader-event hand-off. A decode
+    /// pass emits at most one progress event per decoded chunk, so the default
+    /// bounds the worst-case post-seek skip burst without blocking the decode
+    /// core.
+    #[builder(default = 256)]
+    pub reader_event_capacity: usize,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    pub tmp_claim_poll_interval: Duration,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    pub look_ahead_bytes: Option<u64>,
 }
 
 impl<S> Clone for FileConfig<S>
@@ -111,7 +171,11 @@ where
             discriminator: self.discriminator.clone(),
             downloader: self.downloader.clone(),
             headers: self.headers.clone(),
-            settings: self.settings.clone(),
+            extension: self.extension.clone(),
+            event_channel_capacity: self.event_channel_capacity,
+            reader_event_capacity: self.reader_event_capacity,
+            tmp_claim_poll_interval: self.tmp_claim_poll_interval,
+            look_ahead_bytes: self.look_ahead_bytes,
         }
     }
 }
@@ -129,7 +193,11 @@ where
             .field("discriminator", &self.discriminator)
             .field("pools", &self.pools)
             .field("store", &self.store)
-            .field("settings", &self.settings)
+            .field("extension", &self.extension)
+            .field("event_channel_capacity", &self.event_channel_capacity)
+            .field("reader_event_capacity", &self.reader_event_capacity)
+            .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
+            .field("look_ahead_bytes", &self.look_ahead_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -287,32 +355,54 @@ mod tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
+    use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{Duration, FileSettings, FileSettingsPatch};
+    use super::{Duration, FileConfig, FileConfigPatch, FileSrc, Url};
+    use crate::test_pools::{TestPools, pools};
+
+    fn config() -> FileConfig<TestPools> {
+        FileConfig::for_src(FileSrc::Remote(
+            Url::parse("http://example.com/audio.mp3").expect("a literal URL parses"),
+        ))
+        .store(
+            AssetStore::builder(pools())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools())
+        .build()
+    }
 
     #[kithara::test(native, flash(false))]
     fn a_document_sets_the_reader_capacity_and_leaves_the_poll_interval() {
-        let patch: FileSettingsPatch =
+        let patch: FileConfigPatch =
             serde_yaml_ng::from_str("reader_event_capacity: 512\n").expect("the document types");
-        let mut settings = FileSettings::default();
-        let poll_interval = settings.tmp_claim_poll_interval;
+        // Seeded off the crate default so a merge that reset every unnamed
+        // field could not pass this by coincidence.
+        let mut config = config();
+        config.tmp_claim_poll_interval = Duration::from_millis(77);
 
-        settings.apply(patch);
+        config.apply(patch);
 
-        assert_eq!(settings.reader_event_capacity, 512);
-        assert_eq!(settings.tmp_claim_poll_interval, poll_interval);
+        assert_eq!(config.reader_event_capacity, 512);
+        assert_eq!(
+            config.tmp_claim_poll_interval,
+            Duration::from_millis(77),
+            "a key the document does not name must keep its seeded value"
+        );
     }
 
-    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`, which
-    /// emits its token stream verbatim. A typo there would generate a patch
-    /// that accepts anything, and neither the compiler nor clippy would say a
-    /// word -- only a bogus key proves the attribute survived generation.
+    /// `deny_unknown_fields` is hand-written on [`FileConfigPatch`], so only a
+    /// bogus key proves it is on the type at all. `reader_event_capacity_bytes`
+    /// contains a real field name, which is what makes the assertion
+    /// meaningful: serde's "expected one of" list names the real key, so a
+    /// `contains` on the real name alone would pass vacuously.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error =
-            serde_yaml_ng::from_str::<FileSettingsPatch>("reader_event_capacity_bytes: 512\n")
+            serde_yaml_ng::from_str::<FileConfigPatch>("reader_event_capacity_bytes: 512\n")
                 .expect_err("a typo must not be silently ignored");
 
         assert!(
@@ -323,12 +413,22 @@ mod document_tests {
 
     #[kithara::test(native, flash(false))]
     fn a_document_reads_the_poll_interval_from_humantime_text() {
-        let patch: FileSettingsPatch =
+        let patch: FileConfigPatch =
             serde_yaml_ng::from_str("tmp_claim_poll_interval: 25ms\n").expect("the document types");
-        let mut settings = FileSettings::default();
+        let mut config = config();
 
-        settings.apply(patch);
+        config.apply(patch);
 
-        assert_eq!(settings.tmp_claim_poll_interval, Duration::from_millis(25));
+        assert_eq!(config.tmp_claim_poll_interval, Duration::from_millis(25));
+    }
+
+    /// The per-call wiring is not reachable from a document: naming it is
+    /// refused rather than parsed and dropped.
+    #[kithara::test(native, flash(false))]
+    fn the_per_call_wiring_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<FileConfigPatch>("discriminator: deck-0\n")
+            .expect_err("per-call wiring is handed over in code, not named in a document");
+
+        assert!(error.to_string().contains("discriminator"), "{error}");
     }
 }

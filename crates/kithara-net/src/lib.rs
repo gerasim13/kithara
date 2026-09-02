@@ -28,7 +28,7 @@ pub use crate::{
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
     types::{
-        Compression, CompressionAlgorithm, Headers, ImpersonatePreset, NetOptions, NetSettings,
-        RangeSpec, RetryPolicy, RetryPolicySettings,
+        Compression, CompressionAlgorithm, Headers, ImpersonatePreset, NetOptions, NetOptionsPatch,
+        RangeSpec, RetryPolicy, RetryPolicyPatch,
     },
 };

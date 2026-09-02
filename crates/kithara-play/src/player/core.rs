@@ -246,8 +246,7 @@ mod tests {
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        engine::EngineSettings,
-        player::{PlayerConfig, PlayerSettings, PlayerSettingsPatch},
+        player::{PlayerConfig, PlayerConfigPatch},
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
         test_pools::{TestPools, pools},
@@ -367,11 +366,7 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .settings(
-                    PlayerSettings::builder()
-                        .gapless_mode(GaplessMode::Disabled)
-                        .build(),
-                )
+                .gapless_mode(GaplessMode::Disabled)
                 .build(),
         );
         let mut config = resource_config("https://example.com/song.mp3");
@@ -387,24 +382,20 @@ mod tests {
 
     /// A document naming `player.gapless_mode` must reach the same prepared
     /// decoder config as the Rust-level builder above -- riding the full
-    /// chain (`PlayerSettings` -> `PlayerCore` -> `AudioDecoderConfig`)
-    /// rather than stopping at the settings struct the patch writes into.
+    /// chain (`PlayerConfig` -> `PlayerCore` -> `AudioDecoderConfig`) rather
+    /// than stopping at the configuration the patch writes into.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn a_document_named_gapless_mode_reaches_the_prepared_decoder() {
-        let patch: PlayerSettingsPatch =
-            serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
-                .expect("the document types");
-        let mut settings = PlayerSettings::default();
-        settings.apply(patch);
+        let patch: PlayerConfigPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+            .expect("the document types");
+        let mut config = PlayerConfig::builder()
+            .worker(worker())
+            .session(testing::test_session())
+            .build();
+        config.apply(patch);
 
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .worker(worker())
-                .session(testing::test_session())
-                .settings(settings)
-                .build(),
-        );
+        let player = PlayerImpl::new(config);
         let mut config = resource_config("https://example.com/song.mp3");
 
         config = player.prepare_config(config);
@@ -536,35 +527,24 @@ mod tests {
         let config = PlayerConfig::builder()
             .worker(worker())
             .session(testing::test_session())
-            .settings(
-                PlayerSettings::builder()
-                    .crossfade_duration(2.0)
-                    .prefetch_duration(5.0)
-                    .default_rate(0.5)
-                    .gapless_mode(GaplessMode::MediaOnly)
-                    .engine(
-                        EngineSettings::builder()
-                            .eq_layout(generate_log_spaced_bands(5))
-                            .max_slots(2)
-                            .sample_rate(
-                                NonZeroU32::new(44_100)
-                                    .expect("invariant: sample rate is non-zero"),
-                            )
-                            .build(),
-                    )
-                    .build(),
-            )
+            .crossfade_duration(2.0)
+            .prefetch_duration(5.0)
+            .default_rate(0.5)
+            .gapless_mode(GaplessMode::MediaOnly)
+            .eq_layout(generate_log_spaced_bands(5))
+            .max_slots(2)
+            .sample_rate(NonZeroU32::new(44_100).expect("invariant: sample rate is non-zero"))
             .timestretch(StretchControls::new(1.0))
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
     }
 
-    /// `PlayerConfig` no longer declares its own `sample_rate`: it hands
-    /// `settings.engine` whole to the `EngineConfig` it prepares. This pins
-    /// that the value the player reports back out is the exact one the
-    /// engine runs with, so the two cannot drift into two copies of one
-    /// number.
+    /// `PlayerConfig::sample_rate` is the single place the value lives before
+    /// the `EngineConfig` it configures exists. This pins that the value the
+    /// player reports back out is the exact one the engine runs with, so a
+    /// document naming `player.engine.sample_rate` cannot land somewhere the
+    /// engine never reads.
     #[kithara::test]
     fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
         let sample_rate = NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero");
@@ -572,11 +552,7 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .settings(
-                    PlayerSettings::builder()
-                        .engine(EngineSettings::builder().sample_rate(sample_rate).build())
-                        .build(),
-                )
+                .sample_rate(sample_rate)
                 .build(),
         );
 
@@ -589,15 +565,7 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .settings(
-                    PlayerSettings::builder()
-                        .engine(
-                            EngineSettings::builder()
-                                .eq_layout(generate_log_spaced_bands(3))
-                                .build(),
-                        )
-                        .build(),
-                )
+                .eq_layout(generate_log_spaced_bands(3))
                 .build(),
         );
         assert_eq!(player.eq_band_count(), 3);
@@ -611,25 +579,17 @@ mod tests {
         let config = PlayerConfig::builder()
             .worker(worker())
             .session(testing::test_session())
-            .settings(
-                PlayerSettings::builder()
-                    .default_rate(0.5)
-                    .crossfade_duration(2.5)
-                    .prefetch_duration(7.0)
-                    .engine(
-                        EngineSettings::builder()
-                            .max_slots(8)
-                            .eq_layout(generate_log_spaced_bands(5))
-                            .build(),
-                    )
-                    .build(),
-            )
+            .default_rate(0.5)
+            .crossfade_duration(2.5)
+            .prefetch_duration(7.0)
+            .max_slots(8)
+            .eq_layout(generate_log_spaced_bands(5))
             .build();
-        assert_eq!(config.settings.engine.max_slots, 8);
-        assert!((config.settings.default_rate - 0.5).abs() < f32::EPSILON);
-        assert!((config.settings.crossfade_duration - 2.5).abs() < f32::EPSILON);
-        assert!((config.settings.prefetch_duration - 7.0).abs() < f32::EPSILON);
-        assert_eq!(config.settings.engine.eq_layout.len(), 5);
+        assert_eq!(config.max_slots, 8);
+        assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
+        assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
+        assert!((config.prefetch_duration - 7.0).abs() < f32::EPSILON);
+        assert_eq!(config.eq_layout.len(), 5);
     }
 
     #[kithara::test]
@@ -768,11 +728,7 @@ mod tests {
             PlayerConfig::builder()
                 .worker(worker())
                 .session(testing::test_session())
-                .settings(
-                    PlayerSettings::builder()
-                        .auto_advance_enabled(false)
-                        .build(),
-                )
+                .auto_advance_enabled(false)
                 .build(),
         );
         assert!(!player.auto_advance_enabled());

@@ -12,7 +12,7 @@ mod queue;
 pub(crate) use kithara_bufpool::testing as test_pools;
 mod track;
 
-pub use config::{QueueConfig, QueueSettings, QueueSettingsPatch};
+pub use config::{QueueConfig, QueueConfigPatch};
 pub use error::QueueError;
 pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
 pub use navigation::{NavigationState, RepeatMode};

@@ -152,7 +152,7 @@ scope, `None` owns a standalone one). Ownership sits above this crate: the
 embedding surface (`kithara-app`, `kithara-ffi`) builds one `Downloader` and
 threads it through `kithara-play::ResourceConfig::downloader`, so every peer shares
 one HTTP pool; with none supplied, `kithara-play` builds a per-resource one.
-`DownloaderSettings` is the second entry point: a configuration document types into it
+`DownloaderConfigPatch` is the second entry point: a configuration document types into it
 and `apply` writes past the builder, so a document can compose a value the builder would
 have refused. `client`, `cancel` and `runtime` are wiring rather than settings and are
 absent from it; `abr_settings` nests, so the ABR knobs are reached at

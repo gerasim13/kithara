@@ -18,12 +18,12 @@ AES-128-CBC decryption (kithara-drm); `HlsSource<S>` (`impl Source`) reads throu
 same closed schema `S: HasPool<u8>`; `HlsConfig<S>` keeps cheap clones of both. The HTTP client,
 playlist cache, key store, segment storage, and temporary byte buffers therefore share one facade
 and one hard overall budget, with no global or per-component fallback pool.
-`settings: HlsSettings` groups the nine streaming knobs that do not depend on `S`: `net_options`,
-`size_probe_method`, `download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache
-bounds, `event_channel_capacity`, and `look_ahead_bytes`.
+Nine streaming knobs beside them do not depend on `S`: `net_options`, `size_probe_method`,
+`download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache bounds,
+`event_channel_capacity`, and `look_ahead_bytes`.
 `look_ahead_bytes: None` resolves to
 `DEFAULT_LOOK_AHEAD_BYTES` (2 MiB) at the consumer site; `Some(0)` disables the cap.
-`settings.net_options` builds the internal HTTP client only when no `downloader` is injected; an
+`net_options` builds the internal HTTP client only when no `downloader` is injected; an
 injected downloader carries its own. The ephemeral media prefetch window is `capacity -
 non_media_reserve`, clamped to `[min_media_window, max(max_media_window, min_media_window)]` and
 capped by the store's capacity. `cancel` is the master token: `Hls::create` wraps it in a
@@ -32,28 +32,29 @@ capped by the store's capacity. `cancel` is the master token: `Hls::create` wrap
 
 ## Configuration document entry point
 
-`HlsSettings` is the second way in: a configuration document types into the generated
-`HlsSettingsPatch` — `kithara-app`'s `hls:` section — and `apply` writes only the fields the
-document names, leaving the rest of `HlsConfig::settings` standing. `look_ahead_bytes: Option<u64>` carries `#[patch(skip_wrap)]` so a
-document names a bare number under `hls.look_ahead_bytes`, not `Some(number)` — the same mechanism
-`kithara-abr`'s `AbrSettings` uses for its own already-optional knob.
+`HlsConfig<S>` is the one configuration struct this crate has: the tunables and the per-call
+wiring live in it together. `HlsConfigPatch` is the second way in: a configuration document types
+into it — `kithara-app`'s `hls:` section — and `apply` writes only the fields the document names,
+leaving the rest of `HlsConfig` standing. It is hand-written rather than derived, because
+`struct-patch` copies a struct's generics onto the patch it generates and `HlsConfig<S>` is
+generic. `look_ahead_bytes: Option<u64>` is already optional on the config, so the patch declares
+it as a bare `Option` too and a document names a plain number under `hls.look_ahead_bytes`, not
+`Some(number)`. `Deserialize` only, never `Serialize`: a typed patch holds resolved secrets in the
+clear.
 
-`net_options` is the one knob inside `HlsSettings` a document may *not* name: it carries
-`#[patch(skip)]`, so `hls.net_options` is refused by `deny_unknown_fields` rather than parsed and
-dropped. The reason is duplication, not inertness — an embedder that reaches a configuration
-document already spells these options somewhere, and `kithara-app` spells them in its own top-level
-`net:` section. Two spellings of one value, one of them dead, is the shape a configuration document
-exists to prevent; the live one is `net:`. That a document value could not arrive anyway is the
-weaker, secondary point: `kithara-play::ResourceSettings` holds an `HlsSettings` whose own
-`net_options` no document can reach either — that field is `#[patch(skip)]` here and the whole
-`hls` field is `#[patch(skip)]` there — and `kithara-app` injects a `downloader` on every path
-besides, which is what makes `HlsSettings::net_options` unread there. It is not unread
-everywhere: `kithara-queue`'s `TrackSource::Uri` branch builds a `ResourceConfig` with no
-downloader, so the field is live for that caller. Live, but out of a document's reach.
+`net_options` is the one knob the patch does not declare, so `hls.net_options` is refused by
+`deny_unknown_fields` rather than parsed and dropped. The reason is duplication, not inertness — an
+embedder that reaches a configuration document already spells these options somewhere, and
+`kithara-app` spells them in its own top-level `net:` section. Two spellings of one value, one of
+them dead, is the shape a configuration document exists to prevent; the live one is `net:`. That a
+document value could not arrive anyway is the weaker, secondary point: `kithara-app` injects a
+`downloader` on every path besides, which is what makes `HlsConfig::net_options` unread there. It
+is not unread everywhere: `kithara-queue`'s `TrackSource::Uri` branch builds a `ResourceConfig`
+with no downloader, so the field is live for that caller. Live, but out of a document's reach.
 
-Skipping it also keeps `NetOptions` free of a `PartialEq` it has no honest meaning for:
-`struct-patch` demands `PartialEq` of every nested, renamed field, and `NetOptions` holds an
-`Observer` trait object whose only available equality is pointer identity.
+Leaving it out also keeps `NetOptions` free of a `PartialEq` it has no honest meaning for:
+`into_patch_by_diff` compares field by field, and `NetOptions` holds an `Observer` trait object
+whose only available equality is pointer identity.
 
 `initial_abr_mode` did not move even though its type does not depend on `S`: it names which variant
 a *particular stream* starts on, not a crate-wide default, and all 112 of its builder-setter call
@@ -62,13 +63,13 @@ write. `url` and `base_url` are per-resource identity, not tunable policy. `disc
 per-session ABR/ladder cache key. `headers` are per-request HTTP headers, closer to per-call wiring
 than a document-level default. `store`, `pools`, `keys`, `bus`, `cancel`, and `downloader` are live
 handles or `S`-typed values a document has no way to name, the same reasoning
-`kithara-assets::AssetStoreSettings` applies to its own `cancel` / `event_bus` / `layouts`.
+`kithara-assets::AssetStoreConfigPatch` applies to its own `cancel` / `event_bus` / `layouts`.
 
 The six `DEFAULT_*` values are module-level `pub(crate)` consts. They were associated consts on
 `impl<S> HlsConfig<S>`, which forced every reader to pick an `S` it did not otherwise care about
 (`HlsConfig::<S>::DEFAULT_LOOK_AHEAD_BYTES` in `stream/hls.rs`,
 `HlsConfig::<...>::DEFAULT_ACQUIRE_ATTEMPT_BUDGET` in `variant/io/dispatch.rs`). Re-hanging them off
-`HlsSettings` would only have swapped one namespace for another: `HlsSettings` has no methods, so an
+`HlsConfigPatch` would only have swapped one namespace for another: the patch has no methods, so an
 inherent `impl` holding nothing but constants is a split from the code that uses them rather than a
 namespace — `style.no-impl-only-consts` says so, and allows the shape only at three or more
 constants, which is a threshold this crate should not be steering by. Nothing outside the crate read

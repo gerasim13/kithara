@@ -52,7 +52,7 @@ pub(crate) trait Flushable: Send + Sync {
 
 /// Tunables for [`FlushHub`].
 #[derive(Clone, Debug, Patch)]
-#[patch(name = "FlushSettings")]
+#[patch(name = "FlushPolicyPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -337,7 +337,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn a_patch_writes_only_the_field_it_names() {
-        let settings: FlushSettings =
+        let settings: FlushPolicyPatch =
             serde_yaml_ng::from_str("force_every_n_ops: 512\n").expect("the document types");
         let mut policy = FlushPolicy::default();
         // Seeded away from the default of 50ms, so the assertion below can tell

@@ -9,6 +9,7 @@ use kithara::{
     },
     queue::QueueConfig,
 };
+use struct_patch::Patch as _;
 
 use crate::{
     config::AppConfig,
@@ -98,24 +99,21 @@ impl Deck {
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
         let timestretch = StretchControls::new(1.0);
-        let mut settings = config.player.clone();
-        settings.engine.eq_layout = generate_log_spaced_bands(config.eq_bands);
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .cancel(cancel.clone())
-                .settings(settings)
-                .timestretch(Arc::clone(&timestretch))
-                .worker(config.worker.clone())
-                .build(),
-        );
-        let queue = AppQueue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(config.store.clone())
-                .cancel(cancel.clone())
-                .settings(config.queue.clone())
-                .build(),
-        );
+        let mut player_config = PlayerConfig::builder()
+            .cancel(cancel.clone())
+            .eq_layout(generate_log_spaced_bands(config.eq_bands))
+            .timestretch(Arc::clone(&timestretch))
+            .worker(config.worker.clone())
+            .build();
+        player_config.apply(config.player.clone());
+        let player = PlayerImpl::new(player_config);
+        let mut queue_config = QueueConfig::builder()
+            .player(player)
+            .store(config.store.clone())
+            .cancel(cancel.clone())
+            .build();
+        queue_config.apply(config.queue.clone());
+        let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
 
         Ok(Self {

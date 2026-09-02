@@ -10,7 +10,7 @@ use kithara::platform::time;
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
@@ -204,7 +204,7 @@ async fn build_live_audio(
     worker
         .open(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .settings(AudioSettings::builder().block_on_underrun(true).build())
+                .block_on_underrun(true)
                 .build(),
         )
         .await
@@ -349,7 +349,7 @@ async fn live_real_drm_playback_smoke() {
     let mut audio = worker
         .open(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .settings(AudioSettings::builder().block_on_underrun(true).build())
+                .block_on_underrun(true)
                 .build(),
         )
         .await
@@ -444,7 +444,7 @@ async fn live_ephemeral_revisit_sequence_regression(
                 .backend(backend)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("audio creation");
     #[cfg(target_arch = "wasm32")]
@@ -776,7 +776,7 @@ async fn live_real_stream_seek_resume_native(#[case] encrypted: bool, #[case] la
     let mut audio = worker
         .open(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .settings(AudioSettings::builder().block_on_underrun(true).build())
+                .block_on_underrun(true)
                 .build(),
         )
         .await
@@ -879,7 +879,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let mut audio = worker
             .open(
                 AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                    .settings(AudioSettings::builder().block_on_underrun(true).build())
+                    .block_on_underrun(true)
                     .build(),
             )
             .await
@@ -1201,7 +1201,7 @@ async fn live_ephemeral_small_cache_playback(#[case] encrypted: bool, #[case] la
     let mut audio = worker
         .open(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .settings(AudioSettings::builder().block_on_underrun(true).build())
+                .block_on_underrun(true)
                 .build(),
         )
         .await
@@ -1306,7 +1306,7 @@ async fn live_ephemeral_small_cache_seek_stress(
                     .backend(backend)
                     .build(),
             )
-            .settings(AudioSettings::builder().block_on_underrun(true).build())
+            .block_on_underrun(true)
             .build();
         let mut audio = worker.open(config).await.expect("audio creation");
         info!(label, "Warmup: reading initial chunks");

@@ -5,7 +5,7 @@ use crate::Percent;
 
 /// Policy for one physical buffer pool in a region.
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
-#[patch(name = "PoolSettings")]
+#[patch(name = "PoolConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -34,7 +34,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{Percent, PoolConfig, PoolSettings};
+    use super::{Percent, PoolConfig, PoolConfigPatch};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
@@ -43,7 +43,7 @@ mod tests {
             .trim_capacity(4_096)
             .build();
 
-        let patch: PoolSettings =
+        let patch: PoolConfigPatch =
             serde_yaml_ng::from_str("max_buffers: 32\n").expect("a valid patch document parses");
         config.apply(patch);
 
@@ -56,7 +56,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_share_at_the_ceiling_is_accepted() {
-        let patch: PoolSettings = serde_yaml_ng::from_str("max_share: 100\n")
+        let patch: PoolConfigPatch = serde_yaml_ng::from_str("max_share: 100\n")
             .expect("100 percent is inside the invariant");
 
         assert_eq!(patch.max_share, Some(Percent::FULL));
@@ -64,7 +64,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_percent_above_one_hundred_is_refused() {
-        let error = serde_yaml_ng::from_str::<PoolSettings>("max_share: 140\n")
+        let error = serde_yaml_ng::from_str::<PoolConfigPatch>("max_share: 140\n")
             .expect_err("140 percent violates the Percent invariant");
 
         assert!(

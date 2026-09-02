@@ -21,7 +21,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead},
     file::{File, FileConfig},
-    hls::{Hls, HlsConfig, HlsSettings},
+    hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -397,12 +397,8 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         .pools(pools)
                         .initial_abr_mode(auto(1))
                         .downloader(downloader)
-                        .settings(
-                            HlsSettings::builder()
-                                .download_batch_size(3)
-                                .look_ahead_bytes(96_000)
-                                .build(),
-                        )
+                        .download_batch_size(3)
+                        .look_ahead_bytes(96_000)
                         .build();
 
                     let mut stream = Stream::<Hls<TestPools>>::new(config)

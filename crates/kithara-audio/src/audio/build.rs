@@ -20,9 +20,9 @@ use kithara_test_utils::kithara;
 use tracing::{debug, info, warn};
 
 use super::{
-    AudioConfig, AudioDecoderConfig, AudioSession, AudioSettings, ConsumerWakeMode, DecodeError,
-    DecodeInit, PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts,
-    StreamAudioSource, StreamDecoderFactory, ThreadWake,
+    AudioConfig, AudioDecoderConfig, AudioSession, ConsumerWakeMode, DecodeError, DecodeInit,
+    PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
+    StreamDecoderFactory, ThreadWake,
     core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
     cursor::ChunkCursor,
     event::{
@@ -213,18 +213,15 @@ where
             media_info: user_media_info,
             observer,
             decoder,
-            settings,
-            stream: stream_config,
-            bus: config_bus,
-            cancel: config_cancel,
-        } = config;
-        let AudioSettings {
             preload_chunks,
             host_sample_rate: config_host_sr,
             block_on_underrun,
             consumer_wake_mode,
             audio_buffer_chunks,
-        } = settings;
+            stream: stream_config,
+            bus: config_bus,
+            cancel: config_cancel,
+        } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let runtime_handle = current_runtime_handle()?;
 

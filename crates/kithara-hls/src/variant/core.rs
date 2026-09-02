@@ -46,7 +46,7 @@ pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 pub(crate) struct PlanConfig {
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
-    /// `HlsSettings::look_ahead_bytes`:
+    /// `HlsConfig::look_ahead_bytes`:
     /// - `Some(n)` — when a segment's start offset exceeds
     ///   `session.position() + n`, leave it (and everything after)
     ///   in the queue; further prefetch waits for the reader to
@@ -63,11 +63,11 @@ pub(crate) struct PlanConfig {
     pub(crate) look_ahead_segments: Option<usize>,
     #[builder(default)]
     pub(crate) size_probe_method: SizeProbeMethod,
-    /// Mirrors `HlsSettings::download_batch_size`: segments one dispatch round
+    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
     /// may emit.
     #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub(crate) prefetch_budget: usize,
-    /// Mirrors `HlsSettings::acquire_attempt_budget`: dispatch rounds a slot
+    /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
     #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,

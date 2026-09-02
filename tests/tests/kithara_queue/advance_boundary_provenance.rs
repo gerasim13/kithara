@@ -937,7 +937,7 @@ fn with_autoplay(
     mut config: QueueConfig<TestPools>,
     should_autoplay: bool,
 ) -> QueueConfig<TestPools> {
-    config.settings.should_autoplay = should_autoplay;
+    config.should_autoplay = should_autoplay;
     config
 }
 

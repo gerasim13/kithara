@@ -5,10 +5,7 @@ use kithara::{
     events::{AudioEvent, Event, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{
-        EngineSettings, PlayerConfig, PlayerImpl, PlayerSettings, ResourceConfig, ResourceSrc,
-        SeekOutcome, SessionDispatcher,
-    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome, SessionDispatcher},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -105,17 +102,9 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     let session = Arc::new(OfflineSession::new_manual());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .settings(
-                PlayerSettings::builder()
-                    .engine(
-                        EngineSettings::builder()
-                            .sample_rate(
-                                std::num::NonZeroU32::new(SAMPLE_RATE)
-                                    .expect("fixture sample rate must be non-zero"),
-                            )
-                            .build(),
-                    )
-                    .build(),
+            .sample_rate(
+                std::num::NonZeroU32::new(SAMPLE_RATE)
+                    .expect("fixture sample rate must be non-zero"),
             )
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),

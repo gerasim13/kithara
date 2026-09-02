@@ -293,46 +293,43 @@ the DRM providers alone, and fails the build listing all missing names with thei
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once, in
 the crate that defines it. `pools` is the one section that cannot: `pool_schema!` generates a region type per consumer,
 so there is no crate-level type to derive a patch on. It is composed here instead, out of `kithara-bufpool`'s own
-`PoolSettings` — one per pool this application declares — which keeps the per-pool value spelled once even though the
-region shape is local. `net` is the first of them: it is `kithara::net::NetSettings`, and what it may say is the
+`PoolConfigPatch` — one per pool this application declares — which keeps the per-pool value spelled once even though the
+region shape is local. `net` is the first of them: it is `kithara::net::NetOptionsPatch`, and what it may say is the
 `kithara-net` contract rather than this crate's. `main` builds `NetOptions` from the crate default, applies that
 section, and only then lets `--insecure` force verification off; the flag is an override that can turn verification
 off and never back on.
 
 `network` predated that shape and is now gone. `compression` and `is_insecure` moved to `net` first; `size_probe_method`
-was the field left behind, and it has now moved to `hls` — `kithara::hls::HlsSettingsPatch`, generated from
-`kithara-hls`'s own `HlsSettings`. Naming `network` at all is refused by `deny_unknown_fields` rather than parsed and
+was the field left behind, and it has now moved to `hls` — `kithara::hls::HlsConfigPatch`, what a document may say about
+`kithara-hls`'s own `HlsConfig`. Naming `network` at all is refused by `deny_unknown_fields` rather than parsed and
 ignored, which is what makes the move a move rather than a second reader going quiet. Two tests hold that refusal: one
 in `document::schema` at the type, one in `document::load` through the whole merge-expand-type pipeline.
 
-`hls` is `HlsSettingsPatch` whole, and all eight knobs it declares travel. `file` is
-`kithara::file::FileSettingsPatch`, and `audio` is `kithara::audio::AudioSettingsPatch`, whose two declared knobs are
-`preload_chunks` and `audio_buffer_chunks`. The three compose in `Config::resource_settings`: crate defaults, then
-`audio` into `settings.audio`, then `hls` and `file` into the two other per-source settings the tree holds.
-`AppConfig::resource` carries the result and `sources::build_resource_config` passes it to `ResourceConfig::settings`,
-which hands the `AudioSettings` inside it straight to the per-stream `AudioConfig`, the `HlsSettings` to the
-`HlsConfig`, and the `FileSettings` to the `FileConfig`. Nothing is copied field by field along the way, so a knob
-`kithara-audio`, `kithara-hls`, or `kithara-file` adds later reaches the built stream with no edit here. The
-composition lives on `Config` rather than inline in `main` for the same reason `store_backend` does — so a test reaches
-the code the binary runs, not a copy of it. `Document` declares no `resource:` section at all; `resource.hls`,
-`resource.file`, and `resource.audio` are refused because the top-level `hls:`, `file:`, and `audio:` sections are
-already this document's spelling for those knobs and a second path to one value is what a configuration document
-exists to prevent.
+`hls` is `HlsConfigPatch` whole, and all eight knobs it declares travel. `file` is
+`kithara::file::FileConfigPatch`, and `audio` is `kithara::audio::AudioConfigPatch`, whose two declared knobs are
+`preload_chunks` and `audio_buffer_chunks`. `AppConfig` carries all three as patches, and
+`sources::build_resource_config` sets them on `ResourceConfig`, which holds them until a track exists: an `HlsConfig`
+needs a `url` and a `store`, a `FileConfig` needs a source, so neither can be built before then.
+`kithara-play/src/resource/build.rs` builds the real config for the track and applies the patch onto it. Nothing is
+copied field by field along the way, so a knob `kithara-audio`, `kithara-hls`, or `kithara-file` adds later reaches the
+built stream with no edit here. `Document` declares no `resource:` section at all; `resource.hls`, `resource.file`, and
+`resource.audio` are refused because the top-level `hls:`, `file:`, and `audio:` sections are already this document's
+spelling for those knobs and a second path to one value is what a configuration document exists to prevent.
 
-`AudioSettings` skips three more of its own fields one level under `audio:` — `consumer_wake_mode` and
-`block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every player-managed resource (and
-either one can put reads on, or park, the real-time render callback), and `host_sample_rate` because every open path
-writes the rate the engine actually opened. `ResourceSettings::preferred_peak_bitrate` stays skipped too, because
-nothing forwards it to an ABR controller, so a document key for it would be one the binary ignores. See
-`kithara-audio`'s and `kithara-play`'s `CONTEXT.md` for those arguments.
+`AudioConfigPatch` leaves out three more of `AudioConfig`'s own fields, so naming them one level under `audio:` is
+refused — `consumer_wake_mode` and `block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every
+player-managed resource (and either one can put reads on, or park, the real-time render callback), and
+`host_sample_rate` because every open path writes the rate the engine actually opened.
+`ResourceConfig::preferred_peak_bitrate` is unreachable too, because nothing forwards it to an ABR controller, so a
+document key for it would be one the binary ignores. See `kithara-audio`'s and `kithara-play`'s `CONTEXT.md` for those
+arguments.
 
-`HlsSettings` has a ninth field the patch does not declare at all. `net_options` carries `#[patch(skip)]`, so naming
-`hls.net_options` is refused rather than dropped: `net:` is already this document's live spelling for those options,
-and a second spelling would be a second source of truth for one value. See `kithara-hls`'s `CONTEXT.md` for the rest
-of that argument, and for why `initial_abr_mode`, `url`, `base_url`, `discriminator` and `headers` were never
-document candidates.
+`HlsConfig` has a ninth knob the patch does not declare at all. Naming `hls.net_options` is refused rather than
+dropped: `net:` is already this document's live spelling for those options, and a second spelling would be a second
+source of truth for one value. See `kithara-hls`'s `CONTEXT.md` for the rest of that argument, and for why
+`initial_abr_mode`, `url`, `base_url`, `discriminator` and `headers` were never document candidates.
 
-`assets_store` is `kithara::assets::AssetStoreSettings`, and it is the first section the application does not pass
+`assets_store` is `kithara::assets::AssetStoreConfigPatch`, and it is the first section the application does not pass
 through whole. Seven of its eight knobs reach `AssetStore::open` unchanged through `maybe_*` setters, where an unset
 value is byte-identical to never calling the setter. `backend` cannot: `open`'s own fallback for an absent backend is a
 fresh unique temp directory per launch, so forwarding an unset value would move the on-disk cache every run. `main`
@@ -340,23 +337,22 @@ therefore calls `Config::store_backend`, which resolves an unnamed backend to `S
 under the system temp directory. That resolution lives in `document::load` rather than inline at the construction site
 so a test can reach it; two in `document::load` hold it, one for the silent document and one for a named backend.
 
-`queue` is `kithara::queue::QueueSettingsPatch`, and it is the first section after `net` whose value reaches a
-built object with no staged transfer in between: `main` applies it to a `QueueSettings`, `AppConfig` carries that,
-and `Deck::build` hands it to `QueueConfig::builder()` at `deck.rs:116`. Three of the four tunables travel.
-`should_autoplay` carries `#[patch(skip)]` because a release build reads it nowhere — `queue/state.rs:193` drops it
-under `#[cfg(not(any(test, feature = "probe")))]` — and a document key the shipped binary ignores reads as a
+`queue` is `kithara::queue::QueueConfigPatch`. `AppConfig` carries it and `Deck::build` applies it to the
+`QueueConfig` it builds. Three of the four tunables travel. `should_autoplay` is absent from the patch because a
+release build reads it nowhere — `queue/state.rs:193` drops it under
+`#[cfg(not(any(test, feature = "probe")))]` — and a document key the shipped binary ignores reads as a
 supported control while doing nothing.
 
-`player` is `kithara::play::PlayerSettingsPatch`, and it replaced a section named `playback` whose one field
-`crossfade_seconds` was this crate's own copy of `PlayerSettings::crossfade_duration`. The copy is gone rather than
+`player` is `kithara::play::PlayerConfigPatch`, and it replaced a section named `playback` whose one field
+`crossfade_seconds` was this crate's own copy of `PlayerConfig::crossfade_duration`. The copy is gone rather than
 kept in step, so the value is spelled once, in the crate that defines it; `app.yaml` names
 `player.crossfade_duration: 5.0` because this application has shipped that longer crossfade since before the section
 existed and the crate default is `1.0`. Naming `playback` is refused rather than parsed and ignored, held by
-`a_playback_section_is_rejected`. Engine knobs nest under `player.engine` as an `EngineSettingsPatch` rather than
-repeating on the player, because `PlayerConfig` builds the `EngineConfig` and two structs declaring one sample rate
-would be two sources of truth for it.
+`a_playback_section_is_rejected`. Engine knobs nest under `player.engine` as an `EngineConfigPatch` rather than
+repeating on the player, because `PlayerConfig` owns the resolved sample rate and hands it to `EngineConfig::builder`,
+and two structs declaring one sample rate would be two sources of truth for it.
 
-Four knobs on that patch carry `#[patch(skip)]`, each because something downstream already owns the value.
+Four knobs are absent from those patches, each because something downstream already owns the value.
 `auto_advance_enabled` and `prefetch_duration` are overwritten at `queue/state.rs:202-203` for every queue-driven
 player. `engine.eq_layout` is written by `Deck::build` from `app.eq_bands`, which is itself a document key, so
 declaring both would give one value two spellings with the older one always winning; a layout that is not
@@ -374,7 +370,7 @@ default, build the `DrawBuffers` from it, then build `UiConfig` through
 patched onto an already-built `UiConfig`, and never routed through `UiConfig::default()`, which would
 build and immediately discard a second `PoolRegion`. `AppConfig::ui` carries the result and `AppUi::new`
 takes it by reference instead of calling
-`UiConfig::default()` itself, the same shape `AppConfig::resource` uses for `ResourceSettings`. `main`
-calls `.ui(document.ui_settings()?)` on the same builder chain as `.resource(document.resource_settings())`;
+`UiConfig::default()` itself. `main` calls `.ui(document.ui_settings()?)` on the same builder chain as
+`.audio(document.audio())`, `.hls(document.hls())` and `.file(document.file())`;
 the `?` is there because a `draw_pool:` section can name limits the generated schema refuses, and a
 document is refused with a message rather than aborting the process.

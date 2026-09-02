@@ -11,11 +11,14 @@ use kithara::ui::{
     source::{DrawPoolLimits, UiConfig},
 };
 use kithara::{
-    assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
-    net::NetSettings,
-    play::{PlayerSettingsPatch, ResourceSettings, policy::DomainKeyPolicy},
-    queue::QueueSettingsPatch,
-    worker::{ComputePoolSettings, WorkerSettings},
+    assets::{AssetLayoutRegistry, AssetStoreConfigPatch, StorageBackend},
+    audio::AudioConfigPatch,
+    file::FileConfigPatch,
+    hls::HlsConfigPatch,
+    net::NetOptionsPatch,
+    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
+    queue::QueueConfigPatch,
+    worker::{ComputePoolSettings, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
 use struct_patch::Patch as _;
@@ -29,7 +32,7 @@ use super::{
 };
 use crate::{
     baked::{BAKED_DOCUMENT, baked_env},
-    config::AppSettings,
+    config::AppConfigPatch,
     pools::PoolsSection,
 };
 
@@ -192,25 +195,31 @@ impl Config {
 
     /// The HTTP options the document names.
     #[must_use]
-    pub fn net(&self) -> NetSettings {
+    pub fn net(&self) -> NetOptionsPatch {
         self.document.net.clone()
     }
 
-    /// The settings tree every track is opened with: the crate defaults, then
-    /// the document's `audio:`, `hls:`, and `file:` sections into the held
-    /// per-concern settings. Those three sections are the document's only
-    /// spelling for this tree -- `resource.audio`, `resource.hls`, and
-    /// `resource.file` are refused -- so composing them is what turns the
-    /// document into the value `ResourceConfig::settings` takes. The
-    /// composition lives here rather than at the construction site so a test
-    /// can reach the same code the binary runs.
+    /// Knobs the document sets on every track's audio pipeline. `audio:`,
+    /// `hls:`, and `file:` are the document's only spelling for the three
+    /// configurations a track is opened with -- `resource.audio`,
+    /// `resource.hls`, and `resource.file` are refused -- and each rides to
+    /// its construction site as a patch, because none of those configurations
+    /// exists until a track does.
     #[must_use]
-    pub fn resource_settings(&self) -> ResourceSettings {
-        let mut settings = ResourceSettings::default();
-        settings.audio.apply(self.document.audio.clone());
-        settings.hls.apply(self.document.hls.clone());
-        settings.file.apply(self.document.file.clone());
-        settings
+    pub fn audio(&self) -> AudioConfigPatch {
+        self.document.audio.clone()
+    }
+
+    /// Knobs the document sets on every HLS track's stream.
+    #[must_use]
+    pub fn hls(&self) -> HlsConfigPatch {
+        self.document.hls.clone()
+    }
+
+    /// Knobs the document sets on every file track's stream.
+    #[must_use]
+    pub fn file(&self) -> FileConfigPatch {
+        self.document.file.clone()
     }
 
     /// Knobs the document sets on the compiled UI: the crate default, then
@@ -241,7 +250,7 @@ impl Config {
     /// Knobs the document sets on the player, threaded into every deck's
     /// `PlayerConfig`.
     #[must_use]
-    pub fn player(&self) -> PlayerSettingsPatch {
+    pub fn player(&self) -> PlayerConfigPatch {
         self.document.player.clone()
     }
 
@@ -250,13 +259,13 @@ impl Config {
     ///
     /// [`AppConfig`]: crate::config::AppConfig
     #[must_use]
-    pub fn app_settings(&self) -> AppSettings {
+    pub fn app_settings(&self) -> AppConfigPatch {
         self.document.app.clone()
     }
 
     /// Knobs the document sets on the compute worker.
     #[must_use]
-    pub fn worker(&self) -> WorkerSettings {
+    pub fn worker(&self) -> WorkerConfigPatch {
         self.document.worker.clone()
     }
 
@@ -268,13 +277,13 @@ impl Config {
 
     /// Knobs the document sets on the asset store.
     #[must_use]
-    pub fn assets_store(&self) -> AssetStoreSettings {
+    pub fn assets_store(&self) -> AssetStoreConfigPatch {
         self.document.assets_store.clone()
     }
 
     /// Knobs the document sets on the queue.
     #[must_use]
-    pub fn queue(&self) -> QueueSettingsPatch {
+    pub fn queue(&self) -> QueueConfigPatch {
         self.document.queue.clone()
     }
 
@@ -348,7 +357,6 @@ mod tests {
     use kithara::{
         hls::SizeProbeMethod,
         net::{Compression, NetOptions},
-        play::PlayerSettings,
         worker::ComputePoolSettings,
     };
     use struct_patch::Patch as _;
@@ -384,16 +392,18 @@ mod tests {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
         assert_eq!(
-            config.resource_settings().hls.size_probe_method,
-            SizeProbeMethod::RangeGet,
+            config.hls().size_probe_method,
+            Some(SizeProbeMethod::RangeGet),
             "the shipped document selects range_get"
         );
         assert!(!config.tracks().is_empty());
 
-        let mut player_settings = PlayerSettings::default();
-        player_settings.apply(config.player());
+        let crossfade = config
+            .player()
+            .crossfade_duration
+            .expect("the shipped document names a crossfade");
         assert!(
-            (player_settings.crossfade_duration - 5.0).abs() < f32::EPSILON,
+            (crossfade - 5.0).abs() < f32::EPSILON,
             "the shipped document pins the 5-second crossfade against the crate default of 1.0"
         );
     }
@@ -409,10 +419,7 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(
-            config.resource_settings().hls.size_probe_method,
-            SizeProbeMethod::Head
-        );
+        assert_eq!(config.hls().size_probe_method, Some(SizeProbeMethod::Head));
         assert!(
             !config.tracks().is_empty(),
             "a section the overlay never names keeps its baked value"
@@ -474,7 +481,7 @@ mod tests {
     }
 
     /// A document's `queue` key reaches the accessor unchanged, and a knob it
-    /// never names stays absent so the crate default that built `QueueSettings`
+    /// never names stays absent so the crate default that built `QueueConfig`
     /// stands.
     #[kithara::test(native, flash(false))]
     fn the_queue_section_survives_the_load_pipeline() {
@@ -493,11 +500,11 @@ mod tests {
         );
     }
 
-    /// The three sections that compose one `ResourceSettings` each write their
-    /// own part of it, and the baked `hls.size_probe_method` an overlay never
-    /// names survives the composition.
+    /// The three sections a track is opened with each carry their own patch,
+    /// and the baked `hls.size_probe_method` an overlay never names survives
+    /// alongside them.
     #[kithara::test(native, flash(false))]
-    fn the_audio_hls_and_file_sections_compose_one_settings_tree() {
+    fn the_audio_hls_and_file_sections_each_reach_their_own_patch() {
         let dir = tempdir();
         let path = write(
             &dir,
@@ -506,13 +513,12 @@ mod tests {
         );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
-        let settings = config.resource_settings();
 
-        assert_eq!(settings.audio.preload_chunks.get(), 7);
-        assert_eq!(settings.file.reader_event_capacity, 512);
+        assert_eq!(config.audio().preload_chunks, NonZeroUsize::new(7));
+        assert_eq!(config.file().reader_event_capacity, Some(512));
         assert_eq!(
-            settings.hls.size_probe_method,
-            SizeProbeMethod::RangeGet,
+            config.hls().size_probe_method,
+            Some(SizeProbeMethod::RangeGet),
             "a section the overlay never names keeps its baked value"
         );
     }
@@ -659,8 +665,8 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("an empty overlay loads");
 
         assert_eq!(
-            config.resource_settings().hls.size_probe_method,
-            SizeProbeMethod::RangeGet
+            config.hls().size_probe_method,
+            Some(SizeProbeMethod::RangeGet)
         );
         assert!(
             !config.tracks().is_empty(),

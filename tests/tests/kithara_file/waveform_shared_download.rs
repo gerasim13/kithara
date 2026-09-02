@@ -16,7 +16,7 @@ use bytes::Bytes;
 use kithara::{
     analysis::BeatAnalysisConfig,
     assets::StorageBackend,
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSettings, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorkerConfig, RegisteredAudio, ResourceSrc},
@@ -106,7 +106,7 @@ async fn waveform_and_player_share_one_get() {
             .pools(pools.clone())
             .build(),
     )
-    .settings(AudioSettings::builder().block_on_underrun(true).build())
+    .block_on_underrun(true)
     .build();
 
     // Run both concurrently so they cooperate on one download.

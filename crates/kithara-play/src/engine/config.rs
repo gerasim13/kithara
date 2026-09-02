@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_bufpool::PoolRegion;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::BeatGridId;
-use struct_patch::Patch;
+use serde::Deserialize;
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
@@ -16,52 +16,28 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     None => unreachable!(),
 };
 
-/// Engine-level knobs a configuration document can override. Extracted out of
-/// [`EngineConfig`] so a document reaches exactly these tunables and never the
-/// per-call wiring (`grid_id`, `cancel`, `session`, `pools`) that stays on
-/// [`EngineConfig`] itself.
+/// What a configuration document may say about [`EngineConfig`], under a
+/// player's `engine` key.
 ///
-/// `PlayerConfig` builds an `EngineConfig` from a player's own settings, so
-/// `PlayerSettings` holds one of these under `engine` rather than repeating
-/// `sample_rate`, `max_slots` and `eq_layout` as a second copy: two settings
-/// structs declaring the same three values would be a second mutable source
-/// of truth for one number.
-#[derive(Clone, Debug, PartialEq, Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
-#[patch(name = "EngineSettingsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
+/// Nothing merges it into an [`EngineConfig`] directly: a player owns the
+/// resolved `sample_rate` and `max_slots` and hands them to
+/// [`EngineConfig::builder`], so `PlayerConfig`'s own patch carries this one
+/// and applies it to the player. The per-call wiring (`grid_id`, `cancel`,
+/// `session`, `pools`), `eq_layout` and `channels` are absent on purpose, and
+/// `deny_unknown_fields` refuses them by name rather than dropping them
+/// silently.
+///
+/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
+/// references are resolved, so the tree it merges into holds secrets in the
+/// clear.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
-pub struct EngineSettings {
-    /// EQ band layout per player. Default: 10-band log-spaced. Not a
-    /// document key: every construction site in the workspace derives this
-    /// from a generator (`generate_log_spaced_bands`), and a custom layout
-    /// is installed at runtime through `PlayerImpl::set_eq_layout` rather
-    /// than through config.
-    #[patch(skip)]
-    #[builder(default = generate_log_spaced_bands(10))]
-    pub eq_layout: Vec<EqBandConfig>,
-    /// Number of output channels. Default: 2 (stereo). Not a document key:
-    /// the only reader is a startup log line, so a document value would
-    /// change nothing the engine actually does.
-    #[patch(skip)]
-    #[builder(default = 2)]
-    pub channels: u16,
-    /// Sample rate passed to the runtime backend as a hint. Default: 44100.
-    /// Offline/test harnesses set this to drive deterministic render at a
-    /// known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
-    pub sample_rate: NonZeroU32,
-    /// Maximum concurrent slots in the engine. Default: 4.
-    #[builder(default = 4)]
-    pub max_slots: usize,
-}
-
-impl Default for EngineSettings {
-    fn default() -> Self {
-        Self::builder().build()
-    }
+pub struct EngineConfigPatch {
+    /// See [`EngineConfig::sample_rate`].
+    pub sample_rate: Option<NonZeroU32>,
+    /// See [`EngineConfig::max_slots`].
+    pub max_slots: Option<usize>,
 }
 
 /// Configuration for the audio engine.
@@ -80,10 +56,26 @@ pub struct EngineConfig<S> {
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
-    /// Engine-level knobs a configuration document can override. See
-    /// [`EngineSettings`] for what a document may say.
-    #[builder(default)]
-    pub(crate) settings: EngineSettings,
+    /// EQ band layout per player. Default: 10-band log-spaced. Not a
+    /// document key: every construction site in the workspace derives this
+    /// from a generator (`generate_log_spaced_bands`), and a custom layout
+    /// is installed at runtime through `PlayerImpl::set_eq_layout` rather
+    /// than through config.
+    #[builder(default = generate_log_spaced_bands(10))]
+    pub(crate) eq_layout: Vec<EqBandConfig>,
+    /// Number of output channels. Default: 2 (stereo). Not a document key:
+    /// the only reader is a startup log line, so a document value would
+    /// change nothing the engine actually does.
+    #[builder(default = 2)]
+    pub(crate) channels: u16,
+    /// Sample rate passed to the runtime backend as a hint. Default: 44100.
+    /// Offline/test harnesses set this to drive deterministic render at a
+    /// known rate.
+    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    pub(crate) sample_rate: NonZeroU32,
+    /// Maximum concurrent slots in the engine. Default: 4.
+    #[builder(default = 4)]
+    pub(crate) max_slots: usize,
 }
 
 impl<S> Clone for EngineConfig<S> {
@@ -93,7 +85,10 @@ impl<S> Clone for EngineConfig<S> {
             cancel: self.cancel.clone(),
             session: self.session.clone(),
             pools: self.pools.clone(),
-            settings: self.settings.clone(),
+            eq_layout: self.eq_layout.clone(),
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            max_slots: self.max_slots,
         }
     }
 }
@@ -101,9 +96,80 @@ impl<S> Clone for EngineConfig<S> {
 impl<S> fmt::Debug for EngineConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EngineConfig")
-            .field("settings", &self.settings)
+            .field("sample_rate", &self.sample_rate)
+            .field("max_slots", &self.max_slots)
+            .field("channels", &self.channels)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+
+    use super::{EngineConfigPatch, NonZeroU32};
+
+    /// `deny_unknown_fields` is hand-written here rather than emitted by
+    /// `#[patch(attribute(...))]`, so a bogus key is what proves it is on the
+    /// type at all. `slot_ceiling` is not a prefix of any real field (unlike
+    /// `max_slot`, which would pass this assertion vacuously because the
+    /// error message lists the real `max_slots` field among the valid names).
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<EngineConfigPatch>("slot_ceiling: 8\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("slot_ceiling"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_document_names_both_live_keys() {
+        let patch: EngineConfigPatch =
+            serde_yaml_ng::from_str("sample_rate: 48000\nmax_slots: 8\n")
+                .expect("the document types");
+
+        assert_eq!(patch.sample_rate.map(NonZeroU32::get), Some(48_000));
+        assert_eq!(patch.max_slots, Some(8));
+    }
+
+    /// A key the document does not name stays unset, so the merge has nothing
+    /// to write and the caller's value stands.
+    #[kithara::test(native, flash(false))]
+    fn an_absent_key_stays_unset_rather_than_defaulting() {
+        let patch: EngineConfigPatch =
+            serde_yaml_ng::from_str("max_slots: 8\n").expect("the document types");
+
+        assert_eq!(patch.max_slots, Some(8));
+        assert!(
+            patch.sample_rate.is_none(),
+            "an unnamed key must stay `None` so the merge skips it"
+        );
+    }
+
+    /// `eq_layout` is a real field on [`EngineConfig`] but must not be
+    /// document-reachable: every construction site derives it from
+    /// `generate_log_spaced_bands`, and a custom layout is installed at
+    /// runtime through `PlayerImpl::set_eq_layout` (see the field's doc
+    /// comment).
+    #[kithara::test(native, flash(false))]
+    fn the_generator_owned_eq_layout_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<EngineConfigPatch>("eq_layout: []\n")
+            .expect_err("a generator-owned field must not be settable from a document");
+
+        assert!(error.to_string().contains("eq_layout"), "{error}");
+    }
+
+    /// `channels` is a real field on [`EngineConfig`] but must not be
+    /// document-reachable: its only reader is a startup log line, so a
+    /// document value would change nothing the engine actually does (see the
+    /// field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_unread_channels_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<EngineConfigPatch>("channels: 1\n")
+            .expect_err("a field with no consumer must not be settable from a document");
+
+        assert!(error.to_string().contains("channels"), "{error}");
     }
 }
 
@@ -111,80 +177,19 @@ impl<S> fmt::Debug for EngineConfig<S> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::EngineSettings;
+    use super::{BeatGridId, EngineConfig};
+    use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
     fn defaults_match_the_documented_values() {
-        let settings = EngineSettings::default();
+        let config: EngineConfig<TestPools> = EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("a grid identity"))
+            .pools(pools())
+            .build();
 
-        assert_eq!(settings.channels, 2);
-        assert_eq!(settings.sample_rate.get(), 44_100);
-        assert_eq!(settings.max_slots, 4);
-        assert_eq!(settings.eq_layout.len(), 10);
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod document_tests {
-    use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
-
-    use super::EngineSettings;
-
-    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`,
-    /// which emits its token stream verbatim. A typo there would generate a
-    /// patch that accepts anything, and neither the compiler nor clippy
-    /// would say a word -- only a bogus key proves the attribute survived
-    /// generation.
-    #[kithara::test(native, flash(false))]
-    fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<super::EngineSettingsPatch>("slot_ceiling: 8\n")
-            .expect_err("a typo must not be silently ignored");
-
-        assert!(error.to_string().contains("slot_ceiling"), "{error}");
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn a_patch_writes_only_the_field_it_names() {
-        let patch: super::EngineSettingsPatch =
-            serde_yaml_ng::from_str("max_slots: 8\n").expect("the document types");
-        let mut settings = EngineSettings::default();
-        // Seeded off the default (2) so a whole-struct `apply` that resets
-        // every unnamed field to `Default::default()` cannot pass this
-        // assertion by coincidence.
-        settings.channels = 5;
-
-        settings.apply(patch);
-
-        assert_eq!(settings.max_slots, 8);
-        assert_eq!(
-            settings.channels, 5,
-            "a silent field must keep its seeded value, not reset to default"
-        );
-    }
-
-    /// `eq_layout` is a real field on `EngineSettings` but must not be
-    /// document-reachable: every construction site derives it from
-    /// `generate_log_spaced_bands`, and a custom layout is installed at
-    /// runtime through `PlayerImpl::set_eq_layout` (see the field's doc
-    /// comment).
-    #[kithara::test(native, flash(false))]
-    fn the_generator_owned_eq_layout_is_not_a_document_key() {
-        let error = serde_yaml_ng::from_str::<super::EngineSettingsPatch>("eq_layout: []\n")
-            .expect_err("a generator-owned field must not be settable from a document");
-
-        assert!(error.to_string().contains("eq_layout"), "{error}");
-    }
-
-    /// `channels` is a real field on `EngineSettings` but must not be
-    /// document-reachable: its only reader is a startup log line, so a
-    /// document value would change nothing the engine actually does (see
-    /// the field's doc comment).
-    #[kithara::test(native, flash(false))]
-    fn the_unread_channels_field_is_not_a_document_key() {
-        let error = serde_yaml_ng::from_str::<super::EngineSettingsPatch>("channels: 1\n")
-            .expect_err("a field with no consumer must not be settable from a document");
-
-        assert!(error.to_string().contains("channels"), "{error}");
+        assert_eq!(config.channels, 2);
+        assert_eq!(config.sample_rate.get(), 44_100);
+        assert_eq!(config.max_slots, 4);
+        assert_eq!(config.eq_layout.len(), 10);
     }
 }

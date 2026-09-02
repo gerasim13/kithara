@@ -143,20 +143,23 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 
 ## Configuration document entry point
 
-`FileSettings` is the second way in: a configuration document types into the generated
-`FileSettingsPatch` and `apply` writes only the fields the document names, leaving the rest of
-`FileConfig::settings` standing. `extension: Option<String>` and `look_ahead_bytes: Option<u64>`
-both carry `#[patch(skip_wrap)]` so a document names a bare value under `extension` /
-`look_ahead_bytes`, not `Some(value)` — the same mechanism `kithara-hls`'s `HlsSettings` uses for
-its own already-optional knobs. `tmp_claim_poll_interval` carries
-`#[patch(attribute(serde(with = "humantime_serde::option")))]`, so a document writes `25ms` rather
-than a raw millisecond count.
+`FileConfig<S>` is the one configuration struct this crate has: the tunables and the per-call
+wiring live in it together. `FileConfigPatch` is the second way in: a configuration document types
+into it and `apply` writes only the fields the document names, leaving the rest of `FileConfig`
+standing. It is hand-written rather than derived, because `struct-patch` copies a struct's
+generics onto the patch it generates and `FileConfig<S>` is generic. `extension: Option<String>`
+and `look_ahead_bytes: Option<u64>` are already optional on the config, so the patch declares them
+as bare `Option` too and a document names a plain value under `extension` / `look_ahead_bytes`,
+not `Some(value)`. `tmp_claim_poll_interval` is read through
+`serde(with = "humantime_serde::option")`, so a document writes `25ms` rather than a raw
+millisecond count. `Deserialize` only, never `Serialize`: a typed patch holds resolved secrets in
+the clear.
 
-`kithara-app`'s `file:` section is that document's spelling. It types into `FileSettingsPatch`,
-`main` applies it to the `file` field of one `kithara_play::ResourceSettings`, and every track is
-opened with that value: `ResourceConfig` carries the `FileSettings` whole and
-`kithara-play/src/resource/build.rs` hands it straight to `FileConfig::settings`. The one field the
-document does not have the last word on is `extension`: the file branch resolves it as the
+`kithara-app`'s `file:` section is that document's spelling. It types into `FileConfigPatch`,
+`main` hands it to `AppConfig::file`, and every track is opened with that value:
+`kithara_play::ResourceConfig` carries the patch — no `FileConfig` can exist before a track does —
+and `kithara-play/src/resource/build.rs` applies it to the `FileConfig` it builds. The one field
+the document does not have the last word on is `extension`: the file branch resolves it as the
 per-call format hint, then the extension derived from the source path, then whatever the document
 named — the two ahead of it identify the track being opened, which is more specific than a
 crate-wide default.

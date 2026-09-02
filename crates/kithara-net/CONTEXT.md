@@ -147,7 +147,7 @@ the cookie store.
 `HttpClient::with_observer` rebuilds `NetOptions` by struct update, so a new option is carried over by construction —
 a field-by-field rebuild would silently reset any knob it forgot.
 
-`NetSettings` and `RetryPolicySettings` are what a configuration document may say about those options. They are
+`NetOptionsPatch` and `RetryPolicyPatch` are what a configuration document may say about those options. They are
 `Deserialize` only: a patch reaching this crate has already had its references resolved, so nothing serializes one back
 out. Every field is optional and a patch writes only the fields it names, leaving the builder's value standing
 everywhere else; `retry_policy` is itself a patch, so a document naming one retry field keeps the other two.

@@ -13,8 +13,7 @@ use kithara::{
         sync::{Arc, Mutex},
     },
     play::{
-        EngineSettings, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings,
-        ResourceSettings, ResourceSrc,
+        PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
@@ -199,15 +198,7 @@ impl NativeInner {
         let player_cancel = cancel.clone();
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
-            .settings(
-                PlayerSettings::builder()
-                    .engine(
-                        EngineSettings::builder()
-                            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
-                            .build(),
-                    )
-                    .build(),
-            )
+            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .cancel(player_cancel.child())
             .worker(worker)
             .build();
@@ -595,11 +586,7 @@ fn build_source_for_item(
         reason: e.to_string(),
     })?;
     let config = FfiResourceConfig::for_src(src)
-        .settings(
-            ResourceSettings::builder()
-                .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
-                .build(),
-        )
+        .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())

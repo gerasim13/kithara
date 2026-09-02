@@ -20,7 +20,7 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{
-        analyzer::{AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisSettings, TrackAnalysis},
+        analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis},
         producer::{AnalysisProducer, ring},
         worker::Job,
     },
@@ -252,12 +252,8 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat_config(
         BeatAnalysisConfig::builder()
             .resampler_backend(NoResamplerBackend)
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .detector_window_seconds(window_seconds)
-                    .detector_overlap_seconds(0)
-                    .build(),
-            )
+            .detector_window_seconds(window_seconds)
+            .detector_overlap_seconds(0)
             .build(),
     )
 }
@@ -881,7 +877,7 @@ mod artifacts {
         Consts, Pass, Source, targets,
     };
     use crate::{
-        BeatAnalysisConfig, BeatAnalysisSettings,
+        BeatAnalysisConfig,
         test_pools::{TestPools, pools},
     };
 
@@ -908,12 +904,8 @@ mod artifacts {
             .with_beat_config(
                 BeatAnalysisConfig::builder()
                     .resampler_backend(RubatoBackend::default())
-                    .settings(
-                        BeatAnalysisSettings::builder()
-                            .detector_window_seconds(WINDOW_SECONDS)
-                            .detector_overlap_seconds(0)
-                            .build(),
-                    )
+                    .detector_window_seconds(WINDOW_SECONDS)
+                    .detector_overlap_seconds(0)
                     .build(),
             )
             .with_beat_detector(beat_detector(), GridParams::default())

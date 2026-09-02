@@ -13,9 +13,9 @@ pub(crate) use position::chunk_position;
 pub use seek::SeekHandle;
 
 pub(crate) use crate::{
-    AudioConfig, AudioControl, AudioDecoderConfig, AudioRead, AudioSession, AudioSettings,
-    ChunkOutcome, ConsumerWakeMode, DecodeError, Fetch, PendingReason, PreloadGate,
-    PreparedAudioLane, ReadOutcome, SeekOutcome,
+    AudioConfig, AudioControl, AudioDecoderConfig, AudioRead, AudioSession, ChunkOutcome,
+    ConsumerWakeMode, DecodeError, Fetch, PendingReason, PreloadGate, PreparedAudioLane,
+    ReadOutcome, SeekOutcome,
     pipeline::{
         consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,

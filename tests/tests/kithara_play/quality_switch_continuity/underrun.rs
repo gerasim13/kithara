@@ -1,7 +1,7 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioSession, AudioSettings},
+    audio::{AudioConfig, AudioSession},
     hls::{Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -94,11 +94,7 @@ async fn prepare_tiny_ring_player(
                 .build(),
         )
         .events(bus)
-        .settings(
-            AudioSettings::builder()
-                .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
-                .build(),
-        )
+        .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
         .build();
     let audio = worker
         .open(config)

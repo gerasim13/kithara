@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
-    file::FileSettings,
+    file::FileConfigPatch,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSettings, ResourceSrc},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -129,17 +129,11 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .store(store.clone())
             .build(),
     ));
+    let mut file = FileConfigPatch::default();
+    file.look_ahead_bytes = Some(LOOK_AHEAD_BYTES);
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader)
-        .settings(
-            ResourceSettings::builder()
-                .file(
-                    FileSettings::builder()
-                        .look_ahead_bytes(LOOK_AHEAD_BYTES)
-                        .build(),
-                )
-                .build(),
-        )
+        .file(file)
         .store(store)
         .build();
 

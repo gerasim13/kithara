@@ -2,7 +2,7 @@ use std::path::Path;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioSettings},
+    audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
@@ -71,7 +71,7 @@ async fn create_hls_audio(
     // readers never spin against the virtual clock.
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());

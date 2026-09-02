@@ -52,12 +52,12 @@ bounded compute seam.
 
 ## Configuration document entry point
 
-`WorkerSettings` is the second way in: a configuration document types into it
+`WorkerConfigPatch` is the second way in: a configuration document types into it
 and `apply` writes only `max_compute_tasks`, leaving whatever `cancel`,
 `runtime`, and `pool` the builder already assembled standing. Those three
 fields are wiring, not settings, and carry `#[patch(skip)]` for it.
 `ComputePoolSettings` is what a document may say about the compute pool. It is
-a section of its own rather than a field of `WorkerSettings`, because `pool` is
+a section of its own rather than a field of `WorkerConfigPatch`, because `pool` is
 skipped; the embedding surface owns the key it arrives under. `Shared` is
 absent from it on purpose: it carries a live
 `rayon::ThreadPool` only code can hand over, and a document has no way to name

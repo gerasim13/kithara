@@ -49,7 +49,7 @@ impl<S> PlayerImpl<S> {
         let pools = config.worker.pools().clone();
         let sync = PlayerSync::unavailable(
             config.grid_id,
-            config.settings.engine.sample_rate,
+            config.sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
         );
@@ -63,8 +63,10 @@ impl<S> PlayerImpl<S> {
         config.cancel = Some(cancel.clone());
 
         let engine_config = EngineConfig::builder()
-            .settings(config.settings.engine.clone())
             .grid_id(config.grid_id)
+            .sample_rate(config.sample_rate)
+            .max_slots(config.max_slots)
+            .eq_layout(config.eq_layout.clone())
             .pools(pools)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
@@ -76,7 +78,7 @@ impl<S> PlayerImpl<S> {
         }
 
         // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.settings.default_rate);
+        config.timestretch.set_speed(config.default_rate);
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
@@ -84,8 +86,8 @@ impl<S> PlayerImpl<S> {
             engine_load: Arc::new(EngineLoad::default()),
             params,
             timestretch: config.timestretch,
-            gapless_mode: config.settings.gapless_mode,
-            block_on_underrun: config.settings.block_on_underrun,
+            gapless_mode: config.gapless_mode,
+            block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
         };

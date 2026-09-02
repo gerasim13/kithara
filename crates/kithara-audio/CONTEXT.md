@@ -106,7 +106,7 @@ them inline before returning, because its thread may take the
 FIFO is not a cross-route delivery order: an inline reader event may reach
 subscribers before an earlier-`seq` deferred event still parked in the ring.
 With
-`AudioSettings::block_on_underrun` set true a `read()` on an empty ring PARKS
+`AudioConfig::block_on_underrun` set true a `read()` on an empty ring PARKS
 the caller until the worker produces and the effective wake mode is always
 `ImmediateOffRt`, regardless of the explicitly configured mode. The consumer
 must therefore live on a dedicated thread or `spawn_blocking`, never the audio
@@ -469,15 +469,24 @@ in the ceil frame domain and the decoder adapter sizes buffers from that.
 
 ## Document entry point
 
-`AudioSettings` (`pipeline::config::audio`) is this crate's document-facing
-config type, held whole as `AudioConfig.settings`. It carries the two knobs a
-configuration document can name -- `preload_chunks` and `audio_buffer_chunks`
--- plus three runtime-owned fields (`host_sample_rate`, `block_on_underrun`,
-`consumer_wake_mode`) that stay `#[patch(skip)]` because every player-managed
-resource overwrites them from engine/session policy. `kithara-play`'s
-`ResourceSettings` holds one whole `AudioSettings` rather than re-declaring
-its fields, and a document reaches it through a top-level `audio:` section,
-the same shape `hls:` and `file:` already use.
+`AudioConfig` is the one configuration struct this crate has: the tunables and
+the per-call wiring live in it together. `AudioConfigPatch`
+(`pipeline::config::audio`) is what a configuration document may say about it
+-- `preload_chunks` and `audio_buffer_chunks`, the two knobs a document can
+name. Three fields of `AudioConfig` are deliberately absent from the patch
+(`host_sample_rate`, `block_on_underrun`, `consumer_wake_mode`): every
+player-managed resource overwrites them from engine/session policy, so a
+document value would be overwritten by the first host that disagrees. The
+patch is hand-written rather than derived because `struct-patch` copies a
+struct's generics onto the patch it generates and `AudioConfig<T, B>` is
+generic; `deny_unknown_fields` refuses the three skipped names rather than
+dropping them silently. `Deserialize` only, never `Serialize`: a typed patch
+holds resolved secrets in the clear.
+
+`kithara-play`'s `ResourceConfig` carries an `AudioConfigPatch` rather than a
+built `AudioConfig`, because no `AudioConfig` can exist before a track does. A
+document reaches it through a top-level `audio:` section, the same shape
+`hls:` and `file:` already use.
 
 ## Agent guardrails
 

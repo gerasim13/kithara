@@ -1,25 +1,25 @@
 use std::collections::BTreeMap;
 
 #[cfg(feature = "broadcast")]
-use kithara::broadcast::BroadcastSettings;
+use kithara::broadcast::BroadcastConfigPatch;
 #[cfg(feature = "gui")]
 use kithara::ui::source::{DrawPoolLimitsPatch, UiConfigPatch};
 use kithara::{
-    analysis::BeatAnalysisSettingsPatch,
-    assets::{AssetStoreSettings, FlushSettings},
-    audio::AudioSettingsPatch,
-    file::FileSettingsPatch,
-    hls::HlsSettingsPatch,
-    host::HostSettings,
-    net::NetSettings,
-    play::PlayerSettingsPatch,
-    queue::QueueSettingsPatch,
-    stream::dl::DownloaderSettings,
-    worker::{ComputePoolSettings, WorkerSettings},
+    analysis::BeatAnalysisConfigPatch,
+    assets::{AssetStoreConfigPatch, FlushPolicyPatch},
+    audio::AudioConfigPatch,
+    file::FileConfigPatch,
+    hls::HlsConfigPatch,
+    host::HostConfigPatch,
+    net::NetOptionsPatch,
+    play::PlayerConfigPatch,
+    queue::QueueConfigPatch,
+    stream::dl::DownloaderConfigPatch,
+    worker::{ComputePoolSettings, WorkerConfigPatch},
 };
 use serde::Deserialize;
 
-use crate::{config::AppSettings, pools::PoolsSection};
+use crate::{config::AppConfigPatch, pools::PoolsSection};
 
 /// Everything one configuration document can say. Sections default to empty, so
 /// a document names only what it changes.
@@ -33,29 +33,29 @@ use crate::{config::AppSettings, pools::PoolsSection};
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Document {
-    pub(crate) app: AppSettings,
+    pub(crate) app: AppConfigPatch,
     pub(crate) assets: Assets,
-    pub(crate) assets_store: AssetStoreSettings,
-    pub(crate) audio: AudioSettingsPatch,
-    pub(crate) beat: BeatAnalysisSettingsPatch,
+    pub(crate) assets_store: AssetStoreConfigPatch,
+    pub(crate) audio: AudioConfigPatch,
+    pub(crate) beat: BeatAnalysisConfigPatch,
     #[cfg(feature = "broadcast")]
-    pub(crate) broadcast: BroadcastSettings,
-    pub(crate) downloader: DownloaderSettings,
+    pub(crate) broadcast: BroadcastConfigPatch,
+    pub(crate) downloader: DownloaderConfigPatch,
     /// Draw-pool retention limits `UiConfig::draw_buffers` is built from.
     /// Read before `DrawBuffers` is constructed, never patched onto
     /// `UiConfig` afterwards -- see `Config::ui_settings`.
     #[cfg(feature = "gui")]
     pub(crate) draw_pool: DrawPoolLimitsPatch,
     pub(crate) drm: Drm,
-    pub(crate) file: FileSettingsPatch,
-    pub(crate) flush: FlushSettings,
-    pub(crate) hls: HlsSettingsPatch,
-    pub(crate) host: HostSettings,
-    pub(crate) net: NetSettings,
-    pub(crate) player: PlayerSettingsPatch,
+    pub(crate) file: FileConfigPatch,
+    pub(crate) flush: FlushPolicyPatch,
+    pub(crate) hls: HlsConfigPatch,
+    pub(crate) host: HostConfigPatch,
+    pub(crate) net: NetOptionsPatch,
+    pub(crate) player: PlayerConfigPatch,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
-    pub(crate) queue: QueueSettingsPatch,
+    pub(crate) queue: QueueConfigPatch,
     /// The toolkit's own tunables -- arena bytes and node limits, read by
     /// both hosts, plus `screen_cache`, which only the retained host reads
     /// (see `UiConfig::screen_cache` in `kithara-ui`). `draw_buffers` is not
@@ -64,7 +64,7 @@ pub(crate) struct Document {
     /// what it is built from -- see `Config::ui_settings`.
     #[cfg(feature = "gui")]
     pub(crate) ui: UiConfigPatch,
-    pub(crate) worker: WorkerSettings,
+    pub(crate) worker: WorkerConfigPatch,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
 

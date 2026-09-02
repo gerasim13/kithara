@@ -35,7 +35,7 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 /// Configuration for the shared output session owned by [`Host`].
 #[derive(Clone, Copy, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "HostSettings")]
+#[patch(name = "HostConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -331,11 +331,11 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{HostConfig, HostSettings, NonZeroU32};
+    use super::{HostConfig, HostConfigPatch, NonZeroU32};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_the_sample_rate() {
-        let settings: HostSettings =
+        let settings: HostConfigPatch =
             serde_yaml_ng::from_str("sample_rate: 48000\n").expect("the document types");
         let mut config = HostConfig::builder().build();
 
@@ -346,7 +346,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_empty_patch_keeps_the_value_the_config_was_built_with() {
-        let settings: HostSettings =
+        let settings: HostConfigPatch =
             serde_yaml_ng::from_str("{}\n").expect("an empty document types");
         let seeded = NonZeroU32::new(96_000).expect("96000 is not zero");
         let mut config = HostConfig::builder().sample_rate(seeded).build();

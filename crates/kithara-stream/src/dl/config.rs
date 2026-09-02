@@ -7,7 +7,7 @@ use struct_patch::Patch;
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder, Patch)]
 #[builder(start_fn = for_client)]
-#[patch(name = "DownloaderSettings")]
+#[patch(name = "DownloaderConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -73,7 +73,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{DownloaderConfig, DownloaderSettings};
+    use super::{DownloaderConfig, DownloaderConfigPatch};
 
     fn client() -> HttpClient {
         HttpClient::new(NetOptions::default(), test_pools(), CancelToken::never())
@@ -81,7 +81,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_concurrency_it_names() {
-        let patch: DownloaderSettings =
+        let patch: DownloaderConfigPatch =
             serde_yaml_ng::from_str("max_concurrent: 8\n").expect("the document types");
         // Seeded away from the built default of 2s, so the assertion below can
         // tell "left alone" from "reset to the default".
@@ -101,7 +101,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_nested_abr_patch_reaches_the_downloader() {
-        let settings: DownloaderSettings =
+        let settings: DownloaderConfigPatch =
             serde_yaml_ng::from_str("abr_settings:\n  min_switch_interval: 45s\n")
                 .expect("the document types");
         // The inner field is seeded away from its 0.8 default, so the second

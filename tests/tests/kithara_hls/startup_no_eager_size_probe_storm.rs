@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, AudioSettings, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -115,7 +115,7 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
 
     // NOTE: this is the historical storm seam. Keep creation and first-frame

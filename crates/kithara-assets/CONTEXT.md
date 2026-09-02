@@ -347,7 +347,7 @@ clones via `Arc`, so one store serves file and HLS with no protocol-owned wrappe
 
 ## Configuration document entry point
 
-`AssetStoreSettings` is the second way in: a configuration document types into it and names a
+`AssetStoreConfigPatch` is the second way in: a configuration document types into it and names a
 subset of what `AssetStore::open` accepts. It mirrors `open`'s optional knobs one field per
 parameter — `backend`, `cache_capacity`, `max_assets`, `max_bytes`, `mem_resource_capacity`,
 `processing_chunk_size`, `processing_gate_poll_interval`, `segment_reservation` — and nothing
@@ -355,7 +355,7 @@ else. Two of those mirror a backend-specific parameter and are inert on the othe
 as they are on `open`: `mem_resource_capacity` is read only on the memory branch, and
 `segment_reservation` reaches only `DiskStoreSetup`. A document that names either beside the wrong
 backend configures nothing, and since an unnamed `backend` resolves to disk, `mem_resource_capacity`
-is the one a document is most likely to name in vain. The field docs on `AssetStoreSettings` say so
+is the one a document is most likely to name in vain. The field docs on `AssetStoreConfigPatch` say so
 at the surface an operator reads. `cancel`, `event_bus`, `flush_hub`, and `layouts` are absent: each carries a live value only
 code can hand over (a token, a bus handle, a shared hub, a registry), and a document has no way to
 name one. It is a plain `Deserialize` struct, not a `struct-patch` type: `open` is a `#[bon]`

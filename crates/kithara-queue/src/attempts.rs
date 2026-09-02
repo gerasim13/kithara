@@ -8,7 +8,7 @@ pub(crate) enum LoadClass {
     /// prefetch so a hung background lane cannot starve selection.
     Interactive,
     /// Append-time background prefetch, capped by
-    /// [`QueueSettings::max_concurrent_loads`](crate::QueueSettings::max_concurrent_loads).
+    /// [`QueueConfig::max_concurrent_loads`](crate::QueueConfig::max_concurrent_loads).
     Prefetch,
 }
 

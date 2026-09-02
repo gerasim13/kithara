@@ -10,7 +10,7 @@ use struct_patch::Patch;
 #[non_exhaustive]
 #[derive(Clone, fieldwork::Fieldwork, Patch)]
 #[fieldwork(opt_in, with)]
-#[patch(name = "WorkerSettings")]
+#[patch(name = "WorkerConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -126,7 +126,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{ComputePoolSettings, PoolConfig, RayonConfig, WorkerConfig, WorkerSettings};
+    use super::{ComputePoolSettings, PoolConfig, RayonConfig, WorkerConfig, WorkerConfigPatch};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
@@ -135,7 +135,7 @@ mod tests {
             .with_max_compute_tasks(NonZeroUsize::new(2).expect("nonzero"))
             .with_owned_pool(seeded_pool.clone());
 
-        let patch: WorkerSettings =
+        let patch: WorkerConfigPatch =
             serde_yaml_ng::from_str("max_compute_tasks: 4\n").expect("valid patch document");
         config.apply(patch);
 

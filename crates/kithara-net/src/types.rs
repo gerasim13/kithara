@@ -151,7 +151,7 @@ impl fmt::Display for RangeSpec {
 }
 
 #[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
-#[patch(name = "RetryPolicySettings")]
+#[patch(name = "RetryPolicyPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -197,7 +197,7 @@ impl RetryPolicy {
 }
 
 #[derive(Clone, Debug, Builder, Patch)]
-#[patch(name = "NetSettings")]
+#[patch(name = "NetOptionsPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -245,7 +245,7 @@ pub struct NetOptions {
     #[patch(skip)]
     pub observer: Option<Observer>,
     #[builder(default)]
-    #[patch(name = "RetryPolicySettings")]
+    #[patch(name = "RetryPolicyPatch")]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
@@ -626,11 +626,11 @@ mod settings_tests {
 
     use struct_patch::Patch as _;
 
-    use super::{Compression, Duration, NetOptions, NetSettings, RetryPolicy};
+    use super::{Compression, Duration, NetOptions, NetOptionsPatch, RetryPolicy};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_fields_it_names() {
-        let settings: NetSettings =
+        let settings: NetOptionsPatch =
             serde_yaml_ng::from_str("inactivity_timeout: 90s\npool_idle_timeout: 250ms\n")
                 .expect("the document types");
         let mut options = NetOptions::builder().body_queue_capacity(7).build();
@@ -647,7 +647,7 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn a_nested_retry_patch_reaches_the_inner_field() {
-        let settings: NetSettings =
+        let settings: NetOptionsPatch =
             serde_yaml_ng::from_str("retry_policy:\n  max_retries: 7\n  base_delay: 250ms\n")
                 .expect("the document types");
         let mut options = NetOptions::builder()
@@ -671,7 +671,7 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<NetSettings>("inactivity_timeout_ms: 1s\n")
+        let error = serde_yaml_ng::from_str::<NetOptionsPatch>("inactivity_timeout_ms: 1s\n")
             .expect_err("a typo must not be silently ignored");
 
         assert!(
@@ -682,7 +682,7 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn compression_is_read_as_the_list_of_names_a_document_spells() {
-        let settings: NetSettings =
+        let settings: NetOptionsPatch =
             serde_yaml_ng::from_str("compression: [gzip, deflate]\n").expect("the document types");
         let mut options = NetOptions::builder().build();
 
@@ -696,7 +696,7 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn an_empty_compression_list_disables_negotiation() {
-        let settings: NetSettings =
+        let settings: NetOptionsPatch =
             serde_yaml_ng::from_str("compression: []\n").expect("the document types");
         let mut options = NetOptions::builder().build();
 

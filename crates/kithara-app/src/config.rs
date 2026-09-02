@@ -5,11 +5,14 @@ use bon::Builder;
 use kithara::ui::source::UiConfig;
 use kithara::{
     analysis::BeatAnalysisConfig,
+    audio::AudioConfigPatch,
     drm::KeyProcessorRegistry,
+    file::FileConfigPatch,
+    hls::HlsConfigPatch,
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerSettings, ResourceSettings, policy::DomainKeyPolicy},
+    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
-    queue::QueueSettings,
+    queue::QueueConfigPatch,
     stream::dl::Downloader,
     worker::Worker,
 };
@@ -53,10 +56,10 @@ impl AppDrm {
 ///
 /// Shared owners and the downloader are mandatory; product knobs carry the
 /// crate's own defaults, which the configuration document patches through
-/// [`AppSettings`].
+/// [`AppConfigPatch`].
 #[derive(Clone, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "AppSettings")]
+#[patch(name = "AppConfigPatch")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -97,19 +100,27 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub palette: Palette,
-    /// Resource-level knobs threaded into every track's `ResourceConfig`,
-    /// including the `HlsSettings` and `FileSettings` the built stream
-    /// carries. A document reaches these through `audio`, `hls`, and
-    /// `file` — the same as [`AppConfig::queue`] reaches [`QueueSettings`]
-    /// through `queue` — not through [`AppSettings`].
+    /// What the document's `audio:` section says about every track's audio
+    /// pipeline, carried as a patch because no `AudioConfig` exists until a
+    /// track does. Reached through `audio`, not through [`AppConfigPatch`].
     #[builder(default)]
     #[patch(skip)]
-    pub resource: ResourceSettings,
+    pub audio: AudioConfigPatch,
+    /// What the document's `hls:` section says about every HLS track. Carried
+    /// as a patch for the same reason [`AppConfig::audio`] is.
+    #[builder(default)]
+    #[patch(skip)]
+    pub hls: HlsConfigPatch,
+    /// What the document's `file:` section says about every file track.
+    /// Carried as a patch for the same reason [`AppConfig::audio`] is.
+    #[builder(default)]
+    #[patch(skip)]
+    pub file: FileConfigPatch,
     /// UI-level knobs threaded into every compiled document, including the
     /// draw-pool limits [`UiConfig::draw_buffers`] is built from. A document
     /// reaches these through `ui` and `draw_pool` — the same as
-    /// [`AppConfig::resource`] reaches [`ResourceSettings`] through `audio`,
-    /// `hls`, and `file` — not through [`AppSettings`].
+    /// [`AppConfig::audio`] is reached through `audio` — not through
+    /// [`AppConfigPatch`].
     #[cfg(feature = "gui")]
     #[builder(default)]
     #[patch(skip)]
@@ -125,13 +136,12 @@ pub struct AppConfig {
     #[builder(default = false)]
     #[patch(skip)]
     pub should_accept_invalid_certs: bool,
-    /// Player-level knobs threaded into every deck's `PlayerConfig`. A
-    /// document reaches these through `player`, the same as [`AppConfig::queue`]
-    /// reaches [`QueueSettings`] through `queue` — not through
-    /// [`AppSettings`].
+    /// What the document's `player:` section says about every deck's player,
+    /// carried as a patch because no `PlayerConfig` exists until a deck does.
+    /// Reached through `player`, not through [`AppConfigPatch`].
     #[builder(default)]
     #[patch(skip)]
-    pub player: PlayerSettings,
+    pub player: PlayerConfigPatch,
     /// Media duration the broadcast mix tap may run ahead of the packager by.
     /// The app allocates that ring, so it owns its depth: a longer lead rides
     /// out a longer packager stall and pays for it in the memory those
@@ -153,10 +163,11 @@ pub struct AppConfig {
     /// configuration names no package at all.
     #[patch(skip)]
     pub ui_package: Option<PathBuf>,
-    /// Queue-level knobs threaded into every deck's `QueueConfig`.
+    /// What the document's `queue:` section says about every deck's queue,
+    /// carried as a patch for the same reason [`AppConfig::player`] is.
     #[builder(default)]
     #[patch(skip)]
-    pub queue: QueueSettings,
+    pub queue: QueueConfigPatch,
 }
 
 impl fmt::Debug for AppConfig {
@@ -182,7 +193,9 @@ impl fmt::Debug for AppConfig {
             .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)
             .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
-            .field("resource", &self.resource)
+            .field("audio", &self.audio)
+            .field("hls", &self.hls)
+            .field("file", &self.file)
             .field("queue", &self.queue);
         #[cfg(feature = "gui")]
         builder.field("ui", &self.ui);

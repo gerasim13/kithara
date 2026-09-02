@@ -30,7 +30,7 @@ pub use kithara_resampler::{
 };
 pub use pipeline::{
     config::{
-        AudioConfig, AudioDecoderConfig, AudioSettings, AudioSettingsPatch, ConsumerWakeMode,
+        AudioConfig, AudioConfigPatch, AudioDecoderConfig, ConsumerWakeMode,
         DecoderResamplerSettings,
     },
     fetch::{EpochValidator, Fetch, SourceEnd},

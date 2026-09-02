@@ -25,7 +25,7 @@ use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{Event, EventBus, FileEvent},
-    file::{File, FileConfig, FileSettings, FileSrc},
+    file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, time::Duration},
     stream::{
@@ -150,11 +150,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
         )
         .pools(pools)
         .cancel(cancel)
-        .settings(
-            FileSettings::builder()
-                .look_ahead_bytes(Consts::TOTAL as u64)
-                .build(),
-        )
+        .look_ahead_bytes(Consts::TOTAL as u64)
         .downloader(downloader)
         .build();
     let _stream = Stream::<File<TestPools>>::new(config)

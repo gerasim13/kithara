@@ -42,13 +42,12 @@ where
 {
     let capacity = config.store.ephemeral_cache_capacity()?;
     let maximum = config
-        .settings
         .ephemeral_cache_max_media_window
-        .max(config.settings.ephemeral_cache_min_media_window);
+        .max(config.ephemeral_cache_min_media_window);
     let bounded = capacity
         .get()
-        .saturating_sub(config.settings.ephemeral_cache_non_media_reserve)
-        .max(config.settings.ephemeral_cache_min_media_window)
+        .saturating_sub(config.ephemeral_cache_non_media_reserve)
+        .max(config.ephemeral_cache_min_media_window)
         .min(maximum);
     Some(capacity.get().min(bounded))
 }
@@ -68,7 +67,7 @@ where
         let bus = config
             .bus
             .clone()
-            .unwrap_or_else(|| EventBus::new(config.settings.event_channel_capacity));
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let downloader = config
             .downloader
@@ -126,12 +125,7 @@ where
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
-        let look_ahead_bytes = Some(
-            config
-                .settings
-                .look_ahead_bytes
-                .unwrap_or(DEFAULT_LOOK_AHEAD_BYTES),
-        );
+        let look_ahead_bytes = Some(config.look_ahead_bytes.unwrap_or(DEFAULT_LOOK_AHEAD_BYTES));
         let look_ahead_segments = effective_look_ahead_segments(&config);
 
         playhead.set_duration(playlist_state.track_duration());
@@ -144,9 +138,9 @@ where
         let plan_config = PlanConfig {
             look_ahead_bytes,
             look_ahead_segments,
-            prefetch_budget: config.settings.download_batch_size.max(1),
-            acquire_attempt_budget: config.settings.acquire_attempt_budget,
-            size_probe_method: config.settings.size_probe_method,
+            prefetch_budget: config.download_batch_size.max(1),
+            acquire_attempt_budget: config.acquire_attempt_budget,
+            size_probe_method: config.size_probe_method,
         };
         let plan_ctx = PlanCtx {
             config: plan_config,
@@ -267,7 +261,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     let dl_cancel = cancel.child();
-    let net_options: NetOptions = config.settings.net_options.clone();
+    let net_options: NetOptions = config.net_options.clone();
     let client = HttpClient::new(net_options, config.pools.clone(), dl_cancel.child());
     let dl_config = DownloaderConfig::for_client(client)
         .cancel(dl_cancel)
@@ -324,7 +318,7 @@ mod tests {
     #[kithara::test]
     fn configured_maximum_bounds_the_window() {
         let mut config = config_with_capacity(128);
-        config.settings.ephemeral_cache_max_media_window = 10;
+        config.ephemeral_cache_max_media_window = 10;
 
         assert_eq!(effective_look_ahead_segments(&config), Some(10));
     }
@@ -332,8 +326,8 @@ mod tests {
     #[kithara::test]
     fn configured_minimum_takes_precedence_over_smaller_maximum() {
         let mut config = config_with_capacity(128);
-        config.settings.ephemeral_cache_min_media_window = 8;
-        config.settings.ephemeral_cache_max_media_window = 2;
+        config.ephemeral_cache_min_media_window = 8;
+        config.ephemeral_cache_max_media_window = 2;
 
         assert_eq!(effective_look_ahead_segments(&config), Some(8));
     }

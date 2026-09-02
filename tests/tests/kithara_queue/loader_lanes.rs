@@ -16,7 +16,7 @@ use kithara::{
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueSettings, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -109,7 +109,7 @@ fn build_queue_with_tick(
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
-            .settings(QueueSettings::builder().max_concurrent_loads(cap).build())
+            .max_concurrent_loads(cap)
             .store(store.clone())
             .player(player)
             .build(),

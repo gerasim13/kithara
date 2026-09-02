@@ -6,7 +6,7 @@ use struct_patch::Patch;
 /// The chunk geometry the model is run with is not here: it follows the
 /// segmentation `beat_this` was trained on and is not a knob.
 #[derive(Clone, Copy, Debug, Builder, PartialEq, Patch)]
-#[patch(name = "BeatSettings")]
+#[patch(name = "BeatConfigPatch")]
 #[patch(attribute(derive(Clone, Copy, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
@@ -40,13 +40,13 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{BeatConfig, BeatSettings};
+    use super::{BeatConfig, BeatConfigPatch};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
         let mut config = BeatConfig::builder().dedup_width(4).build();
 
-        let patch: BeatSettings =
+        let patch: BeatConfigPatch =
             serde_yaml_ng::from_str("peak_half_width: 5\n").expect("valid patch document");
         config.apply(patch);
 

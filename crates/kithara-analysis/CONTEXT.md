@@ -133,16 +133,18 @@ The worker drains the transport on its own tick, where DSP is allowed, and folds
 one at every push boundary, so beat-resampler segmentation is a pure function of
 the producer's own chunk boundaries.
 
-`BeatAnalysisConfig<B>` pairs a standalone resampler backend with the
-`BeatAnalysisSettings` that owns the backend-independent beat tunables; a
-configuration document reaches those through `BeatAnalysisSettingsPatch`.
+`BeatAnalysisConfig<B>` is the one configuration struct of the analyzer: the
+caller-owned resampler backend and the backend-independent beat tunables live
+in it together. A configuration document reaches the tunables through
+`BeatAnalysisConfigPatch`, hand-written rather than derived because
+`struct-patch` copies the config's `B` onto the patch it generates.
 Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
 30-second detector windows with 2 seconds of overlap, and
-`ResamplerQuality::High`. Behind `beat-nn` the settings also carry the
-detector's `BeatConfig` peak-picking policy: that field, its `beat()`
-forwarder, and the `beat:` document key exist only under that feature, and the
-policy is printed by the hand-written `Debug` so `cache_tag()` cannot hand a
-moved policy the grid cached for the frozen parity values. The analyzer never
+`ResamplerQuality::High`. Behind `beat-nn` the config also carries the
+detector's `BeatConfig` peak-picking policy: that field, its patch's nested
+`beat` field, and the `beat:` document key exist only under that feature, and
+the policy is printed by the hand-written `Debug` so `cache_tag()` cannot hand
+a moved policy the grid cached for the frozen parity values. The analyzer never
 stores whole-track source PCM: it downmixes to mono and keeps covered spans at
 detector rate in buffers borrowed from the caller's typed region.
 

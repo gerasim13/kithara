@@ -51,7 +51,7 @@ use super::{
 #[cfg(feature = "analysis-beat")]
 use crate::BeatState;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-use crate::analyzer::{BeatAnalysisConfig, BeatAnalysisSettings};
+use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
 use crate::blob::to_bytes;
 #[cfg(feature = "analysis-waveform")]
@@ -154,14 +154,10 @@ fn beat_waveform(
 ) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     let config = BeatAnalysisConfig::builder()
         .resampler_backend(NoResamplerBackend)
-        .settings(
-            BeatAnalysisSettings::builder()
-                .target_rate(SR)
-                .detector_min_window_seconds(min_window_seconds)
-                .detector_window_seconds(window_seconds)
-                .detector_overlap_seconds(0)
-                .build(),
-        )
+        .target_rate(SR)
+        .detector_min_window_seconds(min_window_seconds)
+        .detector_window_seconds(window_seconds)
+        .detector_overlap_seconds(0)
         .build();
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
         .with_beat_config(config)

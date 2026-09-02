@@ -167,91 +167,89 @@ publishes `AudioEvent::EngineLoad` at the existing telemetry interval.
 
 ## Configuration Document Entry Point
 
-`PlayerSettings` and its nested `EngineSettings` are the way a configuration
-document reaches player and engine tunables: a document types into the
-generated `PlayerSettingsPatch` (`kithara-app`'s `player:` section) and its
-nested `EngineSettingsPatch` (`player.engine:`), and `apply` writes only the
-fields the document names, leaving the rest of `PlayerConfig::settings`
-standing. `PlayerConfig` builds the `EngineConfig` an engine actually runs
-from that same `PlayerSettings::engine` value (see "Engine Lifecycle"), so
-there is one settings tree behind both — never a second copy of
-`sample_rate` / `max_slots` / `eq_layout` free to drift out of step with it.
+`PlayerConfig<S>` and `EngineConfig<S>` are each the one configuration struct
+of their component: the tunables and the per-call wiring live in them
+together. `PlayerConfigPatch` is how a configuration document reaches the
+player's tunables (`kithara-app`'s `player:` section); it carries an
+`EngineConfigPatch` under its `engine` field for the engine's two
+(`player.engine:`). `apply` writes only the fields the document names,
+leaving the rest of `PlayerConfig` standing. Both patches are hand-written
+rather than derived, because `struct-patch` copies a struct's generics onto
+the patch it generates and both configs are generic over `S`. `Deserialize`
+only, never `Serialize`: a typed patch holds resolved secrets in the clear.
 
-`kithara-app` builds a `PlayerSettings` from the crate default plus the
-document overlay in `main.rs`, then threads it through `Deck::build`'s
-`PlayerConfig::builder().settings(...)` call — the only construction site a
-document reaches.
+`PlayerConfig` owns the resolved `sample_rate`, `max_slots` and `eq_layout`
+and hands them to `EngineConfig::builder()` (see "Engine Lifecycle"), so
+`PlayerConfigPatch::apply` writes `engine.sample_rate` and `engine.max_slots`
+onto the player's own fields — one value behind both, never a second copy
+free to drift out of step.
 
-`PlayerSettings::gapless_mode` is a live key: `GaplessMode`'s adjacent tagging
+`kithara-app` carries the patch on `AppConfig` and `Deck::build` applies it to
+the `PlayerConfig` it builds — the only construction site a document reaches.
+
+`PlayerConfig::gapless_mode` is a live key: `GaplessMode`'s adjacent tagging
 gives it `gapless_mode:` / `mode: disabled` for the unit variant, or `mode:`
 plus a nested `params:` for a data-carrying one.
 
-Five fields carry `#[patch(skip)]`, so naming one in a document is refused
-rather than parsed and silently dropped:
+Five fields the two configs hold are absent from their patches, so naming one
+in a document is refused rather than parsed and silently dropped:
 
-- `PlayerSettings::auto_advance_enabled` — `Queue::new` calls
+- `PlayerConfig::auto_advance_enabled` — `Queue::new` calls
   `PlayerImpl::set_auto_advance_enabled(false)` unconditionally
   (`crates/kithara-queue/src/queue/state.rs:202`); see "Queue Auto-Advance".
-- `PlayerSettings::prefetch_duration` — `Queue::new` calls
+- `PlayerConfig::prefetch_duration` — `Queue::new` calls
   `PlayerImpl::set_prefetch_duration(...)` unconditionally
-  (`crates/kithara-queue/src/queue/state.rs:203`) from its own
-  `QueueSettings` copy; the queue is the canonical owner.
-- `PlayerSettings::block_on_underrun` — the shipped binary is a real-time
+  (`crates/kithara-queue/src/queue/state.rs:203`) from its own `QueueConfig`
+  copy; the queue is the canonical owner.
+- `PlayerConfig::block_on_underrun` — the shipped binary is a real-time
   host and the audio callback can never block; only the offline test
   harness sets it, from Rust.
-- `EngineSettings::eq_layout` — always a generator output at every
+- `EngineConfig::eq_layout` — always a generator output at every
   construction site; `Deck::build` derives it from `AppConfig::eq_bands` (a
   document key of its own) and a custom layout is installed at runtime
   through `PlayerImpl::set_eq_layout` instead (see "Live Equalizer Layout").
-- `EngineSettings::channels` — has no reader outside a startup log line.
+- `EngineConfig::channels` — has no reader outside a startup log line.
 
 ## Configuration Document Entry Point: Resources
 
-`ResourceSettings` is how a configuration document reaches the knobs one
-opened resource runs on, and how the HLS, file, and audio settings its stream
-carries get there. `ResourceConfig` holds one by value; `resource/build.rs`
-hands `settings.hls` straight to `HlsConfig::settings`, `settings.file`
-straight to `FileConfig::settings`, and `settings.audio` straight to
-`AudioConfig::settings` — one `.settings(...)` call each instead of forwarding
+`ResourceConfig<S, B>` is the one configuration struct of an opened resource,
+and it is where a document's HLS, file, and audio values wait for the stream
+that will use them. It carries them as patches — `HlsConfigPatch`,
+`FileConfigPatch`, `AudioConfigPatch` — not as built configs: an `HlsConfig`
+needs a `url` and a `store`, a `FileConfig` needs a source, so neither can
+exist before a track does. `resource/build.rs` builds the real config for the
+track, then `apply`s the patch onto it — one call each instead of forwarding
 fields individually — so none of the three sets is re-declared field by field
 and a knob either crate adds later needs no edit here. The one value the file
-branch overwrites is `FileSettings::extension`: `hint` is per-call input read
-twice — as the file source's extension and as the decoder's format hint — so
-it stays on `ResourceConfig` and is mapped in once.
+branch overwrites afterwards is `extension`: the per-call `hint` and the
+extension derived from the source both name this very track, so either
+outranks a document's blanket `file.extension`.
 
-`kithara-app` composes the tree in `Config::resource_settings`: the crate
-default, then `audio:` into `settings.audio`, `hls:` into `settings.hls`, and
-`file:` into `settings.file`. There is no `resource:` document section.
-`sources::build_resource_config` passes the whole value to
-`ResourceConfig::settings` — the only construction site a document reaches.
+`kithara-app` carries the three patches on `AppConfig`, straight from the
+`audio:`, `hls:` and `file:` sections. There is no `resource:` document
+section: one is refused by `Document`'s `deny_unknown_fields`, which
+`document/schema.rs`'s `a_resource_section_is_rejected` pins.
+`sources::build_resource_config` sets all three on the builder — the only
+construction site a document reaches.
 
-`ResourceSettings` is not itself a document section and derives no `Patch`: a
-document naming `resource:` is refused by `Document`'s `deny_unknown_fields`,
-which `document/schema.rs`'s `a_resource_section_is_rejected` pins. Its four
-fields are unreachable from a document by construction, which is what each of
-them needs:
+Four more fields of `ResourceConfig` are runtime-owned, and no document
+section reaches them:
 
-- `ResourceSettings::hls`, `ResourceSettings::file`, and
-  `ResourceSettings::audio` — each held type's document-facing fields are
-  live only under its own top-level `hls:` / `file:` / `audio:` section, which
-  is applied to that exact value. A reachable `resource.hls` (or `.file`,
-  `.audio`) would be a second spelling for one value.
-- `ResourceSettings::preferred_peak_bitrate` — held for a reader that does not
-  exist. `resource/build.rs` forwards it to neither branch, so no ABR
-  controller ever sees it, and the one caller of
+- `consumer_wake_mode`, `block_on_underrun` and `host_sample_rate` — the
+  audio capabilities the resource's `AudioConfig` is opened with.
+  `PlayerImpl::prepare_config` overwrites all three for every player-managed
+  resource, and the analysis path in `kithara-app`'s `waveform::open_reader`
+  writes `host_sample_rate` through `ResourceConfig::set_host_sample_rate`.
+  `AudioConfigPatch` does not declare them either, for the same reason
+  documented in `kithara-audio`'s `CONTEXT.md`; `preload_chunks` and
+  `audio_buffer_chunks` are the two audio knobs that do travel, and
+  `resource/build.rs` applies them on both branches.
+- `preferred_peak_bitrate` — held for a reader that does not exist.
+  `resource/build.rs` forwards it to neither branch, so no ABR controller
+  ever sees it, and the one caller of
   `ResourceConfig::preferred_peak_bitrate` is a test asserting the value
   survives `Loader::build_config`. A document key here would ship a knob the
   binary ignores; it becomes one when the ABR wiring lands.
-
-`AudioSettings::consumer_wake_mode`, `::block_on_underrun`, and
-`::host_sample_rate` carry their own `#[patch(skip)]` one level down, inside
-`audio:`, for the same runtime-ownership reasons documented in
-`kithara-audio`'s `CONTEXT.md`: `PlayerImpl::prepare_config` overwrites all
-three for every player-managed resource, and the analysis path in
-`kithara-app`'s `waveform::open_reader` writes `host_sample_rate` through
-`ResourceConfig::set_host_sample_rate`. `preload_chunks` and
-`audio_buffer_chunks` are the two `AudioSettings` fields that travel, and
-`resource/build.rs` reads both on both branches.
 
 ## Live Equalizer Layout
 
@@ -323,7 +321,7 @@ allocates a `TrackId` and hands it to the bridge, so there is no untagged item t
 
 Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
 `PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
-`PlayerSettings::auto_advance_enabled` (default `true`) uses a built-in linear policy
+`PlayerConfig::auto_advance_enabled` (default `true`) uses a built-in linear policy
 (`next = current + 1`). `kithara-queue::Queue` disables that built-in policy at construction
 (`PlayerImpl::set_auto_advance_enabled(false)`) and reacts to `HandoverRequested` by selecting the
 loaded successor via `select_item_with_crossfade`; it does not call `arm_next` / `commit_next`.
@@ -695,7 +693,7 @@ reselecting-current path and never be enqueued.
 ## Invariants
 
 - `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `EngineImpl::max_slots()` slots allocated at once (`EngineSettings::max_slots`, default
+- At most `EngineImpl::max_slots()` slots allocated at once (`EngineConfig::max_slots`, default
   4, reached through `PlayerConfig.settings.engine`).
 - `PlayerImpl::slot()` is `None` until a slot is allocated (phases `Idle` and `Stopped`-without-
   slot); `send_to_slot` then fails with `PlayError::NoActiveSlot`.

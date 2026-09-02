@@ -445,7 +445,7 @@ mod tests {
         BeatAnalyzer, normalize_marks, window_marks,
     };
     use crate::{
-        BeatAnalysisConfig, BeatAnalysisSettings,
+        BeatAnalysisConfig,
         beat::BeatPassConfig,
         test_pools::{TestPools, pools},
     };
@@ -692,11 +692,7 @@ mod tests {
     fn custom_detector_rate_controls_passthrough_domain() {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .target_rate(Consts::SRC)
-                    .build(),
-            )
+            .target_rate(Consts::SRC)
             .build();
         let pcm = stereo(4096, |_| 0.25);
         let mut analyzer = analyzer(Consts::SRC, config);
@@ -714,13 +710,9 @@ mod tests {
     fn detector_input_is_bounded_by_configured_window() {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .target_rate(Consts::SRC)
-                    .detector_window_seconds(1)
-                    .detector_overlap_seconds(0)
-                    .build(),
-            )
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(1)
+            .detector_overlap_seconds(0)
             .build();
         let pcm = stereo(3 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -745,13 +737,9 @@ mod tests {
     fn a_run_at_the_minimum_is_detected_before_the_flush() {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .target_rate(Consts::SRC)
-                    .detector_window_seconds(2)
-                    .detector_overlap_seconds(1)
-                    .build(),
-            )
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(1)
             .build();
         let pcm = stereo(2 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -784,14 +772,10 @@ mod tests {
     fn a_short_run_yields_a_grid_and_is_refined_when_it_fills() {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .target_rate(Consts::SRC)
-                    .detector_window_seconds(8)
-                    .detector_overlap_seconds(1)
-                    .detector_min_window_seconds(2)
-                    .build(),
-            )
+            .target_rate(Consts::SRC)
+            .detector_window_seconds(8)
+            .detector_overlap_seconds(1)
+            .detector_min_window_seconds(2)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
         let pcm = stereo(12 * second, |_| 0.25);
@@ -896,13 +880,9 @@ mod tests {
         // windows and the shuffle actually reorders detected spans.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .settings(
-                BeatAnalysisSettings::builder()
-                    .target_rate(22_050)
-                    .detector_window_seconds(1)
-                    .detector_overlap_seconds(0)
-                    .build(),
-            )
+            .target_rate(22_050)
+            .detector_window_seconds(1)
+            .detector_overlap_seconds(0)
             .build();
         // Short enough that the mono budget never reclaims a span before its
         // window completes: marker equality across arrival orders holds below

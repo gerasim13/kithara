@@ -10,8 +10,8 @@ use kithara::{
         thread::{JoinHandle, spawn_named},
     },
     play::{
-        Cmd, EngineImpl, EngineSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, PlayerSettings, Reply, SessionDispatcher, player::Player,
+        Cmd, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
+        SessionDispatcher, player::Player,
     },
 };
 
@@ -96,11 +96,7 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
-            .settings(
-                PlayerSettings::builder()
-                    .engine(EngineSettings::builder().max_slots(max_slots).build())
-                    .build(),
-            )
+            .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(session)
             .build(),

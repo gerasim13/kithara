@@ -9,8 +9,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, thread, tokio},
-    play::{PlayWorkerConfig, PlayerSettings},
-    queue::QueueSettings,
+    play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
     worker::{RayonConfig, Worker, WorkerConfig},
 };
@@ -163,10 +162,6 @@ fn main() -> AppResult {
             std::process::exit(1);
         }
     };
-    let mut queue_settings = QueueSettings::default();
-    queue_settings.apply(document.queue());
-    let mut player_settings = PlayerSettings::default();
-    player_settings.apply(document.player());
     let mut config = AppConfig::builder()
         .drm(AppDrm::new(drm_policy))
         .downloader(downloader)
@@ -174,9 +169,11 @@ fn main() -> AppResult {
         .worker(worker)
         .base_worker(base_worker)
         .store(store)
-        .queue(queue_settings)
-        .player(player_settings)
-        .resource(document.resource_settings())
+        .queue(document.queue())
+        .player(document.player())
+        .audio(document.audio())
+        .hls(document.hls())
+        .file(document.file())
         .ui(document.ui_settings()?)
         // The same value tracing is running on, so a document that names no
         // directives still leaves the built configuration agreeing with the

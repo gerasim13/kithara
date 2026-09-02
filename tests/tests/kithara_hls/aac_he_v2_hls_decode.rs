@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, AudioSettings, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{thread, time::Duration, tokio::task::spawn_blocking},
@@ -61,7 +61,7 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
                 .backend(backend)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
 
     let mut audio = worker.open(config).await.expect("audio creation");

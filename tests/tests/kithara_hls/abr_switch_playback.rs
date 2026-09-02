@@ -1,13 +1,10 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{
-        AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ChunkOutcome,
-        ReadOutcome,
-    },
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
-    hls::{AbrMode, Hls, HlsConfig, HlsSettings},
+    hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -100,7 +97,7 @@ async fn open_packaged_hls_audio(
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(abr)
-        .settings(HlsSettings::builder().download_batch_size(1).build())
+        .download_batch_size(1)
         .cancel(cancel)
         .downloader(downloader)
         .maybe_events(bus.clone())
@@ -180,7 +177,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
         .build();
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
     spawn_blocking(move || {
@@ -364,10 +361,10 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
                 .store(store.clone())
                 .pools(pools.clone())
                 .initial_abr_mode(AbrMode::manual(variant))
-                .settings(HlsSettings::builder().download_batch_size(1).build())
+                .download_batch_size(1)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
         let mut warm_audio = worker
             .open(warm_config)
@@ -513,7 +510,7 @@ async fn stream_continues_after_seek(
                 .backend(backend)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
     // The blocking read phase must NOT run on the test runtime thread: with
@@ -614,7 +611,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(temp_dir: TestTem
         .build();
 
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
     spawn_blocking(move || {
@@ -693,7 +690,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] enc
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
     spawn_blocking(move || {
@@ -772,7 +769,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(("mp3").to_string())
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
     spawn_blocking(move || {
@@ -1104,7 +1101,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     // — the flash-correct enforcement of the "no >5 s stall" contract.
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus.clone())
-        .settings(AudioSettings::builder().block_on_underrun(true).build())
+        .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
 

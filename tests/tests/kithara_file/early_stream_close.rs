@@ -8,7 +8,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event, EventBus, EventReceiver, FileEvent},
-    file::{File, FileConfig, FileSettings, FileSrc},
+    file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -129,7 +129,7 @@ async fn file_stream_closes_early_seek_still_works() {
         )
         .pools(pools)
         .cancel(cancel_token)
-        .settings(FileSettings::builder().look_ahead_bytes(256_000).build())
+        .look_ahead_bytes(256_000)
         .downloader(dl)
         .build();
 
@@ -255,7 +255,7 @@ async fn partial_cache_resume_works() {
         )
         .pools(pools.clone())
         .cancel(cancel1.clone())
-        .settings(FileSettings::builder().look_ahead_bytes(256_000).build())
+        .look_ahead_bytes(256_000)
         .build();
 
     let stream1 = Stream::<File<TestPools>>::new(config1).await.unwrap();
@@ -300,7 +300,7 @@ async fn partial_cache_resume_works() {
         )
         .pools(pools)
         .cancel(cancel2.clone())
-        .settings(FileSettings::builder().look_ahead_bytes(256_000).build())
+        .look_ahead_bytes(256_000)
         .build();
 
     let stream2 = Stream::<File<TestPools>>::new(config2).await.unwrap();

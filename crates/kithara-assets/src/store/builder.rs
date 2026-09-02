@@ -94,13 +94,16 @@ impl<'de> Deserialize<'de> for StorageBackend {
     }
 }
 
-/// What a document can say about the asset store. Mirrors the knob parameters
-/// of [`AssetStore::open`], which is a `#[bon]` builder function and so has no
-/// struct to derive on. An unset field leaves the layer below it deciding.
+/// What a configuration document can say about the asset store.
+///
+/// The one patch in the workspace with no configuration struct beside it:
+/// [`AssetStore::open`] is a `#[bon]` builder function, so its knobs are
+/// parameters and there is nothing to derive a patch from. This mirrors those
+/// parameters by hand. An unset field leaves the layer below it deciding.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
-pub struct AssetStoreSettings {
+pub struct AssetStoreConfigPatch {
     /// Where resources live. Unset means whatever the embedder resolves an
     /// absent backend to; `AssetStore::open` itself falls back to a disk root
     /// under a fresh temp directory, which is a different place on every
@@ -1016,7 +1019,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn a_document_sets_the_cache_capacity_and_leaves_the_rest() {
-        let settings: AssetStoreSettings =
+        let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("cache_capacity: 32\n").expect("the document types");
 
         assert_eq!(
@@ -1029,7 +1032,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn a_document_reads_the_processing_gate_poll_interval_as_humantime() {
-        let settings: AssetStoreSettings =
+        let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("processing_gate_poll_interval: 250ms\n")
                 .expect("the document types");
 
@@ -1042,7 +1045,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn a_document_types_a_memory_backend() {
-        let settings: AssetStoreSettings =
+        let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("backend:\n  kind: memory\n").expect("the document types");
 
         assert_eq!(settings.backend, Some(StorageBackend::Memory));
@@ -1080,7 +1083,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn a_store_built_from_the_documents_settings_enforces_the_capacity_it_named() {
-        let settings: AssetStoreSettings =
+        let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("cache_capacity: 1\n").expect("the document types");
 
         let store = AssetStore::builder(crate::test_pools::pools())
