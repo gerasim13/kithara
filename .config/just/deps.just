@@ -2,6 +2,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
 deny:
+    cargo fetch --locked
     cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
     cargo deny --offline check
 

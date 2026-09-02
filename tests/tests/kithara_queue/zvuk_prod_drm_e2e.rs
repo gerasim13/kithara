@@ -22,7 +22,8 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
+    TestTempDir, kithara, offline::OfflineSession, test_defaults::Consts as Shared,
+    waits::wait_for_position_at_least,
 };
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
@@ -79,6 +80,7 @@ async fn shared_ctx() -> &'static Ctx {
             .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
                 .worker(worker)
                 .session(OfflineSession::arc_auto())
                 .build(),

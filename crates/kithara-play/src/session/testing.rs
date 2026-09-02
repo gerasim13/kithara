@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
@@ -7,6 +10,11 @@ use super::{AllocatedSlot, Cmd, Reply, SessionDispatcher, SessionSampleRate};
 use crate::{
     PlayError, SessionDuckingMode, SharedEq, SlotId,
     bridge::{NodeInputs, slot_channels},
+};
+
+pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
 };
 
 struct TestSession {

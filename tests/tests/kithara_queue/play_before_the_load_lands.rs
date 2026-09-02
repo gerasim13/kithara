@@ -9,7 +9,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::OfflineSession, temp_dir, waits::wait_for_position_event,
+    TestServerHelper, kithara, offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
+    waits::wait_for_position_event,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -38,6 +39,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),

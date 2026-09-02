@@ -22,6 +22,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -61,6 +62,7 @@ fn build_session(cache_path: &Path) -> Session {
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))

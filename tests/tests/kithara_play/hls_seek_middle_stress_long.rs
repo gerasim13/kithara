@@ -445,6 +445,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .cancel(shutdown_token.child())

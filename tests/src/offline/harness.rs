@@ -15,7 +15,7 @@ use kithara::{
     warp::StretchControls,
 };
 
-use super::OfflineSession;
+use super::{OfflineSession, session::OFFLINE_BLOCK_FRAMES};
 use crate::bufpool_ext::{TestPools, pools};
 
 pub struct OfflinePlayerHarness {
@@ -44,7 +44,12 @@ pub struct OfflinePlayerOptions {
 
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
-        let session = Arc::new(OfflineSession::new_manual());
+        let sample_rate =
+            NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
+        let session = Arc::new(OfflineSession::new_manual_with(
+            sample_rate,
+            OFFLINE_BLOCK_FRAMES,
+        ));
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
@@ -52,9 +57,7 @@ impl OfflinePlayerHarness {
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
             .block_on_underrun(options.block_on_underrun)
-            .sample_rate(
-                NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
-            )
+            .sample_rate(sample_rate)
             .maybe_eq_layout(options.eq_layout)
             .session(Arc::clone(&session_dispatcher))
             .worker(worker)

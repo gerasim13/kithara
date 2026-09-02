@@ -42,6 +42,9 @@ pub struct HostConfig {
     #[builder(default = DEFAULT_SAMPLE_RATE)]
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Optional CPAL output callback-size override. `None` preserves Firewheel's default.
+    #[field(get, copy)]
+    output_block_frames: Option<NonZeroU32>,
 }
 
 /// Typed command proxy for one player value exclusively resident in a Host.
@@ -132,6 +135,12 @@ impl<S> Host<S> {
         Ok((grid_id, player.control()))
     }
 
+    /// Returns the session rate used before the output device is measured.
+    #[must_use]
+    pub fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.root_view.grid().axis().sample_rate()
+    }
+
     fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
         let operations = Box::new([TopologyOperation::Attach {
             member: SyncMember::Group {
@@ -210,13 +219,7 @@ impl<S> Host<S> {
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
+        self.dispatcher.sample_rate()
     }
 
     /// Installs the single post-limiter mix tap.
@@ -322,8 +325,36 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
+    use kithara_bufpool::testing::TestPools;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn host_config_preserves_output_block_default_and_allows_override() {
+        let default = HostConfig::builder().build();
+        assert_eq!(default.output_block_frames(), None);
+
+        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let configured = HostConfig::builder().output_block_frames(frames).build();
+        assert_eq!(configured.output_block_frames(), Some(frames));
+    }
+
+    #[kithara::test]
+    fn host_root_owns_the_configured_sample_rate() {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let config = HostConfig::builder().sample_rate(sample_rate).build();
+        let root = Host::<TestPools>::session_root(config).expect("host root");
+
+        assert_eq!(root.sample_rate, sample_rate);
+        assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
     use kithara_test_utils::kithara;
 
     use super::{HostConfig, HostConfigPatch, NonZeroU32};

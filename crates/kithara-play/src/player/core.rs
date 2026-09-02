@@ -234,6 +234,7 @@ mod tests {
     use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
+    use kithara_audio::ConsumerWakeMode;
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
@@ -245,9 +246,9 @@ mod tests {
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerConfigPatch},
+        player::{PlayerConfig, PlayerConfigPatch, PlayerControlSource},
         resource::{ResourceConfig, ResourceSrc},
-        session::testing,
+        session::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, testing},
         test_pools::{TestPools, pools},
     };
 
@@ -272,9 +273,25 @@ mod tests {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
+    struct ForeignRateSession;
+
+    impl SessionDispatcher<TestPools> for ForeignRateSession {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(None, 48_000))),
+                _ => Ok(Reply::Ok),
+            }
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+    }
+
     fn player() -> PlayerImpl<TestPools> {
         PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .build(),
@@ -363,6 +380,7 @@ mod tests {
     fn prepare_config_applies_player_gapless_mode() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .gapless_mode(GaplessMode::Disabled)
@@ -391,6 +409,7 @@ mod tests {
         let mut config = PlayerConfig::builder()
             .worker(worker())
             .session(testing::test_session())
+            .sample_rate(NonZeroU32::new(44_100).expect("44100 is not zero"))
             .build();
         config.apply(patch);
 
@@ -424,6 +443,7 @@ mod tests {
         let parent_master = CancelToken::never();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .cancel(parent_master.clone())
@@ -524,6 +544,7 @@ mod tests {
     #[kithara::test]
     fn player_config_custom() {
         let config = PlayerConfig::builder()
+            .sample_rate(testing::TEST_SAMPLE_RATE)
             .worker(worker())
             .session(testing::test_session())
             .crossfade_duration(2.0)
@@ -532,7 +553,6 @@ mod tests {
             .gapless_mode(GaplessMode::MediaOnly)
             .eq_layout(generate_log_spaced_bands(5))
             .max_slots(2)
-            .sample_rate(NonZeroU32::new(44_100).expect("invariant: sample rate is non-zero"))
             .timestretch(StretchControls::new(1.0))
             .build();
         let player = PlayerImpl::new(config);
@@ -541,9 +561,9 @@ mod tests {
 
     /// `PlayerConfig::sample_rate` is the single place the value lives before
     /// the `EngineConfig` it configures exists. This pins that the value the
-    /// player reports back out is the exact one the engine runs with, so a
-    /// document naming `player.engine.sample_rate` cannot land somewhere the
-    /// engine never reads.
+    /// player reports back out is the exact one the engine runs with, so the
+    /// rate the owning Host hands down cannot land somewhere the engine never
+    /// reads.
     #[kithara::test]
     fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
         let sample_rate = NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero");
@@ -562,6 +582,7 @@ mod tests {
     fn eq_band_count_tracks_a_replacement_layout_before_start() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .eq_layout(generate_log_spaced_bands(3))
@@ -576,6 +597,7 @@ mod tests {
     #[kithara::test]
     fn player_config_builder() {
         let config = PlayerConfig::builder()
+            .sample_rate(testing::TEST_SAMPLE_RATE)
             .worker(worker())
             .session(testing::test_session())
             .default_rate(0.5)
@@ -651,6 +673,7 @@ mod tests {
     fn timestretch_is_address_stable_across_play_pause() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .build(),
@@ -704,6 +727,7 @@ mod tests {
         let worker = worker();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker.clone())
                 .session(testing::test_session())
                 .build(),
@@ -725,11 +749,50 @@ mod tests {
     fn auto_advance_disabled_via_config() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .auto_advance_enabled(false)
                 .build(),
         );
         assert!(!player.auto_advance_enabled());
+    }
+
+    #[kithara::test]
+    fn host_rejects_a_player_built_for_another_sample_rate() {
+        let mut player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .build(),
+        );
+        let binding = SessionBinding::new(Arc::new(ForeignRateSession));
+
+        assert!(matches!(
+            PlayerControlSource::attach_session(&mut player, binding),
+            Err(PlayError::SessionSampleRateMismatch {
+                player: 44_100,
+                session: 48_000,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(Arc::new(ForeignRateSession))
+                .build(),
+        );
+
+        assert!(matches!(
+            player.core.engine.start(),
+            Err(PlayError::SessionSampleRateMismatch {
+                player: 44_100,
+                session: 48_000,
+            })
+        ));
     }
 }

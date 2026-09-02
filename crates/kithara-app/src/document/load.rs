@@ -15,6 +15,7 @@ use kithara::{
     audio::AudioConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
+    host::HostConfigPatch,
     net::NetOptionsPatch,
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
@@ -246,6 +247,15 @@ impl Config {
         Ok(config)
     }
 
+    /// Knobs the document sets on the audio Host, which owns the output
+    /// sample rate every deck's player is then built with. The rate is named
+    /// here and nowhere else: a Host refuses a player whose rate disagrees
+    /// with its own, so `PlayerConfig::sample_rate` carries `#[patch(skip)]`.
+    #[must_use]
+    pub fn host(&self) -> HostConfigPatch {
+        self.document.host.clone()
+    }
+
     /// Knobs the document sets on the player, threaded into every deck's
     /// `PlayerConfig`.
     #[must_use]
@@ -346,6 +356,7 @@ mod tests {
 
     use kithara::{
         hls::SizeProbeMethod,
+        host::HostConfig,
         net::{Compression, NetOptions},
         worker::ComputePool,
     };
@@ -621,6 +632,23 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(config.assets_store().backend, Some(StorageBackend::Memory));
+    }
+
+    /// The Host owns the output sample rate, so `host` is the one section
+    /// that may name it; `PlayerConfig::sample_rate` carries `#[patch(skip)]`
+    /// and every deck's player is built from `Host::requested_sample_rate`.
+    /// Seeded off the `HostConfig` default (44100) so the assertion cannot
+    /// pass on a patch that was never applied.
+    #[kithara::test(native, flash(false))]
+    fn a_document_names_the_output_rate_on_the_host_section() {
+        let dir = tempdir();
+        let path = write(&dir, "host-rate", "host:\n  sample_rate: 48000\n");
+
+        let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let mut config = HostConfig::builder().build();
+        config.apply(document.host());
+
+        assert_eq!(config.sample_rate().get(), 48_000);
     }
 
     /// The proof the section is gone rather than merely unread: `network` no

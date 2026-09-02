@@ -10,11 +10,6 @@ use crate::{
     session::SessionDispatcher,
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
-
 /// Configuration for the audio engine.
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
@@ -43,12 +38,9 @@ pub struct EngineConfig<S> {
     /// change nothing the engine actually does.
     #[builder(default = 2)]
     pub(crate) channels: u16,
-    /// Sample rate passed to the runtime backend as a hint. Default: 44100.
-    /// Offline/test harnesses set this to drive deterministic render at a
-    /// known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    /// Initial output sample rate supplied by the owning player session.
     pub(crate) sample_rate: NonZeroU32,
-    /// Maximum concurrent slots in the engine. Default: 4.
+    /// Maximum number of concurrent player slots. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,
 }
@@ -83,7 +75,7 @@ impl<S> fmt::Debug for EngineConfig<S> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{BeatGridId, EngineConfig};
+    use super::{BeatGridId, EngineConfig, NonZeroU32};
     use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
@@ -91,10 +83,10 @@ mod tests {
         let config: EngineConfig<TestPools> = EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("a grid identity"))
             .pools(pools())
+            .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
             .build();
 
         assert_eq!(config.channels, 2);
-        assert_eq!(config.sample_rate.get(), 44_100);
         assert_eq!(config.max_slots, 4);
         assert_eq!(config.eq_layout.len(), 10);
     }

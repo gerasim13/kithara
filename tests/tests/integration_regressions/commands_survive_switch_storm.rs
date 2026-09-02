@@ -22,6 +22,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
@@ -131,6 +132,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))

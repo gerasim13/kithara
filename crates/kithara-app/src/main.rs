@@ -181,7 +181,9 @@ fn main() -> AppResult {
         .build();
     config.apply(app);
 
-    let mut host = AppHost::new(HostConfig::builder().build())?;
+    let mut host_config = HostConfig::builder().build();
+    host_config.apply(document.host());
+    let mut host = AppHost::new(host_config)?;
     let decks = vec![
         Deck::build(DeckId(0), &config, &mut host)?,
         Deck::build(DeckId(1), &config, &mut host)?,

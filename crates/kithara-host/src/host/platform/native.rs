@@ -41,13 +41,19 @@ where
     /// # Errors
     /// Returns an error when a canonical grid identity cannot be allocated.
     pub fn new(config: HostConfig) -> Result<Self, PlayError> {
+        let output_block_frames = config.output_block_frames;
         let SessionRoot {
             id,
             sample_rate,
             group,
             view,
         } = Self::session_root(config)?;
-        let dispatcher = crate::session::native::spawn::<S>(group, view.clone(), sample_rate);
+        let dispatcher = crate::session::native::spawn::<S>(
+            group,
+            view.clone(),
+            sample_rate,
+            output_block_frames,
+        );
         Ok(Self::owner(id, view, dispatcher, Platform::owner()))
     }
 

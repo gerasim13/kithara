@@ -91,18 +91,19 @@ node.
 `PlayerConfig<S>` is this crate's one player configuration — tunables and
 per-call wiring together — and `#[derive(Patch)]` generates `PlayerConfigPatch`,
 what a document's `player:` section may say: `gapless_mode`,
-`crossfade_duration`, `default_rate`, `sample_rate`, `max_slots`. The last two
-are the engine's: `PlayerConfig` owns them and hands them to
-`EngineConfig::builder`, so there is one value behind both and `EngineConfig`
-needs no patch of its own.
+`crossfade_duration`, `default_rate`, `max_slots`. The last is the engine's:
+`PlayerConfig` owns it and hands it to `EngineConfig::builder`, so there is one
+value behind both and `EngineConfig` needs no patch of its own.
 
 Skipped, and therefore refused by name rather than dropped:
 `auto_advance_enabled` and `prefetch_duration` (`Queue::new` overwrites both
 unconditionally — the queue is their owner), `block_on_underrun` (only the
-offline harness sets it; a real-time host callback can never block), and
+offline harness sets it; a real-time host callback can never block),
 `eq_layout` (always a generator output; `Deck::build` derives it from
 `AppConfig::eq_bands`, and a custom layout arrives at runtime through
-`PlayerImpl::set_eq_layout`).
+`PlayerImpl::set_eq_layout`), and `sample_rate` (`HostConfig` owns the output
+rate and a Host refuses a player whose rate disagrees — see Engine Lifecycle
+below; the document names it once, under `host`).
 
 `ResourceConfig<S, B>` is where a document's HLS, file, and audio values wait for
 the track that will use them. It carries them as patches — `HlsConfigPatch`,
@@ -160,6 +161,13 @@ UI must not drift from the audio
 (`select_item_on_consumed_slot_errors_without_bookkeeping`).
 
 ## Engine Lifecycle
+
+`PlayerConfig.sample_rate` is mandatory and has no playback-layer default. It
+is the Player's initial session-rate contract; Host attachment queries the
+canonical dispatcher carried by `SessionBinding`, and that dispatcher is the
+sole rate source for validation and register/start commands. Tests pass their
+fixture rate explicitly.
+
 `EngineImpl::start` is **atomic single-start**: an internal `start_lock`
 serializes the `running` check-then-act, and `running` flips only after
 `session.start_player` fully succeeds. `ensure_engine_started` treats
@@ -378,4 +386,3 @@ arriving resource down the reselecting-current path, never to be enqueued.
 ## Testing And Integration
 The offline render backend for deterministic engine and player tests lives in
 `kithara-integration-tests::offline`, not here.
-

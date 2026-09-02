@@ -18,7 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_for_position_event,
+    test_defaults::Consts as Shared, waits::wait_for_position_event,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -77,6 +77,7 @@ fn build_queue_with_tick(
 ) {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -234,6 +235,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),

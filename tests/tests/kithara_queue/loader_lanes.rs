@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
@@ -102,6 +103,7 @@ fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),

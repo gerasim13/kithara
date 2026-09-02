@@ -25,6 +25,7 @@ use kithara_integration_tests::{
     kithara, mixed_codec_ladder_encrypted,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 use url::Url;
@@ -166,6 +167,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
             .session(OfflineSession::<AppPools>::arc_auto())
             .build(),

@@ -17,6 +17,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
@@ -141,6 +142,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))

@@ -14,11 +14,6 @@ use crate::{
     session::SessionDispatcher,
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
-
 fn allocate_grid_id() -> BeatGridId {
     let Ok(id) = BeatGridId::allocate() else {
         panic!("process-wide beat-grid identity space is exhausted");
@@ -82,9 +77,12 @@ pub struct PlayerConfig<S> {
     #[builder(default = 3.5)]
     #[patch(skip)]
     pub prefetch_duration: f32,
-    /// Sample rate handed to the engine this player builds, and to the
-    /// player's own sync identity. Default: 44100.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    /// Initial output sample rate supplied by the owning session, handed on
+    /// to the engine this player builds and to the player's own sync
+    /// identity. Not a document key: `HostConfig` owns the rate, a Host
+    /// rejects a player whose rate disagrees with its own, and the document
+    /// names it once under `host`.
+    #[patch(skip)]
     pub sample_rate: NonZeroU32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
@@ -151,7 +149,7 @@ impl<S> fmt::Debug for PlayerConfig<S> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::PlayerConfig;
+    use super::{NonZeroU32, PlayerConfig};
     use crate::{
         PlayWorker, PlayWorkerConfig,
         test_pools::{TestPools, pools},
@@ -160,6 +158,7 @@ mod tests {
     pub(super) fn config() -> PlayerConfig<TestPools> {
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .sample_rate(NonZeroU32::new(44_100).expect("44100 is not zero"))
             .build()
     }
 
@@ -172,7 +171,6 @@ mod tests {
         assert!((config.crossfade_duration - 1.0).abs() < f32::EPSILON);
         assert!((config.default_rate - 1.0).abs() < f32::EPSILON);
         assert!((config.prefetch_duration - 3.5).abs() < f32::EPSILON);
-        assert_eq!(config.sample_rate.get(), 44_100);
         assert_eq!(config.max_slots, 4);
     }
 }
@@ -239,26 +237,18 @@ mod document_tests {
         );
     }
 
-    /// The rate a document names lands on the very field this player hands
-    /// to the engine it builds, so the value the document names and the
-    /// value the engine receives cannot drift apart.
+    /// `sample_rate` is a real field on [`PlayerConfig`] but must not be
+    /// document-reachable: `HostConfig` owns the output rate, a Host refuses
+    /// a player whose rate disagrees with its own, and the document names it
+    /// once under `host` (see the field's doc comment).
+    ///
+    /// [`PlayerConfig`]: super::PlayerConfig
     #[kithara::test(native, flash(false))]
-    fn a_named_sample_rate_reaches_the_engine_the_player_builds() {
-        let patch: PlayerConfigPatch =
-            serde_yaml_ng::from_str("sample_rate: 48000\n").expect("the document types");
-        let mut config = config();
-        // Seeded off the default (4) so a whole-struct `apply` that reset
-        // every unnamed field would go red here instead of passing by
-        // coincidence.
-        config.max_slots = 8;
+    fn the_host_owned_sample_rate_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("sample_rate: 48000\n")
+            .expect_err("a host-owned field must not be settable from a player document");
 
-        config.apply(patch);
-
-        assert_eq!(config.sample_rate.get(), 48_000);
-        assert_eq!(
-            config.max_slots, 8,
-            "a sibling engine value must survive the patch"
-        );
+        assert!(error.to_string().contains("sample_rate"), "{error}");
     }
 
     /// `gapless_mode` was skipped until `GaplessMode` derived `Deserialize`.

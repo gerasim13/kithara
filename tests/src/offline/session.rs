@@ -1,4 +1,4 @@
-use std::ops::RangeInclusive;
+use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use kithara::{
     audio::ConsumerWakeMode,
@@ -51,7 +51,7 @@ pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
     let default_rate = GraphSession::<OfflineBackend, TestPools>::DEFAULT_SAMPLE_RATE;
     let block_frames = f64::from(u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX));
     let park_ms = f64::from(u32::try_from(OFFLINE_PARK_MS).unwrap_or(u32::MAX));
-    let rate = (block_frames / f64::from(default_rate)) / (park_ms / 1_000.0);
+    let rate = (block_frames / f64::from(default_rate.get())) / (park_ms / 1_000.0);
     GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
 }
 
@@ -81,7 +81,11 @@ where
     /// thread never calls [`render`](Self::render).
     #[must_use]
     pub fn new() -> Self {
-        Self::spawn(true, OFFLINE_BLOCK_FRAMES)
+        Self::spawn(
+            true,
+            OFFLINE_BLOCK_FRAMES,
+            GraphSession::<OfflineBackend, S>::DEFAULT_SAMPLE_RATE,
+        )
     }
 
     /// Manual mode: the worker only dispatches commands; the audio
@@ -94,7 +98,16 @@ where
     /// Manual mode with the audio callback size used by the scenario.
     #[must_use]
     pub fn new_manual_with_block_frames(block_frames: usize) -> Self {
-        Self::spawn(false, block_frames)
+        Self::new_manual_with(
+            GraphSession::<OfflineBackend, S>::DEFAULT_SAMPLE_RATE,
+            block_frames,
+        )
+    }
+
+    /// Manual mode with the output rate and audio callback size used by the scenario.
+    #[must_use]
+    pub fn new_manual_with(sample_rate: NonZeroU32, block_frames: usize) -> Self {
+        Self::spawn(false, block_frames, sample_rate)
     }
 
     /// Convenience: `Arc<dyn SessionDispatcher>` over a fresh
@@ -116,12 +129,12 @@ where
         Arc::new(Self::new_manual())
     }
 
-    fn spawn(auto_render: bool, block_frames: usize) -> Self {
+    fn spawn(auto_render: bool, block_frames: usize, sample_rate: NonZeroU32) -> Self {
         let block_frames = u32::try_from(block_frames).expect("offline block size fits u32");
         assert!(block_frames > 0, "offline block size must be non-zero");
         let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg<S>>();
         let handle = spawn_named("kithara-engine-offline-instance", move || {
-            offline_session_thread(&cmd_rx, auto_render, block_frames);
+            offline_session_thread(&cmd_rx, auto_render, block_frames, sample_rate);
         });
         Self {
             cmd_tx: Mutex::new(cmd_tx),
@@ -240,12 +253,14 @@ fn offline_session_thread<S>(
     cmd_rx: &mpsc::Receiver<OfflineMsg<S>>,
     auto_render: bool,
     block_frames: u32,
+    sample_rate: NonZeroU32,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = GraphSession::<OfflineBackend, S>::new(move |ctx, sample_rate| {
-        start_stream_offline(ctx, sample_rate, block_frames)
-    });
+    let mut state = GraphSession::<OfflineBackend, S>::with_sample_rate(
+        sample_rate,
+        move |ctx, sample_rate| start_stream_offline(ctx, sample_rate, block_frames),
+    );
     if auto_render {
         run_auto(
             &mut state,

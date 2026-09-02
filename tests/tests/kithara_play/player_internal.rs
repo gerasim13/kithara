@@ -19,7 +19,9 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader, offline::OfflineSession, test_defaults::Consts as Shared,
+};
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -60,6 +62,7 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<O
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
     let player_config = PlayerConfig::builder()
+        .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
         .bus(bus)
         .crossfade_duration(crossfade_duration)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -71,6 +74,7 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<O
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
+        .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(OfflineSession::arc_manual())
         .build()
@@ -288,6 +292,7 @@ fn replacing_current_item_re_announces_on_next_play() {
 async fn player_play_without_audio_hardware_logs_warning() {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),

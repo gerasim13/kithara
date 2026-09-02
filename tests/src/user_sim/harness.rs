@@ -30,6 +30,7 @@ use crate::{
     bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineSession,
+    test_defaults::Consts,
     user_sim::actions::Action,
 };
 
@@ -147,6 +148,7 @@ impl SimHarness {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
                 .worker(worker)
                 .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
                 .build(),

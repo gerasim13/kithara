@@ -12,6 +12,7 @@ use kithara::{
     },
     warp::{BeatGrid, BeatGridId},
 };
+use kithara_integration_tests::test_defaults::Consts as Shared;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -34,6 +35,7 @@ fn slot_id(value: u64) -> SlotId {
 fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(Arc::new(FixtureSession))
             .pools(pools())
@@ -45,6 +47,7 @@ fn make_engine() -> EngineImpl<TestPools> {
 fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(host.requested_sample_rate())
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
@@ -81,7 +84,7 @@ fn engine_config_builder() {
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
         .max_slots(8)
-        .sample_rate(NonZeroU32::new(48000).expect("fixture sample rate"))
+        .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .channels(1)
         .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
         .pools(pools())
@@ -138,7 +141,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
-        .sample_rate(NonZeroU32::new(48000).expect("fixture sample rate"))
+        .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());

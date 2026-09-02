@@ -17,7 +17,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, analysis_pass::stalled_reader, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_until,
+    test_defaults::Consts as Shared, waits::wait_until,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -46,6 +46,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),

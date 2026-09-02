@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -263,6 +264,7 @@ impl Harness {
             .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
                 .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
                 .session(OfflineSession::arc_auto())
                 .build(),

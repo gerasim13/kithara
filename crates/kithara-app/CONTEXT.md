@@ -282,34 +282,35 @@ tree, failing the build with every missing name and its position.
 ### Crate sections
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
-in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, and under `gui`, `ui`
-and `draw_pool`. Which knobs a section may name is the owning crate's contract, and that crate's `CONTEXT.md` holds
-the argument for each knob left out.
+in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, `host`, and under
+`gui`, `ui` and `draw_pool`. Which knobs a section may name is the owning crate's contract, and that crate's
+`CONTEXT.md` holds the argument for each knob left out. `host` alone names the output rate: `Deck::build` hands
+`Host::requested_sample_rate` to every player.
 
 `pools` is the one section with no crate type to carry: `pool_schema!` generates a region type per consumer, so it is
-composed here out of `kithara-bufpool`'s `PoolConfigPatch`, one per pool this application declares. `net` is applied
-before `--insecure`, an override that can turn verification off and never back on.
+composed here from `kithara-bufpool`'s `PoolConfigPatch`, one per declared pool. `net` is applied before
+`--insecure`, an override that can turn verification off and never back on.
 
 Two sections predated this shape and are gone: `network`, whose fields moved to `net` and `hls`, and `playback`,
-whose single `crossfade_seconds` was this crate's own copy of `PlayerConfig::crossfade_duration`. Naming either is
-refused rather than ignored — that is what makes a move a move instead of a second reader going quiet — and
-`a_playback_section_is_rejected` plus two `network` tests hold it.
+whose `crossfade_seconds` was a second copy of `PlayerConfig::crossfade_duration`. Naming either is refused rather
+than ignored — that is what makes a move a move — and `a_playback_section_is_rejected` plus two `network` tests hold
+it.
 
-`hls`, `file` and `audio` travel as patches all the way to the track: `AppConfig` carries all three,
+`hls`, `file` and `audio` travel as patches all the way to the track: `AppConfig` carries them,
 `sources::build_resource_config` sets them on `ResourceConfig`, and `kithara-play/src/resource/build.rs` applies each
 onto the configuration it builds there — nothing is copied field by field, so a knob those crates add later reaches
 the built stream with no edit here.
 
 `assets_store` arrives the same way: `main` stops the store builder one step short with `into_config()`, applies the
-patch onto that `AssetStoreConfig`, and opens the store from it. `backend` is the one value `Config::assets_store`
+patch onto that config, and opens the store from it. `backend` is the one value `Config::assets_store`
 resolves first — an unnamed backend becomes `StorageBackend::default`, a stable root under the system temp directory,
-and deliberately not `AssetStore::open`'s own fallback, a fresh unique directory per launch that would move the
-on-disk cache every run.
+and deliberately not `AssetStore::open`'s own fallback, a fresh directory per launch that would move the cache
+every run.
 
 `ui` and `draw_pool` are two top-level sections rather than one nested pair because `UiConfig.draw_buffers` is a
 *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only reaches one through `DrawBuffers::try_new`.
 `Config::ui` reads `draw_pool` into a `DrawPoolLimits` off the crate default, builds the `DrawBuffers` from it, then
 builds `UiConfig` through `UiConfig::builder().draw_buffers(...)` and applies `ui` onto that value — read before
 build, never onto an already-built `UiConfig`, and never through `UiConfig::default()`, which would build and discard
-a second `PoolRegion`. It returns a `Result` because a `draw_pool:` section can name limits the generated schema
-refuses, and such a document is refused with a message rather than aborting.
+a second `PoolRegion`. It returns a `Result`: a `draw_pool:` section can name limits the generated schema refuses,
+and such a document is refused with a message rather than aborting.
