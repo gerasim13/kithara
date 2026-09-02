@@ -90,6 +90,20 @@ control path. Rebuilding the output graph is reserved for a physical route
 change. Decode resampling, the Stream-to-decode hook, worker scheduling, fades,
 and playback semantics are not redesigned by this extraction.
 
+## Configuration document
+
+`HostConfig` is this crate's one Host configuration, and `#[derive(Patch)]`
+generates `HostConfigPatch`, what a document's `host:` section may say:
+`sample_rate` and `output_block_frames`. Nothing is skipped -- both values are
+plain product defaults a deployment may name.
+
+`sample_rate` is named here and nowhere else. It is the invariant above read
+from the other end: the rate a Host is built with is the rate every Player
+inserted into it must carry, so a second document key on the player would be a
+second writable spelling of one value. `PlayerConfig::sample_rate` therefore
+carries `#[patch(skip)]`, and `kithara-app`'s `Deck::build` reads
+`Host::requested_sample_rate` and hands it to the player it builds.
+
 ## Migration rule
 
 Move existing session behavior mechanically and preserve command ordering,

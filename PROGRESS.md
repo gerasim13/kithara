@@ -12,27 +12,28 @@ the change that lands the work, and keep it short.
   merged and env-expanded before typing; every section carries the owning crate's
   own patch type, so a value is spelled once. `#[derive(Patch)]` in the
   new `kithara-macros` generates every patch and its `apply`; `struct-patch` and
-  every hand-written patch struct are gone. Secrets stay `$KITHARA_...` references
-  and one resolving nowhere stops startup.
+  every hand-written patch struct are gone. The output rate is named once,
+  under `host`. Secrets stay `$KITHARA_...` references and one resolving nowhere
+  stops startup.
 - Harness and document revision. `AGENTS.md` routes instead of restating, and the
   `style` namespace budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every README to `readme_shape`. The rest is below.
+  `doc_staleness`, and holds every README to `readme_shape`.
 
 ## Next
 
 - Wire the last section end to end: the three integration harnesses still build
   pools from `PoolsSection::default()`, not from the document they load.
 - Work the comment queue down by hand. `--fix` is exhausted - a second run on a
-  clean tree changes nothing - so all 668 are decisions: 497 comments carrying
-  prose outside a doc comment, 105 doc blocks past a dozen lines, 50 oversized
-  inline comments, 16 dense functions. A body comment has no mechanical home.
+  clean tree changes nothing - so all 668 are decisions: 497 prose comments outside
+  a doc comment, 105 long doc blocks, 50 oversized inline comments, 16 dense
+  functions. A body comment has no mechanical home.
 - 439 ordering findings are still mechanical: `struct_field_order` 160,
   `trait_item_order` 188, `struct_init_order` 91. One `just lint style --fix`
   clears them, but it rewrites declarations across every crate, so it wants its
   own change.
 - Wire `just lint style` to a gate. Nothing runs it today - not the commit hook,
-  not a CI lane - which is why the ratchet drifted unseen. A warm run is 58 s: too
-  much per commit, nothing for a lane, and the lane catalog owns it.
+  not a CI lane - so the ratchet drifted unseen. A warm run is 58 s: too much per
+  commit, nothing for a lane, and the lane catalog owns it.
 
 ## Blocked
 
