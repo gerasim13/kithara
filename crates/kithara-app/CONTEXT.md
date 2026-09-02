@@ -249,6 +249,14 @@ build decides nothing about what a field means. A `kithara.yaml` beside the exec
 `--config <path>` names one explicitly; the explicit path must exist, the conventional one may be absent. The
 second layer is how a deployed binary is reconfigured without a rebuild.
 
+`app.yaml` must never name `ui:` or `draw_pool:`. Both are `#[cfg(feature = "gui")]` on `Document` —
+the first sections gated that way — so a `lib-only` build's `Document` declares neither field at all.
+That is the shape the workspace's own integration suites build against: they load this exact shipped
+document through `Config::load(None, None)` from a `lib-only` `kithara-app`. `deny_unknown_fields`
+refuses any key `Document` does not declare for the build that reads it, so either section in
+`app.yaml` would refuse to parse under `lib-only` while typing fine under `gui`. Any future
+`#[cfg(feature = "gui")]` section carries the same constraint.
+
 The pipeline is merge → expand → type, and the order is what keeps secrets out of the logs. Merging and
 expansion both work on the untyped YAML tree, and only the expanded tree is deserialized into
 `document::schema::Document`. A schema failure is therefore reported from the *pre*-expansion tree, so the
@@ -355,3 +363,16 @@ declaring both would give one value two spellings with the older one always winn
 log-spaced arrives at runtime through `PlayerImpl::set_eq_layout`, which is how every construction site in the
 workspace already gets one. `gapless_mode` waits on `GaplessMode` deriving `Deserialize` for its data-carrying
 variant.
+
+`ui` and `draw_pool`, both `#[cfg(feature = "gui")]`, are `kithara::ui::source::UiConfigPatch` and
+`DrawPoolLimitsPatch`. They are two top-level sections rather than one nested pair because
+`UiConfig.draw_buffers` is a *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only
+reaches one through `DrawBuffers::try_new` — see `kithara-ui`'s `CONTEXT.md`, "Configuration Document Entry
+Point". `Config::ui_settings` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
+default, build the `DrawBuffers` from it, then apply `ui` to a `UiConfig` off its own crate default and
+assign the built buffers in afterwards — read before build, never patched onto an already-built
+`UiConfig`. `AppConfig::ui` carries the result and `AppUi::new` takes it by reference instead of calling
+`UiConfig::default()` itself, the same shape `AppConfig::resource` uses for `ResourceSettings`. `main`
+calls `.ui(document.ui_settings()?)` on the same builder chain as `.resource(document.resource_settings())`;
+the `?` is there because a `draw_pool:` section can name limits the generated schema refuses, and a
+document is refused with a message rather than aborting the process.

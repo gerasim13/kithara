@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastSettings;
+#[cfg(feature = "gui")]
+use kithara::ui::source::{DrawPoolLimitsPatch, UiConfigPatch};
 use kithara::{
     analysis::BeatAnalysisSettingsPatch,
     assets::{AssetStoreSettings, FlushSettings},
@@ -39,6 +41,11 @@ pub(crate) struct Document {
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
     pub(crate) downloader: DownloaderSettings,
+    /// Draw-pool retention limits `UiConfig::draw_buffers` is built from.
+    /// Read before `DrawBuffers` is constructed, never patched onto
+    /// `UiConfig` afterwards -- see `Config::ui_settings`.
+    #[cfg(feature = "gui")]
+    pub(crate) draw_pool: DrawPoolLimitsPatch,
     pub(crate) drm: Drm,
     pub(crate) file: FileSettingsPatch,
     pub(crate) flush: FlushSettings,
@@ -49,6 +56,14 @@ pub(crate) struct Document {
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueSettingsPatch,
+    /// The toolkit's own tunables -- arena bytes and node limits, read by
+    /// both hosts, plus `screen_cache`, which only the retained host reads
+    /// (see `UiConfig::screen_cache` in `kithara-ui`). `draw_buffers` is not
+    /// among them: it carries `UiConfig`'s own `#[patch(skip)]` because it is
+    /// a *built* value, and `draw_pool` above is the document's way of naming
+    /// what it is built from -- see `Config::ui_settings`.
+    #[cfg(feature = "gui")]
+    pub(crate) ui: UiConfigPatch,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }

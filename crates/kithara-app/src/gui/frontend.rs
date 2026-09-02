@@ -169,7 +169,7 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
+        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?, &config.ui)?;
         let base_worker = config
             .base_worker
             .clone()

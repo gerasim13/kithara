@@ -24,7 +24,7 @@ use crate::{
         document::{Clock, Ctx},
     },
     shaping::FontPolicy,
-    source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver},
+    source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
 
@@ -700,6 +700,39 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
     .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
 
     assert_eq!(ui.background(), BLUE_PAGE);
+}
+
+/// `Config::settings` is what makes a passed [`UiConfig`] actually
+/// compile the document, closing the gap that left the retained host reading
+/// only [`UiConfig::default`] no matter what a configuration document said.
+/// An arena too small for the fixture's document to fit in is the cheapest
+/// way to prove it is the *passed* value that compiled it, not the generous
+/// default: the default arena never fails on this fixture.
+#[kithara::test]
+fn a_passed_configuration_reaches_the_compiled_document() {
+    let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
+    let resolver = resolver();
+    let settings = UiConfig::builder().max_arena_bytes(1).build();
+    // `Ui` carries no `Debug` impl, so `expect_err` cannot be used here: fall
+    // back to `Result::err`, which only needs one from `RunError` itself.
+    let error = Ui::new(
+        Dresser::wearing(skin(), skin()),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .settings(&settings)
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .err()
+    .unwrap_or_else(|| panic!("an arena too small for the fixture's document must not compile"));
+
+    assert!(
+        matches!(error, RunError::Document(UiDocError::ArenaFull { .. })),
+        "{error}"
+    );
 }
 
 /// A player turns to another skin while it is running, which is the whole point

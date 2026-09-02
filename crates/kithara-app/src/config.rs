@@ -1,6 +1,8 @@
 use std::{fmt, num::NonZeroU32, path::PathBuf};
 
 use bon::Builder;
+#[cfg(feature = "gui")]
+use kithara::ui::source::UiConfig;
 use kithara::{
     analysis::BeatAnalysisConfig,
     drm::KeyProcessorRegistry,
@@ -103,6 +105,15 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub resource: ResourceSettings,
+    /// UI-level knobs threaded into every compiled document, including the
+    /// draw-pool limits [`UiConfig::draw_buffers`] is built from. A document
+    /// reaches these through `ui` and `draw_pool` — the same as
+    /// [`AppConfig::resource`] reaches [`ResourceSettings`] through `audio`,
+    /// `hls`, and `file` — not through [`AppSettings`].
+    #[cfg(feature = "gui")]
+    #[builder(default)]
+    #[patch(skip)]
+    pub ui: UiConfig,
     /// Log filter directives.
     #[builder(default)]
     pub log_directives: Vec<String>,
@@ -150,7 +161,8 @@ pub struct AppConfig {
 
 impl fmt::Debug for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AppConfig")
+        let mut builder = f.debug_struct("AppConfig");
+        builder
             .field("drm", &self.drm)
             .field("palette", &self.palette)
             .field("log_directives", &self.log_directives)
@@ -171,7 +183,9 @@ impl fmt::Debug for AppConfig {
             .field("beat_analysis", &self.beat_analysis)
             .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
             .field("resource", &self.resource)
-            .field("queue", &self.queue)
-            .finish_non_exhaustive()
+            .field("queue", &self.queue);
+        #[cfg(feature = "gui")]
+        builder.field("ui", &self.ui);
+        builder.finish_non_exhaustive()
     }
 }

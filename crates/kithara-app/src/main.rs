@@ -177,6 +177,7 @@ fn main() -> AppResult {
         .queue(queue_settings)
         .player(player_settings)
         .resource(document.resource_settings())
+        .ui(document.ui_settings()?)
         // The same value tracing is running on, so a document that names no
         // directives still leaves the built configuration agreeing with the
         // process; one that names them has `apply` put back exactly this.

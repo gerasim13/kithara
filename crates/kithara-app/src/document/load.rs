@@ -3,6 +3,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "gui")]
+use kithara::bufpool::PoolError;
+#[cfg(feature = "gui")]
+use kithara::ui::{
+    draw::DrawBuffers,
+    source::{DrawPoolLimits, UiConfig},
+};
 use kithara::{
     assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
     net::NetSettings,
@@ -204,6 +211,30 @@ impl Config {
         settings.hls.apply(self.document.hls.clone());
         settings.file.apply(self.document.file.clone());
         settings
+    }
+
+    /// Knobs the document sets on the compiled UI: the crate default, then
+    /// the document's `ui:` section, with `draw_buffers` built from the
+    /// document's `draw_pool:` section rather than patched on afterwards.
+    /// `DrawPoolLimits` only reaches a `DrawBuffers` through
+    /// `DrawBuffers::try_new`, so the document's draw-pool limits must be read
+    /// before that value is constructed -- see `UiConfig::draw_buffers` and
+    /// `DrawPoolLimits` in `kithara-ui`. The composition lives here rather
+    /// than at the construction site so a test can reach the same code the
+    /// binary runs.
+    ///
+    /// # Errors
+    /// Returns the [`PoolError`] the document's `draw_pool:` section failed
+    /// the generated draw-buffer schema with, rather than aborting the
+    /// process on a value a configuration document can now name.
+    #[cfg(feature = "gui")]
+    pub fn ui_settings(&self) -> Result<UiConfig, PoolError> {
+        let mut draw_pool = DrawPoolLimits::default();
+        draw_pool.apply(self.document.draw_pool.clone());
+        let mut config = UiConfig::default();
+        config.apply(self.document.ui.clone());
+        config.draw_buffers = DrawBuffers::try_new(draw_pool)?;
+        Ok(config)
     }
 
     /// Knobs the document sets on the player, threaded into every deck's
@@ -482,6 +513,41 @@ mod tests {
             settings.hls.size_probe_method,
             SizeProbeMethod::RangeGet,
             "a section the overlay never names keeps its baked value"
+        );
+    }
+
+    /// `ui` and `draw_pool` are separate document sections because
+    /// `UiConfig.draw_buffers` is a *built* value: `DrawPoolLimits` only
+    /// reaches it through `DrawBuffers::try_new`, so `Config::ui_settings`
+    /// reads `draw_pool` before building it rather than patching `ui` onto
+    /// the result afterwards. `131072`, `4`, and `7` are values no crate
+    /// default produces (`max_arena_bytes` defaults to 65536, `max_buffers`
+    /// to 64, `command_capacity` to 512): naming two draw-pool keys rather
+    /// than one is what rules out a whole-struct `apply` that silently
+    /// rebuilt every field from `Default` -- one named value alone cannot
+    /// tell that apart from the real merge, but a second one can.
+    #[cfg(feature = "gui")]
+    #[kithara::test(native, flash(false))]
+    fn the_ui_and_draw_pool_sections_compose_one_ui_config() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "ui-and-draw-pool",
+            "ui:\n  max_arena_bytes: 131072\ndraw_pool:\n  max_buffers: 4\n  command_capacity: 7\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let ui = config
+            .ui_settings()
+            .unwrap_or_else(|error| panic!("the document's draw-pool limits must build: {error}"));
+
+        assert_eq!(ui.max_arena_bytes, 131_072);
+        assert_eq!(ui.draw_buffers.limits().max_buffers, 4);
+        assert_eq!(ui.draw_buffers.limits().command_capacity, 7);
+        assert_eq!(
+            ui.draw_buffers.limits().path_capacity,
+            128,
+            "a draw-pool knob the document does not name keeps the crate default"
         );
     }
 

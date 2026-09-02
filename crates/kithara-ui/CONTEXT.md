@@ -106,15 +106,44 @@ an allocation failure returns `UiDocError::ArenaFull`.
   `UiConfig`, so it is the owner site rather than a component reaching for storage of its own.
 - The pool family belongs to the host, not to the document. `UiConfig` carries it and every
   document compiled against that configuration shares it, because a `DrawBuffers` clone is an `Arc`
-  clone. A host builds its configuration once - `app::Ui` in `new`, `kithara-app`'s `AppUi` for both
-  deck layouts - and compiles every screen and every redress against that one value. Building a
-  configuration per compile is the defect this replaced: it gave each document an empty family and
-  threw the filled one away with the document it came from, so a buffer was never reused across a
-  skin change or a screen switch.
+  clone. A host builds its configuration once - `app::Ui` in `new`; `kithara-app` builds one in
+  `Config::ui_settings` and hands it into `AppUi::new`, which no longer builds its own - and compiles
+  every screen and every redress against that one value. Building a configuration per compile is the
+  defect this replaced: it gave each document an empty family and threw the filled one away with the
+  document it came from, so a buffer was never reused across a skin change or a screen switch.
 - `InternId` is valid only within the `CompiledUi` that produced it; a recompile rebuilds the arena.
   Never persist one in application messages or state - host-facing paths stay owned `String`s.
 - `StrArena::resolve` is total: spans cover whole appended strings, so valid spans land on UTF-8
   boundaries. An unknown ID or invalid span resolves to `""` - handle behaviour, not error recovery.
+
+## Configuration Document Entry Point
+
+`UiConfig`, its nested `Limits`, and `DrawPoolLimits` derive `Patch`: a
+configuration document types into the generated `UiConfigPatch`
+(`kithara-app`'s `ui:` section), `LimitsPatch` (`ui.limits:`), and
+`DrawPoolLimitsPatch` (`kithara-app`'s separate `draw_pool:` section), and
+`apply` writes only the fields the document names, leaving the rest of
+`UiConfig` standing.
+
+`draw_pool:` is its own top-level section rather than nested under `ui:`
+because `UiConfig.draw_buffers` is a *built* value, not a patchable field --
+see "Draw Ownership". `kithara-app`'s `Config::ui_settings` reads
+`DrawPoolLimits` from the document, calls `DrawBuffers::try_new` with it, and
+only then builds `UiConfig` from the crate default plus the document's `ui:`
+overlay, assigning the built buffers in afterwards. `main.rs` is the only
+construction site a document reaches.
+
+Two fields carry `#[patch(skip)]`, so naming either in a document is refused
+rather than parsed and silently dropped:
+
+- `UiConfig::custom_kinds` -- registering an extension kind takes code
+  (`CustomKinds::names`, built from what a host actually mounted;
+  `app/embed.rs` is the one call site that ever sets it), so a document
+  naming a kind here would type and then be refused by every build that
+  registers no matching kind. `kithara-app` registers none, so this field
+  stays at its empty default for the whole binary.
+- `UiConfig::draw_buffers` -- see above; its tunable is `DrawPoolLimits`,
+  which the document reaches directly.
 
 ## Document And Compiled Layers
 
@@ -268,12 +297,17 @@ list is therefore exactly the list callers produced before the rounded shape exi
 
 The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
 against the same list rather than promised by two call-through implementations. `UiConfig` is the
-only owner of draw-buffer limits, and each `CompiledUi` carries the resulting shared `DrawBuffers`
-family for both hosts. Its closed `DrawSchema` registers command, path, and paint-text slots under
-one `PoolRegion`; every checked growth competes for `max_bytes`. `max_buffers` bounds the number
-retained by each kind, while a returned buffer above its kind's capacity limit is dropped instead of
-retained. The live builder may grow beyond that retention limit without truncating a command or
-changing a picture, up to the shared hard byte budget.
+only owner of the *built* `DrawBuffers` value - `draw_buffers` stays `#[patch(skip)]` and is never
+itself a document key - and each `CompiledUi` carries the resulting shared family for both hosts.
+The tunables it is built from, `DrawPoolLimits`, derive `Patch` in their own right so a configuration
+document can name them: `kithara-app`'s `Config::ui_settings` reads a `DrawPoolLimits` document
+section and calls `DrawBuffers::try_new` with it *before* constructing `UiConfig`, because `DrawBuffers`
+has no route that patches limits onto an already-built one. Its closed `DrawSchema` registers
+command, path, and paint-text slots under one `PoolRegion`; every checked growth competes for
+`max_bytes`. `max_buffers` bounds the number retained by each kind, while a returned buffer above
+its kind's capacity limit is dropped instead of retained. The live builder may grow beyond that
+retention limit without truncating a command or changing a picture, up to the shared hard byte
+budget.
 The shared control adapters in both hosts start their lists from that compiled owner, and every
 nested clip and authored outline inherits it through the parent builder. `PoolStats::alloc_misses`
 is the standing measure of reuse. The Studio parity capture draws the shipped single- and dual-deck

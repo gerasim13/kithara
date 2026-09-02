@@ -68,6 +68,7 @@ ron = { workspace = true }
 roxmltree = { workspace = true }
 serde = { workspace = true }
 skrifa = { workspace = true, optional = true }
+struct-patch = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
@@ -98,6 +99,7 @@ iced_tiny_skia = { workspace = true }
 iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true
