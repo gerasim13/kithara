@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn seek_withdraws_the_resident_warp_context() {
         let warp = Warp::new((), &WarpConfig::builder().build());
         let publisher = warp.publisher();
