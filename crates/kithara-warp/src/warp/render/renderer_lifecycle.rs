@@ -317,6 +317,7 @@ where
 
     #[doc(hidden)]
     pub fn flush(&mut self) -> Option<AudioChunk> {
+        let snapshot = self.context.load();
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         } else {
@@ -345,11 +346,16 @@ where
         } else {
             self.held_source_frames()
         };
-        self.emit(None, held_source_frames)
+        let output = self.emit(None, held_source_frames);
+        if let Some(output) = output.as_ref() {
+            self.commit_render(snapshot, output.frames());
+        }
+        output
     }
 
     #[doc(hidden)]
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let snapshot = self.context.load();
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -366,15 +372,21 @@ where
         }
 
         let speed = self.controls.speed();
-        if self.unity_passthrough(speed) {
-            return self.process_unity(chunk);
+        let output = if self.unity_passthrough(speed) {
+            self.process_unity(chunk)
+        } else {
+            self.process_active(chunk, speed)
+        };
+        if let Some(output) = output.as_ref() {
+            self.commit_render(snapshot, output.frames());
         }
-        self.process_active(chunk, speed)
+        output
     }
 
     #[doc(hidden)]
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();
+        self.committed = None;
     }
 }

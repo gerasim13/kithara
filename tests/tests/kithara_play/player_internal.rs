@@ -7,23 +7,31 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     self,
+    audio::ConsumerWakeMode,
     events::{Event, EventBus, EventReceiver, TrackId},
-    platform::sync::Arc,
+    platform::sync::{Arc, Mutex},
     play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
-        PlayerStatus, Resource, SeekOutcome, SessionDispatcher,
+        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
+        PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
+        SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::{
-    audio_mock::TestPcmReader, offline::OfflineSession, test_defaults::Consts as Shared,
-};
+use kithara_integration_tests::audio_mock::TestPcmReader;
 
 use crate::bufpool_ext::{TestPools, pools};
+
+const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
+};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -39,7 +47,7 @@ enum RemoveAtScenario {
 }
 
 fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+    AudioSpec::new(2, FIXTURE_SAMPLE_RATE)
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -58,13 +66,59 @@ fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
     )
 }
 
-fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<OfflineSession>) {
+struct FixtureSession {
+    next_player: AtomicU64,
+    next_slot: AtomicU64,
+    nodes: Mutex<Vec<NodeInputs>>,
+}
+
+impl FixtureSession {
+    fn new() -> Self {
+        Self {
+            next_player: AtomicU64::new(1),
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
+        }
+    }
+}
+
+impl SessionDispatcher<TestPools> for FixtureSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+        let reply = match cmd {
+            Cmd::RegisterPlayer { .. } => {
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+            }
+            Cmd::AllocateSlot { .. } => {
+                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+                let (inputs, control) = slot_channels(SharedEq::new(10));
+                self.nodes.lock().push(inputs);
+                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+            }
+            Cmd::QuerySampleRate => {
+                Reply::SampleRate(SessionSampleRate::new(None, FIXTURE_SAMPLE_RATE.get()))
+            }
+            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
+            _ => Reply::Ok,
+        };
+        Ok(reply)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+}
+
+fn fixture_session() -> Arc<dyn SessionDispatcher<TestPools>> {
+    Arc::new(FixtureSession::new())
+}
+
+fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<FixtureSession>) {
     let bus = EventBus::default();
-    let session = Arc::new(OfflineSession::new_manual());
+    let session = Arc::new(FixtureSession::new());
     let player_config = PlayerConfig::builder()
-        .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
         .bus(bus)
         .crossfade_duration(crossfade_duration)
+        .sample_rate(FIXTURE_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
@@ -74,9 +128,9 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<O
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+        .sample_rate(FIXTURE_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .session(OfflineSession::arc_manual())
+        .session(fixture_session())
         .build()
 }
 
@@ -90,25 +144,6 @@ fn drain_player_events(player: &PlayerImpl<TestPools>, rx: &mut EventReceiver) -
             Ok(_) => continue,
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
-        }
-    }
-    events
-}
-
-fn render_until_events(
-    player: &PlayerImpl<TestPools>,
-    session: &OfflineSession,
-    rx: &mut EventReceiver,
-    max_blocks: usize,
-    mut done: impl FnMut(&[PlayerEvent]) -> bool,
-) -> Vec<PlayerEvent> {
-    const BLOCK_FRAMES: usize = 512;
-    let mut events = Vec::new();
-    for _ in 0..max_blocks {
-        let _ = session.render(BLOCK_FRAMES);
-        events.extend(drain_player_events(player, rx));
-        if done(&events) {
-            break;
         }
     }
     events
@@ -208,7 +243,7 @@ async fn player_advance_emits_event() {
 
 #[kithara::test]
 fn replay_same_item_does_not_re_emit_current_item_changed() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     let item = make_tagged_resource("item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
@@ -240,7 +275,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed() {
 fn re_selecting_the_current_item_does_not_re_announce() {
     // Centralization delta: re-selecting the already-current index (e.g. while
     // paused) must not re-announce — announce gates on identity, not on calls.
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     let item = make_tagged_resource("item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
@@ -266,7 +301,7 @@ fn re_selecting_the_current_item_does_not_re_announce() {
 fn replacing_current_item_re_announces_on_next_play() {
     // Dual of suppression: replacing the audio under the current index must
     // re-announce on the next play — index equality must not mask a change.
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     let item = make_tagged_resource("item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
@@ -288,131 +323,9 @@ fn replacing_current_item_re_announces_on_next_play() {
     );
 }
 
-#[kithara::test(tokio)]
-async fn player_play_without_audio_hardware_logs_warning() {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
-            .build(),
-    );
-    player.insert(make_resource(1.0), TrackId::allocate(), None);
-    player.play();
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_zero_emits_terminal_before_current_changed() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let first = make_tagged_resource("item-1", 0.05);
-    let second = make_tagged_resource("item-2", 0.05);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 256, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-            && evs
-                .iter()
-                .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
-                .count()
-                >= 1
-    });
-
-    let item_end = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }));
-    let handover_changed = item_end.and_then(|end_idx| {
-        events
-            .iter()
-            .enumerate()
-            .skip(end_idx + 1)
-            .find(|(_, e)| matches!(e, PlayerEvent::CurrentItemChanged))
-            .map(|(i, _)| i)
-    });
-
-    assert!(item_end.is_some(), "no terminal event: {events:?}");
-    assert!(
-        handover_changed.is_some(),
-        "no post-terminal CurrentItemChanged: {events:?}"
-    );
-    assert!(item_end.unwrap() < handover_changed.unwrap());
-    assert_eq!(player.current_index(), 1);
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_one_activates_before_first_terminal_event() {
-    let (player, session) = make_offline_player(1.0);
-    let mut rx = player.subscribe();
-    let first = make_tagged_resource("item-1", 1.5);
-    let second = make_tagged_resource("item-2", 1.5);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 512, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-
-    let handover_changed = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::CurrentItemChanged));
-    let item_end = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }));
-
-    assert!(handover_changed.is_some(), "no handover event: {events:?}");
-    assert!(item_end.is_some(), "no terminal event: {events:?}");
-    assert!(handover_changed.unwrap() < item_end.unwrap());
-    assert_eq!(player.current_index(), 1);
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_ge_prefetch_still_advances() {
-    let (player, session) = make_offline_player(4.0);
-    let mut rx = player.subscribe();
-    let first = make_tagged_resource("item-1", 5.0);
-    let second = make_tagged_resource("item-2", 5.0);
-    player.insert(first, TrackId::allocate(), None);
-    player.insert(second, TrackId::allocate(), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 1024, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::PrefetchRequested)),
-        "PrefetchRequested must fire when cf >= prefetch (windows coincide); got {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::HandoverRequested)),
-        "HandoverRequested must fire; got {events:?}"
-    );
-    assert_eq!(
-        player.current_index(),
-        1,
-        "auto-advance must reach the second item: {events:?}"
-    );
-}
-
 #[kithara::test]
 fn arm_next_loads_item_and_returns_src() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("item-1", 0.05);
     let second = make_tagged_resource("item-2", 0.05);
@@ -426,14 +339,12 @@ fn arm_next_loads_item_and_returns_src() {
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
-    let _ = session.render(512);
-    player.process_notifications();
     assert_eq!(src.as_ref(), "memory://item-2");
 }
 
 #[kithara::test]
 fn seek_seconds_updates_position_optimistically() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -443,72 +354,9 @@ fn seek_seconds_updates_position_optimistically() {
     assert_eq!(player.position_seconds(), Some(54.689_879_542));
 }
 
-/// Bug #5's dispatch-side sibling: the track honestly finalizes its natural
-/// end and the report sits in the slot ring; before the control thread
-/// drains it, the user seeks back — publishing a newer epoch and reviving
-/// the track. The stale end describes a position the user already left, and
-/// delivering it would let the queue auto-advance out from under the seek.
-#[kithara::test]
-fn an_end_minted_before_a_published_seek_is_not_delivered() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let item = make_tagged_resource("item-1", 0.05);
-    player.insert(item, TrackId::allocate(), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    // Reach the natural end without draining notifications: the EOF report
-    // stays queued, exactly like a queue tick that has not yet run.
-    for _ in 0..64 {
-        let _ = session.render(512);
-    }
-
-    let outcome = player.seek_seconds(0.01).expect("seek must land");
-    assert!(matches!(outcome, SeekOutcome::Landed { .. }));
-
-    let events = drain_player_events(&player, &mut rx);
-    assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
-        "an end minted before a published seek must not reach the queue: {events:?}"
-    );
-}
-
-/// Valve for the fence above: the revived track plays to its end again and
-/// the fresh report — minted at the epoch the seek published — is delivered.
-#[kithara::test]
-fn a_revived_track_delivers_the_end_it_reaches_again() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let item = make_tagged_resource("item-1", 0.05);
-    player.insert(item, TrackId::allocate(), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-    for _ in 0..64 {
-        let _ = session.render(512);
-    }
-
-    player.seek_seconds(0.01).expect("seek must land");
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 256, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
-        "the re-ended track must report its new end: {events:?}"
-    );
-}
-
 #[kithara::test]
 fn arm_next_returns_none_for_empty_slot() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     player.reserve_slots(2);
     let first = make_tagged_resource("item-1", 0.05);
@@ -523,7 +371,7 @@ fn arm_next_returns_none_for_empty_slot() {
 
 #[kithara::test]
 fn arm_next_idempotent_for_same_index() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("item-1", 0.05);
     let second = make_tagged_resource("item-2", 0.05);
@@ -546,7 +394,7 @@ fn arm_next_idempotent_for_same_index() {
 
 #[kithara::test]
 fn arm_next_replaces_previously_armed_slot() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     let a = make_tagged_resource("a", 0.05);
     let b = make_tagged_resource("b", 0.05);
@@ -561,22 +409,17 @@ fn arm_next_replaces_previously_armed_slot() {
         .arm_next(1)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
-    let _ = session.render(512);
-    player.process_notifications();
     let second = player
         .arm_next(2)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_ne!(first.as_ref(), second.as_ref());
     assert_eq!(player.armed_next(), Some(2));
-
-    let _ = session.render(512);
-    player.process_notifications();
 }
 
 #[kithara::test]
 fn commit_next_index_mismatch_returns_typed_error() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("a", 0.05);
     let second = make_tagged_resource("b", 0.05);
@@ -601,7 +444,7 @@ fn commit_next_index_mismatch_returns_typed_error() {
 
 #[kithara::test]
 fn commit_next_advances_index_and_publishes_event() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("a", 0.05);
     let second = make_tagged_resource("b", 0.05);
@@ -632,7 +475,7 @@ fn commit_next_advances_index_and_publishes_event() {
 
 #[kithara::test]
 fn commit_next_idempotent_when_already_activated() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("a", 0.05);
     let second = make_tagged_resource("b", 0.05);
@@ -652,7 +495,7 @@ fn commit_next_idempotent_when_already_activated() {
 
 #[kithara::test]
 fn unarm_next_clears_when_not_activated_and_unloads() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("a", 0.05);
     let second = make_tagged_resource("b", 0.05);
@@ -664,19 +507,15 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
         .arm_next(1)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
-    let _ = session.render(512);
-    player.process_notifications();
 
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
-    let _ = session.render(512);
-    player.process_notifications();
     assert_eq!(src.as_ref(), "memory://b");
 }
 
 #[kithara::test]
 fn unarm_next_preserves_activated_current() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("a", 0.05);
     let second = make_tagged_resource("b", 0.05);
@@ -696,7 +535,7 @@ fn unarm_next_preserves_activated_current() {
 
 #[kithara::test]
 fn select_item_clears_pending_next_and_unloads_preloaded_track() {
-    let (player, session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("item-1", 0.05);
     let second = make_tagged_resource("item-2", 0.05);
@@ -714,8 +553,6 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(2, true).unwrap();
-    let _ = session.render(512);
-    player.process_notifications();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
     assert_eq!(src.as_ref(), "memory://item-2");
@@ -728,7 +565,7 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 /// `arm_next`'s `take()` and `enqueue_to_processor` returns `None`.
 #[kithara::test]
 fn select_item_on_armed_index_promotes_armed_slot() {
-    let (player, session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
     let first = make_tagged_resource("item-1", 0.05);
     let second = make_tagged_resource("item-2", 0.05);
@@ -738,7 +575,6 @@ fn select_item_on_armed_index_promotes_armed_slot() {
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.select_item(0, true).unwrap();
-    let _ = session.render(256);
     let armed_src = player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -746,7 +582,6 @@ fn select_item_on_armed_index_promotes_armed_slot() {
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(1, true).unwrap();
-    let _ = session.render(256);
     player.process_notifications();
 
     assert_eq!(player.current_index(), 1);

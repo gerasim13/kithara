@@ -13,6 +13,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -21,13 +22,12 @@ use kithara::{
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
-    waits::wait_for_loader_done,
+    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
 };
 use url::Url;
 
@@ -88,28 +88,37 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .max_concurrent_loads(cap)
-            .store(store.clone())
-            .player(player)
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .max_concurrent_loads(cap)
+                .store(store.clone())
+                .player(player)
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -121,7 +130,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -129,7 +138,7 @@ fn build_queue_with_tick(
     (queue, downloader, store, tick_handle)
 }
 
-fn is_loading(queue: &Queue<TestPools>, id: TrackId) -> bool {
+fn is_loading(queue: &QueueControl<TestPools>, id: TrackId) -> bool {
     matches!(
         queue.track(id).map(|e| e.status),
         Some(TrackStatus::Loading)
@@ -137,7 +146,7 @@ fn is_loading(queue: &Queue<TestPools>, id: TrackId) -> bool {
 }
 
 async fn wait_until_loading(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {

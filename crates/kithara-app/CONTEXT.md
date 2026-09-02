@@ -10,6 +10,17 @@ client, playback worker, queues, and analysis cache. Its `u8` and `f32` slots
 compete under one 256 MiB hard cap; startup allocation is declared in the
 schema configuration rather than warmed later by a component.
 
+## Recording asset adapter
+
+`AssetPartSink` is the application composition seam between storage-neutral
+`kithara-record` and the canonical `AssetStore`. It acquires one phase-typed
+writer, maps random-access container writes directly to that writer, and
+publishes only through consuming `commit(final_len)`. Abort first closes the
+writer and then removes that exact relative resource through AssetStore's
+canonical deletion channel; a cancelled or failed recording must not leave an
+active partial asset. Encoding and recording crates never receive a filesystem
+path or an AssetStore.
+
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
@@ -244,73 +255,67 @@ its entry until the version is bumped — acceptable for a library of stable fil
 ## Configuration document
 
 The application is configured by a document, in two layers. `crates/kithara-app/app.yaml` is what this build ships
-with: `build.rs` embeds its text verbatim and the application parses that same text at startup, so the build decides nothing
-about what a field means. A `kithara.yaml` beside the executable is laid over it — `--config <path>` names one
-explicitly, and the explicit path must exist where the conventional one may be absent. That second layer reconfigures a deployed
-binary without a rebuild.
+with: `build.rs` embeds its text verbatim and the application parses that same text at startup, so the build decides
+nothing about what a field means. A `kithara.yaml` beside the executable is laid over it — `--config <path>` names one
+explicitly and must exist, where the conventional one may be absent — reconfiguring a deployed binary without a
+rebuild.
 
 `app.yaml` must never name `ui:`, `draw_pool:`, or any future `#[cfg(feature = "gui")]` section: a `lib-only` build's
-`Document` declares no such field, and the workspace's integration suites load this exact shipped document through
-`Config::load(None, None)` from a `lib-only` build.
+`Document` declares no such field, and the integration suites load this exact document through
+`Config::load(None, None)` from one.
 
-The pipeline is merge → expand → type, and that order is what keeps secrets out of the logs: both earlier steps work
-on the untyped YAML tree, only the expanded tree is deserialized into `document::schema::Document`, and a schema
-failure is reported from the *pre*-expansion tree, naming `$KITHARA_DRM_PROD_KEY` rather than the value behind it.
-`Config` keeps that pre-expansion tree and prints it from `Config::dump` (`--dump-config`) and its own `Debug`; the
-typed tree carries resolved secrets and is deserialize-only, so nothing serializes it.
+The pipeline is merge → expand → type, and that order keeps secrets out of the logs: both earlier steps work on the
+untyped YAML tree, only the expanded tree deserializes into `document::schema::Document`, and a schema failure is
+reported from the *pre*-expansion tree, naming `$KITHARA_DRM_PROD_KEY` rather than the value behind it. `Config`
+keeps that tree and prints it from `Config::dump` (`--dump-config`) and its own `Debug`; the typed tree holds
+resolved secrets, so it is deserialize-only.
 
 The merge contract (`document::merge`): two mappings merge key by key, so an overlay names only what it changes;
-every other pair replaces, so a sequence such as `playlist.tracks` or `net.compression` is one setting taken whole,
-never appended to. An explicit `null` blanks a key's value and keeps the key — under a crate section the field then
-types as `None`, the same as never naming it, so the crate default stands. An overlay with nothing in it (empty,
-comments only, a bare `---`) leaves the shipped document standing, its root having named no key to blank; one whose
-root is a scalar or a sequence is refused as `LoadError::Schema` naming that file.
+every other pair replaces, so a sequence such as `playlist.tracks` is one setting taken whole, never appended to.
+An explicit `null` blanks a value and keeps the key; under a crate section the field then types as `None`, so the
+crate default stands. An empty overlay (nothing, comments only,
+a bare `---`) leaves the shipped document standing, its root having named no key to blank; one whose root is a
+scalar or sequence is refused as `LoadError::Schema` naming that file.
 
-Secrets are never inlined. A provider's `cipher_key`, and any header value, may be a `$KITHARA_...` reference; the
-values live in the gitignored workspace `.env` or in the build shell, and a reference resolves from the process
-environment first and the table `build.rs` baked behind it second. One that resolves nowhere — unset, or empty —
-stops startup rather than degrading, and `MissingEnv` names every unresolved reference at once with its position
-(`drm.providers[0].cipher_key`). The position is load-bearing: expansion runs over the merged tree, so without it an
-operator cannot tell which document to fix.
+Secrets are never inlined. A provider's `cipher_key` and any header value may be a `$KITHARA_...` reference; the
+values live in the gitignored workspace `.env` or the build shell, and a reference resolves from the process
+environment first, the table `build.rs` baked behind it second. One that resolves nowhere — unset or empty — stops
+startup rather than degrading, and `MissingEnv` names every unresolved reference at once with its position
+(`drm.providers[0].cipher_key`), without which an operator cannot tell which of the merged documents to fix.
 
 `build.rs` emits that table as the crate-private `baked::baked_env`, carrying only the names this build found a value
-for and wrapping each in `obfstr!()` so a shipped secret is not a plain run of bytes in `strings` output; a name it had
-no value for is answered `None` and refused at startup. Builds that talk to a real key server — today the CI
-`network*` lanes — set `KITHARA_DRM_REQUIRE` to any non-empty value, and an upfront pass then validates the whole
-tree, failing the build with every missing name and its position.
+for, each wrapped in `obfstr!()` so a shipped secret is not a plain run of bytes in `strings` output; a name it had no
+value for answers `None` and is refused at startup. Builds that talk to a real key server — today the CI `network*`
+lanes — set `KITHARA_DRM_REQUIRE`, and an upfront pass then fails the build with every missing name and its
+position.
 
 ### Crate sections
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
-in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, `host`, and under
-`gui`, `ui` and `draw_pool`. Which knobs a section may name is the owning crate's contract, and that crate's
-`CONTEXT.md` holds the argument for each knob left out. `host` alone names the output rate: `Deck::build` hands
-`Host::requested_sample_rate` to every player.
+in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, and under `gui`,
+`ui` and `draw_pool`. Which knobs a section may name is the owning crate's contract, and that crate's `CONTEXT.md`
+holds the argument for each knob left out.
+
+The audio session is the exception `app` carries: `HostConfig` is a session-mode enum, Realtime or Offline, not a
+configuration struct, so it has no patch. `app.sample_rate` and `app.output_block_frames` reach the Host builder in
+`main`, both optional, so an unnamed key leaves the Host's default standing. The rate is still spelled once: a Host
+refuses a player whose rate disagrees, so `Deck::build` reads it back off `Host::requested_sample_rate`.
 
 `pools` is the one section with no crate type to carry: `pool_schema!` generates a region type per consumer, so it is
-composed here from `kithara-bufpool`'s `PoolConfigPatch`, one per declared pool. `net` is applied before
+composed here from `kithara-bufpool`'s `PoolConfigPatch`, one per pool. `net` is applied before
 `--insecure`, an override that can turn verification off and never back on.
 
-Two sections predated this shape and are gone: `network`, whose fields moved to `net` and `hls`, and `playback`,
-whose `crossfade_seconds` was a second copy of `PlayerConfig::crossfade_duration`. Naming either is refused rather
-than ignored — that is what makes a move a move — and `a_playback_section_is_rejected` plus two `network` tests hold
-it.
-
-`hls`, `file` and `audio` travel as patches all the way to the track: `AppConfig` carries them,
-`sources::build_resource_config` sets them on `ResourceConfig`, and `kithara-play/src/resource/build.rs` applies each
-onto the configuration it builds there — nothing is copied field by field, so a knob those crates add later reaches
-the built stream with no edit here.
-
-`assets_store` arrives the same way: `main` stops the store builder one step short with `into_config()`, applies the
-patch onto that config, and opens the store from it. `backend` is the one value `Config::assets_store`
-resolves first — an unnamed backend becomes `StorageBackend::default`, a stable root under the system temp directory,
-and deliberately not `AssetStore::open`'s own fallback, a fresh directory per launch that would move the cache
-every run.
+`hls`, `file` and `audio` travel as patches all the way to the track: `AppConfig` carries them and
+`sources::build_resource_config` sets them on `ResourceConfig`, which `kithara-play` applies onto the configuration
+it builds. `assets_store` arrives the same way — `main` stops the store builder one step short with `into_config()`,
+patches that config, and opens the store from it. Nothing is copied field by field, so a knob those crates add later
+needs no edit here. `backend` is the one value `Config::assets_store` resolves first: an unnamed backend becomes
+`StorageBackend::default`, a stable root under the system temp directory, deliberately not `AssetStore::open`'s own
+fallback, a fresh directory per launch that would move the cache every run.
 
 `ui` and `draw_pool` are two top-level sections rather than one nested pair because `UiConfig.draw_buffers` is a
-*built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only reaches one through `DrawBuffers::try_new`.
-`Config::ui` reads `draw_pool` into a `DrawPoolLimits` off the crate default, builds the `DrawBuffers` from it, then
-builds `UiConfig` through `UiConfig::builder().draw_buffers(...)` and applies `ui` onto that value — read before
-build, never onto an already-built `UiConfig`, and never through `UiConfig::default()`, which would build and discard
-a second `PoolRegion`. It returns a `Result`: a `draw_pool:` section can name limits the generated schema refuses,
-and such a document is refused with a message rather than aborting.
+*built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` reaches one only through `DrawBuffers::try_new`.
+`Config::ui` therefore reads `draw_pool` before it builds — never onto an already-built `UiConfig`, and never
+through `UiConfig::default()`, which would build and discard a second `PoolRegion`. It returns a `Result`: a
+`draw_pool:` section can name limits the generated schema refuses, and such a document is refused with a message
+rather than aborting.

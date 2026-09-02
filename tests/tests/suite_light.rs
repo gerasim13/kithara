@@ -13,6 +13,9 @@ mod common;
 
 pub use kithara_integration_tests::bufpool_ext;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod audio_artifact;
+
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 #[path = "common/gapless.rs"]

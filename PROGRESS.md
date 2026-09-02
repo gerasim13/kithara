@@ -13,7 +13,7 @@ the change that lands the work, and keep it short.
   own patch type, so a value is spelled once. `#[derive(Patch)]` in the
   new `kithara-macros` generates every patch and its `apply`; `struct-patch` and
   every hand-written patch struct are gone. The output rate is named once,
-  under `host`. Secrets stay `$KITHARA_...` references and one resolving nowhere
+  under `app`. Secrets stay `$KITHARA_...` references and one resolving nowhere
   stops startup.
 - Harness and document revision. `AGENTS.md` routes instead of restating, and the
   `style` namespace budgets documents with `doc_size`, blocks drift with

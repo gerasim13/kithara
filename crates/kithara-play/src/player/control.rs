@@ -6,6 +6,8 @@ use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
+#[cfg(any(test, feature = "probe"))]
+use crate::bridge::RtMetricsSnapshot;
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
     ResourceConfig,
@@ -57,6 +59,11 @@ where
     {
         self.runtime
             .with_open(|runtime| runtime.prepare_config(config))
+    }
+
+    /// Insert a resource into the resident player's queue.
+    pub fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
+        self.command(|runtime| runtime.insert(resource, item_id, at_position));
     }
 
     /// Plant a completed resource into an existing player slot.
@@ -185,6 +192,10 @@ where
             /// Current engine cost snapshot.
             #[must_use]
             pub fn engine_load(&self) -> EngineLoadSnapshot;
+            /// Read the active audio slot's real-time counters for tests and probes.
+            #[cfg(any(test, feature = "probe"))]
+            #[must_use]
+            pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot>;
             /// Number of EQ bands.
             #[must_use]
             pub fn eq_band_count(&self) -> usize;
@@ -237,6 +248,12 @@ where
     /// Reset all EQ bands.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::reset_eq)
+    }
+
+    /// Apply a completed selection through the resident player runtime.
+    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.select_item(index, autoplay))
     }
 
     /// Apply a completed selection through the resident player runtime.

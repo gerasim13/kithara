@@ -10,6 +10,7 @@ use firewheel::{
     param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
@@ -80,6 +81,7 @@ impl RenderPass {
     /// Render audio for all active tracks into the output buffers.
     pub(crate) fn render_audio(
         &mut self,
+        context: Option<&RenderContext>,
         targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
         frames: usize,
@@ -160,10 +162,9 @@ impl RenderPass {
             }
 
             let mut read_outcome = {
-                let Some(outcome) = tracks
-                    .at_mut(*track_handle)
-                    .map(|track| track.read(&mut read_bufs, &mut mix_bufs, 0..frames, &mut sink))
-                else {
+                let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
+                    track.render(context, &mut read_bufs, &mut mix_bufs, 0..frames, &mut sink)
+                }) else {
                     continue;
                 };
                 playback_started = true;
@@ -192,7 +193,13 @@ impl RenderPass {
                     }
 
                     let Some(outcome) = tracks.at_mut(*next_handle).map(|track| {
-                        track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink)
+                        track.render(
+                            context,
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            &mut sink,
+                        )
                     }) else {
                         continue;
                     };
@@ -221,7 +228,13 @@ impl RenderPass {
                             continue;
                         };
                         next_track.play();
-                        next_track.read(&mut read_bufs, &mut mix_bufs, offset..frames, &mut sink);
+                        next_track.render(
+                            context,
+                            &mut read_bufs,
+                            &mut mix_bufs,
+                            offset..frames,
+                            &mut sink,
+                        );
                         break;
                     }
                 }

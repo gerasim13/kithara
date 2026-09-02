@@ -1,6 +1,7 @@
 use std::{
     mem,
     num::{NonZeroU32, NonZeroUsize},
+    rc::Rc,
 };
 
 use kithara_platform::{
@@ -185,6 +186,21 @@ impl Task for PanicTask {
     }
 }
 
+struct LocalTask {
+    constructed_on: u64,
+    events: mpsc::Sender<(u64, u64)>,
+    _thread_bound: Rc<()>,
+}
+
+impl Task for LocalTask {
+    fn tick(&mut self) -> TickResult {
+        self.events
+            .send((self.constructed_on, thread::current_thread_id()))
+            .ok();
+        TickResult::Done
+    }
+}
+
 struct PanicObserver {
     panicked: mpsc::Sender<TaskId>,
 }
@@ -214,6 +230,30 @@ fn budgets() -> SchedulerBudgets {
         task_burst: 32,
         wait_timeout: Duration::from_millis(10),
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn local_task_is_constructed_and_run_on_the_dispatcher_thread() {
+    let caller = thread::current_thread_id();
+    let worker = crate::Worker::new(crate::WorkerConfig::new());
+    let dispatcher = worker.dispatcher(DispatcherConfig::builder().name("local-task-test").build());
+    let (events, received) = mpsc::channel();
+    let task = dispatcher
+        .reserve(TaskConfig::new())
+        .expect("local task reservation")
+        .start_local(move |_| LocalTask {
+            constructed_on: thread::current_thread_id(),
+            events,
+            _thread_bound: Rc::new(()),
+        })
+        .expect("local task submission");
+
+    let (constructed_on, ticked_on) = received
+        .recv_timeout(Instant::now() + default_timeout())
+        .expect("local task completion");
+    assert_ne!(constructed_on, caller);
+    assert_eq!(constructed_on, ticked_on);
+    drop(task);
 }
 
 fn slot(id: u64, priority: Priority, task: impl Task) -> Slot {

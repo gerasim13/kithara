@@ -1,10 +1,11 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
-use bon::Builder;
-use kithara_macros::Patch;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
+#[cfg(any(test, feature = "probe"))]
+use kithara_play::TransportRevision;
 use kithara_play::{
-    GroupState, PlayError, SessionBinding, SessionDispatcher,
+    GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
@@ -12,10 +13,15 @@ use kithara_warp::{
     SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
-
+mod config;
+#[cfg(feature = "offline")]
+mod offline;
 mod platform;
 
-use platform::Platform;
+pub use config::HostConfig;
+#[cfg(feature = "offline")]
+use offline::OfflineRuntime;
+use platform::{Platform, PlatformResult};
 
 #[cfg(any(test, feature = "probe"))]
 use crate::api::SessionDuckingMode;
@@ -26,26 +32,6 @@ use crate::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
 };
-
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
-
-/// Configuration for the shared output session owned by [`Host`].
-#[derive(Clone, Copy, Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct HostConfig {
-    /// Initial device-rate hint. Physical route changes may update it later.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
-    #[field(get, copy)]
-    sample_rate: NonZeroU32,
-    /// Optional CPAL output callback-size override. `None` preserves Firewheel's default.
-    #[field(get, copy)]
-    output_block_frames: Option<NonZeroU32>,
-}
 
 /// Typed command proxy for one player value exclusively resident in a Host.
 #[derive(fieldwork::Fieldwork)]
@@ -81,7 +67,51 @@ pub struct Host<S> {
     owns_session: bool,
     root_view: RootView,
     dispatcher: Arc<dyn HostDispatcher<S>>,
-    platform: Platform<S>,
+    session: SessionRuntime<S>,
+}
+
+enum SessionRuntime<S> {
+    Realtime(Platform<S>),
+    #[cfg(feature = "offline")]
+    Offline {
+        platform: Platform<S>,
+        runtime: OfflineRuntime<S>,
+    },
+}
+
+impl<S> SessionRuntime<S> {
+    const fn realtime(platform: Platform<S>) -> Self {
+        Self::Realtime(platform)
+    }
+
+    #[cfg(feature = "offline")]
+    const fn offline(platform: Platform<S>, runtime: OfflineRuntime<S>) -> Self {
+        Self::Offline { platform, runtime }
+    }
+
+    const fn platform(&self) -> &Platform<S> {
+        match self {
+            Self::Realtime(platform) => platform,
+            #[cfg(feature = "offline")]
+            Self::Offline { platform, .. } => platform,
+        }
+    }
+
+    const fn platform_mut(&mut self) -> &mut Platform<S> {
+        match self {
+            Self::Realtime(platform) => platform,
+            #[cfg(feature = "offline")]
+            Self::Offline { platform, .. } => platform,
+        }
+    }
+
+    #[cfg(feature = "offline")]
+    const fn offline_runtime_mut(&mut self) -> Option<&mut OfflineRuntime<S>> {
+        match self {
+            Self::Offline { runtime, .. } => Some(runtime),
+            Self::Realtime(_) => None,
+        }
+    }
 }
 
 struct SessionRoot {
@@ -92,9 +122,8 @@ struct SessionRoot {
 }
 
 impl<S> Host<S> {
-    fn session_root(config: HostConfig) -> Result<SessionRoot, PlayError> {
+    fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
-        let sample_rate = config.sample_rate;
         let group = GroupState::unavailable(
             grid_id,
             sample_rate,
@@ -114,14 +143,14 @@ impl<S> Host<S> {
         id: BeatGridId,
         root_view: RootView,
         dispatcher: Arc<dyn HostDispatcher<S>>,
-        platform: Platform<S>,
+        session: SessionRuntime<S>,
     ) -> Self {
         Self {
             id,
             owns_session: true,
             root_view,
             dispatcher,
-            platform,
+            session,
         }
     }
 
@@ -219,7 +248,36 @@ impl<S> Host<S> {
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        self.dispatcher.sample_rate()
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
+            Reply::SampleRate(sample_rate) => Ok(sample_rate),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for sample-rate query".into(),
+            )),
+        }
+    }
+
+    /// Change the canonical session tempo at the next render boundary.
+    ///
+    /// # Errors
+    /// Returns an error when the Host rejects or cannot dispatch the update.
+    pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSessionTempo { tempo })
+    }
+
+    /// Read the canonical session transport revision for probes.
+    ///
+    /// # Errors
+    /// Returns an error when the Host cannot answer the query.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
+            Reply::SessionTransport(snapshot) => Ok(snapshot.revision()),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for transport query".into(),
+            )),
+        }
     }
 
     /// Installs the single post-limiter mix tap.
@@ -236,6 +294,19 @@ impl<S> Host<S> {
     /// Returns an error when graph dispatch fails.
     pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::DisableMixTap)
+    }
+
+    /// Restart the current output route while preserving Host-owned graph state.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot restart its output route.
+    pub fn invalidate_audio_route<R>(&self, reason: R) -> Result<(), PlayError>
+    where
+        R: Into<String>,
+    {
+        self.exec_play_ok(Cmd::InvalidateAudioRoute {
+            reason: reason.into(),
+        })
     }
 
     /// Updates the shared output-session ducking mode.
@@ -273,9 +344,56 @@ impl<S> Host<S> {
     }
 }
 
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Creates one Host with its configured realtime or offline session.
+    ///
+    /// # Errors
+    /// Returns an error when the session root or selected runtime cannot start.
+    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+        match config {
+            HostConfig::Realtime {
+                sample_rate_hint,
+                output_block_frames,
+                ..
+            } => {
+                let root = Self::session_root(sample_rate_hint)?;
+                let (dispatcher, platform) = Platform::realtime(
+                    root.group,
+                    root.view.clone(),
+                    root.sample_rate,
+                    output_block_frames,
+                )
+                .resolve()?;
+                Ok(Self::owner(
+                    root.id,
+                    root.view,
+                    dispatcher,
+                    SessionRuntime::realtime(platform),
+                ))
+            }
+            #[cfg(feature = "offline")]
+            config @ HostConfig::Offline { .. } => {
+                let platform = Platform::offline().resolve()?;
+                let root = Self::session_root(config.sample_rate())?;
+                let (dispatcher, runtime) =
+                    OfflineRuntime::new(config, root.group, root.view.clone())?;
+                Ok(Self::owner(
+                    root.id,
+                    root.view,
+                    dispatcher,
+                    SessionRuntime::offline(platform, runtime),
+                ))
+            }
+        }
+    }
+}
+
 impl<S> Drop for Host<S> {
     fn drop(&mut self) {
-        Platform::close(&mut self.platform, self.id);
+        Platform::close(self.session.platform_mut(), self.id);
         if self.owns_session
             && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
         {
@@ -311,7 +429,7 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
         &mut self,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        Platform::transact(&self.dispatcher, operation)
+        Platform::transact(self.session.platform(), &self.dispatcher, operation)
     }
 }
 
@@ -333,56 +451,40 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn host_config_preserves_output_block_default_and_allows_override() {
-        let default = HostConfig::builder().build();
-        assert_eq!(default.output_block_frames(), None);
+    fn realtime_config_preserves_output_block_default_and_allows_override() {
+        let default = HostConfig::<TestPools>::builder().build();
+        let HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } = default
+        else {
+            panic!("default Host config must be realtime");
+        };
+        assert_eq!(output_block_frames, None);
 
         let frames = NonZeroU32::new(128).expect("test block size is non-zero");
-        let configured = HostConfig::builder().output_block_frames(frames).build();
-        assert_eq!(configured.output_block_frames(), Some(frames));
+        let configured = HostConfig::<TestPools>::builder()
+            .output_block_frames(frames)
+            .build();
+        let HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } = configured
+        else {
+            panic!("realtime builder must create realtime config");
+        };
+        assert_eq!(output_block_frames, Some(frames));
     }
 
     #[kithara::test]
     fn host_root_owns_the_configured_sample_rate() {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-        let config = HostConfig::builder().sample_rate(sample_rate).build();
-        let root = Host::<TestPools>::session_root(config).expect("host root");
+        let config = HostConfig::<TestPools>::builder()
+            .sample_rate_hint(sample_rate)
+            .build();
+        let root = Host::<TestPools>::session_root(config.sample_rate()).expect("host root");
 
         assert_eq!(root.sample_rate, sample_rate);
         assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod document_tests {
-    use kithara_test_utils::kithara;
-
-    use super::{HostConfig, HostConfigPatch, NonZeroU32};
-
-    #[kithara::test(native, flash(false))]
-    fn a_patch_writes_the_sample_rate() {
-        let settings: HostConfigPatch =
-            serde_yaml_ng::from_str("sample_rate: 48000\n").expect("the document types");
-        let mut config = HostConfig::builder().build();
-
-        config.apply(settings);
-
-        assert_eq!(config.sample_rate().get(), 48_000);
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn an_empty_patch_keeps_the_value_the_config_was_built_with() {
-        let settings: HostConfigPatch =
-            serde_yaml_ng::from_str("{}\n").expect("an empty document types");
-        let seeded = NonZeroU32::new(96_000).expect("96000 is not zero");
-        let mut config = HostConfig::builder().sample_rate(seeded).build();
-
-        config.apply(settings);
-
-        assert_eq!(
-            config.sample_rate(),
-            seeded,
-            "a document that names nothing must not reset the built value"
-        );
     }
 }

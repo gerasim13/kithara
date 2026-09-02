@@ -14,7 +14,7 @@ use kithara_play::{
 };
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation,
+    TopologyOperation, TransportRevision,
 };
 
 use super::{
@@ -27,6 +27,10 @@ use crate::Host;
 /// Probe-only access to session-output policy.
 pub trait HostProbe {
     /// # Errors
+    /// Returns an error when the Host cannot read the canonical transport revision.
+    fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
+
+    /// # Errors
     /// Returns an error when the Host cannot read the output policy.
     fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
 
@@ -38,6 +42,7 @@ pub trait HostProbe {
 impl<S> HostProbe for Host<S> {
     delegate::delegate! {
         to self {
+            fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
             #[call(ducking_mode)]
             fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
             #[call(set_ducking_mode)]
@@ -183,7 +188,7 @@ fn attach_player_with_id<B, S>(
     state.publish_root();
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "wasm32"))]
 pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let player = PlayerImpl::new(

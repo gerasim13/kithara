@@ -4,15 +4,15 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, QueueControl, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -23,9 +23,8 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
-    test_defaults::Consts as Shared,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 use url::Url;
@@ -42,7 +41,7 @@ fn install_tracing() {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue<AppPools>,
+    queue: &QueueControl<AppPools>,
     id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -128,7 +127,7 @@ async fn run_delayed_drm_seek(
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<AppPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<AppPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -156,6 +155,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .cancel(shutdown.child())
             .build(),
     );
+    let session_pools = worker.pools().clone();
     let config = AppConfig::builder()
         // The fixture serves its own AES-128 keys; no provider claims 127.0.0.1.
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
@@ -165,15 +165,21 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .store(store)
         .build();
 
+    let session_config = HostConfig::offline(session_pools)
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(session_config.sample_rate())
             .worker(worker)
-            .session(OfflineSession::<AppPools>::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let queue = OfflineQueue::new(
+        session_config,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
 
     let source = super::app_track_source(
         url.as_str(),

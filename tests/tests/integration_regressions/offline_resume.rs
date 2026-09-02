@@ -4,6 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
     hls::{AbrMode, HlsConfigPatch},
+    host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -12,14 +13,14 @@ use kithara::{
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -68,7 +69,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -197,17 +198,22 @@ async fn resumes_after_outage(
         PlayerConfig::builder()
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools).build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
         .initial_abr_mode(AbrMode::manual(0))
@@ -215,7 +221,7 @@ async fn resumes_after_outage(
         .store(store)
         .build();
 
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let ticker = spawn_ticker(queue.control());
     let mut rx = queue.subscribe();
     let id = queue
         .append(TrackSource::Config(Box::new(cfg)))

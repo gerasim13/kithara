@@ -21,6 +21,37 @@ impl SourceEnd {
     }
 }
 
+/// Exact decoded-source interval represented by rendered PCM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct SourceSpan {
+    /// Inclusive decoded source frame.
+    #[field(get, copy)]
+    start: u64,
+    /// Exclusive decoded source frame.
+    #[field(get, copy)]
+    end: u64,
+    /// Sample rate of the decoded source coordinate.
+    #[field(get, copy)]
+    sample_rate: NonZeroU32,
+}
+
+impl SourceSpan {
+    /// Construct a decoded-source interval.
+    #[must_use]
+    pub const fn new(start: u64, end: u64, sample_rate: NonZeroU32) -> Option<Self> {
+        if start > end {
+            return None;
+        }
+        Some(Self {
+            start,
+            end,
+            sample_rate,
+        })
+    }
+}
+
 /// Fetch result from a worker source.
 #[derive(Debug)]
 pub enum Fetch<C> {
@@ -121,5 +152,12 @@ mod tests {
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));
         assert!(validator.is_valid(&next));
+    }
+
+    #[kithara::test]
+    fn source_span_rejects_an_inverted_interval() {
+        let rate = NonZeroU32::new(48_000).expect("test sample rate");
+
+        assert_eq!(SourceSpan::new(2, 1, rate), None);
     }
 }

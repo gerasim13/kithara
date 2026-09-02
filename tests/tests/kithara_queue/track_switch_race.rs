@@ -23,21 +23,21 @@
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
+    offline::OfflineQueue, temp_dir,
 };
 use url::Url;
 
@@ -112,31 +112,40 @@ async fn build_hls(
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -145,7 +154,7 @@ fn build_queue_with_tick(
 }
 
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: Arc<Queue<TestPools>>) {
+async fn run_tick_driver(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -163,25 +172,34 @@ async fn run_tick_driver(queue: Arc<Queue<TestPools>>) {
 /// from the legitimate end-of-`fast` auto-advance to the next queue entry.
 fn build_queue_no_tick(
     temp_dir: &TestTempDir,
-) -> (Arc<Queue<TestPools>>, Downloader, AssetStore<TestPools>) {
+) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -226,7 +244,7 @@ where
 /// current status (so an already-terminal track returns immediately), then
 /// blocks on the event stream — no polling.
 async fn wait_for_loader_done(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -272,7 +290,7 @@ async fn wait_for_loader_done(
 /// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
 /// `current()` (catches an already-current track), then blocks on the event.
 async fn wait_for_current_id(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -322,7 +340,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
 /// current status (catches an already-applied transition), then blocks on the
 /// event stream under `deadline` as a hard safety cap.
 async fn wait_for_status(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     expected: TrackStatus,
     deadline: Duration,
@@ -358,7 +376,10 @@ async fn wait_for_status(
 /// barge-in is itself the absence-over-the-window success. Caller must have
 /// already confirmed `fast` is current, so the only future current-change is
 /// the end-of-`fast` auto-advance this races.
-async fn assert_no_barge_in(queue: &Queue<TestPools>, slow_id: TrackId) -> Result<(), String> {
+async fn assert_no_barge_in(
+    queue: &QueueControl<TestPools>,
+    slow_id: TrackId,
+) -> Result<(), String> {
     let mut rx = queue.subscribe();
     let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,

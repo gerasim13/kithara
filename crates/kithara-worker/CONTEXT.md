@@ -5,6 +5,9 @@
 `Worker` owns shared runtime resources and the root of its cancellation
 subtree. Each `Dispatcher` owns one scheduler thread. Each admitted task owns a
 reservation, a child cancellation token, and a single mutable numeric priority.
+`PendingTask::start` constructs transferable tasks on the caller, while
+`PendingTask::start_local` constructs thread-bound tasks on the dispatcher and
+keeps them there for their complete lifecycle.
 
 The crate contains no playback, analysis, asset, or media policy. Domain crates
 provide `Task` implementations and consume observer events.

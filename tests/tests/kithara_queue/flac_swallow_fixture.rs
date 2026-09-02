@@ -1,8 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -160,8 +163,12 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let recorder = probe_capture::install();
 
-    let mut player = OfflinePlayer::new(OUT_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
     let windows =

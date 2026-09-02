@@ -213,7 +213,9 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     harness.with_player(|player| {
         player.reserve_slots(1);
-        player.replace_item(0, resource, TrackId::allocate());
+        player
+            .replace_item(0, resource, TrackId::allocate())
+            .expect("replace quality-switch fixture item");
         player
             .select_item(0, true)
             .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));

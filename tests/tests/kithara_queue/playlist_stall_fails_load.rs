@@ -3,6 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -11,19 +12,19 @@ use kithara::{
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
+    offline::OfflineQueue, temp_dir,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
 
 async fn wait_for_failed(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
 ) -> Result<String, String> {
@@ -57,7 +58,7 @@ async fn wait_for_failed(
     ))
 }
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -103,17 +104,23 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .build(),
     );
 
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(session.sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let tick_handle = spawn_ticker(Arc::clone(&queue));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
+    let tick_handle = spawn_ticker(queue.control());
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
         .downloader(downloader)

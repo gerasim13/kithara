@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -24,7 +27,7 @@ use crate::{
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     /// Warm-up success gate: the decoder has demonstrably produced PCM.
     const PRE_SEEK_MIN_POSITION_SECS: f64 = 0.25;
@@ -90,8 +93,12 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     // Warm-up is state-driven, not a fixed-size burst: the render races the
     // REAL network + decode pipeline, and under flash the burst's virtual

@@ -4,8 +4,9 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+use kithara_test_macros as kithara;
 
-use crate::{ActiveRegion, RegionPlan, StretchControls};
+use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls};
 
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,8 @@ mod tests;
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    pub(super) context: RenderReader,
+    pub(super) committed: Option<RenderSnapshot>,
     pub(super) controls: Arc<StretchControls>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
@@ -78,6 +81,7 @@ where
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
         controls: Arc<StretchControls>,
+        context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
     ) -> Self {
@@ -85,6 +89,8 @@ where
         let plan = controls.region_plan();
         let target = Self::prepare_target(current_kind, spec, &pools, None, None);
         Self {
+            context,
+            committed: None,
             engine: target.engine,
             retired_engine: None,
             current_kind,
@@ -248,6 +254,47 @@ where
             admitted.saturating_sub(held_source_frames),
             meta.spec.sample_rate,
         ));
+    }
+
+    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        if !self.context.is_current(&snapshot) {
+            return;
+        }
+        let Some((source, _)) = self.rendered_source_end else {
+            return;
+        };
+        let source_start = snapshot.frontier().source();
+        let output_start = i64::from(snapshot.frontier().output());
+        if let Some(committed) = snapshot.advance(self.committed.as_ref(), source, output_frames) {
+            self.render_committed(committed, source_start, output_start);
+        }
+    }
+
+    #[kithara::probe(
+        session_epoch = u64::from(committed.context().session_epoch()),
+        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
+        output_start,
+        output_end = i64::from(committed.frontier().output()),
+        source_start,
+        source_end = committed.frontier().source()
+    )]
+    fn render_committed(
+        &mut self,
+        committed: RenderSnapshot,
+        source_start: u64,
+        output_start: i64,
+    ) {
+        self.committed = Some(committed);
+    }
+
+    /// Last context and frontier committed by a successful worker render.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
+        self.committed.as_ref()
     }
 
     /// Exact decoded-source boundary represented by the latest emitted samples.

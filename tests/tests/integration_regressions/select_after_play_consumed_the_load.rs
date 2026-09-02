@@ -11,7 +11,11 @@
 //!
 //! The engine-start window is a session gate here, so the interleaving is a
 //! rendezvous rather than a timing window.
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -23,17 +27,16 @@ use kithara::{
         tokio,
     },
     play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, ResourceSrc,
-        SessionDispatcher, player::PlayerControlSource,
+        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
+        ResourceSrc, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq, SlotId,
+        player::PlayerControlSource, slot_channels,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
-    kithara,
-    offline::OfflineSession,
-    temp_dir,
+    kithara, temp_dir,
     test_defaults::Consts as Shared,
     waits::wait_for_event,
 };
@@ -44,36 +47,54 @@ const TRACK_COUNT: usize = 2;
 /// Holds the first `StartPlayer` until the test releases it, standing in for
 /// the audio-device stream start that makes the window wide on a real device.
 struct StartGatedSession {
-    inner: Arc<dyn SessionDispatcher<TestPools>>,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    next_player: AtomicU64,
+    next_slot: AtomicU64,
+    nodes: Mutex<Vec<NodeInputs>>,
 }
 
 impl StartGatedSession {
-    fn new(
-        inner: Arc<dyn SessionDispatcher<TestPools>>,
-        entered: mpsc::Sender<()>,
-        release: mpsc::Receiver<()>,
-    ) -> Self {
+    fn new(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
         Self {
-            inner,
             gate: Mutex::new(Some((entered, release))),
+            next_player: AtomicU64::new(1),
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
         }
     }
 }
 
 impl SessionDispatcher<TestPools> for StartGatedSession {
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-        if matches!(cmd, Cmd::StartPlayer { .. })
-            && let Some((entered, release)) = self.gate.lock().take()
-        {
-            entered.send(()).expect("test holds the entered receiver");
-            release.recv().expect("test holds the release sender");
-        }
-        self.inner.exec(cmd)
+        let reply = match cmd {
+            Cmd::StartPlayer { .. } => {
+                if let Some((entered, release)) = self.gate.lock().take() {
+                    entered.send(()).expect("test holds the entered receiver");
+                    release.recv().expect("test holds the release sender");
+                }
+                Reply::Ok
+            }
+            Cmd::RegisterPlayer { .. } => {
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+            }
+            Cmd::AllocateSlot { .. } => {
+                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+                let (inputs, control) = slot_channels(SharedEq::new(10));
+                self.nodes.lock().push(inputs);
+                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+            }
+            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
+                None,
+                Shared::NON_ZERO_SAMPLE_RATE.get(),
+            )),
+            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
+            _ => Reply::Ok,
+        };
+        Ok(reply)
     }
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        self.inner.consumer_wake_mode()
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
@@ -114,11 +135,7 @@ fn resource_config(
 async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTempDir) {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let session = Arc::new(StartGatedSession::new(
-        OfflineSession::arc_auto(),
-        entered_tx,
-        release_rx,
-    ));
+    let session = Arc::new(StartGatedSession::new(entered_tx, release_rx));
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {

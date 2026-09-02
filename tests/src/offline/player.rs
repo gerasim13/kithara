@@ -1,213 +1,127 @@
-use std::sync::atomic::Ordering;
-
-use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
     audio::AudioReader,
+    events::{Event, EventReceiver, PlayerEvent},
+    host::HostConfig,
     platform::sync::Arc,
     play::{
-        PlayerNode, Resource, SharedEq, TrackTransition,
-        bridge::{PlaybackShared, PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
-        rt::track::PlayerResource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
+        bridge::RtMetricsSnapshot, player::PlayerControl,
     },
 };
-use ringbuf::traits::{Consumer, Producer};
 
-use super::backend::{OfflineBackend, OfflineConfig};
-use crate::bufpool_ext::{Pools, pools};
+use super::{OfflineResident, host::offline_pools};
+use crate::bufpool_ext::TestPools;
 
+/// Product Player and Host wired for deterministic finite rendering.
 pub struct OfflinePlayer {
-    pools: Pools,
-    playback: Arc<PlaybackShared>,
-    ctx: FirewheelCtx<OfflineBackend>,
-    control: SlotControl,
+    events: EventReceiver,
+    player: OfflineResident<PlayerImpl<TestPools>, TestPools>,
 }
 
 impl OfflinePlayer {
-    const OFFLINE_BLOCK_FRAMES: u32 = 512;
-
-    /// Create an offline player with stereo output at the given sample rate.
+    /// Create an offline player from the product session configuration.
     ///
     /// # Panics
     ///
-    /// Panics if the offline audio stream or graph cannot be initialised.
+    /// Panics if the product offline Host cannot be initialised.
     #[must_use]
-    pub fn new(sample_rate: u32) -> Self {
-        let fw_config = FirewheelConfig {
-            num_graph_outputs: ChannelCount::STEREO,
-            ..FirewheelConfig::default()
-        };
-        let mut ctx = FirewheelCtx::<OfflineBackend>::new(fw_config);
-
-        let stream_config = OfflineConfig {
-            sample_rate,
-            block_frames: Self::OFFLINE_BLOCK_FRAMES,
-        };
-        ctx.start_stream(stream_config)
-            .expect("BUG: start offline stream");
-
-        let (inputs, control) = slot_channels(SharedEq::new(0));
-        let playback = Arc::clone(&control.playback);
-        let pools = pools();
-
-        let player_node = PlayerNode::new(inputs, pools.clone());
-        let node_id = ctx.add_node(player_node, None);
-        let graph_out = ctx.graph_out_node_id();
-        ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
-            .expect("BUG: connect player to output");
-        ctx.update().expect("BUG: initial graph update");
-
-        Self {
-            pools,
-            playback,
-            ctx,
-            control,
-        }
+    pub fn new(session: HostConfig<TestPools>) -> Self {
+        let sample_rate = session.sample_rate();
+        let pools = offline_pools(&session).clone();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(sample_rate)
+                .worker(worker)
+                .build(),
+        );
+        let events = player.subscribe();
+        let player = OfflineResident::new(session, player)
+            .unwrap_or_else(|error| panic!("create product offline player: {error}"));
+        Self { events, player }
     }
 
-    /// Load a resource as a track and trigger `FadeIn` crossfade.
+    fn control(&self) -> PlayerControl<TestPools> {
+        self.player.control()
+    }
+
+    /// Load one resource and start playback.
     ///
     /// # Panics
     ///
-    /// Panics if the command channel is full.
-    pub fn load_and_fadein(&mut self, resource: Resource, src: &str) {
-        let src: Arc<str> = Arc::from(src);
-        let pr = PlayerResource::new(resource, Arc::clone(&src), &self.pools)
-            .expect("offline player resource fits the test pool budget");
-        // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
-        // does when a resource crosses to the audio thread. Without it a later `seek` would move
-        // the media clock while the source stayed put.
-        let item_id = kithara::events::TrackId::allocate();
-        let seek = pr.seek_handle();
-        self.control
-            .cmd_tx
-            .try_push(PlayerCmd::LoadTrack {
-                resource: Box::new(pr),
-                item_id,
-            })
-            .expect("BUG: send LoadTrack");
-        if let Some(handle) = seek {
-            self.control.bind_seek(item_id, handle);
-        }
-        self.control
-            .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)))
-            .expect("BUG: send FadeIn");
-        self.control
-            .cmd_tx
-            .try_push(PlayerCmd::SetPaused(false))
-            .expect("BUG: send SetPaused");
+    /// Panics if the product player rejects the resource.
+    pub fn load_and_fadein(&mut self, resource: Resource) {
+        let control = self.control();
+        control.reserve_slots(1);
+        control
+            .replace_item(0, resource, kithara::events::TrackId::allocate())
+            .expect("replace offline player item");
+        control.play();
     }
 
     /// Set the transition duration used by the next load.
-    ///
-    /// # Panics
-    /// Panics if the command channel is full.
     pub fn set_fade_duration(&mut self, seconds: f32) {
-        self.control
-            .cmd_tx
-            .try_push(PlayerCmd::SetFadeDuration(seconds))
-            .expect("BUG: send SetFadeDuration");
+        self.control().set_crossfade_duration(seconds);
     }
 
     /// Snapshot the real-time counters owned by this player slot.
     #[must_use]
     pub fn metrics(&self) -> RtMetricsSnapshot {
-        self.playback.metrics().snapshot()
+        self.control().rt_metrics().unwrap_or_default()
     }
 
     /// Current playback position in seconds.
+    #[must_use]
     pub fn position(&self) -> f64 {
-        self.playback.position.load(Ordering::Relaxed)
+        self.control().position_seconds().unwrap_or_default()
     }
 
-    /// Number of times `process()` was called.
-    pub fn process_count(&self) -> u64 {
-        self.playback.process_count.load(Ordering::Relaxed)
-    }
-
-    /// Render `frames` of audio. Returns interleaved stereo output.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the graph update or backend access fails.
+    /// Render `frames` of interleaved stereo audio through the product Host.
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
-        self.ctx.update().expect("BUG: graph update");
-        let output = self
-            .ctx
-            .active_backend_mut()
-            .expect("BUG: backend active")
-            .render(frames);
-        self.drain_trash();
+        let output = self.player.render(frames);
+        self.control().process_notifications();
         output
     }
 
-    /// Send a seek command to the processor.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the command channel is full.
-    pub fn seek(&mut self, seconds: f64, seek_epoch: u64) {
-        self.playback.seek_epoch.store(seek_epoch, Ordering::SeqCst);
-        // Begin off the render loop, then hand the processor the re-base.
-        self.control
-            .begin_seek(kithara::platform::time::Duration::from_secs_f64(seconds));
-        self.control
-            .cmd_tx
-            .try_push(PlayerCmd::Seek {
-                seconds,
-                seek_epoch,
-            })
-            .expect("BUG: send Seek");
+    /// Seek through the product player. The product runtime owns seek epochs.
+    pub fn seek(&mut self, seconds: f64, _seek_epoch: u64) {
+        self.control()
+            .seek_seconds(seconds)
+            .unwrap_or_else(|error| panic!("seek offline player: {error}"));
     }
 
-    /// Drain pending processor notifications.
-    ///
-    /// Tests use this to discriminate between a track that ended/failed
-    /// cleanly (notification arrives within the observation window) and
-    /// a pipeline stuck in a recreate-loop (no terminal notification —
-    /// position stays pinned at the seek target).
+    /// Drain the product event stream into the scenario observation tags.
     pub fn take_notification_kinds(&mut self) -> Vec<NotificationKind> {
-        let mut out = Vec::new();
-        while let Some(n) = self.control.notif_rx.try_pop() {
-            use kithara::play::PlayerNotification as N;
-            out.push(match n {
-                N::Loaded { .. } => NotificationKind::Loaded,
-                N::Unloaded { .. } => NotificationKind::Unloaded,
-                N::HandoverRequested => NotificationKind::HandoverRequested,
-                N::PlaybackStarted { .. } => NotificationKind::PlaybackStarted,
-                N::PlaybackStopped { .. } => NotificationKind::PlaybackStopped,
-                N::Requested => NotificationKind::Requested,
-                N::Changed { .. } => NotificationKind::Changed,
-                N::FadingIn { .. } => NotificationKind::FadingIn,
-                N::FadingOut { .. } => NotificationKind::FadingOut,
-                N::RateChanged { .. } => continue,
-            });
+        self.control().process_notifications();
+        let mut notifications = Vec::new();
+        while let Ok(envelope) = self.events.try_recv() {
+            let kind = match envelope.event {
+                Event::Player(PlayerEvent::PlaybackStarted { .. }) => {
+                    Some(NotificationKind::PlaybackStarted)
+                }
+                Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })
+                | Event::Player(PlayerEvent::ItemDidFail { .. }) => {
+                    Some(NotificationKind::PlaybackStopped)
+                }
+                Event::Player(PlayerEvent::PrefetchRequested) => Some(NotificationKind::Requested),
+                Event::Player(PlayerEvent::HandoverRequested) => {
+                    Some(NotificationKind::HandoverRequested)
+                }
+                _ => None,
+            };
+            notifications.extend(kind);
         }
-        self.drain_trash();
-        out
-    }
-
-    fn drain_trash(&mut self) {
-        while let Some(track) = self.control.trash_rx.try_pop() {
-            if let Some(seek) = track.seek_handle() {
-                self.control.unbind_seek(track.item_id(), &seek);
-            }
-        }
+        notifications
     }
 }
 
-/// Tag for `PlayerNotification` variants.
+/// Test observation tags retained for scenario assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
-    Loaded,
-    Unloaded,
     HandoverRequested,
     PlaybackStarted,
     PlaybackStopped,
     Requested,
-    Changed,
-    FadingIn,
-    FadingOut,
 }
 
 /// Thin wrapper around [`Resource::from_reader`] for tests.
@@ -218,9 +132,7 @@ where
     Resource::from_reader(reader, None)
 }
 
-/// Thin wrapper around [`Resource::from_reader`] with an explicit `src`
-/// tag, used by harness tests that match `ItemDidPlayToEnd { src, .. }`
-/// on the bus.
+/// Thin wrapper around [`Resource::from_reader`] with an explicit source tag.
 pub fn resource_from_reader_with_src<R, S>(reader: R, src: S) -> Resource
 where
     R: AudioReader + 'static,

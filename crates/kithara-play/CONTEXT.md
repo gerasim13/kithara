@@ -101,9 +101,10 @@ unconditionally — the queue is their owner), `block_on_underrun` (only the
 offline harness sets it; a real-time host callback can never block),
 `eq_layout` (always a generator output; `Deck::build` derives it from
 `AppConfig::eq_bands`, and a custom layout arrives at runtime through
-`PlayerImpl::set_eq_layout`), and `sample_rate` (`HostConfig` owns the output
-rate and a Host refuses a player whose rate disagrees — see Engine Lifecycle
-below; the document names it once, under `host`).
+`PlayerImpl::set_eq_layout`), and `sample_rate` (the Host owns the output rate
+and refuses a player whose rate disagrees — see Engine Lifecycle below;
+`Deck::build` reads it back off `Host::requested_sample_rate`, and the document
+names it once, as `app.sample_rate`).
 
 `ResourceConfig<S, B>` is where a document's HLS, file, and audio values wait for
 the track that will use them. It carries them as patches — `HlsConfigPatch`,

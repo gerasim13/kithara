@@ -152,6 +152,14 @@ pub struct AppConfig {
     /// Band count of the EQ layout every deck's player graph is built with.
     #[builder(default = 3)]
     pub eq_bands: usize,
+    /// Output rate this application asks its audio session for. `None` leaves
+    /// `HostConfig`'s own default standing: the Host owns the product default
+    /// and refuses a player whose rate disagrees, so this names an override
+    /// and every deck's player still reads the rate back off the Host.
+    pub sample_rate: Option<NonZeroU32>,
+    /// Native output callback size the audio session is asked for. `None`
+    /// leaves the backend's own block size in place.
+    pub output_block_frames: Option<NonZeroU32>,
     /// Where this application reads its UI package from. What is found there
     /// is laid over the documents this build carries, so the interface can be
     /// changed without a rebuild. A path that does not exist means no package
@@ -187,6 +195,8 @@ impl fmt::Debug for AppConfig {
             .field("broadcast_tap_lead", &self.broadcast_tap_lead)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
+            .field("sample_rate", &self.sample_rate)
+            .field("output_block_frames", &self.output_block_frames)
             .field("beat_analysis", &self.beat_analysis)
             .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
             .field("audio", &self.audio)

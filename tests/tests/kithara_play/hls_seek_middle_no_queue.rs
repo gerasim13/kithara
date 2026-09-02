@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -24,7 +27,7 @@ use crate::{
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     /// Minimum seconds of audio the render loop pumps after the seek
     /// before checking the landing. The loop returns on the actual
@@ -227,8 +230,12 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(

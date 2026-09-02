@@ -15,7 +15,6 @@ use kithara::{
     audio::AudioConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
-    host::HostConfigPatch,
     net::NetOptionsPatch,
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
@@ -247,15 +246,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Knobs the document sets on the audio Host, which owns the output
-    /// sample rate every deck's player is then built with. The rate is named
-    /// here and nowhere else: a Host refuses a player whose rate disagrees
-    /// with its own, so `PlayerConfig::sample_rate` carries `#[patch(skip)]`.
-    #[must_use]
-    pub fn host(&self) -> HostConfigPatch {
-        self.document.host.clone()
-    }
-
     /// Knobs the document sets on the player, threaded into every deck's
     /// `PlayerConfig`.
     #[must_use]
@@ -363,6 +353,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError, StorageBackend};
+    use crate::pools::AppPools;
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -634,21 +625,25 @@ mod tests {
         assert_eq!(config.assets_store().backend, Some(StorageBackend::Memory));
     }
 
-    /// The Host owns the output sample rate, so `host` is the one section
-    /// that may name it; `PlayerConfig::sample_rate` carries `#[patch(skip)]`
-    /// and every deck's player is built from `Host::requested_sample_rate`.
-    /// Seeded off the `HostConfig` default (44100) so the assertion cannot
-    /// pass on a patch that was never applied.
+    /// The Host owns the output rate -- it refuses a player whose rate
+    /// disagrees, and `Deck::build` reads every player's rate back off
+    /// `Host::requested_sample_rate` -- so `PlayerConfig::sample_rate` carries
+    /// `#[patch(skip)]` and the document names the rate once. It names it
+    /// under `app`, not `host`: `HostConfig` is a session-mode enum with no
+    /// patch of its own, so `main` reads the key off the built `AppConfig` and
+    /// hands it to the Host builder. Seeded off the Host's own default (44100)
+    /// so the assertion cannot pass on a key that never arrived.
     #[kithara::test(native, flash(false))]
-    fn a_document_names_the_output_rate_on_the_host_section() {
+    fn a_document_names_the_output_rate_on_the_app_section() {
         let dir = tempdir();
-        let path = write(&dir, "host-rate", "host:\n  sample_rate: 48000\n");
+        let path = write(&dir, "output-rate", "app:\n  sample_rate: 48000\n");
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
-        let mut config = HostConfig::builder().build();
-        config.apply(document.host());
+        let host = HostConfig::<AppPools>::builder()
+            .maybe_sample_rate_hint(document.app().sample_rate)
+            .build();
 
-        assert_eq!(config.sample_rate().get(), 48_000);
+        assert_eq!(host.sample_rate().get(), 48_000);
     }
 
     /// The proof the section is gone rather than merely unread: `network` no

@@ -66,7 +66,7 @@ pub fn crossfader_gain(bus: CrossfaderBus, position: f32) -> Result<f32, PlayErr
     Ok(gain)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 

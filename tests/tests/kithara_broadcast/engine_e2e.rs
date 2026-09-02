@@ -13,7 +13,7 @@ use kithara::{
         },
         time::Duration,
     },
-    play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
+    play::{MixTapWriter, Resource},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -152,10 +152,8 @@ impl OnAir {
         let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
         let drops = Arc::new(AtomicU64::new(0));
         harness
-            .session()
-            .exec_ok(Cmd::EnableMixTap {
-                writer: MixTapWriter::new(pcm, Arc::clone(&drops)),
-            })
+            .host()
+            .install_mix_tap(MixTapWriter::new(pcm, Arc::clone(&drops)))
             .expect("enable the mix tap");
 
         let config = BroadcastConfig::builder()

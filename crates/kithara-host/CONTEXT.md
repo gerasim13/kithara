@@ -15,13 +15,40 @@ and playback flow. `kithara-warp` owns synchronization and warp contracts. The
 dependency direction is `kithara-host -> kithara-play` and
 `kithara-host -> kithara-warp`; neither lower crate may depend on the Host.
 
+## Offline rendering
+
+`Host` is the sole composition root for both realtime and offline sessions.
+`HostConfig<S>` directly selects the platform device backend or offline
+renderer; there is no nested session config or parallel offline Host type.
+The offline mode owns the same root group, Firewheel graph, limiter, transport,
+and member insertion path as realtime. Only its backend and scheduler differ.
+The backend starts lazily on the first render when no player has started it
+yet, so an empty master mix is valid silence rather than an unavailable graph.
+
+Its renderer consumes one absolute finite frame range at a time. It may skip
+forward by rendering undisclosed frames, never rewinds an already consumed
+timeline, and writes only the requested range to `RenderSink` in blocks bounded
+by the offline `HostConfig::max_block_frames`. The same config supplies the
+composition root's `PoolRegion<S>`; each block is acquired from its `f32` pool
+and returned after the sink call, preserving the shared hard budget.
+Signal-format mismatch, cancellation, backend failure, and sink failure are
+terminal for that request. The composition owner finalizes the sink on success
+and drops it on error; Host does not own storage or encoding.
+
+The offline session is one `kithara-worker` task. Worker, dispatcher, and task
+budgets come from the offline Host config; rendering is unpaced by default and
+runs as fast as the caller requests. Optional pacing is probe-only and advances
+the same canonical cursor, so deterministic finite capture must not combine it
+with explicit render requests.
+
 ## Runtime boundary
 
-The existing `kithara-engine` session thread is the canonical Host owner and the
-lower PlayerSession actuator. It owns the root group, member values, Firewheel
-context, and graph commands. Closing a player remains a caller-side two-phase
-operation: close the runtime first, then detach the member. Calling close from
-the owner loop could dispatch back into that same loop and deadlock.
+The selected session runtime is the canonical Host actuator. Realtime uses the
+platform session owner; offline uses one `kithara-worker` task. It owns the root
+group, member values, Firewheel context, graph commands, and offline cursor.
+Closing a player remains a caller-side two-phase operation: close the runtime
+first, then detach the member. Calling close from the owner loop could dispatch
+back into that same loop and deadlock.
 
 Terminal shutdown first drops the command receiver, then drops session state,
 then acknowledges the Host. This order disconnects queued callers before
@@ -77,32 +104,20 @@ rejection or fallback state.
 
 ## Route and sample-rate invariant
 
-`HostConfig` is the only product default for the initial output sample rate.
-Each inserted Player is built for an explicit initial rate and the one-shot
-`SessionBinding` carries only the canonical Host dispatcher. Insertion queries
-that session and rejects a mismatch before the Player can register or start.
-Session register/start commands derive their rate from the same query rather
-than accepting another caller-supplied value.
+The selected `HostConfig` mode is the only product default for the initial
+output sample rate. Its realtime variant also owns the optional native output
+block override; leaving it unset preserves the backend default. Each inserted Player
+is built for an explicit initial rate and the one-shot `SessionBinding` carries
+only the canonical Host dispatcher. Insertion queries that session and rejects
+a mismatch before the Player can register or start. Session register/start
+commands derive their rate from the same query rather than accepting another
+caller-supplied value.
 
 Route changes keep the existing flow: the Host observes the device change and
 the Player receives the resulting sample-rate update through its current
 control path. Rebuilding the output graph is reserved for a physical route
 change. Decode resampling, the Stream-to-decode hook, worker scheduling, fades,
 and playback semantics are not redesigned by this extraction.
-
-## Configuration document
-
-`HostConfig` is this crate's one Host configuration, and `#[derive(Patch)]`
-generates `HostConfigPatch`, what a document's `host:` section may say:
-`sample_rate` and `output_block_frames`. Nothing is skipped -- both values are
-plain product defaults a deployment may name.
-
-`sample_rate` is named here and nowhere else. It is the invariant above read
-from the other end: the rate a Host is built with is the rate every Player
-inserted into it must carry, so a second document key on the player would be a
-second writable spelling of one value. `PlayerConfig::sample_rate` therefore
-carries `#[patch(skip)]`, and `kithara-app`'s `Deck::build` reads
-`Host::requested_sample_rate` and hands it to the player it builds.
 
 ## Migration rule
 

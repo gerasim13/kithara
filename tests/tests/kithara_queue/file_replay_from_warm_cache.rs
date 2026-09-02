@@ -7,6 +7,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -15,12 +16,12 @@ use kithara::{
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -31,7 +32,7 @@ use url::Url;
 use crate::bufpool_ext::{TestPools, pools};
 
 struct Session {
-    queue: Arc<Queue<TestPools>>,
+    queue: OfflineQueue<TestPools>,
     downloader: Downloader,
     store: AssetStore<TestPools>,
     flush_hub: Arc<FlushHub>,
@@ -39,7 +40,7 @@ struct Session {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -66,16 +67,21 @@ fn build_session(cache_path: &Path) -> Session {
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools.clone())
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
