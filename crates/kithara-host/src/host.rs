@@ -48,6 +48,9 @@ pub struct RealtimeSessionConfig {
     #[builder(default = DEFAULT_SAMPLE_RATE)]
     #[field(get, copy)]
     sample_rate_hint: NonZeroU32,
+    /// Optional native output callback-size override. `None` preserves the backend default.
+    #[field(get, copy)]
+    output_block_frames: Option<NonZeroU32>,
 }
 
 impl Default for RealtimeSessionConfig {
@@ -221,6 +224,12 @@ impl<S> Host<S> {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(dispatcher))?;
         Ok((grid_id, player.control()))
+    }
+
+    /// Returns the session rate used before the output device is measured.
+    #[must_use]
+    pub fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.root_view.grid().axis().sample_rate()
     }
 
     fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
@@ -409,9 +418,13 @@ where
         match config.session {
             SessionConfig::Realtime(config, _) => {
                 let root = Self::session_root(config.sample_rate_hint)?;
-                let (dispatcher, platform) =
-                    Platform::realtime(root.group, root.view.clone(), root.sample_rate)
-                        .resolve()?;
+                let (dispatcher, platform) = Platform::realtime(
+                    root.group,
+                    root.view.clone(),
+                    root.sample_rate,
+                    config.output_block_frames,
+                )
+                .resolve()?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
@@ -485,5 +498,37 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
             "host topology operation did not change topology".into(),
         )),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::testing::TestPools;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn realtime_config_preserves_output_block_default_and_allows_override() {
+        let default = RealtimeSessionConfig::builder().build();
+        assert_eq!(default.output_block_frames(), None);
+
+        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let configured = RealtimeSessionConfig::builder()
+            .output_block_frames(frames)
+            .build();
+        assert_eq!(configured.output_block_frames(), Some(frames));
+    }
+
+    #[kithara::test]
+    fn host_root_owns_the_configured_sample_rate() {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let config = RealtimeSessionConfig::builder()
+            .sample_rate_hint(sample_rate)
+            .build();
+        let root = Host::<TestPools>::session_root(config.sample_rate_hint()).expect("host root");
+
+        assert_eq!(root.sample_rate, sample_rate);
+        assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

@@ -423,11 +423,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
-    let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
-            .pacing(Duration::from_millis(10))
+    let session_config = OfflineSessionConfig::builder(pools)
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(session_config.sample_rate())
+            .worker(worker)
             .build(),
+    );
+    let queue = OfflineQueue::new(
+        session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
     .expect("create product offline queue");

@@ -104,12 +104,14 @@ rejection or fallback state.
 
 ## Route and sample-rate invariant
 
-`HostConfig` is the only product default for the initial output sample rate.
-Each inserted Player is built for an explicit initial rate and the one-shot
-`SessionBinding` carries only the canonical Host dispatcher. Insertion queries
-that session and rejects a mismatch before the Player can register or start.
-Session register/start commands derive their rate from the same query rather
-than accepting another caller-supplied value.
+The selected `SessionConfig` is the only product default for the initial output
+sample rate. `RealtimeSessionConfig` also owns the optional native output block
+override; leaving it unset preserves the backend default. Each inserted Player
+is built for an explicit initial rate and the one-shot `SessionBinding` carries
+only the canonical Host dispatcher. Insertion queries that session and rejects
+a mismatch before the Player can register or start. Session register/start
+commands derive their rate from the same query rather than accepting another
+caller-supplied value.
 
 Route changes keep the existing flow: the Host observes the device change and
 the Player receives the resulting sample-rate update through its current

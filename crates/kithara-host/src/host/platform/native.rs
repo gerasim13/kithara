@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
@@ -49,12 +49,14 @@ impl<S> Platform<S> {
     pub(in crate::host) fn realtime(
         group: GroupState<PlayerMember>,
         view: RootView,
-        sample_rate: std::num::NonZeroU32,
+        sample_rate: NonZeroU32,
+        output_block_frames: Option<NonZeroU32>,
     ) -> StartedPlatform<S>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let dispatcher = crate::session::native::spawn::<S>(group, view, sample_rate);
+        let dispatcher =
+            crate::session::native::spawn::<S>(group, view, sample_rate, output_block_frames);
         (dispatcher, Self::owner())
     }
 

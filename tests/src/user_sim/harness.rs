@@ -141,12 +141,18 @@ impl SimHarness {
                 root: cache_path.into(),
             })
             .build();
+        let session_config = OfflineSessionConfig::builder(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
-        let queue_owner = OfflineQueue::new(
-            OfflineSessionConfig::builder(pools.clone())
-                .pacing(Duration::from_millis(10))
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(session_config.sample_rate())
+                .worker(worker)
                 .build(),
+        );
+        let queue_owner = OfflineQueue::new(
+            session_config,
             Queue::new(
                 QueueConfig::builder()
                     .player(player)
