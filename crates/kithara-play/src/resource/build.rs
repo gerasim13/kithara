@@ -1,7 +1,7 @@
 use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
-use kithara_file::{FileConfig, FileSrc};
+use kithara_file::{FileConfig, FileSettings, FileSrc};
 use kithara_hls::{HlsConfig, HlsSettings};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
@@ -61,13 +61,17 @@ where
         let file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
             .downloader(downloader)
-            .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
-            .maybe_extension(extension.clone())
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
+            .settings(
+                FileSettings::builder()
+                    .maybe_look_ahead_bytes(self.look_ahead_bytes)
+                    .maybe_extension(extension.clone())
+                    .build(),
+            )
             .build();
         AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())

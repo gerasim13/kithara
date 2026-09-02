@@ -141,6 +141,27 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
   `Content-Range`, a mismatched interval, an unknown `*` representation total, or an unknown-size
   bounded full response fails before any byte is written.
 
+## Configuration document entry point
+
+`FileSettings` is the second way in: a configuration document types into the generated
+`FileSettingsPatch` and `apply` writes only the fields the document names, leaving the rest of
+`FileConfig::settings` standing. `extension: Option<String>` and `look_ahead_bytes: Option<u64>`
+both carry `#[patch(skip_wrap)]` so a document names a bare value under `extension` /
+`look_ahead_bytes`, not `Some(value)` — the same mechanism `kithara-hls`'s `HlsSettings` uses for
+its own already-optional knobs. `tmp_claim_poll_interval` carries
+`#[patch(attribute(serde(with = "humantime_serde::option")))]`, so a document writes `25ms` rather
+than a raw millisecond count.
+
+No `file:` document section exists yet — `kithara-app` never builds a `FileConfig` today (the file
+source is built inside `kithara-play/src/resource/build.rs`), so wiring a `file:` key into
+`kithara-app`'s document schema would parse and configure nothing. A later task adds the section
+together with the reader that consumes it.
+
+`src`, `discriminator`, and `headers` are per-stream input, not crate-wide policy: they name what
+is being fetched and how, not a tunable default. `store`, `pools`, `bus`, `cancel`, and `downloader`
+are live handles or `S`-typed values a document has no way to name, the same reasoning
+`kithara-hls::HlsConfig` applies to its own wiring fields.
+
 Cache identity: naming is owned by the layout registered for the `File` marker in the shared
 `AssetStore`. The stream binds `AssetSource::Remote { url, discriminator }` through
 `store.scope::<File>()` and mints one `AssetResource::Source`; its extension comes from the

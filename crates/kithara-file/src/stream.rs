@@ -17,7 +17,7 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use crate::{
-    config::{FileConfig, FileSrc},
+    config::{FileConfig, FileSettings, FileSrc},
     coord::FileCoord,
     error::SourceError,
     session::{
@@ -260,10 +260,10 @@ where
     ) -> Result<FileSource<S>, SourceError> {
         let key = local_key(path)?;
         let store = config.store.clone();
-        let reader_event_capacity = config.reader_event_capacity;
+        let reader_event_capacity = config.settings.reader_event_capacity;
         let bus = config
             .bus
-            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
+            .unwrap_or_else(|| EventBus::new(config.settings.event_channel_capacity));
         let reader = store.open_resource(&key, None).map_err(|error| {
             let source_error = SourceError::Assets(error);
             publish_open_error(Some(&bus), &source_error);
@@ -293,15 +293,19 @@ where
             bus,
             discriminator,
             downloader,
-            event_channel_capacity,
-            extension,
             headers,
-            look_ahead_bytes,
             pools,
-            reader_event_capacity,
+            settings,
             store,
             ..
         } = config;
+        let FileSettings {
+            event_channel_capacity,
+            extension,
+            look_ahead_bytes,
+            reader_event_capacity,
+            ..
+        } = settings;
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pools));
         let backend = store;
         let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
@@ -358,7 +362,7 @@ where
         config: FileConfig<S>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, StreamSourceError> {
-        let poll_interval = config.tmp_claim_poll_interval;
+        let poll_interval = config.settings.tmp_claim_poll_interval;
         let mut progress = TmpClaimProgress::default();
         loop {
             if cancel.is_cancelled() {

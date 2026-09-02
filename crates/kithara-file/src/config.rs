@@ -7,6 +7,7 @@ use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
+use struct_patch::Patch;
 use url::Url;
 
 /// Source of a file stream: either a remote URL or a local path.
@@ -16,6 +17,50 @@ pub enum FileSrc {
     Remote(Url),
     /// Local file accessed directly from disk.
     Local(PathBuf),
+}
+
+/// Streaming knobs a configuration document can override. Extracted out of
+/// [`FileConfig`] so a document reaches exactly these tunables and never the
+/// per-call wiring (`store`, `pools`, `bus`, `cancel`, `downloader`) or
+/// per-stream input (`src`, `discriminator`, `headers`) that stay on
+/// [`FileConfig`] itself.
+#[derive(Clone, Debug, Builder, Patch)]
+#[builder(state_mod(vis = "pub"))]
+#[patch(name = "FileSettingsPatch")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
+#[non_exhaustive]
+pub struct FileSettings {
+    /// Explicit source-extension hint used before the URL-path extension.
+    #[patch(skip_wrap)]
+    pub extension: Option<String>,
+    /// Event bus channel capacity (used when `bus` is not provided).
+    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    pub event_channel_capacity: usize,
+    /// Ring depth for the decode-core to shell reader-event hand-off. A decode
+    /// pass emits at most one progress event per decoded chunk, so the default
+    /// bounds the worst-case post-seek skip burst without blocking the decode
+    /// core.
+    #[builder(default = 256)]
+    pub reader_event_capacity: usize,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    pub tmp_claim_poll_interval: Duration,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    #[patch(skip_wrap)]
+    pub look_ahead_bytes: Option<u64>,
+}
+
+impl Default for FileSettings {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Configuration for file streaming.
@@ -44,28 +89,12 @@ where
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
-    /// Explicit source-extension hint used before the URL-path extension.
-    pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: Option<u64>,
-    /// Event bus channel capacity (used when `bus` is not provided).
-    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
-    pub event_channel_capacity: usize,
-    /// Ring depth for the decode-core to shell reader-event hand-off. A decode
-    /// pass emits at most one progress event per decoded chunk, so the default
-    /// bounds the worst-case post-seek skip burst without blocking the decode
-    /// core.
-    #[builder(default = 256)]
-    pub reader_event_capacity: usize,
-    /// Poll interval while a sibling `AssetStore` instance holds the
-    /// atomic-chunked tmp for this file's canonical path. The default is short
-    /// enough that the observed ~67 ms race window in
-    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
-    /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    pub tmp_claim_poll_interval: Duration,
+    /// Streaming knobs a configuration document can override. See
+    /// [`FileSettings`] for what a document may say.
+    #[builder(default)]
+    pub settings: FileSettings,
 }
 
 impl<S> Clone for FileConfig<S>
@@ -81,12 +110,8 @@ where
             cancel: self.cancel.clone(),
             discriminator: self.discriminator.clone(),
             downloader: self.downloader.clone(),
-            extension: self.extension.clone(),
             headers: self.headers.clone(),
-            look_ahead_bytes: self.look_ahead_bytes,
-            event_channel_capacity: self.event_channel_capacity,
-            reader_event_capacity: self.reader_event_capacity,
-            tmp_claim_poll_interval: self.tmp_claim_poll_interval,
+            settings: self.settings.clone(),
         }
     }
 }
@@ -101,14 +126,10 @@ where
             .field("bus", &self.bus)
             .field("cancel", &self.cancel)
             .field("headers", &self.headers)
-            .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .field("extension", &self.extension)
             .field("discriminator", &self.discriminator)
             .field("pools", &self.pools)
             .field("store", &self.store)
-            .field("event_channel_capacity", &self.event_channel_capacity)
-            .field("reader_event_capacity", &self.reader_event_capacity)
-            .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
+            .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
@@ -261,5 +282,37 @@ mod tests {
 
         assert!(config.bus.is_some());
         assert!(cloned.bus.is_some());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{Duration, FileSettings, FileSettingsPatch};
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_reader_capacity_and_leaves_the_poll_interval() {
+        let patch: FileSettingsPatch =
+            serde_yaml_ng::from_str("reader_event_capacity: 512\n").expect("the document types");
+        let mut settings = FileSettings::default();
+        let poll_interval = settings.tmp_claim_poll_interval;
+
+        settings.apply(patch);
+
+        assert_eq!(settings.reader_event_capacity, 512);
+        assert_eq!(settings.tmp_claim_poll_interval, poll_interval);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_reads_the_poll_interval_from_humantime_text() {
+        let patch: FileSettingsPatch =
+            serde_yaml_ng::from_str("tmp_claim_poll_interval: 25ms\n").expect("the document types");
+        let mut settings = FileSettings::default();
+
+        settings.apply(patch);
+
+        assert_eq!(settings.tmp_claim_poll_interval, Duration::from_millis(25));
     }
 }
