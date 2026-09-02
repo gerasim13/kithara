@@ -32,6 +32,10 @@ stages:
 # instead by keeping the build directory between jobs.
 variables:
   CARGO_INCREMENTAL: "0"
+  # GitHub's HTTP/2 ref listing stalls in the Linux runner.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: http.version
+  GIT_CONFIG_VALUE_0: HTTP/1.1
   GIT_DEPTH: "0"
   # Cleaning the tree between jobs deleted the build directory with it, so
   # every job relinked the whole workspace and the compiler cache could only

@@ -3,7 +3,7 @@ set working-directory := "../.."
 
 deny:
     cargo fetch --locked
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
+    cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
     cargo deny --offline check
 
 machete:
