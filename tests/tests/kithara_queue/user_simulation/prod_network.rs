@@ -32,6 +32,7 @@ use kithara_app::{
 use kithara_integration_tests::{
     TestTempDir, kithara,
     offline::OfflineSession,
+    test_defaults::Consts as Shared,
     user_sim::{actions::Action, scenarios},
 };
 
@@ -100,6 +101,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
@@ -360,6 +362,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
@@ -427,6 +430,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let prod = build_prod_ctx();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
@@ -715,6 +719,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     let session = Arc::new(OfflineSession::<AppPools>::new_manual());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(prod.config.worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<AppPools>>)
             .build(),

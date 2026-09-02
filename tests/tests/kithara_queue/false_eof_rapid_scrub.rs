@@ -20,7 +20,9 @@ use kithara_app::{
     config::AppConfig,
     pools::{AppPools, build as app_pools},
 };
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, kithara, offline::OfflineSession, test_defaults::Consts as Shared,
+};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
 /// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
@@ -89,6 +91,7 @@ async fn build_ctx() -> Ctx {
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),

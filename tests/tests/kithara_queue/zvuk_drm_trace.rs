@@ -21,7 +21,9 @@ use kithara_app::{
     pools::{AppPools, build as app_pools},
     sources::build_source,
 };
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, kithara, offline::OfflineSession, test_defaults::Consts as Shared,
+};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -90,6 +92,7 @@ async fn shared_ctx() -> &'static Ctx {
             .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
                 .session(OfflineSession::arc_auto())
                 .worker(worker)
                 .build(),

@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -40,6 +41,7 @@ fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
 fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> Arc<Queue<TestPools>> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))

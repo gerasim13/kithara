@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     kithara,
     offline::OfflineSession,
     temp_dir,
+    test_defaults::Consts as Shared,
 };
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
@@ -137,6 +138,7 @@ fn build_queue_with_tick_cf(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)

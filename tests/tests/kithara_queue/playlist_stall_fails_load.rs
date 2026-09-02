@@ -16,7 +16,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -105,6 +105,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))

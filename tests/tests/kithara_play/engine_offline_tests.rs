@@ -6,7 +6,7 @@ use kithara::{
     play::{EngineConfig, EngineImpl},
     warp::BeatGridId,
 };
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{offline::OfflineSession, test_defaults::Consts as Shared};
 
 use super::engine_session_contract as contract;
 use crate::bufpool_ext::{TestPools, pools};
@@ -14,6 +14,7 @@ use crate::bufpool_ext::{TestPools, pools};
 fn engine(max_slots: usize) -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("offline engine grid id"))
             .max_slots(max_slots)
             .pools(pools())

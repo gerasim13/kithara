@@ -17,7 +17,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::EncryptionRequest, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, test_defaults::Consts as Shared,
 };
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
@@ -423,6 +423,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),

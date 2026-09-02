@@ -24,6 +24,7 @@ use kithara_app::{
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
     offline::{OfflineSession, offline_gain_window},
+    test_defaults::Consts as Shared,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
@@ -101,6 +102,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 .build();
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
+                    .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
                     .worker(worker)
                     .session(OfflineSession::arc_auto())
                     .build(),

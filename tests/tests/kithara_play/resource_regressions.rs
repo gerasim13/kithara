@@ -602,6 +602,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(play_worker(&region))
             .session(OfflineSession::arc_manual())
             .build(),
@@ -1016,6 +1017,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(play_worker(&region))
             .session(OfflineSession::arc_manual())
             .build(),
