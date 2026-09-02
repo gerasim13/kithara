@@ -1,15 +1,29 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    PlayError,
+    GroupState, PlayError,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{BeatGridId, SyncAdmission, SyncOperation, SyncRejected};
 
-use super::super::{Host, HostConfig, HostOwned, SessionRoot};
-use crate::session::HostDispatcher;
+use super::super::{Host, HostOwned, PlatformResult};
+use crate::session::{HostDispatcher, RootView};
+
+type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
+
+impl<S> PlatformResult<Self> for Platform<S> {
+    fn resolve(self) -> Result<Self, PlayError> {
+        Ok(self)
+    }
+}
+
+impl<S> PlatformResult<Self> for StartedPlatform<S> {
+    fn resolve(self) -> Result<Self, PlayError> {
+        Ok(self)
+    }
+}
 
 pub(in crate::host) struct Platform<S> {
     marker: PhantomData<fn() -> S>,
@@ -25,10 +39,30 @@ impl<S> Platform<S> {
     pub(in crate::host) const fn close(_platform: &mut Self, _host_id: BeatGridId) {}
 
     pub(in crate::host) fn transact(
+        _platform: &Self,
         dispatcher: &Arc<dyn HostDispatcher<S>>,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
         dispatcher.transact(operation)
+    }
+
+    pub(in crate::host) fn realtime(
+        group: GroupState<PlayerMember>,
+        view: RootView,
+        sample_rate: NonZeroU32,
+        output_block_frames: Option<NonZeroU32>,
+    ) -> StartedPlatform<S>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        let dispatcher =
+            crate::session::native::spawn::<S>(group, view, sample_rate, output_block_frames);
+        (dispatcher, Self::owner())
+    }
+
+    #[cfg(feature = "offline")]
+    pub(in crate::host) const fn offline() -> Self {
+        Self::owner()
     }
 }
 
@@ -36,21 +70,6 @@ impl<S> Host<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    /// Creates the platform session and its canonical synchronization root.
-    ///
-    /// # Errors
-    /// Returns an error when a canonical grid identity cannot be allocated.
-    pub fn new(config: HostConfig) -> Result<Self, PlayError> {
-        let SessionRoot {
-            id,
-            sample_rate,
-            group,
-            view,
-        } = Self::session_root(config)?;
-        let dispatcher = crate::session::native::spawn::<S>(group, view.clone(), sample_rate);
-        Ok(Self::owner(id, view, dispatcher, Platform::owner()))
-    }
-
     /// Attaches and transfers one fully configured player or decorator into
     /// this Host before it can register its lower graph projection.
     ///

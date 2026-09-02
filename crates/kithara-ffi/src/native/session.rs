@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{num::NonZeroU32, sync::OnceLock};
 
 use kithara::{
     host::{HostConfig, HostOwned},
@@ -23,6 +23,10 @@ where
     P: PlayerControlSource<Schema = FfiPools>,
 {
     host().lock().insert(player)
+}
+
+pub(crate) fn requested_sample_rate() -> NonZeroU32 {
+    host().lock().requested_sample_rate()
 }
 
 pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), PlayError>

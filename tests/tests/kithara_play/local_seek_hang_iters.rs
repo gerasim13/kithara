@@ -1,9 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     decode::DecoderBackend,
     events::{AbrMode, AudioEvent, Event, EventReceiver},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -26,7 +29,7 @@ use crate::{
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     /// Produced-audio horizon for the event-driven warmup: the warmup
     /// drives the render pull until `PlaybackProgress` advances past this
     /// position, proving the decode worker primed the pipeline before the
@@ -304,14 +307,18 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
             .build(),
         );
 
-        let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
+        let mut player = OfflinePlayer::new(
+            HostConfig::offline(pools())
+                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build(),
+        );
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         let resource = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
         let mut events = resource.subscribe();
-        player.load_and_fadein(resource, &format!("{iter_label}|local-hls"));
+        player.load_and_fadein(resource);
 
         // Event-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),

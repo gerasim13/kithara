@@ -3,26 +3,28 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
+    host::{HostConfig, HostOwned},
     platform::{
         sync::{Arc, Mutex},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         effects::eq::EqBandConfig,
-        player::{PlayerControl, PlayerControlSource},
+        player::{Player, PlayerControl, PlayerControlSource},
     },
     warp::StretchControls,
 };
 
-use super::OfflineSession;
+use super::{OfflineHostHarness, host::offline_pools};
 use crate::bufpool_ext::{TestPools, pools};
 
 pub struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
+    host: OfflineHostHarness<TestPools>,
     player: Mutex<Option<PlayerImpl<TestPools>>>,
     player_control: PlayerControl<TestPools>,
-    session: Arc<OfflineSession>,
+    worker: PlayWorker<TestPools>,
 }
 
 #[derive(Clone, bon::Builder)]
@@ -44,19 +46,23 @@ pub struct OfflinePlayerOptions {
 
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
-        let session = Arc::new(OfflineSession::new_manual());
-        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
         let pools = pools();
+        let sample_rate =
+            NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
+        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
+        Self::new(options, session)
+    }
+
+    pub fn new(options: OfflinePlayerOptions, session: HostConfig<TestPools>) -> Self {
+        let sample_rate = session.sample_rate();
+        let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
             .block_on_underrun(options.block_on_underrun)
-            .sample_rate(
-                NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
-            )
-            .session(Arc::clone(&session_dispatcher))
-            .worker(worker)
+            .sample_rate(sample_rate)
+            .worker(worker.clone())
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();
@@ -64,12 +70,15 @@ impl OfflinePlayerHarness {
         let player = PlayerImpl::new(player_config);
         let player_control = player.control();
         let events = player.subscribe();
+        let host = OfflineHostHarness::new(session)
+            .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
         Self {
             events: Mutex::new(events),
+            host,
             player: Mutex::new(Some(player)),
             player_control,
-            session,
+            worker,
         }
     }
 
@@ -84,22 +93,56 @@ impl OfflinePlayerHarness {
             .expect("offline harness player was already transferred")
     }
 
-    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerImpl<TestPools>) -> R) -> R {
-        let player = self.player.lock();
-        use_player(
-            player
-                .as_ref()
-                .expect("offline harness player was already transferred"),
-        )
+    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerControl<TestPools>) -> R) -> R {
+        self.ensure_player_inserted();
+        use_player(&self.player_control)
     }
 
-    pub fn session(&self) -> &Arc<OfflineSession> {
-        &self.session
+    pub const fn worker(&self) -> &PlayWorker<TestPools> {
+        &self.worker
+    }
+
+    pub fn set_host_level(&self, level: f32) {
+        self.player
+            .lock()
+            .as_ref()
+            .expect("offline harness player was already transferred")
+            .set_host_level(level);
+    }
+
+    pub fn insert<P>(&self, player: P) -> HostOwned<P>
+    where
+        P: PlayerControlSource<Schema = TestPools>,
+    {
+        self.host
+            .insert(player)
+            .unwrap_or_else(|error| panic!("insert player facade into offline Host: {error}"))
+    }
+
+    pub fn insert_control<P>(&self, player: P) -> P::Control
+    where
+        P: PlayerControlSource<Schema = TestPools>,
+    {
+        self.insert(player).control().clone()
+    }
+
+    pub const fn host(&self) -> &OfflineHostHarness<TestPools> {
+        &self.host
     }
 
     /// Synchronously render `frames` of audio.
     pub fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
+        self.ensure_player_inserted();
+        self.host.render(frames)
+    }
+
+    fn ensure_player_inserted(&self) {
+        let mut player = self.player.lock();
+        if let Some(player) = player.take() {
+            self.host
+                .insert(player)
+                .unwrap_or_else(|error| panic!("insert offline player into Host: {error}"));
+        }
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s

@@ -10,6 +10,8 @@ mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod native;
+#[cfg(feature = "offline")]
+pub(crate) mod offline;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;

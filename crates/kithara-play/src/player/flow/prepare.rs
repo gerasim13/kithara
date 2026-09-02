@@ -118,6 +118,7 @@ mod tests {
             Arc::new(ImmediateSession(testing::test_session()));
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(session)
                 .build(),
@@ -142,6 +143,7 @@ mod tests {
     fn prepare_config_overwrites_a_builder_declared_wake_mode() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .build(),

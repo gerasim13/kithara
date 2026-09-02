@@ -31,7 +31,7 @@ const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
 async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &Path) -> Resource {
-    let pools = harness.with_player(|player| player.pools().clone());
+    let pools = harness.worker().pools().clone();
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),

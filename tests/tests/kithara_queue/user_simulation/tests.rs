@@ -6,8 +6,9 @@ use std::fmt::Write;
 use kithara::{
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
+    platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::{
@@ -17,7 +18,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::EncryptionRequest, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineQueue, temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
@@ -398,16 +399,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .await;
     let temp = temp_dir();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let cfg = kithara::play::ResourceConfig::for_src(
         kithara::play::ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
     )
@@ -421,14 +423,21 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
+    let session_config = HostConfig::offline(pools)
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(session_config.sample_rate())
             .worker(worker)
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let q_for_tick = Arc::clone(&queue);
+    let queue = OfflineQueue::new(
+        session_config,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
+    let q_for_tick = queue.control();
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
     // this makes the tick driver a quiescence participant with a
     // virtual `sleep`, so the virtual clock cannot race past the ticks

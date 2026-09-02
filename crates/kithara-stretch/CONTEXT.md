@@ -11,6 +11,10 @@ play-configured `PoolRegion<S>` through `ElasticConfig<S>`; `kithara-signal` own
 Decoder sample-rate conversion remains in the decode/audio seam. This crate must
 not create a default or global pool.
 
+The `perf` feature keeps `hotpath` load-bearing through `kithara::measure_block!`.
+That proc macro expands to `hotpath::measure_block!`; cargo-machete cannot see the
+expanded dependency, so the manifest records this single scanner exception.
+
 - `ElasticEngine` is the sole backend contract. Exact source/output frame counts control time;
   `set_pitch` remains independent, and `prime` / `flush` / `reset` define stream lifecycle.
 - `StretchKind` is the compiled backend selector. Persisted discriminants are stable regardless of

@@ -82,15 +82,24 @@ mod tests {
     use crate::{
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
-        session::{Cmd, Reply, SessionDispatcher, testing::test_session},
+        session::{
+            Cmd, Reply, SessionDispatcher, SessionSampleRate,
+            testing::{self, test_session},
+        },
         test_pools::{TestPools, pools},
     };
 
     struct ForeignSession;
 
     impl SessionDispatcher<TestPools> for ForeignSession {
-        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
+                    None,
+                    testing::TEST_SAMPLE_RATE.get(),
+                ))),
+                _ => Ok(Reply::Ok),
+            }
         }
 
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -102,6 +111,7 @@ mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker)
                 .session(session)
                 .build(),

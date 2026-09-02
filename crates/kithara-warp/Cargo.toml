@@ -12,6 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = []
 perf = ["kithara-stretch?/perf"]
+probe = ["dep:kithara-test-utils"]
 render = ["dep:kithara-bufpool"]
 stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith", "render"]
 stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee", "render"]
@@ -20,6 +21,8 @@ stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee", "rend
 kithara-bufpool = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"], optional = true }
 
 arc-swap = { workspace = true }
 bon = { workspace = true }

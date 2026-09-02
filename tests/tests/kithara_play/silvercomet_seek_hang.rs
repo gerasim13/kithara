@@ -1,11 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fs::File, io::Write, path::Path};
+use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 
 use kithara::{
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, thread,
@@ -24,7 +25,7 @@ struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const CHANNELS: u16 = Shared::CHANNELS;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     const PLAY_WINDOW_SECS: f64 = 3.0;
     /// Render warmup burned before the first measurement window so
     /// decoder startup silence (the few hundred ms between `load_and_fadein`
@@ -251,7 +252,11 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         let store = kithara_integration_tests::disk_asset_store(temp.path());
         let downloader = fresh_downloader();
 
-        let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
+        let mut player = OfflinePlayer::new(
+            HostConfig::offline(pools())
+                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build(),
+        );
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
@@ -259,7 +264,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             let resource =
                 build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
-            player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
+            player.load_and_fadein(resource);
 
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);

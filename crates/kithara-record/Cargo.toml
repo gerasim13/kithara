@@ -1,0 +1,23 @@
+[package]
+name = "kithara-record"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Storage-neutral master recording for Kithara."
+keywords = ["audio", "recording", "encoding"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+kithara-encode = { workspace = true, default-features = false }
+kithara-output = { workspace = true }
+
+bon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+[lints]
+workspace = true

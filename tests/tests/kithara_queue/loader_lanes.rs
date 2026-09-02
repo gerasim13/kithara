@@ -9,6 +9,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use kithara::{
     assets::AssetStore,
     events::{TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -16,12 +17,12 @@ use kithara::{
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
@@ -81,7 +82,7 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -94,32 +95,41 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .max_concurrent_loads(cap)
-            .store(store.clone())
-            .player(player)
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .max_concurrent_loads(cap)
+                .store(store.clone())
+                .player(player)
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -138,13 +148,13 @@ fn mk_cfg(
         .build()
 }
 
-fn status_of(queue: &Queue<TestPools>, id: TrackId) -> Option<TrackStatus> {
+fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> Option<TrackStatus> {
     queue.track(id).map(|e| e.status)
 }
 
 #[kithara::flash(true)]
 async fn wait_for_status_matching(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
     what: &str,
@@ -292,7 +302,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
 /// Setup invariant: the hung track must still be mid-load when the fast
 /// track resolves, otherwise the scenario did not actually exercise lane
 /// isolation.
-fn assert_hung_still_loading(queue: &Queue<TestPools>, hung_id: TrackId) {
+fn assert_hung_still_loading(queue: &QueueControl<TestPools>, hung_id: TrackId) {
     assert!(
         matches!(status_of(queue, hung_id), Some(TrackStatus::Loading)),
         "setup invariant broken: hung track should still be Loading (last={:?})",

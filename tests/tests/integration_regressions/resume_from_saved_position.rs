@@ -3,30 +3,31 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, TrackId},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration},
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -37,18 +38,22 @@ fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> Arc<Queue<TestPools>> {
+fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    Arc::new(Queue::new(
-        QueueConfig::builder().player(player).store(store).build(),
-    ))
+    OfflineQueue::new(
+        HostConfig::offline(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build(),
+        Queue::new(QueueConfig::builder().player(player).store(store).build()),
+    )
+    .expect("create product offline queue")
 }
 
 fn new_downloader(pools: Pools) -> Downloader {
@@ -63,7 +68,7 @@ fn new_downloader(pools: Pools) -> Downloader {
 }
 
 fn append_track(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     url: &str,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,
@@ -90,7 +95,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let first_queue = new_queue(&first_pools, first_store.clone());
     let first_downloader = new_downloader(first_pools);
-    let first_tick = spawn_ticker(Arc::clone(&first_queue));
+    let first_tick = spawn_ticker(first_queue.control());
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
@@ -137,7 +142,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let second_queue = new_queue(&second_pools, second_store.clone());
     let second_downloader = new_downloader(second_pools);
-    let second_tick = spawn_ticker(Arc::clone(&second_queue));
+    let second_tick = spawn_ticker(second_queue.control());
     let mut second_rx = second_queue.subscribe();
     let second_id = append_track(
         &second_queue,

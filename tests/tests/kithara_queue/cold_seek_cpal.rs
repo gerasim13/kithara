@@ -119,7 +119,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
-    let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(host.requested_sample_rate())
+            .worker(worker)
+            .build(),
+    );
     let queue = Queue::new(QueueConfig::builder().player(player).build());
     let queue = Arc::new(host.insert(queue).expect("attach queue to playback host"));
     queue.set_volume(kithara_integration_tests::e2e::volume());

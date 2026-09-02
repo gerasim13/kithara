@@ -14,7 +14,7 @@ use kithara_play::{
 };
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
-    TopologyOperation,
+    TopologyOperation, TransportRevision,
 };
 
 use super::{
@@ -27,6 +27,10 @@ use crate::Host;
 /// Probe-only access to session-output policy.
 pub trait HostProbe {
     /// # Errors
+    /// Returns an error when the Host cannot read the canonical transport revision.
+    fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
+
+    /// # Errors
     /// Returns an error when the Host cannot read the output policy.
     fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
 
@@ -38,6 +42,7 @@ pub trait HostProbe {
 impl<S> HostProbe for Host<S> {
     delegate::delegate! {
         to self {
+            fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
             #[call(ducking_mode)]
             fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
             #[call(set_ducking_mode)]
@@ -59,15 +64,27 @@ where
     B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+    pub const DEFAULT_SAMPLE_RATE: NonZeroU32 =
+        match NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE) {
+            Some(sample_rate) => sample_rate,
+            None => unreachable!(),
+        };
 
     #[must_use]
     pub fn new<F>(start_stream_fn: F) -> Self
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
+        Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
+    }
+
+    #[must_use]
+    pub fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
         Self {
-            state: state_for(start_stream_fn),
+            state: state_for(sample_rate, start_stream_fn),
         }
     }
 
@@ -104,17 +121,18 @@ where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
-    state_for(start_stream_fn)
+    state_for(
+        GraphSession::<B, TestPools>::DEFAULT_SAMPLE_RATE,
+        start_stream_fn,
+    )
 }
 
-fn state_for<B, F, S>(start_stream_fn: F) -> SessionState<B, S>
+fn state_for<B, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<B, S>
 where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
     let grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let sample_rate =
-        NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE).expect("fixture sample rate");
     let root = GroupState::unavailable(
         grid_id,
         sample_rate,
@@ -144,6 +162,7 @@ fn attach_player_with_id<B, S>(
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
+            .sample_rate(state.root_view.grid().axis().sample_rate())
             .worker(worker)
             .session(Arc::new(FixtureSession))
             .build(),
@@ -169,7 +188,7 @@ fn attach_player_with_id<B, S>(
     state.publish_root();
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "wasm32"))]
 pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let player = PlayerImpl::new(

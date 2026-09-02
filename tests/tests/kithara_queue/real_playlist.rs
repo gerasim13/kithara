@@ -4,6 +4,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -13,7 +14,7 @@ use kithara::{
         tokio::sync::OnceCell,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -23,7 +24,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
-    offline::{OfflineSession, offline_gain_window},
+    offline::{OfflineQueue, offline_gain_window},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
@@ -35,7 +36,7 @@ mod source_helper;
 /// (network TLS context, audio graph) is paid once.
 struct TestCtx {
     config: AppConfig,
-    queue: Arc<Queue<AppPools>>,
+    queue: OfflineQueue<AppPools>,
     /// Isolated cache dir, shared by every track this test binary
     /// loads. Auto-deletes when the process exits, so real-network
     /// runs don't pollute the shared app cache at
@@ -93,21 +94,29 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .cancel(shutdown.child())
                     .build(),
             );
+            let session_pools = worker.pools().clone();
             let config = AppConfig::builder()
                 .downloader(downloader)
                 .shutdown(shutdown)
                 .worker(worker.clone())
                 .store(store)
                 .build();
+            let session_config = HostConfig::offline(session_pools)
+                .pacing(Duration::from_millis(10))
+                .build();
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
+                    .sample_rate(session_config.sample_rate())
                     .worker(worker)
-                    .session(OfflineSession::arc_auto())
                     .build(),
             );
-            let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+            let queue = OfflineQueue::new(
+                session_config,
+                Queue::new(QueueConfig::builder().player(player).build()),
+            )
+            .expect("create product offline queue");
 
-            let queue_for_tick = Arc::clone(&queue);
+            let queue_for_tick = queue.control();
             tokio::task::spawn(async move {
                 loop {
                     sleep(Duration::from_millis(50)).await;
@@ -126,7 +135,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue<AppPools>,
+    queue: &QueueControl<AppPools>,
     track_id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -170,7 +179,11 @@ async fn wait_for_status(
     }
 }
 
-async fn sample_positions(queue: &Queue<AppPools>, count: usize, interval: Duration) -> Vec<f64> {
+async fn sample_positions(
+    queue: &QueueControl<AppPools>,
+    count: usize,
+    interval: Duration,
+) -> Vec<f64> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         out.push(queue.position_seconds().unwrap_or(0.0));
@@ -444,7 +457,13 @@ async fn track_plays_end_to_end(
     time::sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
-    let gain_window = offline_gain_window(2.0);
+    let pacing = ctx.queue.host().pacing().expect("paced offline queue");
+    let gain_window = offline_gain_window(
+        2.0,
+        ctx.queue.host().spec().sample_rate,
+        ctx.queue.host().max_block_frames(),
+        pacing,
+    );
     assert!(
         gain_window.contains(&gain),
         "position gain out of offline-realtime window [{url}]: got \

@@ -10,6 +10,8 @@ mod timeline;
 #[path = "quality_switch_continuity/underrun.rs"]
 mod underrun;
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::{AbrHandle, AbrMode},
     decode::DecoderBackend,
@@ -17,6 +19,7 @@ use kithara::{
         AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
         Event, EventBus, EventReceiver,
     },
+    host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
@@ -296,8 +299,12 @@ async fn prepare_player(
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    let mut player = OfflinePlayer::new(SAMPLE_RATE);
-    player.load_and_fadein(resource, label);
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and

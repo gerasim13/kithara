@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use kithara_platform::{
     CancelGroup, CancelToken, CancelWakerGuard,
     sync::{
@@ -11,6 +13,9 @@ use kithara_test_macros as kithara;
 use tracing as _;
 
 use crate::{Priority, Task, TaskControl, TaskId};
+
+pub(super) type TaskFactory =
+    Box<dyn FnOnce() -> Result<Box<dyn Task>, Box<dyn Any + Send>> + Send>;
 
 pub(super) struct Reservation {
     capacity: Arc<Capacity>,
@@ -49,9 +54,44 @@ impl Drop for Reservation {
 }
 
 pub(super) enum Command {
-    Register(Slot),
+    Register(Registration),
     Unregister(TaskId),
     Shutdown,
+}
+
+pub(super) struct Registration {
+    pub(super) factory: TaskFactory,
+    pub(super) cancel: CancelGroup,
+    pub(super) token: CancelToken,
+    pub(super) priority: Priority,
+    pub(super) control: TaskControl,
+    pub(super) id: TaskId,
+    pub(super) cancel_guards: Vec<CancelWakerGuard>,
+}
+
+impl Registration {
+    pub(super) fn build_slot(self) -> Result<Slot, TaskId> {
+        let Self {
+            factory,
+            cancel,
+            token,
+            priority,
+            control,
+            id,
+            cancel_guards,
+        } = self;
+        let task = factory().map_err(|_| id)?;
+        Ok(Slot {
+            task,
+            cancel,
+            token,
+            priority,
+            control,
+            id,
+            _cancel_guards: cancel_guards,
+            is_terminal: false,
+        })
+    }
 }
 
 pub(super) struct Slot {

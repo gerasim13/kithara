@@ -5,18 +5,20 @@ use std::path::Path;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AssetEvent, DownloaderEvent, Event},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
@@ -95,7 +97,7 @@ fn dir_size_bytes(root: &Path) -> u64 {
 }
 
 async fn load_and_observe(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     rx: &mut kithara::events::EventReceiver,
     handle: &BehaviorHandle,
     downloader: &Downloader,
@@ -141,24 +143,30 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let store = AssetStore::builder(pools)
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
         .event_bus(player.bus().clone())
         .build();
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    );
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let mut rx = queue.subscribe();
 
     let before = dir_size_bytes(temp_dir.path());

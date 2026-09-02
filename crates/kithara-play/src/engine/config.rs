@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
@@ -32,9 +32,8 @@ pub struct EngineConfig<S> {
     /// Number of output channels. Default: 2 (stereo).
     #[builder(default = 2)]
     pub(crate) channels: u16,
-    /// Sample rate passed to the runtime backend as a hint. Default: 44100.
-    #[builder(default = 44100)]
-    pub(crate) sample_rate: u32,
+    /// Initial output sample rate supplied by the owning player session.
+    pub(crate) sample_rate: NonZeroU32,
     /// Maximum number of concurrent player slots. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,

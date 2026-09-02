@@ -10,7 +10,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{StretchControls, WarpConfig};
+use kithara_warp::{
+    PresentationFrontier, RenderContext, RenderPublisher, StretchControls, WarpConfig,
+};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -71,6 +73,7 @@ pub struct Resource {
     #[field(with)]
     playback_rate: PlaybackRate,
     reader: ReaderOwner,
+    render_publisher: Option<RenderPublisher>,
 }
 
 /// Cancels the wrapped per-track token on drop. A `Resource` field rather than
@@ -227,6 +230,7 @@ impl Resource {
             priority: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
+            render_publisher: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -251,15 +255,31 @@ impl Resource {
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
-        let audio = worker.open(config).await?;
+        let mut audio = worker.open(config).await?;
         let priority = audio.priority();
+        let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
+            detail: "registered Warp publisher was already taken",
+        })?;
         let mut resource = Self::from_reader(audio, Some(src))
             .with_playback_rate(PlaybackRate::for_warp(warp_controls));
         if let Err(error) = resource.preload().await {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
         resource.priority = Some(priority);
+        resource.render_publisher = Some(render_publisher);
         Ok(resource)
+    }
+
+    pub(crate) fn clear_render(&self) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.clear();
+        }
+    }
+
+    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish(context, frontier);
+        }
     }
 
     pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
@@ -389,6 +409,7 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
+    use kithara_warp::{SessionEpoch, SessionFrame, Warp};
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -515,6 +536,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
+                source_span: None,
             })
         }
         fn read_planar<'a>(
@@ -531,6 +553,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: frames,
                 position: self.position_duration(),
+                source_span: None,
             })
         }
 
@@ -787,5 +810,38 @@ mod tests {
 
         assert!(!track.is_cancelled());
         assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn seek_withdraws_the_resident_warp_context() {
+        let mut warp = Warp::new((), &WarpConfig::builder().build());
+        let publisher = warp
+            .take_publisher()
+            .expect("fixture Warp owns its publisher");
+        let reader = publisher.reader();
+        let mut resource = Resource::from_reader(EofReader::with_frames(1), None);
+        let context = RenderContext::new(
+            SessionFrame::new(0)..SessionFrame::new(1),
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1)
+                .output(SessionFrame::new(0))
+                .build(),
+        );
+        assert!(reader.load().is_some());
+        resource.render_publisher = Some(publisher);
+        let mut resource = PlayerResource::new(resource, Arc::from("seek"), &pools())
+            .unwrap_or_else(|error| panic!("test player resource: {error}"));
+
+        resource.reset_for_seek();
+
+        assert!(reader.load().is_none());
     }
 }

@@ -4482,9 +4482,11 @@ dependencies = [
  "kithara-hls",
  "kithara-host",
  "kithara-net",
+ "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-record",
  "kithara-resampler",
  "kithara-signal",
  "kithara-storage",
@@ -4565,6 +4567,9 @@ dependencies = [
  "futures",
  "iced",
  "kithara",
+ "kithara-assets",
+ "kithara-encode",
+ "kithara-record",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4576,6 +4581,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4986,10 +4992,13 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-events",
+ "kithara-output",
  "kithara-platform",
  "kithara-play",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-warp",
+ "kithara-worker",
  "kithara-workspace-hack",
  "ringbuf 0.5.0",
  "thiserror 2.0.18",
@@ -5102,6 +5111,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-output"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-platform"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5199,6 +5220,17 @@ dependencies = [
  "kithara-workspace-hack",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-record"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "kithara-encode",
+ "kithara-output",
+ "kithara-test-utils",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5442,6 +5474,7 @@ dependencies = [
  "kithara-platform",
  "kithara-signal",
  "kithara-stretch",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",

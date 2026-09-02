@@ -2,10 +2,14 @@ use std::num::NonZero;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_utils::kithara;
 use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
-use crate::test_pools::{Pools, TestPools, pools, sample_buffer};
+use crate::{
+    PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch, SessionFrame,
+    test_pools::{Pools, TestPools, pools, sample_buffer},
+};
 
 type WarpRenderer = GenericWarpRenderer<TestPools>;
 
@@ -92,7 +96,12 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(controls, spec(), pools())
+    WarpRenderer::new(
+        controls,
+        RenderPublisher::default().reader(),
+        spec(),
+        pools(),
+    )
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
@@ -107,4 +116,43 @@ fn flush_serviced(fx: &mut WarpRenderer) -> Option<AudioChunk> {
     let output = fx.flush();
     fx.prepare(spec());
     output
+}
+
+#[kithara::test]
+fn render_commits_the_context_captured_for_the_operation() {
+    let pools = pools();
+    let publisher = RenderPublisher::default();
+    let mut renderer = WarpRenderer::new(
+        StretchControls::new(1.0),
+        publisher.reader(),
+        spec(),
+        pools.clone(),
+    );
+    let context = RenderContext::new(
+        SessionFrame::new(1_000)..SessionFrame::new(1_001),
+        spec().sample_rate,
+        None,
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture context is valid");
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(41)
+            .output(SessionFrame::new(1_000))
+            .build(),
+    );
+    let mut input = chunk(&pools, &[0.25, -0.5]);
+    input.meta.frame_offset = 41;
+
+    let output = render_serviced(&mut renderer, input).expect("unity render succeeds");
+    let snapshot = renderer
+        .render_snapshot()
+        .expect("successful render commits a snapshot");
+
+    assert_eq!(output.frames(), 1);
+    assert_eq!(snapshot.context(), &context);
+    assert_eq!(snapshot.frontier().source(), 42);
+    assert_eq!(snapshot.frontier().output(), SessionFrame::new(1_001));
 }

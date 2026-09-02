@@ -200,6 +200,7 @@ impl NativeInner {
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .cancel(player_cancel.child())
+            .sample_rate(super::session::requested_sample_rate())
             .worker(worker)
             .build();
         let player = PlayerImpl::new(player_config);

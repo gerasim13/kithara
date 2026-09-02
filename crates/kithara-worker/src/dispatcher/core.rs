@@ -25,7 +25,13 @@ pub(super) fn run_loop(
 
     loop {
         observer.on_event(Event::PassStart);
-        if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
+        if cancel_and_drain(
+            cancel,
+            cmd_rx,
+            &mut slots,
+            &mut needs_reorder,
+            observer.as_mut(),
+        ) {
             return;
         }
         cancel_cancelled(&mut slots);
@@ -50,8 +56,9 @@ fn cancel_and_drain(
     cmd_rx: &mpsc::Receiver<Command>,
     slots: &mut Vec<Slot>,
     needs_reorder: &mut bool,
+    observer: &mut dyn Observer,
 ) -> bool {
-    let shutdown = drain_commands(cmd_rx, slots, needs_reorder);
+    let shutdown = drain_commands(cmd_rx, slots, needs_reorder, observer);
     if cancel.is_cancelled() {
         cancel_all(slots);
         return true;
@@ -63,10 +70,18 @@ fn drain_commands(
     cmd_rx: &mpsc::Receiver<Command>,
     slots: &mut Vec<Slot>,
     needs_reorder: &mut bool,
+    observer: &mut dyn Observer,
 ) -> bool {
     loop {
         match cmd_rx.try_recv() {
-            Ok(Command::Register(mut slot)) => {
+            Ok(Command::Register(registration)) => {
+                let mut slot = match registration.build_slot() {
+                    Ok(slot) => slot,
+                    Err(id) => {
+                        observer.on_event(Event::TaskPanicked { task: id });
+                        continue;
+                    }
+                };
                 if slot.cancel.is_cancelled() {
                     cancel_slot(&mut slot);
                 } else {

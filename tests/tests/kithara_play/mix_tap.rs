@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     events::TrackId,
-    play::{Cmd, PlayError, Resource, SessionDispatcher, SessionError},
+    play::{PlayError, Resource, SessionError},
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
@@ -54,7 +54,7 @@ fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32> {
 fn zero_output_sink_is_processed_beside_graph_out() {
     let harness = playing_harness();
     let mut tap = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("enable mix tap");
 
@@ -78,7 +78,7 @@ fn zero_output_sink_is_processed_beside_graph_out() {
 fn mix_tap_matches_graph_out_bit_exactly() {
     let harness = playing_harness();
     let mut tap = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("enable mix tap");
 
@@ -103,7 +103,7 @@ fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
         SAMPLE_RATE,
     );
     let mut tap = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
@@ -127,17 +127,15 @@ fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
 fn the_tap_keeps_feeding_across_a_device_route_restart() {
     let harness = playing_harness();
     let mut tap = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("enable mix tap");
     render_blocks(&harness, 2);
     assert!(!tap.drain().is_empty(), "the feed runs before the restart");
 
     harness
-        .session()
-        .exec_ok(Cmd::InvalidateAudioRoute {
-            reason: String::from("mix tap route restart"),
-        })
+        .host()
+        .invalidate_audio_route("mix tap route restart")
         .expect("invalidate the audio route");
 
     let rendered = render_blocks(&harness, 4);
@@ -158,7 +156,7 @@ fn mix_tap_overflow_drops_exactly_the_capacity_deficit() {
 
     let harness = playing_harness();
     let mut tap = harness
-        .session()
+        .host()
         .enable_mix_tap(TIGHT_CAPACITY)
         .expect("enable mix tap");
 
@@ -182,20 +180,17 @@ fn mix_tap_overflow_drops_exactly_the_capacity_deficit() {
 fn second_enable_is_rejected_and_disable_releases_the_writer() {
     let harness = playing_harness();
     let tap = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("enable mix tap");
 
-    match harness.session().enable_mix_tap(ROOMY_CAPACITY).map(|_| ()) {
+    match harness.host().enable_mix_tap(ROOMY_CAPACITY).map(|_| ()) {
         Err(PlayError::Session(SessionError::MixTapActive)) => {}
         other => panic!("a second consumer must be rejected, got {other:?}"),
     }
     assert!(tap.writer_alive());
 
-    harness
-        .session()
-        .exec_ok(Cmd::DisableMixTap)
-        .expect("disable mix tap");
+    harness.host().disable_mix_tap().expect("disable mix tap");
     render_blocks(&harness, 2);
     assert!(
         !tap.writer_alive(),
@@ -203,7 +198,7 @@ fn second_enable_is_rejected_and_disable_releases_the_writer() {
     );
 
     let re_enabled = harness
-        .session()
+        .host()
         .enable_mix_tap(ROOMY_CAPACITY)
         .expect("re-enable mix tap after disable");
     assert!(re_enabled.writer_alive());

@@ -5,23 +5,23 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineSession, offline_gain_window},
+    offline::{OfflineQueue, offline_gain_window},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -137,7 +137,7 @@ async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> R
 /// the first sample aligned with the current head.
 async fn sample_positions_via_progress(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     count: usize,
     deadline: Duration,
 ) -> Result<Vec<f64>, String> {
@@ -180,25 +180,35 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -210,7 +220,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -380,7 +390,13 @@ async fn local_track_plays_end_to_end(
             .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
     };
     let gain = end_pos - start_pos;
-    let gain_window = offline_gain_window(2.0);
+    let pacing = queue.host().pacing().expect("paced offline queue");
+    let gain_window = offline_gain_window(
+        2.0,
+        queue.host().spec().sample_rate,
+        queue.host().max_block_frames(),
+        pacing,
+    );
     assert!(
         gain_window.contains(&gain),
         "position gain out of offline-realtime window [{label}]: got \
@@ -418,7 +434,7 @@ where
     .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
-fn playlist_snapshot(queue: &Queue<TestPools>, ids: &[TrackId]) -> String {
+fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {
     let current = queue.current().map(|entry| (entry.id, entry.status));
     let statuses: Vec<String> = ids
         .iter()

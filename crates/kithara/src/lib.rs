@@ -64,6 +64,16 @@ pub mod encode {
     pub use kithara_encode::*;
 }
 
+#[cfg(feature = "output")]
+pub mod output {
+    pub use kithara_output::*;
+}
+
+#[cfg(feature = "record")]
+pub mod record {
+    pub use kithara_record::*;
+}
+
 pub mod events {
     pub use kithara_events::*;
 }
