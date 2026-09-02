@@ -8,6 +8,7 @@ use kithara::{
     hls::HlsSettingsPatch,
     host::HostSettings,
     net::NetSettings,
+    queue::QueueSettingsPatch,
     stream::dl::DownloaderSettings,
     worker::{ComputePoolSettings, WorkerSettings},
 };
@@ -42,6 +43,7 @@ pub(crate) struct Document {
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
+    pub(crate) queue: QueueSettingsPatch,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
@@ -174,6 +176,10 @@ mod tests {
         assert!(
             document.assets_store.cache_capacity.is_none(),
             "a document naming no assets_store section leaves the crate default standing"
+        );
+        assert!(
+            document.queue.max_concurrent_loads.is_none(),
+            "a document naming no queue section leaves the crate default standing"
         );
     }
 

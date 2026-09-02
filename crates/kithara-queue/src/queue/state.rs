@@ -18,7 +18,7 @@ use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
 };
 use crate::{
-    config::QueueConfig,
+    config::{QueueConfig, QueueSettings},
     loader::Loader,
     navigation::NavigationState,
     track::{TrackRecord, Tracks},
@@ -181,6 +181,9 @@ where
             player,
             store,
             cancel: config_cancel,
+            settings,
+        } = config;
+        let QueueSettings {
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
@@ -188,7 +191,7 @@ where
             should_autoplay,
             #[cfg(not(any(test, feature = "probe")))]
                 should_autoplay: _,
-        } = config;
+        } = settings;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
             AssetStore::builder(player.pools().clone())
@@ -570,7 +573,7 @@ pub(crate) mod tests {
             QueueConfig::builder()
                 .player(player())
                 .store(make_store())
-                .prefetch_duration(8.0)
+                .settings(QueueSettings::builder().prefetch_duration(8.0).build())
                 .build(),
         );
 

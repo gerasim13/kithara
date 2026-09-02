@@ -8,6 +8,7 @@ use kithara::{
     platform::{CancelToken, sync::Arc, time::Duration},
     play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
+    queue::QueueSettings,
     stream::dl::Downloader,
     worker::Worker,
 };
@@ -136,6 +137,10 @@ pub struct AppConfig {
     /// configuration names no package at all.
     #[patch(skip)]
     pub ui_package: Option<PathBuf>,
+    /// Queue-level knobs threaded into every deck's `QueueConfig`.
+    #[builder(default)]
+    #[patch(skip)]
+    pub queue: QueueSettings,
 }
 
 impl fmt::Debug for AppConfig {
@@ -161,6 +166,7 @@ impl fmt::Debug for AppConfig {
             .field("beat_analysis", &self.beat_analysis)
             .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
             .field("size_probe_method", &self.size_probe_method)
+            .field("queue", &self.queue)
             .finish_non_exhaustive()
     }
 }

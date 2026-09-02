@@ -112,6 +112,7 @@ impl Deck {
                 .player(player)
                 .store(config.store.clone())
                 .cancel(cancel.clone())
+                .settings(config.queue.clone())
                 .build(),
         );
         let queue = host.insert(queue)?;

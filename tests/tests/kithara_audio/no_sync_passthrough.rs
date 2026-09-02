@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueSettings, Transition, test_utils::QueueProbe},
     signal::AudioChunk,
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
@@ -481,7 +481,7 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     let queue = Queue::new(
         QueueConfig::builder()
             .player(harness.take_player())
-            .should_autoplay(false)
+            .settings(QueueSettings::builder().should_autoplay(false).build())
             .build(),
     );
     let id = queue.insert_loaded_for_test(resource_from_reader(audio));

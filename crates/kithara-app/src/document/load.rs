@@ -8,6 +8,7 @@ use kithara::{
     hls::SizeProbeMethod,
     net::NetSettings,
     play::policy::DomainKeyPolicy,
+    queue::QueueSettingsPatch,
     worker::{ComputePoolSettings, WorkerSettings},
 };
 use serde_yaml_ng::Value;
@@ -228,6 +229,12 @@ impl Config {
         self.document.assets_store.clone()
     }
 
+    /// Knobs the document sets on the queue.
+    #[must_use]
+    pub fn queue(&self) -> QueueSettingsPatch {
+        self.document.queue.clone()
+    }
+
     /// Where the asset store keeps its resources. A document that names no
     /// backend resolves to [`StorageBackend::default`] — a stable root under
     /// the system temp directory — and deliberately not to
@@ -409,6 +416,26 @@ mod tests {
         assert!(
             matches!(config.worker_pool(), Some(ComputePoolSettings::Disabled {})),
             "the accessor hands the application the mode the document named"
+        );
+    }
+
+    /// A document's `queue` key reaches the accessor unchanged, and a knob it
+    /// never names stays absent so the crate default that built `QueueSettings`
+    /// stands.
+    #[kithara::test(native, flash(false))]
+    fn the_queue_section_survives_the_load_pipeline() {
+        let dir = tempdir();
+        let path = write(&dir, "queue", "queue:\n  max_concurrent_loads: 5\n");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        assert_eq!(
+            config.queue().max_concurrent_loads.map(NonZeroUsize::get),
+            Some(5)
+        );
+        assert!(
+            config.queue().max_history_size.is_none(),
+            "a knob the document does not name reaches the app empty"
         );
     }
 

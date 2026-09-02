@@ -28,7 +28,7 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc, SessionDispatcher,
     },
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueSettings, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -225,7 +225,7 @@ async fn run_case(mode: GateMode) {
     let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let queue = Queue::new(
         QueueConfig::builder()
-            .should_autoplay(false)
+            .settings(QueueSettings::builder().should_autoplay(false).build())
             .player(harness.take_player())
             .build(),
     );

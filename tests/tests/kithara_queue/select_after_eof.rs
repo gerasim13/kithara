@@ -7,7 +7,7 @@ use kithara::{
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueSettings, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -70,7 +70,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
     );
     let config = QueueConfig::builder()
         .player(harness.take_player())
-        .should_autoplay(false)
+        .settings(QueueSettings::builder().should_autoplay(false).build())
         .build();
     let queue = Queue::new(config);
     (harness, queue)

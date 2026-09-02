@@ -5247,6 +5247,9 @@ dependencies = [
  "kithara-play",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "serde",
+ "serde_yaml_ng",
+ "struct-patch",
  "thiserror 2.0.18",
  "tracing",
 ]

@@ -34,14 +34,37 @@ through `Queue`, `QueueControl`, `Loader`, `TrackSource`, and `ResourceConfig`.
   standalone byte pool.
   `TrackSource::Uri` resources share it; a caller-supplied `ResourceConfig` keeps its
   own.
-- `max_concurrent_loads` (default 3) sizes the prefetch lane only.
-- `prefetch_duration` (default 3.5) is applied to the supplied player the queue drives,
-  the same way `auto_advance_enabled` is.
-- `max_history_size` (default 100) caps `NavigationState`'s history.
-- `should_autoplay` (default `true`) is consumed only by the
-  `cfg(any(test, feature = "probe"))` harness. The production append / insert path
-  never starts playback: the caller drives the first `select` / `play`, so order is
-  deterministic and independent of which load finishes first.
+- `settings` (`QueueSettings`, defaulted) carries the four tunables a configuration
+  document may override; see "Configuration document entry point" below.
+  - `max_concurrent_loads` (default 3) sizes the prefetch lane only.
+  - `prefetch_duration` (default 3.5) is applied to the supplied player the queue
+    drives, the same way `auto_advance_enabled` is.
+  - `max_history_size` (default 100) caps `NavigationState`'s history.
+  - `should_autoplay` (default `true`) is consumed only by the
+    `cfg(any(test, feature = "probe"))` harness. The production append / insert path
+    never starts playback: the caller drives the first `select` / `play`, so order is
+    deterministic and independent of which load finishes first.
+
+## Configuration document entry point
+
+`QueueSettings` is the second way in: a configuration document types into the
+generated `QueueSettingsPatch` — `kithara-app`'s `queue:` section — and `apply`
+writes only the fields the document names, leaving the rest of
+`QueueConfig::settings` standing. `kithara-app` builds a `QueueSettings` from the
+crate default plus the document overlay in `main.rs`, then threads it through
+`Deck::build`'s `QueueConfig::builder().settings(...)` call — the only production
+`QueueConfig` construction site.
+
+`prefetch_duration` stays `f32` seconds rather than the campaign's `humantime`
+duration convention: the value already reaches setter and read call sites across
+`kithara-play` as a bare `f32`, and converting the type would only churn those for a
+formatting preference.
+
+`cancel`, `player`, and `store` stay on `QueueConfig` itself rather than moving into
+`QueueSettings`: they are live, per-construction handles (a `CancelToken`, an
+already-built `PlayerImpl<S>`, an `S`-typed `AssetStore`) that a configuration
+document has no way to name, the same reasoning `kithara-hls::HlsConfig` and
+`kithara-file::FileConfig` apply to their own wiring fields.
 
 ## Track sources
 
@@ -210,7 +233,7 @@ seeking — not from `PlayerImpl::current_index`.
   surfaces it as `audioId`).
 - `NavigationState` is pure logic; the caller owns locking. History is deduped against
   its tail and capped at the `history_limit` it is constructed with
-  (`QueueConfig::max_history_size`). `next()`: unselected → `0`; `RepeatMode::One` →
+  (`QueueSettings::max_history_size`). `next()`: unselected → `0`; `RepeatMode::One` →
   current; `All` wraps to `0`; `Off` returns `None` and clears the current index at the
   end. `prev()` returns `None` at index 0 or before the first selection. `finish()`
   pushes the current index into history and clears it, keeping `last_selected_index()`.
