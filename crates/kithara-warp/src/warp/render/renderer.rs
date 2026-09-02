@@ -5,7 +5,8 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
-    ElasticCursor, ElasticEngine, ElasticError, ElasticRequest, ElasticSpanPlan, StretchKind,
+    ElasticBackendConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticRequest,
+    ElasticSpanPlan, StretchKind,
 };
 use num_traits::cast::AsPrimitive;
 
@@ -107,6 +108,7 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     pub(super) committed: Option<RenderSnapshot>,
     pub(super) controls: Arc<StretchControls>,
+    pub(super) backends: ElasticBackendConfig,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
     /// drops it from `prepare`, outside `produce_tick_rt`.
@@ -235,6 +237,7 @@ where
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             current_kind,
+            config.backends(),
             spec,
             &pools,
             source_frame_limit,
@@ -248,6 +251,7 @@ where
             retired_engine: None,
             current_kind,
             controls,
+            backends: config.backends(),
             pools,
             spec,
             render_quantum_frames: config.render_quantum_frames(),

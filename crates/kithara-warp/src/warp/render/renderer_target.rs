@@ -1,6 +1,8 @@
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
-use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine};
+use kithara_stretch::{
+    ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
+};
 use tracing::warn;
 
 use super::renderer::WarpRenderer;
@@ -19,6 +21,7 @@ where
 {
     pub(super) fn prepare_target(
         kind: StretchKind,
+        backends: ElasticBackendConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         source_frame_limit: usize,
@@ -32,36 +35,43 @@ where
             scratch: reusable_scratch,
         } = reusable;
         drop(reusable_engine);
-        let result = Self::config_for(kind, spec, pools, source_frame_limit, scratch_frame_limit)
-            .and_then(build_engine)
-            .and_then(|engine| {
-                let channels = usize::from(spec.channels.max(1));
-                let pending_samples = SampleCount::new(
-                    Self::RESIDENT_SOURCE_FRAME_LIMIT
-                        .checked_mul(channels)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                );
-                let mut pending = reusable_pending.unwrap_or_else(|| pools.get::<f32>());
-                pending
-                    .ensure_len(pending_samples.get())
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                pending.clear();
-                let scratch_samples = Self::scratch_samples(spec, scratch_frame_limit)?;
-                let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
-                scratch
-                    .ensure_len(scratch_samples.get())
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                scratch.clear();
-                let activation_samples =
-                    Self::scratch_samples(spec, engine.capabilities().latency().output_frames())?;
-                let mut activation_scratch =
-                    reusable_activation_scratch.unwrap_or_else(|| pools.get::<f32>());
-                activation_scratch
-                    .ensure_len(activation_samples.get())
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                activation_scratch.clear();
-                Ok((engine, pending, scratch, activation_scratch))
-            });
+        let result = Self::config_for(
+            kind,
+            backends,
+            spec,
+            pools,
+            source_frame_limit,
+            scratch_frame_limit,
+        )
+        .and_then(build_engine)
+        .and_then(|engine| {
+            let channels = usize::from(spec.channels.max(1));
+            let pending_samples = SampleCount::new(
+                Self::RESIDENT_SOURCE_FRAME_LIMIT
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            );
+            let mut pending = reusable_pending.unwrap_or_else(|| pools.get::<f32>());
+            pending
+                .ensure_len(pending_samples.get())
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            pending.clear();
+            let scratch_samples = Self::scratch_samples(spec, scratch_frame_limit)?;
+            let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
+            scratch
+                .ensure_len(scratch_samples.get())
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            scratch.clear();
+            let activation_samples =
+                Self::scratch_samples(spec, engine.capabilities().latency().output_frames())?;
+            let mut activation_scratch =
+                reusable_activation_scratch.unwrap_or_else(|| pools.get::<f32>());
+            activation_scratch
+                .ensure_len(activation_samples.get())
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            activation_scratch.clear();
+            Ok((engine, pending, scratch, activation_scratch))
+        });
         match result {
             Ok((engine, pending, scratch, activation_scratch)) => PreparedTarget {
                 activation_scratch: Some(activation_scratch),
@@ -78,6 +88,7 @@ where
 
     fn config_for(
         backend: StretchKind,
+        backends: ElasticBackendConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         source_frame_limit: usize,
@@ -85,6 +96,7 @@ where
     ) -> Result<ElasticConfig<S>, ElasticError> {
         ElasticConfig::builder()
             .backend(backend)
+            .backends(backends)
             .sample_rate(spec.sample_rate.get())
             .channels(usize::from(spec.channels.max(1)))
             .pools(pools.clone())
@@ -169,6 +181,7 @@ where
             };
             let target = Self::prepare_target(
                 kind,
+                self.backends,
                 spec,
                 &self.pools,
                 self.source_frame_limit,

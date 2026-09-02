@@ -8,7 +8,7 @@ use std::num::NonZero;
 
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_stretch::StretchKind;
+use kithara_stretch::{ElasticBackendConfig, StretchKind};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -101,13 +101,22 @@ fn add_click(buf: &mut [f32], frame: usize) {
 /// Render `source` through a key-locked renderer with `plan`, feeding
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
-fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+fn render(
+    backend: StretchKind,
+    backends: ElasticBackendConfig,
+    speed: f32,
+    plan: Option<RegionPlan>,
+    source: &[f32],
+) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .backends(backends)
+        .build();
     let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
@@ -254,10 +263,16 @@ fn region_lookup_covers_segments_and_gaps() {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn corrections_align_drifting_clicks_to_nominal_grid(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let mut src = silence(TOTAL);
     for k in 0..BARS {
         add_click(&mut src, k * P1 + 8192);
@@ -285,7 +300,7 @@ fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKin
         "the uncorrected fixture must visibly drift from the nominal grid"
     );
 
-    let out = render(backend, 1.0, Some(plan), &src);
+    let out = render(backend, backends, 1.0, Some(plan), &src);
     let clicks = click_positions(&mono(&out));
     assert_eq!(
         clicks.len(),
@@ -311,14 +326,20 @@ fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKin
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn ratio_change_boundary_has_no_transient_burst(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let src = sine(TOTAL);
     let plan = RegionPlan::new(vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)])
         .expect("valid plan");
-    let out = mono(&render(backend, 1.0, Some(plan), &src));
+    let out = mono(&render(backend, backends, 1.0, Some(plan), &src));
     assert!(out.len() > BOUNDARY + 16_384, "output too short");
 
     // Region 1 runs at ratio 1.0, so the boundary sits near BOUNDARY frames.
@@ -339,16 +360,22 @@ fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn equal_ratio_boundary_is_seamless(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let src = sine(TOTAL);
     let merged = RegionPlan::new(vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
     let split = RegionPlan::new(vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)])
         .expect("valid plan");
-    let a = render(backend, 1.0, Some(merged), &src);
-    let b = render(backend, 1.0, Some(split), &src);
+    let a = render(backend, backends, 1.0, Some(merged), &src);
+    let b = render(backend, backends, 1.0, Some(split), &src);
     assert_eq!(
         a.len(),
         b.len(),
@@ -367,14 +394,20 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn empty_plan_matches_no_plan(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn empty_plan_matches_no_plan(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let src = sine(TOTAL / 4);
     let empty = RegionPlan::new(Vec::new()).expect("empty plan is valid");
-    let with = render(backend, 0.5, Some(empty), &src);
-    let without = render(backend, 0.5, None, &src);
+    let with = render(backend, backends, 0.5, Some(empty), &src);
+    let without = render(backend, backends, 0.5, None, &src);
     assert_eq!(
         with.len(),
         without.len(),

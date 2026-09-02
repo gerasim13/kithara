@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroUsize;
+
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
     platform::{
@@ -14,6 +16,7 @@ use kithara::{
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     signal::AudioChunk,
     stream::Stream,
+    stretch::ElasticBackendConfig,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -43,6 +46,8 @@ const CAPTURE_BLOCKS: usize = 96;
 const LOAD_INTERVAL_FRAMES: usize = BLOCK_FRAMES * 8;
 const LOAD_BURST: Duration = Duration::from_millis(18);
 const ACTIVE_SPEED: f32 = 0.8;
+const RATE_SMOOTH_FRAMES: usize = 12;
+const RENDER_QUANTUM_FRAMES: usize = 32;
 const TONE_HZ: f64 = 440.0;
 const PITCH_SHIFTED_TONE_HZ: f64 = 352.0;
 const TONE_DOMINANCE_RATIO: f64 = 8.0;
@@ -341,7 +346,7 @@ fn stretch_controls(stretch: Option<(StretchKind, f32)>) -> Arc<StretchControls>
 
 fn audio_config(
     source: &[u8],
-    stretch: Arc<StretchControls>,
+    warp: WarpConfig,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> TrackConfig<MemStream, NoResamplerBackend> {
     let stream = MemStreamConfig {
@@ -353,8 +358,26 @@ fn audio_config(
         .hint("wav".to_owned())
         .build();
     TrackConfig::for_audio(audio)
-        .warp(WarpConfig::builder().stretch(stretch).build())
+        .warp(warp)
         .effects(effects)
+        .build()
+}
+
+fn warp_config(
+    stretch: Option<(StretchKind, f32)>,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+) -> WarpConfig {
+    WarpConfig::builder()
+        .stretch(stretch_controls(stretch))
+        .backends(backends)
+        .rate_smooth_frames(
+            NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+        )
+        .render_quantum_frames(
+            NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+        )
         .build()
 }
 
@@ -373,6 +396,9 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
 async fn render_passthrough(
     source: &[u8],
     stretch: Option<(StretchKind, f32)>,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
@@ -381,9 +407,9 @@ async fn render_passthrough(
             .cancel(CancelToken::never())
             .build(),
     );
-    let target_stretch = stretch_controls(stretch);
+    let target_warp = warp_config(stretch, backends, rate_smooth_frames, render_quantum_frames);
     let mut target_audio = worker
-        .open(audio_config(source, target_stretch, Vec::new()))
+        .open(audio_config(source, target_warp, Vec::new()))
         .await
         .expect("target audio construction");
     wait_for_preload(&target_audio).await;
@@ -393,7 +419,7 @@ async fn render_passthrough(
         let mut audio = worker
             .open(audio_config(
                 source,
-                stretch_controls(None),
+                warp_config(None, backends, rate_smooth_frames, render_quantum_frames),
                 vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
             ))
             .await
@@ -462,18 +488,24 @@ async fn render_passthrough(
     }
 }
 
-async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
-    let stretch = stretch_controls(stretch);
+async fn render_queue_passthrough(
+    source: &[u8],
+    stretch: Option<(StretchKind, f32)>,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+) -> Vec<f32> {
+    let warp = warp_config(stretch, backends, rate_smooth_frames, render_quantum_frames);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+            .warp(warp.clone())
             .build(),
         SAMPLE_RATE,
     );
     let worker = harness.with_player(|player| player.worker().clone());
     let mut audio = worker
-        .open(audio_config(source, stretch, Vec::new()))
+        .open(audio_config(source, warp, Vec::new()))
         .await
         .expect("queue audio construction");
     wait_for_preload(&audio).await;
@@ -766,15 +798,35 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case(StretchKind::Signalsmith)]
+#[case::signalsmith(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES
+)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES
+    )
 )]
 async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
 ) {
-    run_no_sync_passthrough(backend, false).await;
+    run_no_sync_passthrough(
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -784,13 +836,35 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case(StretchKind::Signalsmith)]
+#[case::signalsmith(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES
+)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES
+    )
 )]
-async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backend: StretchKind) {
-    run_active_stretch(backend, false).await;
+async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
+    run_active_stretch(
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -800,14 +874,36 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backen
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
-#[case(StretchKind::Signalsmith)]
+#[case::signalsmith(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES
+)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES
+    )
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
-    run_no_sync_passthrough(backend, true).await;
+async fn record_no_sync_unity_playback_artifacts(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
+    run_no_sync_passthrough(
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        true,
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -817,28 +913,94 @@ async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
-#[case(StretchKind::Signalsmith)]
+#[case::signalsmith(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES
+)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES
+    )
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_active_keylock_artifacts(#[case] backend: StretchKind) {
-    run_active_stretch(backend, true).await;
+async fn record_no_sync_active_keylock_artifacts(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
+    run_active_stretch(
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        true,
+    )
+    .await;
 }
 
-async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
+async fn run_no_sync_passthrough(
+    backend: StretchKind,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+    record_artifacts: bool,
+) {
     let channels = usize::from(CHANNELS);
     let source = source_pcm();
-    let baseline = render_passthrough(source, None, false).await;
+    let baseline = render_passthrough(
+        source,
+        None,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
-    let unity = render_passthrough(source, Some((backend, 1.0)), false).await;
+    let unity = render_passthrough(
+        source,
+        Some((backend, 1.0)),
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
-    let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
+    let loaded = render_passthrough(
+        source,
+        Some((backend, 1.0)),
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        true,
+    )
+    .await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
-    let queue_baseline = render_queue_passthrough(source, None).await;
-    let queue_unity = render_queue_passthrough(source, Some((backend, 1.0))).await;
+    let queue_baseline = render_queue_passthrough(
+        source,
+        None,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+    )
+    .await;
+    let queue_unity = render_queue_passthrough(
+        source,
+        Some((backend, 1.0)),
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+    )
+    .await;
     let mut failures = Vec::new();
     for (label, pcm) in [
         ("queue effect-free", queue_baseline.as_slice()),
@@ -966,14 +1128,51 @@ async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
     );
 }
 
-async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
+async fn run_active_stretch(
+    backend: StretchKind,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+    record_artifacts: bool,
+) {
     let source = source_pcm();
     let marker_source = marked_source_pcm();
-    let control = render_passthrough(source, None, false).await;
-    let candidate = render_passthrough(source, Some((backend, ACTIVE_SPEED)), false).await;
-    let rate_control = render_passthrough(marker_source, None, false).await;
-    let rate_candidate =
-        render_passthrough(marker_source, Some((backend, ACTIVE_SPEED)), false).await;
+    let control = render_passthrough(
+        source,
+        None,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
+    let candidate = render_passthrough(
+        source,
+        Some((backend, ACTIVE_SPEED)),
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
+    let rate_control = render_passthrough(
+        marker_source,
+        None,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
+    let rate_candidate = render_passthrough(
+        marker_source,
+        Some((backend, ACTIVE_SPEED)),
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        false,
+    )
+    .await;
     let control_report = CochleaReport::measure(&control.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_report = CochleaReport::measure(&candidate.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_sine_fit = measure_quiet_sine(&candidate.pcm);

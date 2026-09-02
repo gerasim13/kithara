@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stretch::StretchKind;
+use kithara_stretch::{ElasticBackendConfig, StretchKind};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -37,13 +37,19 @@ fn frontier(source: u64, output: i64) -> PresentationFrontier {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn prepared_quantum_keeps_the_context_it_sampled(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn prepared_quantum_keeps_the_context_it_sampled(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_backend(backend);
-    let (publisher, mut renderer) = renderer_with_publisher(controls);
+    let (publisher, mut renderer) = renderer_with_publisher(controls, backends);
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &sine(16));
     let sampled = context(7, 1_000, input.frames());
@@ -77,13 +83,19 @@ fn prepared_quantum_keeps_the_context_it_sampled(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn invalidated_quantum_preserves_the_committed_frontier(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn invalidated_quantum_preserves_the_committed_frontier(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_backend(backend);
-    let (publisher, mut renderer) = renderer_with_publisher(controls);
+    let (publisher, mut renderer) = renderer_with_publisher(controls, backends);
     let pools = renderer.pools.clone();
     let first = chunk(&pools, &sine(16));
     publisher.publish(&context(7, 1_000, first.frames()), frontier(0, 1_000));
@@ -184,13 +196,19 @@ fn legacy_source_limit_reserves_fractional_output_carry() {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn source_quantum_rejects_a_stationary_terminal_coordinate(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn source_quantum_rejects_a_stationary_terminal_coordinate(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(0.5);
     controls.set_backend(backend);
-    let mut fx = renderer(controls);
+    let mut fx = renderer(controls, backends);
     let pools = fx.pools.clone();
     let mut meta = chunk(&pools, &sine(1)).meta;
     meta.frame_offset = u64::MAX;
@@ -202,10 +220,16 @@ fn source_quantum_rejects_a_stationary_terminal_coordinate(#[case] backend: Stre
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn one_frame_regions_accumulate_into_one_portable_request(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -218,7 +242,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
         ])
         .expect("one-frame regions are ordered and non-empty"),
     )));
-    let mut fx = renderer(controls);
+    let mut fx = renderer(controls, backends);
     let pools = fx.pools.clone();
     let source = sine(4);
 
@@ -251,10 +275,16 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn pending_span_continues_from_presented_frontier(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -266,7 +296,7 @@ fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) 
         ])
         .expect("fixture regions are contiguous"),
     )));
-    let mut fx = renderer(controls);
+    let mut fx = renderer(controls, backends);
     let pools = fx.pools.clone();
     let source = sine(3);
     let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
@@ -311,14 +341,20 @@ fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) 
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn rendered_source_frontier_excludes_pending_source(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let source_latency = fx
         .engine
@@ -357,17 +393,23 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_is_committed_before_resident_unity_render(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn pending_span_is_committed_before_resident_unity_render(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let source = sine(3);
     let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
@@ -393,10 +435,16 @@ fn pending_span_is_committed_before_resident_unity_render(#[case] backend: Stret
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn active_engine_remains_resident_at_live_unity(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const ACTIVE_FRAMES: usize = 4096;
     const UNITY_FRAMES: usize = 1024;
 
@@ -406,7 +454,7 @@ fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut live = renderer(Arc::clone(&controls));
+    let mut live = renderer(Arc::clone(&controls), backends);
     let pools = live.pools.clone();
     render_serviced(&mut live, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
@@ -461,17 +509,23 @@ fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn reset_discards_pending_span_before_new_timeline(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let source = sine(2);
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());

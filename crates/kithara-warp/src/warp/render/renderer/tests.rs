@@ -2,6 +2,7 @@ use std::num::NonZero;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_stretch::ElasticBackendConfig;
 use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
@@ -109,13 +110,17 @@ fn spec() -> AudioSpec {
     }
 }
 
-fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    renderer_with_publisher(controls).1
+fn renderer(controls: Arc<StretchControls>, backends: ElasticBackendConfig) -> WarpRenderer {
+    renderer_with_publisher(controls, backends).1
 }
 
-fn renderer_with_publisher(controls: Arc<StretchControls>) -> (RenderPublisher, WarpRenderer) {
+fn renderer_with_publisher(
+    controls: Arc<StretchControls>,
+    backends: ElasticBackendConfig,
+) -> (RenderPublisher, WarpRenderer) {
     let config = WarpConfig::builder()
         .stretch(controls)
+        .backends(backends)
         .render_quantum_frames(
             NonZero::new(WarpRenderer::DIRECT_OUTPUT_FRAME_LIMIT)
                 .expect("renderer output limit is non-zero"),

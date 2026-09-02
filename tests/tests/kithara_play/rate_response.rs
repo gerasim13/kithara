@@ -11,6 +11,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    stretch::ElasticBackendConfig,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -42,8 +43,11 @@ const PCM_DIFFERENCE_THRESHOLD: f32 = 0.002;
 const PCM_DIFFERENCE_FRAMES: usize = 32;
 const TARGET_WINDOW_FRAMES: usize = 128;
 const RATE_COMMAND_BURST: usize = 64;
+const RATE_SMOOTH_FRAMES: usize = 12;
+const RENDER_QUANTUM_FRAMES: usize = 32;
 const STABLE_TONE_BLOCKS: usize = 4;
 const WARMUP_BLOCK_BUDGET: usize = 200;
+const OVERSIZED_BLOCK_FRAMES: usize = 512;
 
 const UP: RateCase = RateCase::new(SLOW_RATE, 0, INTERMEDIATE_RATE, 2, false);
 const DOWN: RateCase = RateCase::new(INTERMEDIATE_RATE, 2, SLOW_RATE, 0, false);
@@ -190,13 +194,25 @@ async fn open_sine_resource(
 async fn playing_sine_queue(
     temp_dir: &TestTempDir,
     backend: StretchKind,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
     initial_rate: f32,
     output_block_frames: usize,
     response_budget_frames: usize,
 ) -> (OfflinePlayerHarness, Queue<TestPools>, usize) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
-    let warp = WarpConfig::builder().stretch(stretch).build();
+    let warp = WarpConfig::builder()
+        .stretch(stretch)
+        .backends(backends)
+        .rate_smooth_frames(
+            NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+        )
+        .render_quantum_frames(
+            NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+        )
+        .build();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -234,12 +250,13 @@ async fn playing_sine_queue(
 async fn capture_frames(
     harness: &OfflinePlayerHarness,
     frames: usize,
+    callback_frames: usize,
     pump_control: bool,
 ) -> Vec<f32> {
     let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
     while samples.len() / usize::from(CHANNELS) < frames {
         let remaining = frames - samples.len() / usize::from(CHANNELS);
-        let block_frames = remaining.min(BLOCK_FRAMES);
+        let block_frames = remaining.min(callback_frames);
         samples.extend(harness.render(block_frames));
         if pump_control {
             let _ = harness.tick_and_drain();
@@ -252,21 +269,29 @@ async fn capture_frames(
 async fn response_run(
     temp_dir: &TestTempDir,
     backend: StretchKind,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+    output_block_frames: usize,
+    response_budget_frames: usize,
     case: RateCase,
     change_rate: bool,
 ) -> RateRun {
     let (harness, queue, response_budget_frames) = playing_sine_queue(
         temp_dir,
         backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
         case.initial_rate,
-        BLOCK_FRAMES,
-        INDUSTRY_RESPONSE_BUDGET_FRAMES,
+        output_block_frames,
+        response_budget_frames,
     )
     .await;
-    render_until_tone(&harness, case.initial_tone, BLOCK_FRAMES).await;
+    render_until_tone(&harness, case.initial_tone, output_block_frames).await;
 
     let recorder = change_rate.then(probe_capture::install);
-    let mut samples = capture_frames(&harness, PRE_COMMAND_FRAMES, true).await;
+    let mut samples = capture_frames(&harness, PRE_COMMAND_FRAMES, output_block_frames, true).await;
     let command_frame = samples.len() / usize::from(CHANNELS);
     if change_rate {
         if case.burst {
@@ -282,7 +307,15 @@ async fn response_run(
     } else {
         queue.set_rate(case.initial_rate);
     }
-    samples.extend(capture_frames(&harness, RESPONSE_OBSERVATION_FRAMES, false).await);
+    samples.extend(
+        capture_frames(
+            &harness,
+            RESPONSE_OBSERVATION_FRAMES,
+            output_block_frames,
+            false,
+        )
+        .await,
+    );
     let probes = recorder.map_or_else(Vec::new, |recorder| recorder.snapshot());
 
     RateRun {
@@ -574,15 +607,42 @@ fn assert_response(
 async fn run_response_case(
     temp_dir: &TestTempDir,
     backend: StretchKind,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
+    output_block_frames: usize,
+    response_budget_frames: usize,
     case: RateCase,
     label: &str,
 ) {
-    let control = response_run(temp_dir, backend, case, false).await;
+    let control = response_run(
+        temp_dir,
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        output_block_frames,
+        response_budget_frames,
+        case,
+        false,
+    )
+    .await;
 
     #[cfg(feature = "perf")]
     let _guard = HotpathGuardBuilder::new("live_rate_response").build();
 
-    let candidate = response_run(temp_dir, backend, case, true).await;
+    let candidate = response_run(
+        temp_dir,
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        output_block_frames,
+        response_budget_frames,
+        case,
+        true,
+    )
+    .await;
     assert_response(backend, label, case, &candidate, &control);
 }
 
@@ -594,32 +654,112 @@ async fn run_response_case(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::signalsmith_up(StretchKind::Signalsmith, UP)]
-#[case::signalsmith_down(StretchKind::Signalsmith, DOWN)]
-#[case::signalsmith_extreme(StretchKind::Signalsmith, EXTREME)]
-#[case::signalsmith_unity(StretchKind::Signalsmith, UNITY)]
-#[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_up(StretchKind::Bungee, UP)
+#[case::signalsmith_up(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES,
+    UP
+)]
+#[case::signalsmith_down(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES,
+    DOWN
+)]
+#[case::signalsmith_extreme(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES,
+    EXTREME
+)]
+#[case::signalsmith_unity(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES,
+    UNITY
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_down(StretchKind::Bungee, DOWN)
+    case::bungee_up(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES,
+        UP
+    )
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_extreme(StretchKind::Bungee, EXTREME)
+    case::bungee_down(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES,
+        DOWN
+    )
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_unity(StretchKind::Bungee, UNITY)
+    case::bungee_extreme(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES,
+        EXTREME
+    )
+)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case::bungee_unity(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES,
+        UNITY
+    )
 )]
 async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+    #[case] output_block_frames: usize,
+    #[case] response_budget_frames: usize,
     #[case] case: RateCase,
 ) {
-    run_response_case(&temp_dir, backend, case, "live rate change").await;
+    run_response_case(
+        &temp_dir,
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        output_block_frames,
+        response_budget_frames,
+        case,
+        "live rate change",
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -630,16 +770,46 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::signalsmith(StretchKind::Signalsmith)]
+#[case::signalsmith(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    BLOCK_FRAMES,
+    INDUSTRY_RESPONSE_BUDGET_FRAMES
+)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee(StretchKind::Bungee)
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES
+    )
 )]
 async fn latest_rate_wins_after_a_control_burst(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+    #[case] output_block_frames: usize,
+    #[case] response_budget_frames: usize,
 ) {
-    run_response_case(&temp_dir, backend, BURST, "latest-wins burst").await;
+    run_response_case(
+        &temp_dir,
+        backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
+        output_block_frames,
+        response_budget_frames,
+        BURST,
+        "latest-wins burst",
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -652,27 +822,57 @@ async fn latest_rate_wins_after_a_control_burst(
 )]
 #[case::signalsmith_128(
     StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
     BLOCK_FRAMES,
     INDUSTRY_RESPONSE_BUDGET_FRAMES
 )]
-#[case::signalsmith_512(StretchKind::Signalsmith, 512, 639)]
-#[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_128(StretchKind::Bungee, BLOCK_FRAMES, INDUSTRY_RESPONSE_BUDGET_FRAMES)
+#[case::signalsmith_512(
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    RATE_SMOOTH_FRAMES,
+    RENDER_QUANTUM_FRAMES,
+    OVERSIZED_BLOCK_FRAMES,
+    usize::MAX
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_512(StretchKind::Bungee, 512, 639)
+    case::bungee_128(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        BLOCK_FRAMES,
+        INDUSTRY_RESPONSE_BUDGET_FRAMES
+    )
+)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case::bungee_512(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        RATE_SMOOTH_FRAMES,
+        RENDER_QUANTUM_FRAMES,
+        OVERSIZED_BLOCK_FRAMES,
+        usize::MAX
+    )
 )]
 async fn configured_output_buffer_keeps_consecutive_callbacks_contiguous(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
     #[case] callback_frames: usize,
     #[case] response_budget_frames: usize,
 ) {
     let (harness, _queue, _) = playing_sine_queue(
         &temp_dir,
         backend,
+        backends,
+        rate_smooth_frames,
+        render_quantum_frames,
         SLOW_RATE,
         callback_frames,
         response_budget_frames,
@@ -742,9 +942,9 @@ async fn configured_output_buffer_keeps_consecutive_callbacks_contiguous(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::industry_block(128, 441, true)]
-#[case::oversized_block(512, 441, false)]
-#[case::expanded_budget(512, 639, true)]
+#[case::industry_block(BLOCK_FRAMES, INDUSTRY_RESPONSE_BUDGET_FRAMES, true)]
+#[case::oversized_block(OVERSIZED_BLOCK_FRAMES, INDUSTRY_RESPONSE_BUDGET_FRAMES, false)]
+#[case::maximum_budget(OVERSIZED_BLOCK_FRAMES, usize::MAX, true)]
 async fn session_output_block_owns_response_geometry(
     temp_dir: TestTempDir,
     #[case] output_block_frames: usize,

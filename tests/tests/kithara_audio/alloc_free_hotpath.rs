@@ -9,6 +9,7 @@ use kithara::{
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    stretch::ElasticBackendConfig,
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
@@ -35,10 +36,22 @@ fn eager_pools(initial_buffers: usize, initial_capacity: usize) -> Pools {
 
 fn warp_renderer(
     controls: kithara::platform::sync::Arc<StretchControls>,
+    backends: ElasticBackendConfig,
+    rate_smooth_frames: usize,
+    render_quantum_frames: usize,
     spec: AudioSpec,
     pools: Pools,
 ) -> WarpRenderer<TestPools> {
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .backends(backends)
+        .rate_smooth_frames(
+            NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+        )
+        .render_quantum_frames(
+            NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+        )
+        .build();
     Warp::new((), &config).renderer(spec, pools)
 }
 
@@ -273,12 +286,17 @@ fn test_resampler_passthrough_allocation_free() {
 }
 
 #[kithara::test]
-#[case(StretchKind::Signalsmith)]
+#[case(StretchKind::Signalsmith, ElasticBackendConfig::default(), 12, 32)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case(StretchKind::Bungee, ElasticBackendConfig::default(), 12, 32)
 )]
-fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
+fn timestretch_active_process_and_terminal_flush_are_allocation_free(
+    #[case] kind: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
     const FRAMES: usize = 8_192;
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -286,7 +304,14 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut effect = warp_renderer(controls, spec, pools.clone());
+        let mut effect = warp_renderer(
+            controls,
+            backends,
+            rate_smooth_frames,
+            render_quantum_frames,
+            spec,
+            pools.clone(),
+        );
         effect.prepare(spec);
         let first = make_chunk_at(&pools, FRAMES, 2, spec.sample_rate.get(), 0);
         let second = make_chunk_at(
@@ -327,12 +352,17 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
 }
 
 #[kithara::test]
-#[case(StretchKind::Signalsmith)]
+#[case(StretchKind::Signalsmith, ElasticBackendConfig::default(), 12, 32)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case(StretchKind::Bungee, ElasticBackendConfig::default(), 12, 32)
 )]
-fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
+fn timestretch_pending_and_maximum_output_are_allocation_free(
+    #[case] kind: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
     const FRAMES: usize = 8_192;
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -340,7 +370,14 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         let controls = StretchControls::new(0.05);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut maximum = warp_renderer(controls, spec, pools.clone());
+        let mut maximum = warp_renderer(
+            controls,
+            backends,
+            rate_smooth_frames,
+            render_quantum_frames,
+            spec,
+            pools.clone(),
+        );
         maximum.prepare(spec);
         let input = make_chunk(&pools, FRAMES, 2);
         (maximum, input)
@@ -360,7 +397,14 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         let controls = StretchControls::new(2.0);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut pending = warp_renderer(controls, spec, pools.clone());
+        let mut pending = warp_renderer(
+            controls,
+            backends,
+            rate_smooth_frames,
+            render_quantum_frames,
+            spec,
+            pools.clone(),
+        );
         pending.prepare(spec);
         let input = make_chunk(&pools, 1, 2);
         (pending, input)

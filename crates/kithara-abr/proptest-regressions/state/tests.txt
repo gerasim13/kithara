@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc db3f42138b9e5f3b58f113e90a8dbfa25a17a617e06dfac6b3f1aff7d7a32590 # shrinks to ops = [PushBandwidth { bps: 1000 }]

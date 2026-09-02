@@ -2,6 +2,8 @@ use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_stretch::ElasticBackendConfig;
 
 use crate::StretchControls;
 
@@ -28,6 +30,11 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    /// Preparation parameters for the compiled elastic backends.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    #[builder(default)]
+    #[field(get, copy)]
+    backends: ElasticBackendConfig,
     /// Time-stretch rate smoothing window in output frames.
     #[builder(default = Consts::DEFAULT_RATE_SMOOTH_FRAMES)]
     #[field(get, copy)]
@@ -40,6 +47,8 @@ pub struct WarpConfig {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    use kithara_stretch::{BungeeConfig, SignalsmithConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -73,5 +82,26 @@ mod tests {
             config.render_quantum_frames().get(),
             expected_render_quantum_frames
         );
+    }
+
+    #[kithara::test]
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    fn config_carries_backend_geometry() {
+        let backends = ElasticBackendConfig::builder()
+            .signalsmith(
+                SignalsmithConfig::builder()
+                    .block_frames(NonZeroUsize::new(256).expect("fixture block is non-zero"))
+                    .interval_frames(NonZeroUsize::new(16).expect("fixture interval is non-zero"))
+                    .build(),
+            )
+            .bungee(
+                BungeeConfig::builder()
+                    .log2_synthesis_hop_adjust(-2)
+                    .build(),
+            )
+            .build();
+        let config = WarpConfig::builder().backends(backends).build();
+
+        assert_eq!(config.backends(), backends);
     }
 }

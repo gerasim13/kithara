@@ -2,7 +2,7 @@ use std::num::{NonZero, NonZeroU32, NonZeroUsize};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stretch::{ElasticRequest, StretchKind};
+use kithara_stretch::{ElasticBackendConfig, ElasticRequest, StretchKind};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -12,18 +12,18 @@ use super::{
 };
 use crate::{Warp, WarpConfig, test_pools::pools};
 
-fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
+fn keylocked(kind: StretchKind, backends: ElasticBackendConfig, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(kind);
-    renderer(controls)
+    renderer(controls, backends)
 }
 
-fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
+fn vinyl(kind: StretchKind, backends: ElasticBackendConfig, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);
     controls.set_keylock(false);
     controls.set_backend(kind);
-    renderer(controls)
+    renderer(controls, backends)
 }
 
 fn render_with_tail(
@@ -105,14 +105,25 @@ fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith, 128, [510, 508, 510])
+    case::signalsmith(
+        StretchKind::Signalsmith,
+        ElasticBackendConfig::default(),
+        128,
+        [510, 508, 510]
+    )
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee(StretchKind::Bungee, 128, [510, 508, 510])
+    case::bungee(
+        StretchKind::Bungee,
+        ElasticBackendConfig::default(),
+        128,
+        [510, 508, 510]
+    )
 )]
 fn rate_transition_partitions_stay_inside_the_rate_envelope(
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
     #[case] quantum_frames: usize,
     #[case] partitions: [usize; 3],
 ) {
@@ -121,6 +132,7 @@ fn rate_transition_partitions_stay_inside_the_rate_envelope(
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(Arc::clone(&controls))
+        .backends(backends)
         .render_quantum_frames(
             NonZeroUsize::new(quantum_frames).expect("fixture quantum is non-zero"),
         )
@@ -147,10 +159,16 @@ fn rate_transition_partitions_stay_inside_the_rate_envelope(
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn minimum_speed_quantum_preserves_the_declared_rate(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn minimum_speed_quantum_preserves_the_declared_rate(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const SOURCE_FRAMES: usize = 3;
     const OUTPUT_FRAMES: usize = 60;
 
@@ -159,6 +177,7 @@ fn minimum_speed_quantum_preserves_the_declared_rate(#[case] backend: StretchKin
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(controls)
+        .backends(backends)
         .render_quantum_frames(NonZeroUsize::new(64).expect("fixture render quantum is non-zero"))
         .build();
     let pools = pools();
@@ -187,10 +206,16 @@ fn minimum_speed_quantum_preserves_the_declared_rate(#[case] backend: StretchKin
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn renderer_emits_the_configured_output_quantum(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const QUANTUM_FRAMES: usize = 64;
 
     let controls = StretchControls::new(0.5);
@@ -198,6 +223,7 @@ fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(controls)
+        .backends(backends)
         .render_quantum_frames(
             NonZeroUsize::new(QUANTUM_FRAMES).expect("fixture quantum is non-zero"),
         )
@@ -226,30 +252,45 @@ fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
 
 fn run_keylocked_with_tail(
     kind: StretchKind,
+    backends: ElasticBackendConfig,
     speed: f32,
     in_frames: usize,
     input_block_frames: usize,
 ) -> (Vec<f32>, usize) {
     let input = sine(in_frames);
-    render_with_tail(&mut keylocked(kind, speed), &input, input_block_frames)
+    render_with_tail(
+        &mut keylocked(kind, backends, speed),
+        &input,
+        input_block_frames,
+    )
 }
 
 fn run_vinyl(
     kind: StretchKind,
+    backends: ElasticBackendConfig,
     speed: f32,
     in_frames: usize,
     input_block_frames: usize,
 ) -> Vec<f32> {
     let input = sine(in_frames);
-    render(&mut vinyl(kind, speed), &input, input_block_frames)
+    render(
+        &mut vinyl(kind, backends, speed),
+        &input,
+        input_block_frames,
+    )
 }
 
 /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
 /// Shared across every compiled-in backend.
-fn assert_half_speed_contract(kind: StretchKind, input_block_frames: usize) {
+fn assert_half_speed_contract(
+    kind: StretchKind,
+    backends: ElasticBackendConfig,
+    input_block_frames: usize,
+) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
-    let (out, tail_frames) = run_keylocked_with_tail(kind, 0.5, in_frames, input_block_frames);
+    let (out, tail_frames) =
+        run_keylocked_with_tail(kind, backends, 0.5, in_frames, input_block_frames);
     let out_frames = out.len() / channels;
     let timeline_frames = out_frames - tail_frames;
     let expected_timeline = in_frames * 2;
@@ -282,27 +323,42 @@ fn assert_half_speed_contract(kind: StretchKind, input_block_frames: usize) {
     );
 }
 
-fn assert_unity_contract(kind: StretchKind, input_block_frames: usize) {
+fn assert_unity_contract(
+    kind: StretchKind,
+    backends: ElasticBackendConfig,
+    input_block_frames: usize,
+) {
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
     let input = sine(in_frames);
-    let out = render(&mut keylocked(kind, 1.0), &input, input_block_frames);
+    let out = render(
+        &mut keylocked(kind, backends, 1.0),
+        &input,
+        input_block_frames,
+    );
     assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
 }
 
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith, 4096)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default(), 4096)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, 4096))]
-fn half_speed_and_unity_contracts(#[case] backend: StretchKind, #[case] input_block_frames: usize) {
-    assert_half_speed_contract(backend, input_block_frames);
-    assert_unity_contract(backend, input_block_frames);
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default(), 4096)
+)]
+fn half_speed_and_unity_contracts(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] input_block_frames: usize,
+) {
+    assert_half_speed_contract(backend, backends, input_block_frames);
+    assert_unity_contract(backend, backends, input_block_frames);
 }
 
 #[kithara::test]
 fn unity_passthrough_is_bounded_by_the_render_quantum() {
-    let mut renderer = renderer(StretchControls::new(1.0));
+    let mut renderer = renderer(StretchControls::new(1.0), ElasticBackendConfig::default());
     let frames = renderer.render_quantum_frames.get() * 2;
 
     assert_eq!(
@@ -314,17 +370,26 @@ fn unity_passthrough_is_bounded_by_the_render_quantum() {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn primed_output_continues_the_passthrough_frontier(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn primed_output_continues_the_passthrough_frontier(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const BLOCK_FRAMES: usize = 64;
     const ACTIVE_REMAINING: usize = 4096;
 
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .backends(backends)
+        .build();
     let mut renderer = Warp::new((), &config).quantum_renderer(spec(), pools());
     let pools = renderer.pools.clone();
     let latency = renderer
@@ -497,14 +562,20 @@ fn primed_output_continues_the_passthrough_frontier(#[case] backend: StretchKind
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn rendered_source_frontier_excludes_backend_lookahead(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const SOURCE_START: u64 = 10_000;
     const SOURCE_FRAMES: usize = 4096;
 
-    let mut renderer = keylocked(backend, 0.5);
+    let mut renderer = keylocked(backend, backends, 0.5);
     let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
     let mut input = chunk(&pools, &source);
@@ -553,10 +624,18 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default(), 12, 32)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default(), 12, 32)
+)]
+fn rendered_source_frontier_reaches_end_only_on_completed_drain(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
     const SOURCE_START: u64 = 10_000;
     const SOURCE_FRAMES: usize = WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT;
 
@@ -565,7 +644,13 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(controls)
-        .render_quantum_frames(NonZeroUsize::new(4096).expect("fixture render quantum is non-zero"))
+        .backends(backends)
+        .rate_smooth_frames(
+            NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+        )
+        .render_quantum_frames(
+            NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+        )
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     let pools = renderer.pools.clone();
@@ -575,15 +660,30 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     let admitted = SOURCE_START
         .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
         .expect("source frontier fits u64");
-    let source_latency = renderer
+    let latency = renderer
         .engine
         .as_ref()
         .expect("compiled backend is available")
         .capabilities()
-        .latency()
-        .source_frames();
+        .latency();
+    let source_latency = latency.source_frames();
     let held =
         u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
+    let slowest_ratio = 1.0 / f64::from(StretchControls::MIN_SPEED);
+    let terminal_frame_bound = source_latency
+        .to_f64()
+        .expect("backend latency fits f64")
+        .mul_add(
+            slowest_ratio,
+            latency
+                .output_frames()
+                .to_f64()
+                .expect("backend latency fits f64"),
+        )
+        .ceil()
+        .to_usize()
+        .expect("terminal frame bound fits usize");
+    let max_drain_steps = terminal_frame_bound.div_ceil(render_quantum_frames) + 1;
 
     render_serviced(&mut renderer, input).expect("minimum-speed render emits samples");
     assert_eq!(
@@ -595,7 +695,10 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     while let Some(tail) = flush_serviced(&mut renderer) {
         assert!(tail.frames() > 0, "terminal chunk carries real samples");
         frontiers.push(renderer.rendered_source_end());
-        assert!(frontiers.len() < 64, "terminal drain must converge");
+        assert!(
+            frontiers.len() <= max_drain_steps,
+            "terminal drain exceeded its declared latency bound"
+        );
     }
 
     assert!(
@@ -618,12 +721,18 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn output_meta_preserves_decoder_timeline(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let channels = usize::from(Consts::CH);
-    let mut fx = keylocked(backend, 0.5);
+    let mut fx = keylocked(backend, backends, 0.5);
     let pools = fx.pools.clone();
     let cf = 1024usize;
     let block = sine(cf);
@@ -686,16 +795,20 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith, 4096)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default(), 4096)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, 4096))]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default(), 4096)
+)]
 fn vinyl_speed_scales_duration_and_pitch(
     #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
     #[case] input_block_frames: usize,
 ) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-    let out = run_vinyl(backend, 2.0, in_frames, input_block_frames);
+    let out = run_vinyl(backend, backends, 2.0, in_frames, input_block_frames);
     let out_frames = out.len() / channels;
     assert!(
         out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
@@ -717,16 +830,22 @@ fn vinyl_speed_scales_duration_and_pitch(
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn live_speed_change_updates_stretch_duration(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     #[cfg(feature = "perf")]
     let _guard = hotpath::HotpathGuardBuilder::new("live_speed_change").build();
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let block = sine(4096);
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
@@ -752,16 +871,22 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn live_speed_change_ramps_the_first_output_block(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const RESPONSE_QUANTA: usize = 2;
 
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let frames = fx.render_quantum_frames.get();
     let channels = usize::from(Consts::CH);
@@ -870,21 +995,27 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_speed_ramp_is_independent_of_source_partitioning(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn live_speed_ramp_is_independent_of_source_partitioning(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const BLOCK_FRAMES: usize = 4096;
 
     let direct_controls = StretchControls::new(0.5);
     direct_controls.set_keylock(true);
     direct_controls.set_backend(backend);
-    let mut direct = renderer(Arc::clone(&direct_controls));
+    let mut direct = renderer(Arc::clone(&direct_controls), backends);
 
     let quantum_controls = StretchControls::new(0.5);
     quantum_controls.set_keylock(true);
     quantum_controls.set_backend(backend);
-    let mut quantum = renderer(Arc::clone(&quantum_controls));
+    let mut quantum = renderer(Arc::clone(&quantum_controls), backends);
     let direct_pools = direct.pools.clone();
 
     let source = sine(BLOCK_FRAMES * 2);
@@ -922,14 +1053,32 @@ fn live_speed_ramp_is_independent_of_source_partitioning(#[case] backend: Stretc
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default(), 12, 32)
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default(), 12, 32)
+)]
+fn live_keylock_toggle_switches_pitch_mode(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(false);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .backends(backends)
+        .rate_smooth_frames(
+            NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+        )
+        .render_quantum_frames(
+            NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+        )
+        .build();
+    let mut fx = Warp::new((), &config).renderer(spec(), pools());
     let pools = fx.pools.clone();
     let block = sine(4096);
 

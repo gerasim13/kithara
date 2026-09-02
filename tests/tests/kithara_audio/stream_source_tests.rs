@@ -12,6 +12,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stretch::ElasticBackendConfig,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -69,8 +70,10 @@ async fn wait_for_chunk(
         let (next_audio, outcome) = blocking_audio(audio, |audio| audio.next_chunk()).await;
         audio = next_audio;
         match outcome.expect("decode while waiting for a PCM chunk") {
-            ChunkOutcome::Chunk(chunk) => return (audio, chunk),
-            ChunkOutcome::Pending { .. } => time::sleep(Duration::from_millis(10)).await,
+            ChunkOutcome::Chunk(chunk) if chunk.frames() > 0 => return (audio, chunk),
+            ChunkOutcome::Chunk(_) | ChunkOutcome::Pending { .. } => {
+                time::sleep(Duration::from_millis(10)).await;
+            }
             ChunkOutcome::Eof { .. } => panic!("source reached EOF while waiting for PCM"),
         }
     }
@@ -139,12 +142,17 @@ async fn basic_decode_to_eof() {
     timeout(Duration::from_secs(15)),
     hang_timeout_secs(5)
 )]
-#[case(StretchKind::Signalsmith)]
+#[case(StretchKind::Signalsmith, ElasticBackendConfig::default(), 12, 32)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
+    case(StretchKind::Bungee, ElasticBackendConfig::default(), 12, 32)
 )]
-async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: StretchKind) {
+async fn non_unity_route_change_resumes_ahead_of_the_consumer(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+    #[case] rate_smooth_frames: usize,
+    #[case] render_quantum_frames: usize,
+) {
     const PRELOAD_CHUNKS: usize = 64;
     const RING_CHUNKS: usize = 64;
     const SOURCE_RATE: u32 = 44_100;
@@ -177,7 +185,18 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     controls.set_backend(backend);
     controls.set_keylock(true);
     let config = TrackConfig::for_audio(audio)
-        .warp(WarpConfig::builder().stretch(controls).build())
+        .warp(
+            WarpConfig::builder()
+                .stretch(controls)
+                .backends(backends)
+                .rate_smooth_frames(
+                    NonZeroUsize::new(rate_smooth_frames).expect("case smoothing is non-zero"),
+                )
+                .render_quantum_frames(
+                    NonZeroUsize::new(render_quantum_frames).expect("case quantum is non-zero"),
+                )
+                .build(),
+        )
         .build();
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

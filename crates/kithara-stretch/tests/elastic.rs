@@ -8,8 +8,8 @@ use std::{f32::consts::TAU, ops::RangeInclusive};
 
 use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
 use kithara_stretch::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
-    ElasticSpanConfig, StretchKind, build_engine,
+    ElasticBackendConfig, ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError,
+    ElasticRequest, ElasticSpanConfig, StretchKind, build_engine,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -28,13 +28,20 @@ const TERMINAL_HIGH_HZ: f64 = 6_000.0;
 const TERMINAL_LOW_HZ: f64 = 1_500.0;
 const TERMINAL_WINDOW_FRAMES: usize = 64;
 
+type BackendCase = (StretchKind, ElasticBackendConfig);
+
+fn backend_case(backend: StretchKind) -> BackendCase {
+    (backend, ElasticBackendConfig::default())
+}
+
 fn prepared_backend(
-    backend: StretchKind,
+    (backend, backends): BackendCase,
     max_source_frames: usize,
     max_output_frames: usize,
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(backends)
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -46,13 +53,14 @@ fn prepared_backend(
 }
 
 fn prepared_backend_with_rate_envelope(
-    backend: StretchKind,
+    (backend, backends): BackendCase,
     max_source_frames: usize,
     max_output_frames: usize,
     rate_envelope: RangeInclusive<f64>,
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(backends)
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -497,10 +505,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn renders_the_requested_output_frame_count(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn renders_the_requested_output_frame_count(#[case] backend: BackendCase) {
         let mut engine = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4800, 4000).expect("the request is non-empty");
         let source = interleaved_signal(request.source_frames());
@@ -517,10 +528,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn renders_exact_spans_at_both_declared_rate_edges(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn renders_exact_spans_at_both_declared_rate_edges(#[case] backend: BackendCase) {
         let mut engine = prepared_backend(backend, 8192, 4096);
         let capabilities = engine.capabilities();
 
@@ -540,10 +554,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn output_is_independent_of_request_partitioning(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn output_is_independent_of_request_partitioning(#[case] backend: BackendCase) {
         for (source_frames, output_frames, source_partition, output_partition) in [
             (16_384, 16_384, 512, 512),
             (8192, 10_240, 512, 640),
@@ -587,10 +604,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn keeps_capabilities_stable_through_rate_changes(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn keeps_capabilities_stable_through_rate_changes(#[case] backend: BackendCase) {
         const FAST_OUTPUT_FRAMES: usize = 100;
         const FAST_SOURCE_FRAMES: usize = 400;
         const SLOW_OUTPUT_FRAMES: usize = 8000;
@@ -637,10 +657,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn pitch_control_is_independent_of_exact_frame_advance(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn pitch_control_is_independent_of_exact_frame_advance(#[case] backend: BackendCase) {
         let mut reference = prepared_backend(backend, 8192, 8192);
         let mut pitched = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4096, 4096).expect("unity request");
@@ -670,10 +693,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rejects_invalid_pitch_scales(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn rejects_invalid_pitch_scales(#[case] backend: BackendCase) {
         const MIN_NATIVE_RANGE: f64 = 0.25;
         const MAX_NATIVE_RANGE: f64 = 4.0;
         const BELOW_NATIVE_RANGE: f64 = 0.249;
@@ -705,10 +731,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn terminal_flush_reaches_last_source_audio_at_each_rate(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn terminal_flush_reaches_last_source_audio_at_each_rate(#[case] backend: BackendCase) {
         const FRAMES: usize = 8192;
         for request in [
             ElasticRequest::new(FRAMES / 2, FRAMES).expect("half-speed request"),
@@ -764,30 +793,30 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_minimum(StretchKind::Signalsmith, 0.05)
+        case::signalsmith_minimum(backend_case(StretchKind::Signalsmith), 0.05)
     )]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_unity(StretchKind::Signalsmith, 1.0)
+        case::signalsmith_unity(backend_case(StretchKind::Signalsmith), 1.0)
     )]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_maximum(StretchKind::Signalsmith, 4.0)
+        case::signalsmith_maximum(backend_case(StretchKind::Signalsmith), 4.0)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_minimum(StretchKind::Bungee, 0.05)
+        case::bungee_minimum(backend_case(StretchKind::Bungee), 0.05)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_unity(StretchKind::Bungee, 1.0)
+        case::bungee_unity(backend_case(StretchKind::Bungee), 1.0)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_maximum(StretchKind::Bungee, 4.0)
+        case::bungee_maximum(backend_case(StretchKind::Bungee), 4.0)
     )]
     fn terminal_flush_drains_through_caller_sized_quantums(
-        #[case] backend: StretchKind,
+        #[case] backend: BackendCase,
         #[case] rate: f64,
     ) {
         const OUTPUT_FRAMES: usize = 8_000;
@@ -853,10 +882,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn terminal_flush_reaches_each_new_rate_within_declared_latency(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn terminal_flush_reaches_each_new_rate_within_declared_latency(#[case] backend: BackendCase) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
         for (initial_is_minimum, settled_is_minimum) in [(true, false), (false, true)] {
@@ -905,11 +937,14 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
     fn terminal_flush_reaches_practical_rate_edges_after_declared_latency(
-        #[case] backend: StretchKind,
+        #[case] backend: BackendCase,
     ) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 4;
@@ -953,10 +988,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn transitional_eof_preserves_every_indexed_marker(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn transitional_eof_preserves_every_indexed_marker(#[case] backend: BackendCase) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
         const INITIAL_LANDMARKS: usize = 8;
@@ -1021,10 +1059,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn flush_rejects_partial_frame_storage_without_disarming_tail(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn flush_rejects_partial_frame_storage_without_disarming_tail(#[case] backend: BackendCase) {
         const FRAMES: usize = 8192;
 
         let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -1058,10 +1099,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn fresh_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn fresh_engine_has_no_terminal_tail(#[case] backend: BackendCase) {
         let mut engine = prepared_backend(backend, 8192, 8192);
         let mut terminal = vec![0.0; CONTROL_QUANTUM * CHANNELS];
 
@@ -1074,10 +1118,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn reset_engine_has_no_terminal_tail(#[case] backend: BackendCase) {
         const FRAMES: usize = 8192;
 
         let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -1099,10 +1146,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_clears_stream_history_without_changing_capabilities(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn reset_clears_stream_history_without_changing_capabilities(#[case] backend: BackendCase) {
         const LONG_FRAMES: usize = 16_384;
         const SHORT_FRAMES: usize = 4096;
 
@@ -1140,15 +1190,19 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn preserves_tone_pitch_when_source_advance_changes(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn preserves_tone_pitch_when_source_advance_changes(#[case] backend: BackendCase) {
         const SOURCE_FRAMES: usize = 19_200;
         const OUTPUT_FRAMES: usize = 16_000;
 
         let config = ElasticConfig::builder()
-            .backend(backend)
+            .backend(backend.0)
+            .backends(backend.1)
             .pools(default_pools())
             .sample_rate(SAMPLE_RATE)
             .channels(1)
@@ -1195,10 +1249,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rate_envelope_is_the_configured_practical_domain(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn rate_envelope_is_the_configured_practical_domain(#[case] backend: BackendCase) {
         let engine = prepared_backend(backend, 8192, 4096);
         let envelope = engine.capabilities().rate_envelope();
 
@@ -1211,10 +1268,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rejects_buffers_that_do_not_match_the_request(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn rejects_buffers_that_do_not_match_the_request(#[case] backend: BackendCase) {
         let mut engine = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4800, 4000).expect("non-empty request");
         let source = interleaved_signal(request.source_frames());
@@ -1241,10 +1301,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rejects_spans_beyond_the_prepared_block_limits(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn rejects_spans_beyond_the_prepared_block_limits(#[case] backend: BackendCase) {
         const MAX_SOURCE_FRAMES: usize = 2048;
         const MAX_OUTPUT_FRAMES: usize = 2048;
 
@@ -1294,10 +1357,13 @@ mod facade {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn plans_and_renders_one_block_of_continuous_source_spans(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn plans_and_renders_one_block_of_continuous_source_spans(#[case] backend: BackendCase) {
         use kithara_stretch::{ElasticSpan, ElasticSpanPlan};
 
         const OUTPUT_FRAMES: usize = 512;
@@ -1386,7 +1452,7 @@ mod priming {
             .expect("invariant: warmup request is valid")
     }
 
-    fn primed_playing_pair(backend: StretchKind) -> PrimedPair {
+    fn primed_playing_pair(backend: BackendCase) -> PrimedPair {
         const MAX_FRAMES: usize = 65_536;
 
         let mut reference = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
@@ -1494,10 +1560,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn history_and_output_warmup_remove_the_initial_gap(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn history_and_output_warmup_remove_the_initial_gap(#[case] backend: BackendCase) {
         const FRAMES: usize = 512;
 
         let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
@@ -1528,10 +1597,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn post_prime_pitch_change_responds_within_declared_latency(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn post_prime_pitch_change_responds_within_declared_latency(#[case] backend: BackendCase) {
         let (mut reference, mut changed, capabilities, continuation) = primed_playing_pair(backend);
 
         assert_control_response(
@@ -1547,10 +1619,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn post_prime_rate_change_responds_within_declared_latency(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn post_prime_rate_change_responds_within_declared_latency(#[case] backend: BackendCase) {
         let (mut reference, mut changed, capabilities, continuation) = primed_playing_pair(backend);
 
         assert_control_response(
@@ -1566,11 +1641,14 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
     fn repeated_adjacent_rate_and_pitch_corrections_remain_continuous(
-        #[case] backend: StretchKind,
+        #[case] backend: BackendCase,
     ) {
         const MAX_FRAMES: usize = 65_536;
         const TRANSITIONS: usize = 32;
@@ -1640,10 +1718,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn source_history_conditions_the_cue_boundary(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn source_history_conditions_the_cue_boundary(#[case] backend: BackendCase) {
         const MAX_FRAMES: usize = 65_536;
 
         let mut conditioned = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
@@ -1709,21 +1790,21 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_slow(StretchKind::Signalsmith, 0.05)
+        case::signalsmith_slow(backend_case(StretchKind::Signalsmith), 0.05)
     )]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_fast(StretchKind::Signalsmith, 4.0)
+        case::signalsmith_fast(backend_case(StretchKind::Signalsmith), 4.0)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_slow(StretchKind::Bungee, 0.05)
+        case::bungee_slow(backend_case(StretchKind::Bungee), 0.05)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_fast(StretchKind::Bungee, 4.0)
+        case::bungee_fast(backend_case(StretchKind::Bungee), 4.0)
     )]
-    fn prime_accepts_declared_rate_edges(#[case] backend: StretchKind, #[case] rate: f64) {
+    fn prime_accepts_declared_rate_edges(#[case] backend: BackendCase, #[case] rate: f64) {
         const FRAMES: usize = 512;
 
         let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
@@ -1748,22 +1829,22 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_unity(StretchKind::Signalsmith, 1.0)
+        case::signalsmith_unity(backend_case(StretchKind::Signalsmith), 1.0)
     )]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith_non_unity(StretchKind::Signalsmith, 1.2)
+        case::signalsmith_non_unity(backend_case(StretchKind::Signalsmith), 1.2)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_unity(StretchKind::Bungee, 1.0)
+        case::bungee_unity(backend_case(StretchKind::Bungee), 1.0)
     )]
     #[cfg_attr(
         feature = "stretch-bungee",
-        case::bungee_non_unity(StretchKind::Bungee, 1.2)
+        case::bungee_non_unity(backend_case(StretchKind::Bungee), 1.2)
     )]
     fn priming_hides_history_and_preserves_source_order(
-        #[case] backend: StretchKind,
+        #[case] backend: BackendCase,
         #[case] source_frames_per_output: f64,
     ) {
         const MAX_FRAMES: usize = 65_536;
@@ -1832,10 +1913,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn prime_rejects_every_ambiguous_buffer_count(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn prime_rejects_every_ambiguous_buffer_count(#[case] backend: BackendCase) {
         let mut engine = prepared_backend(backend, 1024, 512);
         let capabilities = engine.capabilities();
         let warmup = warmup_request(capabilities, 1.0);
@@ -1911,10 +1995,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_reprime_keeps_the_first_frame_aligned(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn reset_reprime_keeps_the_first_frame_aligned(#[case] backend: BackendCase) {
         const SOURCE_FRAMES: usize = 600;
         const OUTPUT_FRAMES: usize = 500;
 
@@ -1954,10 +2041,13 @@ mod priming {
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
+        case::signalsmith(backend_case(StretchKind::Signalsmith))
     )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn prime_discards_previous_stream_state(#[case] backend: StretchKind) {
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee(backend_case(StretchKind::Bungee))
+    )]
+    fn prime_discards_previous_stream_state(#[case] backend: BackendCase) {
         const FRAMES: usize = 4096;
 
         let mut fresh = prepared_backend(backend, FRAMES, FRAMES);
@@ -2014,14 +2104,14 @@ mod priming {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith, 208, 208)
+    case::signalsmith(backend_case(StretchKind::Signalsmith), 112, 112)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee(StretchKind::Bungee, 256, 896)
+    case::bungee(backend_case(StretchKind::Bungee), 128, 448)
 )]
 fn backend_declares_its_prepared_domain_and_latency(
-    #[case] backend: StretchKind,
+    #[case] backend: BackendCase,
     #[case] expected_source_latency: usize,
     #[case] expected_output_latency: usize,
 ) {
@@ -2040,21 +2130,28 @@ fn backend_declares_its_prepared_domain_and_latency(
     );
     assert_eq!(
         capabilities.latency().source_frames(),
-        expected_source_latency
+        expected_source_latency,
+        "{backend:?} declared latency changed: {:?}",
+        capabilities.latency()
     );
     assert_eq!(
         capabilities.latency().output_frames(),
-        expected_output_latency
+        expected_output_latency,
+        "{backend:?} declared latency changed: {:?}",
+        capabilities.latency()
     );
 }
 
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(backend_case(StretchKind::Signalsmith))
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(backend_case(StretchKind::Bungee))
+)]
+fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: BackendCase) {
     const FRAMES: usize = 65_536;
 
     let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -2088,12 +2185,16 @@ fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKi
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(backend_case(StretchKind::Signalsmith))
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn prepare_uses_the_injected_pool_region_budget(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(backend_case(StretchKind::Bungee))
+)]
+fn prepare_uses_the_injected_pool_region_budget(#[case] backend: BackendCase) {
     let config = ElasticConfig::builder()
-        .backend(backend)
+        .backend(backend.0)
+        .backends(backend.1)
         .pools(pools(0))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -2112,14 +2213,18 @@ fn prepare_uses_the_injected_pool_region_budget(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(backend_case(StretchKind::Signalsmith))
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn config_rejects_channels_outside_audio_spec_range(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(backend_case(StretchKind::Bungee))
+)]
+fn config_rejects_channels_outside_audio_spec_range(#[case] backend: BackendCase) {
     let channels = usize::from(u16::MAX) + 1;
 
     let result = ElasticConfig::builder()
-        .backend(backend)
+        .backend(backend.0)
+        .backends(backend.1)
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(channels)
@@ -2140,6 +2245,7 @@ fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
         let pools = pools(usize::MAX);
         let config = ElasticConfig::builder()
             .backend(StretchKind::Bungee)
+            .backends(ElasticBackendConfig::default())
             .pools(pools.clone())
             .sample_rate(SAMPLE_RATE)
             .channels(CHANNELS)

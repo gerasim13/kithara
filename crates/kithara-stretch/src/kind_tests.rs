@@ -1,6 +1,6 @@
 use kithara_test_utils::kithara;
 
-use crate::{ElasticConfig, StretchKind, build_engine, test_pools};
+use crate::{ElasticBackendConfig, ElasticConfig, StretchKind, build_engine, test_pools};
 
 #[kithara::test(native, flash(false))]
 fn roundtrips_compiled_variants_through_u8() {
@@ -25,10 +25,16 @@ fn keeps_stable_discriminants_and_default_decode() {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn streams_terminal_tail_through_large_caller_buffers(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn streams_terminal_tail_through_large_caller_buffers(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     const CHANNELS: usize = 2;
     const MAX_OUTPUT_FRAMES: usize = 163_840;
     const MAX_SOURCE_FRAMES: usize = 655_360;
@@ -37,6 +43,7 @@ fn streams_terminal_tail_through_large_caller_buffers(#[case] backend: StretchKi
     let pools = test_pools::pools();
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(backends)
         .sample_rate(48_000)
         .channels(CHANNELS)
         .max_source_frames(MAX_SOURCE_FRAMES)

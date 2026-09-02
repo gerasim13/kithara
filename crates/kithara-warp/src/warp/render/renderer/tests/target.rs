@@ -3,7 +3,7 @@ use std::num::NonZero;
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
-use kithara_stretch::StretchKind;
+use kithara_stretch::{ElasticBackendConfig, StretchKind};
 use kithara_test_utils::kithara;
 
 use super::{StretchControls, WarpConfig, spec};
@@ -14,19 +14,40 @@ use crate::test_pools::pools_with_budget as test_pools;
 /// Backend selection changes only at an explicit renderer lifecycle boundary.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
-#[case::bungee_to_signalsmith_active(StretchKind::Bungee, StretchKind::Signalsmith, 0.5)]
-#[case::signalsmith_to_bungee_active(StretchKind::Signalsmith, StretchKind::Bungee, 0.5)]
-#[case::bungee_to_signalsmith_unity(StretchKind::Bungee, StretchKind::Signalsmith, 1.0)]
-#[case::signalsmith_to_bungee_unity(StretchKind::Signalsmith, StretchKind::Bungee, 1.0)]
+#[case::bungee_to_signalsmith_active(
+    StretchKind::Bungee,
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    0.5
+)]
+#[case::signalsmith_to_bungee_active(
+    StretchKind::Signalsmith,
+    StretchKind::Bungee,
+    ElasticBackendConfig::default(),
+    0.5
+)]
+#[case::bungee_to_signalsmith_unity(
+    StretchKind::Bungee,
+    StretchKind::Signalsmith,
+    ElasticBackendConfig::default(),
+    1.0
+)]
+#[case::signalsmith_to_bungee_unity(
+    StretchKind::Signalsmith,
+    StretchKind::Bungee,
+    ElasticBackendConfig::default(),
+    1.0
+)]
 fn backend_change_waits_for_reset(
     #[case] initial: StretchKind,
     #[case] replacement: StretchKind,
+    #[case] backends: ElasticBackendConfig,
     #[case] swap_speed: f32,
 ) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(initial);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(Arc::clone(&controls), backends);
     let pools = fx.pools.clone();
     let block = sine(4096);
     let _ = render_serviced(&mut fx, chunk(&pools, &block));
@@ -49,10 +70,16 @@ fn backend_change_waits_for_reset(
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn target_rebuild_reuses_one_target_pool_budget(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let initial = spec();
     let rebuilt = AudioSpec {
         sample_rate: NonZero::new(48_000).unwrap(),
@@ -64,7 +91,10 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             let controls = StretchControls::new(0.5);
             controls.set_keylock(true);
             controls.set_backend(backend);
-            let config = WarpConfig::builder().stretch(controls).build();
+            let config = WarpConfig::builder()
+                .stretch(controls)
+                .backends(backends)
+                .build();
             let target = crate::Warp::new((), &config).renderer(target_spec, pools.clone());
             assert!(target.engine.is_some());
             pools.stats().allocated_bytes
@@ -77,7 +107,10 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .backends(backends)
+        .build();
     let mut fx = crate::Warp::new((), &config).renderer(initial, pools.clone());
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
@@ -94,15 +127,24 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
+    case::signalsmith(StretchKind::Signalsmith, ElasticBackendConfig::default())
 )]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: StretchKind) {
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(StretchKind::Bungee, ElasticBackendConfig::default())
+)]
+fn failed_target_rebuild_is_not_retried_without_a_new_revision(
+    #[case] backend: StretchKind,
+    #[case] backends: ElasticBackendConfig,
+) {
     let pools = test_pools(0);
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .backends(backends)
+        .build();
     let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());
     assert!(fx.engine.is_none());
 
