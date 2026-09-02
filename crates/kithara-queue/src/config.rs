@@ -150,6 +150,18 @@ mod document_tests {
         assert_eq!(settings.max_history_size, history);
     }
 
+    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`, which
+    /// emits its token stream verbatim. A typo there would generate a patch
+    /// that accepts anything, and neither the compiler nor clippy would say a
+    /// word -- only a bogus key proves the attribute survived generation.
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<QueueSettingsPatch>("max_concurrent_load: 5\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("max_concurrent_load"), "{error}");
+    }
+
     #[kithara::test(native, flash(false))]
     fn a_document_knob_reaches_the_built_config() {
         let patch: QueueSettingsPatch =

@@ -305,6 +305,22 @@ mod document_tests {
         assert_eq!(settings.tmp_claim_poll_interval, poll_interval);
     }
 
+    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`, which
+    /// emits its token stream verbatim. A typo there would generate a patch
+    /// that accepts anything, and neither the compiler nor clippy would say a
+    /// word -- only a bogus key proves the attribute survived generation.
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error =
+            serde_yaml_ng::from_str::<FileSettingsPatch>("reader_event_capacity_bytes: 512\n")
+                .expect_err("a typo must not be silently ignored");
+
+        assert!(
+            error.to_string().contains("reader_event_capacity_bytes"),
+            "{error}"
+        );
+    }
+
     #[kithara::test(native, flash(false))]
     fn a_document_reads_the_poll_interval_from_humantime_text() {
         let patch: FileSettingsPatch =

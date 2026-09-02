@@ -519,7 +519,7 @@ mod tests {
         let dir = tempdir();
         let path = write(
             &dir,
-            "network-section-stale",
+            "stale-section",
             "network:\n  size_probe_method: head\n",
         );
 

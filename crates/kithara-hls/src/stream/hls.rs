@@ -22,7 +22,7 @@ use super::{
     source::HlsSource,
 };
 use crate::{
-    config::{HlsConfig, HlsSettings},
+    config::{DEFAULT_LOOK_AHEAD_BYTES, HlsConfig},
     handle::StreamPeer,
     peer::HlsPeer,
     playlist::{
@@ -130,7 +130,7 @@ where
             config
                 .settings
                 .look_ahead_bytes
-                .unwrap_or(HlsSettings::DEFAULT_LOOK_AHEAD_BYTES),
+                .unwrap_or(DEFAULT_LOOK_AHEAD_BYTES),
         );
         let look_ahead_segments = effective_look_ahead_segments(&config);
 

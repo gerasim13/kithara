@@ -31,18 +31,12 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_named_field_wins_and_its_siblings_survive() {
-        let mut base = yaml("network:\n  compression: [gzip]\n  size_probe_method: head\n");
+        let mut base = yaml("net:\n  compression: [gzip]\n  is_insecure: false\n");
 
-        merge(
-            &mut base,
-            yaml("network:\n  size_probe_method: range_get\n"),
-        );
+        merge(&mut base, yaml("net:\n  is_insecure: true\n"));
 
-        assert_eq!(
-            base["network"]["size_probe_method"],
-            Value::from("range_get")
-        );
-        assert_eq!(base["network"]["compression"][0], Value::from("gzip"));
+        assert_eq!(base["net"]["is_insecure"], Value::from(true));
+        assert_eq!(base["net"]["compression"][0], Value::from("gzip"));
     }
 
     #[kithara::test(native, flash(false))]

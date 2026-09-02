@@ -14,11 +14,16 @@ use kithara_stream::dl::Downloader;
 use struct_patch::Patch;
 use url::Url;
 
+/// Enough rounds for an obstruction another task is already clearing to
+/// disappear, few enough that a standing one reaches the reader instead of
+/// parking it.
 pub(crate) const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
 pub(crate) const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
 pub(crate) const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
 pub(crate) const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
 pub(crate) const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = 3;
+/// Production HLS streams need a downloader backpressure cap so an idle reader
+/// does not drain the whole playlist into cache.
 pub(crate) const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Encryption key handling configuration.
@@ -92,7 +97,9 @@ pub struct HlsSettings {
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
-    /// Max segments to download per step.
+    /// Max segments to download per step. Three keep the fetcher busy across
+    /// one round-trip without planning further ahead than a look-ahead cap
+    /// would allow anyway.
     #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub download_batch_size: usize,
     /// Acquire attempts a planned segment slot gets before the dispatch
@@ -104,7 +111,9 @@ pub struct HlsSettings {
     pub acquire_attempt_budget: u8,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
-    /// [`Self::ephemeral_cache_min_media_window`].
+    /// [`Self::ephemeral_cache_min_media_window`]. Sized for a shared
+    /// 128-entry cache: two concurrent streams each retain 60 media and four
+    /// non-media entries.
     #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
     pub ephemeral_cache_max_media_window: usize,
     /// Minimum media-segment prefetch window for ephemeral HLS stores after
@@ -119,7 +128,7 @@ pub struct HlsSettings {
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    /// `None` falls back to [`Self::DEFAULT_LOOK_AHEAD_BYTES`] (~2 `MiB`)
+    /// `None` falls back to `DEFAULT_LOOK_AHEAD_BYTES` (~2 `MiB`)
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     #[patch(skip_wrap)]
@@ -130,29 +139,6 @@ impl Default for HlsSettings {
     fn default() -> Self {
         Self::builder().build()
     }
-}
-
-impl HlsSettings {
-    /// Default [`Self::acquire_attempt_budget`]. Enough rounds for an
-    /// obstruction another task is already clearing to disappear, few enough
-    /// that a standing one reaches the reader instead of parking it.
-    pub const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
-    /// Per-stream media window for a shared 128-entry cache. Two concurrent
-    /// streams each retain 60 media and four non-media entries.
-    pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize =
-        DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW;
-    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize =
-        DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW;
-    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize =
-        DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE;
-    /// Default [`Self::download_batch_size`]. Three segments keep the fetcher
-    /// busy across one round-trip without planning further ahead than a
-    /// look-ahead cap would allow anyway.
-    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = DEFAULT_DOWNLOAD_BATCH_SIZE;
-    /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
-    /// need a downloader backpressure cap so an idle reader does not
-    /// drain the whole playlist into cache.
-    pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = DEFAULT_LOOK_AHEAD_BYTES;
 }
 
 /// Configuration for HLS streaming.
@@ -250,7 +236,18 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch};
+    use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch, SizeProbeMethod};
+
+    /// The one knob `kithara-app` reads out of this patch resolves through
+    /// `SizeProbeMethod::default()` whenever a document stays silent, so the
+    /// default is part of the contract rather than an implementation detail.
+    #[kithara::test(native, flash(false))]
+    fn a_silent_document_probes_with_head() {
+        assert_eq!(
+            HlsSettings::default().size_probe_method,
+            SizeProbeMethod::Head
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn a_document_sets_the_batch_size_and_leaves_the_window() {
@@ -322,9 +319,12 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<HlsSettingsPatch>("dwnload_batch_size: 6\n")
+        let error = serde_yaml_ng::from_str::<HlsSettingsPatch>("download_batch_sizes: 6\n")
             .expect_err("a typo must not be silently ignored");
 
-        assert!(error.to_string().contains("dwnload_batch_size"), "{error}");
+        assert!(
+            error.to_string().contains("download_batch_sizes"),
+            "{error}"
+        );
     }
 }
