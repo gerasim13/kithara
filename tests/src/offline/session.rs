@@ -36,16 +36,8 @@ const GAIN_FLOOR_SECS: f64 = 0.9;
 /// delivery lag, and progress emits quantize position in ~100 ms steps.
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 
-/// Expected playback-position gain (seconds) when a test sleeps
-/// `window_secs` of virtual time while the auto-render worker advances.
-///
-/// Nominal cadence is one [`OFFLINE_BLOCK_FRAMES`] block per
-/// [`OFFLINE_PARK_MS`] park at the session's default output rate —
-/// ~1.16x the virtual clock. The ceiling is that cadence over the window
-/// plus [`ENDPOINT_SLACK_SECS`]: the probe measures the render through
-/// asynchronous endpoints, not the render loop itself, so a legitimate
-/// outcome can exceed the pure-window nominal by the endpoint slack. A
-/// broken cadence (extra blocks per park) overshoots the ceiling anyway.
+/// Expected playback-position gain while auto-render advances at its
+/// block-scaled reference cadence.
 #[must_use]
 pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
     let default_rate = GraphSession::<OfflineBackend, TestPools>::DEFAULT_SAMPLE_RATE;
@@ -296,13 +288,14 @@ fn run_auto<S>(
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    let render_period = auto_render_period(block_frames);
     loop {
         // Block on the next command, but no longer than one render budget: a
         // command (or `Shutdown`) wakes us at once through the engine-aware
         // channel, while the timeout drives the periodic auto-render so playback
         // advances even when the test thread never sends anything. There is no
         // `park_timeout` to lose a cross-thread wake against.
-        let deadline = Instant::now() + Duration::from_millis(OFFLINE_PARK_MS);
+        let deadline = Instant::now() + render_period;
         match cmd_rx.recv_timeout(deadline) {
             Ok(OfflineMsg::Cmd { cmd, reply_tx }) => {
                 let reply = state.exec(cmd);
@@ -314,10 +307,20 @@ fn run_auto<S>(
             }
             Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = render_frames(state, OFFLINE_BLOCK_FRAMES, block_frames);
+                let _ = render_block(state, block_frames);
             }
         }
     }
+}
+
+fn auto_render_period(block_frames: usize) -> Duration {
+    let block_frames = f64::from(
+        u32::try_from(block_frames).expect("offline callback block size originated as u32"),
+    );
+    let reference_frames = f64::from(
+        u32::try_from(OFFLINE_BLOCK_FRAMES).expect("offline reference block size fits u32"),
+    );
+    Duration::from_millis(OFFLINE_PARK_MS).mul_f64(block_frames / reference_frames)
 }
 
 fn default_output_block_frames() -> usize {
