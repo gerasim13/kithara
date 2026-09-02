@@ -1387,6 +1387,143 @@ fn popover_layer_places_exactly_and_owns_inside_and_outside_presses() {
     );
 }
 
+/// A menu is a surface with things to press in it. The burger menu and the
+/// quality picker both hang a list of pressable rows off a popover, so a press
+/// that reaches the surface but never the row leaves the whole menu inert.
+#[kithara::test]
+fn a_press_inside_an_open_popover_reaches_the_control_it_lands_on() {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.pick",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    let ui = fixture_ui(
+        "popover-item",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Popover(
+                id: "menu",
+                open: Model(id: "ui.menu.open"),
+                align: Start,
+                anchor: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+                content: Pressable(
+                    id: "item",
+                    press: Command(id: "ui.menu.pick"),
+                    child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))),
+                ),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let mut root = masonry_root(output, 200, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("popover redraw must retain typed actions: {error}"));
+
+    let item = {
+        let layer = root.root().get_layer_root(1);
+        let children = layer.children();
+        assert_eq!(children.len(), 1, "the popover layer has one content root");
+        children[0].ctx().bounding_rect()
+    };
+    let at = item.center();
+
+    root.handle_pointer_event(pointer_down(at.x, at.y))
+        .unwrap_or_else(|error| panic!("menu item press must remain typed: {error}"));
+    root.handle_pointer_event(pointer_up(at.x, at.y))
+        .unwrap_or_else(|error| panic!("menu item release must remain typed: {error}"));
+
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::Control {
+            path: "demo/item".to_owned(),
+            action: ControlAction::Activate,
+        })],
+        "the row under the press must activate, at {at:?} inside {item:?}"
+    );
+}
+
+/// A surface floats above the document, so the room it covers belongs to it
+/// alone. The burger menu and the quality picker both hang over controls the
+/// document lays out after them, and an engine reads its own box without
+/// asking what stands above it.
+#[kithara::test]
+fn an_open_popover_keeps_a_press_off_the_control_its_surface_covers() {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.pick",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.page.pick",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    let ui = fixture_ui(
+        "popover-cover",
+        r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Popover(
+                id: "menu",
+                open: Model(id: "ui.menu.open"),
+                align: Start,
+                anchor: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+                content: Pressable(
+                    id: "item",
+                    press: Command(id: "ui.menu.pick"),
+                    child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))),
+                ),
+            ),
+            Pressable(
+                id: "under",
+                press: Command(id: "ui.page.pick"),
+                child: Spacer(id: "under-face", size: Some((w: Fill, h: Fill))),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let mut root = masonry_root(output, 200, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("popover redraw must retain typed actions: {error}"));
+
+    let item = {
+        let layer = root.root().get_layer_root(1);
+        let children = layer.children();
+        assert_eq!(children.len(), 1, "the popover layer has one content root");
+        children[0].ctx().bounding_rect()
+    };
+    let at = item.center();
+
+    root.handle_pointer_event(pointer_down(at.x, at.y))
+        .unwrap_or_else(|error| panic!("menu item press must remain typed: {error}"));
+    root.handle_pointer_event(pointer_up(at.x, at.y))
+        .unwrap_or_else(|error| panic!("menu item release must remain typed: {error}"));
+
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::Control {
+            path: "demo/item".to_owned(),
+            action: ControlAction::Activate,
+        })],
+        "the surface owns the press at {at:?}, not the page control it covers"
+    );
+}
+
 #[kithara::test]
 fn pointer_popover_retains_each_opening_origin_across_rebuilds() {
     let mut registry = fixture_registry();
