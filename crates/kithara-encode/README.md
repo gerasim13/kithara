@@ -34,7 +34,6 @@ let container = ContainerSession::new(&config)?;
 - `ContainerSession` / `ContainerWrite` — portable container state and absolute, storage-neutral byte writes.
 - `StreamEncoder` — native streaming AAC-LC encoder; interleaved f32 in, access units out.
 - `EncoderFactory` — entry point; encodes to complete bytes or to packaged access units.
-- `InnerEncoder` — encoder trait returned by the factory.
 - `BytesEncodeRequest` / `BytesEncodeTarget` — byte-encoding inputs.
 - `PackagedEncodeRequest` — packaged access-unit encoding input.
 - `EncodedBytes` / `EncodedTrack` — encoded outputs (complete bytes and packaged access units).
