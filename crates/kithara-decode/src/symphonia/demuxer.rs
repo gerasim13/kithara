@@ -8,7 +8,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
     StreamSeekPastEof,
 };
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -234,7 +234,7 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {

@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
@@ -282,7 +283,7 @@ impl PlayerTrack {
         self.read_with_context(None, scratch_bufs, mix_bufs, range, sink)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_with_context(
         &mut self,
         context: Option<&RenderContext>,

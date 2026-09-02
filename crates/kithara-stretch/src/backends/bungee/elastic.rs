@@ -1,6 +1,7 @@
 use std::fmt;
 
 use kithara_bufpool::HasPool;
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::stream::StreamCore;
@@ -199,7 +200,7 @@ impl ElasticEngine for BungeeElastic {
         Ok(())
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn process(
         &mut self,
         request: ElasticRequest,

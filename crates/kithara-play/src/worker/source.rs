@@ -3,6 +3,7 @@ use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_stream::SeekObserve;
+use kithara_test_macros as kithara;
 
 use crate::effects::{
     AudioEffect, EffectDrain, EffectDrainStep, apply_effects, held_source_frames, reset_effects,
@@ -657,7 +658,7 @@ where
         Arc::clone(&self.seek)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.sync_discontinuity();
         if self.cancel_stale_input() {
@@ -729,7 +730,7 @@ where
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         if let Some(chunk) = self.retired_input.take() {
             self.source.retire_chunk(chunk);

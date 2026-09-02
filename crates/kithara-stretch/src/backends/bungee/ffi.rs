@@ -1,6 +1,7 @@
 use std::{cell::Cell, marker::PhantomData, ptr::NonNull, slice};
 
 use bungee_sys::{BungeeStretcher, InputChunk, OutputChunk, Request, SampleRates, stretcher};
+use kithara_test_macros as kithara;
 
 use crate::{BungeeConfig, ElasticError};
 
@@ -71,7 +72,7 @@ impl NativeStretcher {
         })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
         #[cfg(test)]
         if self.take_fault(NativeFault::Analyse) {
@@ -104,7 +105,7 @@ impl NativeStretcher {
         Ok(())
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn copy_native_output(
         &self,
         output: &OutputChunk,
@@ -203,7 +204,7 @@ impl NativeStretcher {
         self.copy_native_output(&output, destination, destination_stride)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn synthesise_native(&mut self) -> OutputChunk {
         let mut output = OutputChunk {
             data: std::ptr::null_mut(),

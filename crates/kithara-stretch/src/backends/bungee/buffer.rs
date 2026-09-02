@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use bungee_sys::InputChunk;
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
@@ -80,7 +81,7 @@ impl InputBuffer {
         })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn append(
         &mut self,
         source: Option<&[f32]>,
@@ -191,7 +192,7 @@ impl InputBuffer {
             ))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn analyse(
         &mut self,
         native: &mut NativeStretcher,

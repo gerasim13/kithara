@@ -17,6 +17,7 @@ stretch-bungee = ["dep:bungee-sys"]
 
 [dependencies]
 kithara-signal = { workspace = true }
+kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }

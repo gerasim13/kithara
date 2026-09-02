@@ -4,8 +4,7 @@ use kithara_audio::{SourceEnd, SourceSpan};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
-#[cfg(feature = "probe")]
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 use num_traits::cast::AsPrimitive;
 
@@ -321,7 +320,7 @@ impl PlayerResource {
         self.read_with_context(None, output, range, metrics)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(crate) fn read_with_context(
         &mut self,
         context: Option<&RenderContext>,

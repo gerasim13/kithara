@@ -1,6 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
@@ -486,7 +487,7 @@ where
     /// The playback scheduler uses this workspace-internal seam to prepare an
     /// owning pooled subchunk outside the checked render core.
     #[doc(hidden)]
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,

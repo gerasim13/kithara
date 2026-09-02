@@ -10,6 +10,7 @@ use firewheel::{
     param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_test_macros as kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
@@ -79,7 +80,7 @@ impl RenderPass {
     }
 
     /// Render audio for all active tracks into the output buffers.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(crate) fn render_audio(
         &mut self,
         context: Option<&RenderContext>,

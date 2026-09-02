@@ -5,6 +5,7 @@ use kithara_platform::{
     },
     time::Duration,
 };
+use kithara_test_macros as kithara;
 
 /// Cloneable immediate and deferred scheduler wake capability.
 #[derive(Clone, Default)]
@@ -29,7 +30,7 @@ impl Wake {
         self.inner.deferred.swap(false, Ordering::Acquire)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
         if self.take_deferred() {
             return true;

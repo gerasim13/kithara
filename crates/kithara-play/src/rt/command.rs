@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
@@ -72,7 +73,7 @@ impl PlayerNodeProcessor {
     }
 
     /// Drain all pending commands from the channel.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub fn drain_commands(&mut self) {
         while let Some(cmd) = self.cmd_rx.try_pop() {
             match cmd {

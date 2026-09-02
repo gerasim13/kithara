@@ -1,8 +1,7 @@
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
-#[cfg(feature = "probe")]
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 use tracing::warn;
 
 use super::renderer::{PreparedQuantum, WarpRenderer};
@@ -178,7 +177,7 @@ where
         Ok(drain.complete())
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn process_active(
         &mut self,
         chunk: AudioChunk,
@@ -360,7 +359,7 @@ where
     /// Render the source quantum paired with the speed sampled by
     /// [`Self::prepare_quantum`].
     #[doc(hidden)]
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub fn render_quantum(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let Some(prepared) = self.prepared_quantum.take() else {
             warn!("time-stretch quantum was not prepared before rendering");

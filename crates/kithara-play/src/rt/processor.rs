@@ -13,7 +13,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_test_utils::kithara;
+use kithara_test_macros as kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
@@ -384,7 +384,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         self.render.resize(stream_info.max_block_frames.get().as_());
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
