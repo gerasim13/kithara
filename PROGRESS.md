@@ -10,13 +10,14 @@ the change that lands the work, and keep it short.
 
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
-  `doc_staleness` over every document under `docs`, and holds every crate README
-  to one shape with `readme_shape`: the shared header, badges keyed to `publish`
-  and to the manifest's license, a `# <package name>` title, a lead paragraph,
-  then `Usage` / `Key Types` / `Features` / `Integration` and nothing else. All three queues are at zero, and the rewrites turned up
-  claims the sources contradict - a wrong feature list, a file that no longer
-  exists, an inverted description of a known leak, an MPL-2.0 crate wearing the
-  MIT badge, two crates naming a dead owner for signal generation.
+  `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
+  a header that stays inside the package, badges keyed to `publish` and to the
+  manifest's license, a `# <package name>` title, then `Usage` / `Key Types` /
+  `Features` / `Integration` and nothing else. All three queues are at zero, and
+  the rewrites turned up claims the sources contradict - a wrong feature list, a
+  file that no longer exists, an inverted description of a known leak, an MPL-2.0
+  crate wearing the MIT badge, two crates naming a dead owner, and a logo no
+  published crate page could load.
 
 ## Next
 
