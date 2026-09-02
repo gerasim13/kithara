@@ -46,6 +46,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 
+# `kithara::measure_block!` resolves `hotpath` in this crate; `hotpath` is native-only.
 hotpath = { workspace = true, optional = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
