@@ -35,7 +35,7 @@ pub struct NavigationState {
 impl NavigationState {
     /// New empty state: no current track, history empty, shuffle off,
     /// [`RepeatMode::Off`]. `history_limit` comes from
-    /// `QueueConfig::max_history_size`.
+    /// `QueueSettings::max_history_size`.
     #[must_use]
     pub fn new(history_limit: usize) -> Self {
         Self {

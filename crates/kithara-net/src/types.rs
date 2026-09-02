@@ -671,11 +671,11 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<NetSettings>("inactivity_timeoutt: 1s\n")
+        let error = serde_yaml_ng::from_str::<NetSettings>("inactivity_timeout_ms: 1s\n")
             .expect_err("a typo must not be silently ignored");
 
         assert!(
-            format!("{error}").contains("inactivity_timeoutt"),
+            format!("{error}").contains("inactivity_timeout_ms"),
             "{error}"
         );
     }

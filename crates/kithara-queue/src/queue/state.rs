@@ -62,7 +62,7 @@ where
     pub(super) crossfade_armed_for: AtomicTrackId,
     /// Whether this queue auto-starts playback once the first registered
     /// track finishes loading. Configured via
-    /// [`QueueConfig::should_autoplay`]. `false` means the user must
+    /// [`QueueSettings::should_autoplay`]. `false` means the user must
     /// call [`Queue::select`] manually.
     ///
     /// Currently consumed only by the test-utils harness — the

@@ -15,7 +15,7 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize
 
 /// Default prefetch lead time before EOF, in seconds.
 ///
-/// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
+/// Mirrors `kithara_play::PlayerSettings::prefetch_duration` default.
 pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Queue-level knobs a configuration document can override. Extracted out of
@@ -34,8 +34,14 @@ pub struct QueueSettings {
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
-    /// Whether the queue auto-advances to the next track at EOF.
+    /// Whether the queue auto-starts playback once the first registered track
+    /// finishes loading. A document cannot name this: the field is read only
+    /// under `cfg(any(test, feature = "probe"))` (`queue/lifecycle.rs`), and
+    /// `kithara-app` ships without `probe`, so a document key would configure
+    /// nothing in the binary. It carries `#[patch(skip)]` for that reason, and
+    /// naming it is refused rather than silently dropped.
     #[builder(default = true)]
+    #[patch(skip)]
     pub should_autoplay: bool,
 
     /// Lead time in seconds before EOF at which the next queued track
@@ -156,10 +162,10 @@ mod document_tests {
     /// word -- only a bogus key proves the attribute survived generation.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<QueueSettingsPatch>("max_concurrent_load: 5\n")
+        let error = serde_yaml_ng::from_str::<QueueSettingsPatch>("concurrent_load_cap: 5\n")
             .expect_err("a typo must not be silently ignored");
 
-        assert!(error.to_string().contains("max_concurrent_load"), "{error}");
+        assert!(error.to_string().contains("concurrent_load_cap"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]

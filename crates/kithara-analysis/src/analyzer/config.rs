@@ -260,9 +260,9 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<BeatAnalysisSettingsPatch>("target_ratee: 1\n")
+        let error = serde_yaml_ng::from_str::<BeatAnalysisSettingsPatch>("target_rate_hz: 1\n")
             .expect_err("a typo must not be silently ignored");
 
-        assert!(format!("{error}").contains("target_ratee"), "{error}");
+        assert!(format!("{error}").contains("target_rate_hz"), "{error}");
     }
 }

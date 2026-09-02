@@ -128,8 +128,8 @@ pub struct HlsSettings {
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    /// `None` falls back to `DEFAULT_LOOK_AHEAD_BYTES` (~2 `MiB`)
-    /// at the consumer site — production HLS streams need a downloader
+    /// `None` falls back to a ~2 `MiB` cap at the consumer site —
+    /// production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     #[patch(skip_wrap)]
     pub look_ahead_bytes: Option<u64>,
@@ -239,8 +239,10 @@ mod tests {
     use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch, SizeProbeMethod};
 
     /// The one knob `kithara-app` reads out of this patch resolves through
-    /// `SizeProbeMethod::default()` whenever a document stays silent, so the
-    /// default is part of the contract rather than an implementation detail.
+    /// `SizeProbeMethod::default()` for any document that does not name it —
+    /// including a runtime overlay that blanks the baked value with `~`, which
+    /// types to `None` the same way an absent key does. The default is part of
+    /// that contract rather than an implementation detail.
     #[kithara::test(native, flash(false))]
     fn a_silent_document_probes_with_head() {
         assert_eq!(
