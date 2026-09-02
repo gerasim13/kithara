@@ -264,7 +264,9 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     while Instant::now() < deadline {
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 if !switch_seen {
                     let pace = position.saturating_sub(consumed);
                     spawn_blocking(move || paced_backoff(pace))
@@ -993,7 +995,9 @@ fn read_manual_cross_codec_phase(
         }
 
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 let count = u64::try_from(count.get())
                     .unwrap_or_else(|error| panic!("read count does not fit u64: {error}"));
                 if manual_applied {

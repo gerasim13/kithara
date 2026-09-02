@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
-use kithara_warp::RenderContext;
+use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -58,9 +58,25 @@ impl PlayerTrack {
         range: Range<usize>,
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
-        if context.is_some_and(|context| context.for_output_range(range.clone()).is_none()) {
+        let Some(context) = context else {
+            self.resource.clear_render();
+            return self.read(scratch_bufs, mix_bufs, range, sink);
+        };
+        if context.sample_rate().get() != self.sample_rate {
+            self.resource.clear_render();
             self.handle_failed_end(sink.notifications);
             return TrackReadOutcome::Failed;
+        }
+        let Some(context) = context.for_output_range(range.clone()) else {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        };
+        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
+            self.resource
+                .publish_render(&context, presentation_frontier(&context, source.frame()));
+        } else {
+            self.resource.clear_render();
         }
         self.read(scratch_bufs, mix_bufs, range, sink)
     }
@@ -355,5 +371,41 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
+    PresentationFrontier::builder()
+        .source(source)
+        .output(context.output_frames().start)
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
+
+    use super::presentation_frontier;
+
+    #[kithara::test]
+    fn publication_uses_the_derived_subrange_start() {
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_200),
+            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid")
+        .for_output_range(40..80)
+        .expect("fixture subrange is valid");
+
+        let frontier = presentation_frontier(&context, 8_000);
+
+        assert_eq!(frontier.source(), 8_000);
+        assert_eq!(frontier.output(), SessionFrame::new(1_040));
     }
 }

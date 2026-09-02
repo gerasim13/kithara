@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 use super::{
     Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer, sine,
 };
-use super::{StretchControls, WarpRenderer, spec};
+use super::{RenderPublisher, StretchControls, WarpRenderer, spec};
 use crate::test_pools::pools_with_budget as test_pools;
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
@@ -74,7 +74,12 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             let controls = StretchControls::new(0.5);
             controls.set_keylock(true);
             controls.set_backend(backend);
-            let target = WarpRenderer::new(controls, target_spec, pools.clone());
+            let target = WarpRenderer::new(
+                controls,
+                RenderPublisher::default().reader(),
+                target_spec,
+                pools.clone(),
+            );
             assert!(target.engine.is_some());
             pools.stats().allocated_bytes
         })
@@ -86,7 +91,12 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, initial, pools.clone());
+    let mut fx = WarpRenderer::new(
+        controls,
+        RenderPublisher::default().reader(),
+        initial,
+        pools.clone(),
+    );
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
@@ -110,7 +120,12 @@ fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: 
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
+    let mut fx = WarpRenderer::new(
+        controls,
+        RenderPublisher::default().reader(),
+        spec(),
+        pools.clone(),
+    );
     assert!(fx.engine.is_none());
 
     fx.rebuild_pending = true;
