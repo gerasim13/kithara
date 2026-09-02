@@ -223,3 +223,103 @@ fn is_option(ty: &Type) -> bool {
         .last()
         .is_some_and(|last| last.ident == "Option")
 }
+
+#[cfg(test)]
+mod tests {
+    use syn::{DeriveInput, parse_quote};
+
+    use super::derive;
+
+    fn expansion(input: &DeriveInput) -> String {
+        derive(input).expect("the derive expands").to_string()
+    }
+
+    #[test]
+    fn a_generic_configuration_yields_a_patch_with_no_generics() {
+        let input: DeriveInput = parse_quote! {
+            pub struct HlsConfig<S> {
+                #[patch(skip)]
+                pub store: AssetStore<S>,
+                pub download_batch_size: usize,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(expanded.contains("pub struct HlsConfigPatch { pub download_batch_size"));
+        assert!(
+            !expanded.contains("HlsConfigPatch <"),
+            "the patch must not repeat the configuration's generics"
+        );
+        assert!(
+            !expanded.contains("store"),
+            "a skipped field reaches neither the patch nor the merge"
+        );
+    }
+
+    #[test]
+    fn an_already_optional_field_is_wrapped_once() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                look_ahead_bytes: Option<u64>,
+                batch: usize,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(expanded.contains("look_ahead_bytes : Option < u64 >"));
+        assert!(expanded.contains("batch : :: core :: option :: Option < usize >"));
+    }
+
+    #[test]
+    fn a_nested_field_recurses_into_the_owning_crates_patch() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[patch(nested)]
+                beat: kithara_beat::BeatConfig,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(expanded.contains("beat : kithara_beat :: BeatConfigPatch"));
+        assert!(expanded.contains("self . beat . apply (patch . beat)"));
+    }
+
+    #[test]
+    fn a_gated_field_gates_its_merge_too() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[cfg(feature = "beat-nn")]
+                threshold: f32,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert_eq!(
+            expanded.matches("cfg (feature = \"beat-nn\")").count(),
+            2,
+            "the patch field and the merge statement both carry the gate"
+        );
+    }
+
+    #[test]
+    fn an_unknown_option_names_what_the_derive_accepts() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[patch(rename = "other")]
+                batch: usize,
+            }
+        };
+
+        let error = derive(&input).expect_err("the derive refuses the option");
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected `skip`, `nested` or `attribute(...)`")
+        );
+    }
+}
