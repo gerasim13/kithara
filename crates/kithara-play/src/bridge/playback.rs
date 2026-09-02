@@ -1,60 +1,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(feature = "probe")]
-use std::{hint::spin_loop, sync::atomic::fence};
 
-#[cfg(feature = "probe")]
-use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
-#[cfg(feature = "probe")]
-use portable_atomic::AtomicI64;
 use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
-
-#[cfg(feature = "probe")]
-const SEQLOCK_PHASES: u64 = 2;
-
-#[cfg(feature = "probe")]
-#[derive(Default)]
-struct RenderBoundaryCell {
-    version: AtomicU64,
-    session_epoch: AtomicU64,
-    output_end: AtomicI64,
-}
-
-#[cfg(feature = "probe")]
-impl RenderBoundaryCell {
-    fn load(&self) -> Option<(SessionEpoch, SessionFrame)> {
-        loop {
-            let before = self.version.load(Ordering::Acquire);
-            if before == 0 {
-                return None;
-            }
-            if !before.is_multiple_of(SEQLOCK_PHASES) {
-                spin_loop();
-                continue;
-            }
-            let session_epoch = self.session_epoch.load(Ordering::Relaxed);
-            let output_end = self.output_end.load(Ordering::Relaxed);
-            fence(Ordering::Acquire);
-            if self.version.load(Ordering::Acquire) == before {
-                return Some((
-                    SessionEpoch::new(session_epoch),
-                    SessionFrame::new(output_end),
-                ));
-            }
-            spin_loop();
-        }
-    }
-
-    fn publish(&self, context: &RenderContext) {
-        self.version.fetch_add(1, Ordering::AcqRel);
-        self.session_epoch
-            .store(u64::from(context.session_epoch()), Ordering::Relaxed);
-        self.output_end
-            .store(i64::from(context.output_frames().end), Ordering::Relaxed);
-        self.version.fetch_add(1, Ordering::Release);
-    }
-}
 
 /// One read of each live playback scalar.
 ///
@@ -103,25 +51,12 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
-    #[cfg(feature = "probe")]
-    render_boundary: RenderBoundaryCell,
     /// Effective media seconds consumed per output second; `0.0` while paused.
     pub(crate) rate: AtomicF32,
     metrics: RtMetrics,
 }
 
 impl PlaybackShared {
-    delegate::delegate! {
-        to self.render_boundary {
-            #[cfg(feature = "probe")]
-            #[call(publish)]
-            pub(crate) fn publish_render_boundary(&self, context: &RenderContext);
-            #[cfg(feature = "probe")]
-            #[call(load)]
-            pub(crate) fn render_boundary(&self) -> Option<(SessionEpoch, SessionFrame)>;
-        }
-    }
-
     /// Lock-free counters the audio thread bumps instead of emitting `tracing` events.
     #[must_use]
     pub const fn metrics(&self) -> &RtMetrics {

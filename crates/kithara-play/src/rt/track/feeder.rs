@@ -4,7 +4,9 @@ use kithara_audio::{SourceEnd, SourceSpan};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
-use kithara_warp::{PresentationFrontier, RenderContext};
+#[cfg(feature = "probe")]
+use kithara_test_utils::kithara;
+use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 use num_traits::cast::AsPrimitive;
 
 #[rustfmt::skip]
@@ -58,23 +60,48 @@ impl MediaSpan {
         self.frames - self.consumed_frames
     }
 
-    fn take(&mut self, frames: usize) -> (f64, Option<SourceSpan>) {
+    fn source_for(&self, frames: usize) -> Option<SourceSpan> {
+        let source = self.source?;
         let start = self.consumed_frames;
+        let end = start + frames.min(self.remaining_frames());
+        let source_start = source_frame_at(source, start, self.frames)?;
+        let source_end = source_frame_at(source, end, self.frames)?;
+        SourceSpan::new(source_start, source_end, source.sample_rate())
+            .map(|span| span.with_render_revision(source.render_revision()))
+    }
+
+    fn take(&mut self, frames: usize) -> (f64, Option<SourceSpan>) {
         let consumed_frames = frames.min(self.remaining_frames());
-        let end = start + consumed_frames;
-        let consumed_source = self.source.and_then(|source| {
-            let source_start = source_frame_at(source, start, self.frames)?;
-            let source_end = source_frame_at(source, end, self.frames)?;
-            SourceSpan::new(source_start, source_end, source.sample_rate())
-                .map(|span| span.with_render_revision(source.render_revision()))
-        });
-        self.consumed_frames = end;
+        let consumed_source = self.source_for(consumed_frames);
+        self.consumed_frames += consumed_frames;
         let consumed_frames: f64 = AsPrimitive::as_(consumed_frames);
         let span_frames: f64 = AsPrimitive::as_(self.frames);
         (
             self.seconds * consumed_frames / span_frames,
             consumed_source,
         )
+    }
+
+    #[cfg_attr(
+        feature = "probe",
+        kithara::probe(
+            render_revision = source.render_revision(),
+            session_epoch = u64::from(context.session_epoch()),
+            output_start = i64::from(context.output_frames().start),
+            output_end = i64::from(context.output_frames().end),
+            source_start = source.start(),
+            source_end = source.end()
+        )
+    )]
+    fn pcm_consumed(
+        &mut self,
+        frames: usize,
+        context: &RenderContext,
+        source: SourceSpan,
+    ) -> (f64, Option<SourceSpan>) {
+        let consumed = self.take(frames);
+        debug_assert_eq!(consumed.1, Some(source));
+        consumed
     }
 }
 
@@ -224,11 +251,7 @@ impl PlayerResource {
             .min(self.channel_buffers[0].len())
     }
 
-    fn consume_media(
-        &mut self,
-        mut frames: usize,
-        observe: &mut impl FnMut(Range<usize>, SourceSpan),
-    ) -> f64 {
+    fn consume_media(&mut self, mut frames: usize, context: Option<&RenderContext>) -> f64 {
         let mut seconds = 0.0;
         let mut source_end = self.last_source_end;
         let mut output_start = 0usize;
@@ -237,15 +260,20 @@ impl PlayerResource {
                 break;
             };
             let consumed = frames.min(span.remaining_frames());
-            let (consumed_seconds, consumed_source) = span.take(consumed);
+            let output_end = output_start.saturating_add(consumed);
+            let presented = context
+                .and_then(|context| context.for_output_range(output_start..output_end))
+                .zip(span.source_for(consumed));
+            let (consumed_seconds, consumed_source) = match presented {
+                Some((context, source)) => span.pcm_consumed(consumed, &context, source),
+                None => span.take(consumed),
+            };
             seconds += consumed_seconds;
             if let Some(consumed_source) = consumed_source {
-                let output_end = output_start.saturating_add(consumed);
                 source_end = Some(SourceEnd::new(
                     consumed_source.end(),
                     consumed_source.sample_rate(),
                 ));
-                observe(output_start..output_end, consumed_source);
             }
             frames -= consumed;
             output_start = output_start.saturating_add(consumed);
@@ -290,16 +318,16 @@ impl PlayerResource {
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
-        self.read_observed(output, range, metrics, |_, _| {})
+        self.read_with_context(None, output, range, metrics)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub(crate) fn read_observed(
+    pub(crate) fn read_with_context(
         &mut self,
+        context: Option<&RenderContext>,
         output: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
-        mut observe: impl FnMut(Range<usize>, SourceSpan),
     ) -> ReadOutcome {
         self.consumed_media_seconds = 0.0;
         let frames_to_read = range.end - range.start;
@@ -324,7 +352,7 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
-            self.consumed_media_seconds = self.consume_media(frames_to_write, &mut observe);
+            self.consumed_media_seconds = self.consume_media(frames_to_write, context);
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -392,6 +420,10 @@ impl PlayerResource {
     #[must_use]
     pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
         self.resource.get().seek_handle()
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.resource.get().render_reader()
     }
 
     delegate::delegate! {

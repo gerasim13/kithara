@@ -125,8 +125,6 @@ pub struct WarpRenderer<S> {
     pub(super) terminal_rate: Option<RateTarget>,
     /// Render context sampled with `terminal_rate`.
     pub(super) terminal_snapshot: Option<RenderSnapshot>,
-    #[cfg(feature = "probe")]
-    pub(super) last_committed_rate_revision: u64,
     /// Renderer-owned applied speed. Shared controls contain only the target.
     pub(super) applied_speed: SmoothedParam,
     /// Exact source coordinate committed with the applied speed after rendering.
@@ -256,8 +254,6 @@ where
             prepared_quantum: None,
             terminal_rate: None,
             terminal_snapshot: None,
-            #[cfg(feature = "probe")]
-            last_committed_rate_revision: 0,
             applied_speed: SmoothedParam::new(
                 speed,
                 SmootherConfig {
@@ -444,17 +440,16 @@ where
         ));
     }
 
-    pub(super) fn commit_snapshot(
-        &mut self,
+    pub(super) fn next_render_snapshot(
+        &self,
         snapshot: RenderSnapshot,
         output_frames: usize,
-    ) -> Option<crate::SessionFrame> {
+    ) -> Option<(RenderSnapshot, crate::SessionFrame, u64)> {
         let (source, _, _) = self.rendered_source_end?;
         let committed = snapshot.advance(self.committed.as_ref(), source, output_frames)?;
         let output_frames = i64::try_from(output_frames).ok()?;
         let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
-        self.committed = Some(committed);
-        Some(crate::SessionFrame::new(output_start))
+        Some((committed, crate::SessionFrame::new(output_start), source))
     }
 
     /// Last context and frontier committed by a successful worker quantum.

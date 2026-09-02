@@ -1,6 +1,8 @@
 use kithara_events::RouteDescription;
 #[cfg(feature = "probe")]
 use kithara_test_utils::kithara;
+#[cfg(feature = "probe")]
+use kithara_warp::RenderSnapshot;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -10,17 +12,23 @@ use crate::{
     player::state::phase::PlayerPhaseKind,
 };
 
-#[cfg(feature = "probe")]
-#[kithara::probe(request_revision, target_rate_bits, session_epoch, presentation_frame)]
-fn rate_requested(
-    request_revision: u64,
-    target_rate_bits: u32,
-    session_epoch: u64,
-    presentation_frame: i64,
-) {
-}
-
 impl<S> PlayerRuntime<S> {
+    #[cfg(feature = "probe")]
+    #[kithara::probe(
+        request_revision,
+        target_rate_bits,
+        session_epoch = u64::from(snapshot.context().session_epoch()),
+        presentation_frame = i64::from(snapshot.context().output_frames().end)
+    )]
+    fn rate_requested(
+        &self,
+        request_revision: u64,
+        target_rate_bits: u32,
+        snapshot: &RenderSnapshot,
+    ) {
+        self.core.worker.wake();
+    }
+
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -127,21 +135,20 @@ impl<S> PlayerRuntime<S> {
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
         #[cfg(feature = "probe")]
-        let boundary = self
+        let snapshot = self
             .slot()
-            .and_then(|slot| self.core.engine.slot_playback(slot))
-            .and_then(|playback| playback.render_boundary());
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
 
-        let _revision = self.core.warp.stretch().set_speed(rate);
+        let revision = self.core.warp.stretch().set_speed(rate);
 
         #[cfg(feature = "probe")]
-        if let Some((session_epoch, presentation_frame)) = boundary {
-            rate_requested(
-                _revision,
+        if let Some(snapshot) = snapshot {
+            self.rate_requested(
+                revision,
                 rate.max(kithara_warp::StretchControls::MIN_SPEED).to_bits(),
-                u64::from(session_epoch),
-                i64::from(presentation_frame),
+                &snapshot,
             );
+            return;
         }
 
         self.core.worker.wake();

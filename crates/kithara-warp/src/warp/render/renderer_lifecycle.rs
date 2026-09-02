@@ -7,23 +7,32 @@ use tracing::warn;
 
 use super::renderer::{PreparedQuantum, WarpRenderer};
 
-#[cfg(feature = "probe")]
-#[kithara::probe(
-    request_revision,
-    applied_rate_bits,
-    session_epoch,
-    session_frame,
-    source_start,
-    source_end
-)]
-fn rate_applied(
-    request_revision: u64,
-    applied_rate_bits: u32,
-    session_epoch: u64,
-    session_frame: i64,
-    source_start: u64,
-    source_end: u64,
-) {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    #[cfg_attr(
+        feature = "probe",
+        kithara::probe(
+            request_revision,
+            applied_rate_bits,
+            session_epoch = u64::from(committed.context().session_epoch()),
+            session_frame,
+            source_start,
+            source_end
+        )
+    )]
+    fn rate_applied(
+        &mut self,
+        committed: crate::RenderSnapshot,
+        request_revision: u64,
+        applied_rate_bits: u32,
+        session_frame: i64,
+        source_start: u64,
+        source_end: u64,
+    ) {
+        self.committed = Some(committed);
+    }
 }
 
 impl<S> WarpRenderer<S>
@@ -378,33 +387,21 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        #[cfg(feature = "probe")]
         let rate = prepared.rate();
-        #[cfg(feature = "probe")]
         let applied_speed = prepared.speed();
         let output = self.render_prepared(chunk, prepared, false);
         if let (Some(snapshot), Some(output)) = (snapshot, output.as_ref()) {
-            #[cfg(feature = "probe")]
-            let session_epoch = snapshot.context().session_epoch();
-            #[cfg(feature = "probe")]
-            let source_span = self
-                .rendered_source_end()
-                .map(|(end, _)| (output.meta.frame_offset, end));
-            if let Some(_session_frame) = self.commit_snapshot(snapshot, output.frames()) {
-                #[cfg(feature = "probe")]
-                if self.last_committed_rate_revision != rate.revision()
-                    && let Some((source_start, source_end)) = source_span
-                {
-                    self.last_committed_rate_revision = rate.revision();
-                    rate_applied(
-                        rate.revision(),
-                        applied_speed.to_bits(),
-                        u64::from(session_epoch),
-                        i64::from(_session_frame),
-                        source_start,
-                        source_end,
-                    );
-                }
+            if let Some((committed, session_frame, source_end)) =
+                self.next_render_snapshot(snapshot, output.frames())
+            {
+                self.rate_applied(
+                    committed,
+                    rate.revision(),
+                    applied_speed.to_bits(),
+                    i64::from(session_frame),
+                    output.meta.frame_offset,
+                    source_end,
+                );
             } else {
                 warn!("time-stretch quantum produced an invalid presentation frontier");
             }

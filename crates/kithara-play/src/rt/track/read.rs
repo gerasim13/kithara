@@ -1,8 +1,6 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
-#[cfg(feature = "probe")]
-use kithara_test_utils::kithara;
 use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
@@ -12,25 +10,6 @@ use super::{
     triggers::{TrackTriggers, TriggerInput},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
-
-#[cfg(feature = "probe")]
-#[kithara::probe(
-    render_revision,
-    session_epoch,
-    output_start,
-    output_end,
-    source_start,
-    source_end
-)]
-fn pcm_consumed(
-    render_revision: u64,
-    session_epoch: u64,
-    output_start: i64,
-    output_end: i64,
-    source_start: u64,
-    source_end: u64,
-) {
-}
 
 struct TrackReadContext<'a> {
     range: Range<usize>,
@@ -349,7 +328,7 @@ impl PlayerTrack {
 
     fn read_resource(
         &mut self,
-        _context: Option<&RenderContext>,
+        context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
@@ -361,40 +340,8 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        #[cfg(feature = "probe")]
-        let read = resource.read_observed(
-            &mut scratch_window,
-            0..range.len(),
-            metrics,
-            |output, source| {
-                let Some(context) = _context else {
-                    return;
-                };
-                let start = i64::from(context.output_frames().start);
-                let Some(output_start) = i64::try_from(output.start)
-                    .ok()
-                    .and_then(|offset| start.checked_add(offset))
-                else {
-                    return;
-                };
-                let Some(output_end) = i64::try_from(output.end)
-                    .ok()
-                    .and_then(|offset| start.checked_add(offset))
-                else {
-                    return;
-                };
-                pcm_consumed(
-                    source.render_revision(),
-                    u64::from(context.session_epoch()),
-                    output_start,
-                    output_end,
-                    source.start(),
-                    source.end(),
-                );
-            },
-        );
-        #[cfg(not(feature = "probe"))]
-        let read = resource.read(&mut scratch_window, 0..range.len(), metrics);
+        let read =
+            resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics);
 
         let outcome = match read {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {

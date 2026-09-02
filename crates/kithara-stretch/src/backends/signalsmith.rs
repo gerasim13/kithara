@@ -6,14 +6,15 @@ use signalsmith_stretch::Stretch;
 
 use crate::{
     ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticRequest, elastic::PitchScale,
+    ElasticRequest, SignalsmithConfig, elastic::PitchScale,
 };
 
-fn engine(channels: u32) -> (Stretch, ElasticLatency) {
-    const BLOCK_FRAMES: usize = 416;
-    const INTERVAL_FRAMES: usize = 64;
-
-    let inner = Stretch::new(channels, BLOCK_FRAMES, INTERVAL_FRAMES);
+fn engine(channels: u32, config: SignalsmithConfig) -> (Stretch, ElasticLatency) {
+    let inner = Stretch::new(
+        channels,
+        config.block_frames().get(),
+        config.interval_frames().get(),
+    );
     let native_input_latency = inner.input_latency();
     let native_output_latency = inner.output_latency();
     (
@@ -163,7 +164,7 @@ impl ElasticEngine for SignalsmithElastic {
     {
         let channels = u32::try_from(config.channels())
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
-        let (mut inner, latency) = engine(channels);
+        let (mut inner, latency) = engine(channels, *config.backends().signalsmith());
         inner.set_transpose_factor(1.0, None);
         let capabilities = ElasticCapabilities::new(config.shape(), latency);
         let prime_window_samples = capabilities.samples(latency.source_frames())?;
