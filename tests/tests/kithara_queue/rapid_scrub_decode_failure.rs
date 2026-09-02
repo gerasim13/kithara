@@ -261,17 +261,19 @@ impl Harness {
                 root: temp_dir.path().to_path_buf(),
             })
             .build();
+        let session = OfflineSessionConfig::builder(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(session.sample_rate())
                 .worker(PlayWorker::new(
                     PlayWorkerConfig::builder(pools.clone()).build(),
                 ))
                 .build(),
         );
         let queue = OfflineQueue::new(
-            OfflineSessionConfig::builder(pools)
-                .pacing(Duration::from_millis(10))
-                .build(),
+            session,
             Queue::new(QueueConfig::builder().player(player).build()),
         )
         .expect("create product offline queue");

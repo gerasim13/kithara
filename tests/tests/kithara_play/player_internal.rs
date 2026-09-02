@@ -28,6 +28,11 @@ use kithara_integration_tests::audio_mock::TestPcmReader;
 
 use crate::bufpool_ext::{TestPools, pools};
 
+const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
+};
+
 #[derive(Clone, Copy)]
 enum InsertScenario {
     AppendTwice,
@@ -42,7 +47,7 @@ enum RemoveAtScenario {
 }
 
 fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+    AudioSpec::new(2, FIXTURE_SAMPLE_RATE)
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -89,7 +94,9 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
-            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+            Cmd::QuerySampleRate => {
+                Reply::SampleRate(SessionSampleRate::new(None, FIXTURE_SAMPLE_RATE.get()))
+            }
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
@@ -111,6 +118,7 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
+        .sample_rate(FIXTURE_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
@@ -120,6 +128,7 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
+        .sample_rate(FIXTURE_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(fixture_session())
         .build()

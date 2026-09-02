@@ -38,17 +38,19 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
+    let session = OfflineSessionConfig::builder(session_pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(session.sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(session_pools.clone()).build(),
             ))
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(session_pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+        session,
         Queue::new(
             QueueConfig::builder()
                 .player(player)

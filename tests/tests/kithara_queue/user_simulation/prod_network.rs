@@ -97,15 +97,17 @@ fn build_prod_ctx() -> ProdCtx {
 }
 
 fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
+    let session = OfflineSessionConfig::builder(prod.config.worker.pools().clone())
+        .maybe_pacing(pacing)
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(session.sample_rate())
             .worker(prod.config.worker.clone())
             .build(),
     );
     OfflineQueue::new(
-        OfflineSessionConfig::builder(prod.config.worker.pools().clone())
-            .maybe_pacing(pacing)
-            .build(),
+        session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
     .expect("create product offline queue")

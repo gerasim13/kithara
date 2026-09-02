@@ -136,8 +136,12 @@ fn build_queue_with_tick_cf(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
+    let session = OfflineSessionConfig::builder(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(session.sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))
@@ -145,9 +149,7 @@ fn build_queue_with_tick_cf(
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools.clone())
-            .pacing(Duration::from_millis(10))
-            .build(),
+        session,
         Queue::new(
             QueueConfig::builder()
                 .player(player)

@@ -37,6 +37,7 @@ use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara, temp_dir,
+    test_defaults::Consts as Shared,
     waits::wait_for_event,
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
@@ -82,7 +83,10 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
-            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
+                None,
+                Shared::NON_ZERO_SAMPLE_RATE.get(),
+            )),
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
@@ -90,7 +94,7 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
     }
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        self.inner.consumer_wake_mode()
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
@@ -140,6 +144,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
