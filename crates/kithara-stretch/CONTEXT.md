@@ -25,6 +25,9 @@ expanded dependency, so the manifest records this single scanner exception.
   `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
   practical playback-rate envelope, backend preparation geometry, and the injected pool region;
   the selector is not a second factory argument.
+- Backend geometry defaults preserve each native engine's quality preset: Signalsmith derives its
+  block and interval from the sample rate, and Bungee uses zero synthesis-hop adjustment. Supplying
+  one custom Signalsmith dimension requires supplying both.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
   above an adapter names a concrete DSP library.

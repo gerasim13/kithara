@@ -10,18 +10,26 @@ use crate::{
     ElasticRequest, SignalsmithConfig, elastic::PitchScale,
 };
 
-fn engine(channels: u32, config: SignalsmithConfig) -> (Stretch, ElasticLatency) {
-    let inner = Stretch::new(
-        channels,
-        config.block_frames().get(),
-        config.interval_frames().get(),
-    );
+fn engine(
+    sample_rate: u32,
+    channels: u32,
+    config: SignalsmithConfig,
+) -> Result<(Stretch, ElasticLatency), ElasticError> {
+    let inner = match (config.block_frames(), config.interval_frames()) {
+        (Some(block), Some(interval)) => Stretch::new(channels, block.get(), interval.get()),
+        (None, None) => Stretch::preset_default(channels, sample_rate),
+        _ => {
+            return Err(ElasticError::EnginePreparation(
+                "Signalsmith block and interval must be configured together",
+            ));
+        }
+    };
     let native_input_latency = inner.input_latency();
     let native_output_latency = inner.output_latency();
-    (
+    Ok((
         inner,
         ElasticLatency::new(native_input_latency, native_output_latency),
-    )
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -165,7 +173,11 @@ impl ElasticEngine for SignalsmithElastic {
     {
         let channels = u32::try_from(config.channels())
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
-        let (mut inner, latency) = engine(channels, *config.backends().signalsmith());
+        let (mut inner, latency) = engine(
+            config.sample_rate(),
+            channels,
+            *config.backends().signalsmith(),
+        )?;
         inner.set_transpose_factor(1.0, None);
         let capabilities = ElasticCapabilities::new(config.shape(), latency);
         let prime_window_samples = capabilities.samples(latency.source_frames())?;

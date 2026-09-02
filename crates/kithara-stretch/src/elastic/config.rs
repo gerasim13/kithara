@@ -11,14 +11,6 @@ struct Consts;
 
 impl Consts {
     const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
-    const DEFAULT_SIGNALSMITH_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(224) {
-        Some(frames) => frames,
-        None => unreachable!(),
-    };
-    const DEFAULT_SIGNALSMITH_INTERVAL_FRAMES: NonZeroUsize = match NonZeroUsize::new(32) {
-        Some(frames) => frames,
-        None => unreachable!(),
-    };
     const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
     const MAX_PHASE_ERROR: f64 = 1.0;
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
@@ -26,35 +18,27 @@ impl Consts {
 }
 
 /// Signalsmith preparation geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
-    /// Analysis block size in source frames.
-    #[builder(default = Consts::DEFAULT_SIGNALSMITH_BLOCK_FRAMES)]
-    block_frames: NonZeroUsize,
-    /// Analysis interval in source frames.
-    #[builder(default = Consts::DEFAULT_SIGNALSMITH_INTERVAL_FRAMES)]
-    interval_frames: NonZeroUsize,
+    /// Custom analysis block size in source frames; absent selects the native preset.
+    block_frames: Option<NonZeroUsize>,
+    /// Custom analysis interval in source frames; absent selects the native preset.
+    interval_frames: Option<NonZeroUsize>,
 }
 
 impl SignalsmithConfig {
     fn validate(self) -> Result<Self, ElasticError> {
-        if self.interval_frames > self.block_frames {
-            return Err(ElasticError::EnginePreparation(
-                "Signalsmith interval exceeds its analysis block",
-            ));
-        }
-        Ok(self)
-    }
-}
-
-impl Default for SignalsmithConfig {
-    fn default() -> Self {
-        Self {
-            block_frames: Consts::DEFAULT_SIGNALSMITH_BLOCK_FRAMES,
-            interval_frames: Consts::DEFAULT_SIGNALSMITH_INTERVAL_FRAMES,
+        match (self.block_frames, self.interval_frames) {
+            (Some(block), Some(interval)) if interval > block => Err(
+                ElasticError::EnginePreparation("Signalsmith interval exceeds its analysis block"),
+            ),
+            (Some(_), None) | (None, Some(_)) => Err(ElasticError::EnginePreparation(
+                "Signalsmith block and interval must be configured together",
+            )),
+            _ => Ok(self),
         }
     }
 }
@@ -66,7 +50,7 @@ impl Default for SignalsmithConfig {
 #[non_exhaustive]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
-    #[builder(default = -4)]
+    #[builder(default)]
     log2_synthesis_hop_adjust: i32,
 }
 
@@ -406,9 +390,9 @@ mod tests {
     fn backend_geometry_has_one_configured_default_owner() {
         let backends = ElasticBackendConfig::builder().build();
 
-        assert_eq!(backends.signalsmith().block_frames().get(), 224);
-        assert_eq!(backends.signalsmith().interval_frames().get(), 32);
-        assert_eq!(backends.bungee().log2_synthesis_hop_adjust(), -4);
+        assert_eq!(backends.signalsmith().block_frames(), None);
+        assert_eq!(backends.signalsmith().interval_frames(), None);
+        assert_eq!(backends.bungee().log2_synthesis_hop_adjust(), 0);
     }
 
     #[kithara::test]
@@ -460,6 +444,37 @@ mod tests {
             result,
             Err(ElasticError::EnginePreparation(
                 "Signalsmith interval exceeds its analysis block"
+            ))
+        ));
+    }
+
+    #[kithara::test]
+    #[case::block_only(true)]
+    #[case::interval_only(false)]
+    fn signalsmith_custom_geometry_requires_both_values(#[case] block_only: bool) {
+        let frames = NonZeroUsize::new(32).expect("fixture geometry is non-zero");
+        let signalsmith = if block_only {
+            SignalsmithConfig::builder().block_frames(frames).build()
+        } else {
+            SignalsmithConfig::builder().interval_frames(frames).build()
+        };
+        let result = ElasticConfig::builder()
+            .backends(
+                ElasticBackendConfig::builder()
+                    .signalsmith(signalsmith)
+                    .build(),
+            )
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(960)
+            .max_output_frames(480)
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(ElasticError::EnginePreparation(
+                "Signalsmith block and interval must be configured together"
             ))
         ));
     }
