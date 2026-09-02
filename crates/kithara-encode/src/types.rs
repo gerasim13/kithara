@@ -1,6 +1,7 @@
 use bon::Builder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
+#[cfg(any(feature = "ffmpeg", feature = "fdk-aac"))]
 use crate::{EncodeError, EncodeResult};
 
 /// PCM source for encoder requests.
@@ -108,6 +109,7 @@ impl PackagedEncodeRequest<'_> {
     ///
     /// Returns [`EncodeError::InvalidInput`] for a zero timescale, a zero
     /// `packets_per_segment`, or a PCM source without a finite length.
+    #[cfg(any(feature = "ffmpeg", feature = "fdk-aac"))]
     pub(crate) fn validate(&self) -> EncodeResult<()> {
         if self.timescale == 0 {
             return Err(EncodeError::InvalidInput(
