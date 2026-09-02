@@ -1136,14 +1136,28 @@ mod tests {
     }
 
     #[kithara::test]
-    fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+    #[case::stereo_44k(2, 44_100, 64)]
+    #[case::mono_48k(1, 48_000, 64)]
+    fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers(
+        #[case] channels: u16,
+        #[case] sample_rate: u32,
+        #[case] chunk_frames: u32,
+    ) {
+        let spec = AudioSpec::new(
+            channels,
+            NonZeroU32::new(sample_rate).expect("test sample rate"),
+        );
         let pools = pools();
         let head = Arc::new(AtomicU64::new(0));
+        let next_offset = u64::from(chunk_frames);
+        let final_offset = next_offset
+            .checked_mul(2)
+            .expect("fixture source extent fits u64");
+        let output_frames = chunk_frames / 2;
         let source = RawSource {
             chunks: VecDeque::from([
-                chunk_with_frames(&pools, spec, 0, 64, 0.25),
-                chunk_with_frames(&pools, spec, 64, 64, 0.25),
+                chunk_with_frames(&pools, spec, 0, chunk_frames, 0.25),
+                chunk_with_frames(&pools, spec, next_offset, chunk_frames, 0.25),
             ]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
@@ -1154,7 +1168,7 @@ mod tests {
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(
             head.load(Ordering::Acquire),
-            64,
+            next_offset,
             "one worker pass advances exactly one source transition"
         );
         flush_deferred(&mut source);
@@ -1165,14 +1179,14 @@ mod tests {
             panic!("the second raw chunk must release the first buffered span");
         };
 
-        assert_eq!(head.load(Ordering::Acquire), 128);
+        assert_eq!(head.load(Ordering::Acquire), final_offset);
         assert_eq!(data.meta.frame_offset, 0);
-        assert_eq!(data.meta.frames, 32);
+        assert_eq!(data.meta.frames, output_frames);
         assert_eq!(
             source_end,
             Some(SourceEnd::new(
-                64,
-                NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+                next_offset,
+                NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
             )),
             "the buffered second span remains outside the live source frontier"
         );
@@ -1185,13 +1199,13 @@ mod tests {
             panic!("EOF drain must release the second buffered span");
         };
 
-        assert_eq!(data.meta.frame_offset, 64);
-        assert_eq!(data.meta.frames, 32);
+        assert_eq!(data.meta.frame_offset, next_offset);
+        assert_eq!(data.meta.frames, output_frames);
         assert_eq!(
             source_end,
             Some(SourceEnd::new(
-                128,
-                NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+                final_offset,
+                NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
             )),
             "terminal output releases the held source frontier"
         );
@@ -1254,15 +1268,31 @@ mod tests {
     }
 
     #[kithara::test]
-    fn unity_warp_preserves_samples_and_meta_across_discontinuity() {
-        let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
-        let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
+    #[case::stereo_to_mono(2, 44_100, 1, 48_000, 256, 512, 64)]
+    #[case::mono_to_stereo(1, 48_000, 2, 44_100, 128, 384, 32)]
+    fn unity_warp_preserves_samples_and_meta_across_discontinuity(
+        #[case] initial_channels: u16,
+        #[case] initial_sample_rate: u32,
+        #[case] changed_channels: u16,
+        #[case] changed_sample_rate: u32,
+        #[case] first_offset: u64,
+        #[case] second_offset: u64,
+        #[case] chunk_frames: u32,
+    ) {
+        let initial = AudioSpec::new(
+            initial_channels,
+            NonZeroU32::new(initial_sample_rate).expect("initial rate"),
+        );
+        let changed = AudioSpec::new(
+            changed_channels,
+            NonZeroU32::new(changed_sample_rate).expect("changed rate"),
+        );
         let pools = pools();
-        let first = chunk_with_frames(&pools, initial, 256, 64, 0.25);
+        let first = chunk_with_frames(&pools, initial, first_offset, chunk_frames, 0.25);
         let first_ptr = first.samples.as_ptr();
         let first_meta = first.meta;
         let first_samples = first.samples.to_vec();
-        let mut second = chunk_with_frames(&pools, changed, 512, 64, 0.25);
+        let mut second = chunk_with_frames(&pools, changed, second_offset, chunk_frames, 0.25);
         second.meta.segment_index = Some(3);
         second.meta.variant_index = Some(2);
         second.meta.epoch = 9;
