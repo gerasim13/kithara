@@ -838,7 +838,12 @@ mod tests {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(crate::native::session::requested_sample_rate())
+                .worker(worker)
+                .build(),
+        );
         let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
         let owner = crate::native::session::insert(queue)
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");

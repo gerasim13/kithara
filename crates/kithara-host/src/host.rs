@@ -130,8 +130,17 @@ impl<S> Host<S> {
     {
         let grid_id = player.id();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(dispatcher))?;
+        player.attach_session(SessionBinding::new(
+            dispatcher,
+            self.requested_sample_rate(),
+        ))?;
         Ok((grid_id, player.control()))
+    }
+
+    /// Returns the session rate used before the output device is measured.
+    #[must_use]
+    pub fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.root_view.grid().axis().sample_rate()
     }
 
     fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
@@ -326,6 +335,7 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::testing::TestPools;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -338,5 +348,15 @@ mod tests {
         let frames = NonZeroU32::new(128).expect("test block size is non-zero");
         let configured = HostConfig::builder().output_block_frames(frames).build();
         assert_eq!(configured.output_block_frames(), Some(frames));
+    }
+
+    #[kithara::test]
+    fn host_root_owns_the_configured_sample_rate() {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let config = HostConfig::builder().sample_rate(sample_rate).build();
+        let root = Host::<TestPools>::session_root(config).expect("host root");
+
+        assert_eq!(root.sample_rate, sample_rate);
+        assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

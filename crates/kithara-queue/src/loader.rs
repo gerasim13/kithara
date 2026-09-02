@@ -411,6 +411,7 @@ mod tests {
             let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
+                    .sample_rate(crate::queue::TEST_SAMPLE_RATE)
                     .worker(worker)
                     .session(crate::queue::test_session())
                     .build(),

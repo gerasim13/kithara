@@ -84,13 +84,17 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{queue::test_session, test_pools::pools};
+    use crate::{
+        queue::{TEST_SAMPLE_RATE, test_session},
+        test_pools::pools,
+    };
 
     #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(TEST_SAMPLE_RATE)
                 .worker(worker)
                 .session(test_session())
                 .build(),

@@ -66,7 +66,7 @@ impl<S> PlayerImpl<S> {
             .eq_layout(config.eq_layout.clone())
             .grid_id(config.grid_id)
             .max_slots(config.max_slots)
-            .sample_rate(config.sample_rate.get())
+            .sample_rate(config.sample_rate)
             .pools(pools)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())

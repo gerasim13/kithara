@@ -96,6 +96,9 @@ pub enum PlayError {
     #[error("player is already attached to an audio session")]
     SessionAlreadyBound,
 
+    #[error("player sample rate {player} does not match audio session sample rate {session}")]
+    SessionSampleRateMismatch { player: u32, session: u32 },
+
     #[error("an audio session is already active on this thread")]
     SessionAlreadyActive,
 

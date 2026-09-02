@@ -13,11 +13,6 @@ use crate::{
     session::SessionDispatcher,
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
-
 fn allocate_grid_id() -> BeatGridId {
     let Ok(id) = BeatGridId::allocate() else {
         panic!("process-wide beat-grid identity space is exhausted");
@@ -74,10 +69,7 @@ pub struct PlayerConfig<S> {
     /// Secondary lead time before EOF at which the next queued item is loaded.
     #[builder(default = 3.5)]
     pub(crate) prefetch_duration: f32,
-    /// Sample rate passed to the engine/runtime backend as a hint.
-    /// Default: 44100. Offline/test harnesses set this to drive
-    /// deterministic render at a known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    /// Initial output sample rate supplied by the owning session.
     pub(crate) sample_rate: NonZeroU32,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]

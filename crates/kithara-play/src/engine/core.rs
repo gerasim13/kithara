@@ -47,7 +47,9 @@ impl<S> EngineImpl<S> {
         let session = config
             .session
             .take()
-            .map_or_else(SessionHandle::pending, SessionHandle::new);
+            .map_or_else(SessionHandle::pending, |dispatcher| {
+                SessionHandle::new(dispatcher, config.sample_rate)
+            });
         let max_slots = config.max_slots;
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
@@ -83,7 +85,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
-        self.config.sample_rate
+        self.config.sample_rate.get()
     }
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -124,7 +126,6 @@ impl<S> EngineImpl<S> {
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pools().clone(),
-            self.config.sample_rate,
         )?;
         *player_id = Some(id);
         drop(player_id);
@@ -301,11 +302,11 @@ impl<S> EngineImpl<S> {
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
         if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate;
+            return self.config.sample_rate.get();
         }
         self.session
             .sample_rate()
-            .map_or(self.config.sample_rate, SessionSampleRate::output)
+            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -356,13 +357,12 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+        self.session.start_player(player_id, master_volume)?;
 
         self.running.store(true, Ordering::Release);
 
         info!(
-            sample_rate = self.config.sample_rate,
+            sample_rate = self.config.sample_rate.get(),
             channels = self.config.channels,
             max_slots = self.config.max_slots,
             player_id,

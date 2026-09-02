@@ -144,6 +144,7 @@ fn attach_player_with_id<B, S>(
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
+            .sample_rate(state.root_view.grid().axis().sample_rate())
             .worker(worker)
             .session(Arc::new(FixtureSession))
             .build(),
@@ -167,20 +168,6 @@ fn attach_player_with_id<B, S>(
         .expect("fixture player attachment");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
     state.publish_root();
-}
-
-#[cfg(test)]
-pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .session(Arc::new(FixtureSession))
-            .build(),
-    );
-    target_member(player)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

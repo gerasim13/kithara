@@ -82,7 +82,10 @@ mod tests {
     use crate::{
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
-        session::{Cmd, Reply, SessionDispatcher, testing::test_session},
+        session::{
+            Cmd, Reply, SessionDispatcher,
+            testing::{self, test_session},
+        },
         test_pools::{TestPools, pools},
     };
 
@@ -102,6 +105,7 @@ mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker)
                 .session(session)
                 .build(),

@@ -266,6 +266,7 @@ mod tests {
     fn commit_next_without_arm_returns_not_ready() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .build(),
@@ -278,6 +279,7 @@ mod tests {
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
                 .session(testing::test_session())
                 .build(),

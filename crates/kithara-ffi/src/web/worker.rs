@@ -98,6 +98,7 @@ pub(crate) fn worker_main(
         let queue_store = state.store.clone();
         let player = kithara::play::PlayerImpl::new(
             kithara::play::PlayerConfig::builder()
+                .sample_rate(host.requested_sample_rate())
                 .worker(worker)
                 .build(),
         );
