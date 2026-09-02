@@ -1,11 +1,12 @@
-use kithara::platform::{CancelToken, time::Duration};
+use kithara::{platform::CancelToken, worker::Worker};
 
 use super::{BroadcastResult, Packager, fixture::Stream};
-use crate::pools::AppHost;
+use crate::pools::{AppHost, Pools};
 
 pub(super) struct Absent;
 
 impl Packager for Absent {
+    type Config = ();
     type Live = Stream;
 
     const IS_AVAILABLE: bool = false;
@@ -16,8 +17,10 @@ impl Packager for Absent {
 
     fn start(
         _host: &AppHost,
+        _worker: &Worker,
+        _pools: &Pools,
         _shutdown: &CancelToken,
-        _tap_lead: Duration,
+        _config: &(),
     ) -> BroadcastResult<Option<Stream>> {
         Err("no packager in this build".into())
     }

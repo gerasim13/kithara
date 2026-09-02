@@ -28,7 +28,6 @@ use platform::{Platform, PlatformResult};
 use crate::api::SessionDuckingMode;
 use crate::{
     api::HostLevel,
-    bridge::MixTapWriter,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -281,16 +280,6 @@ impl<S> Host<S> {
         }
     }
 
-    /// Installs the single post-limiter mix tap.
-    ///
-    /// # Errors
-    /// Returns an error when a tap is active or graph dispatch fails.
-    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        let mut outputs = OutputGroup::new();
-        outputs.push(writer);
-        self.enable_outputs(outputs)
-    }
-
     /// Installs one post-limiter group for simultaneous independent outputs.
     ///
     /// # Errors
@@ -308,11 +297,11 @@ impl<S> Host<S> {
         }
     }
 
-    /// Removes the post-limiter mix tap.
+    /// Removes the post-limiter output group.
     ///
     /// # Errors
     /// Returns an error when graph dispatch fails.
-    pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
+    pub fn disable_outputs(&self) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::DisableMixTap)
     }
 

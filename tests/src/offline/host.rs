@@ -6,7 +6,7 @@ use std::{
 use kithara::{
     bufpool::{HasPool, PoolRegion},
     host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
-    output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
+    output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
         sync::{
@@ -179,19 +179,22 @@ where
     pub fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
         let (pcm_tx, pcm_rx) = HeapRb::<f32>::new(capacity).split();
         let drops = Arc::new(AtomicU64::new(0));
-        self.state
-            .lock()
-            .host
-            .enable_mix_tap(MixTapWriter::new(pcm_tx, Arc::clone(&drops)))?;
+        self.install_mix_tap(MixTapWriter::new(pcm_tx, Arc::clone(&drops)))?;
         Ok(MixTapProbe { drops, pcm: pcm_rx })
     }
 
     pub fn install_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        self.state.lock().host.enable_mix_tap(writer)
+        let mut outputs = OutputGroup::new();
+        outputs.push(writer);
+        self.enable_outputs(outputs)
     }
 
     pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
-        self.state.lock().host.disable_mix_tap()
+        self.state.lock().host.disable_outputs()
+    }
+
+    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+        self.state.lock().host.enable_outputs(outputs)
     }
 
     pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>

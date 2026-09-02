@@ -74,7 +74,7 @@ async fn the_live_playlist_obeys_the_reload_rules() {
 }
 
 #[kithara::test(tokio)]
-async fn a_gap_in_the_feed_is_signalled_for_a_client_to_resynchronise() {
+async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise() {
     let origin = Origin::start();
     let listed = u64::try_from(WINDOW).expect("the window fits");
     origin.advance_to(2).await;

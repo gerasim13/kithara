@@ -1,8 +1,8 @@
 use std::error::Error;
 
-use kithara::platform::{CancelToken, time::Duration};
+use kithara::{platform::CancelToken, worker::Worker};
 
-use crate::pools::AppHost;
+use crate::pools::{AppHost, Pools};
 
 #[cfg(test)]
 mod absent;
@@ -23,6 +23,7 @@ pub(crate) type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 /// What the bar needs from a packager. `Live` has no values where the
 /// `broadcast` feature is off, which makes the running phase unconstructable.
 pub(crate) trait Packager: 'static {
+    type Config: Clone + Send + 'static;
     type Live: Send + 'static;
 
     /// Whether this build carries a packager at all. The UI reads it instead
@@ -34,11 +35,13 @@ pub(crate) trait Packager: 'static {
     /// `Ok(None)`: no device rate measured yet, so the request stands.
     fn start(
         host: &AppHost,
+        worker: &Worker,
+        pools: &Pools,
         shutdown: &CancelToken,
-        tap_lead: Duration,
+        config: &Self::Config,
     ) -> BroadcastResult<Option<Self::Live>>;
 
-    /// Releases the host mix tap before the packager drains.
+    /// Releases the Host output group before the packager drains.
     fn release(host: &AppHost) -> BroadcastResult<()>;
 
     /// Drains the stream and shuts it down. Blocking.
@@ -49,17 +52,28 @@ pub(crate) trait Packager: 'static {
 
 #[cfg(test)]
 mod tests {
-    use kithara::host::HostConfig;
-
-    use super::{
-        AppHost, CancelToken, Duration, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
-        ready::Ready, unmeasured::Unmeasured,
+    use kithara::{
+        host::HostConfig,
+        worker::{Worker, WorkerConfig},
     };
 
-    /// The phase machine only carries the lead to its packager, so the
-    /// value is arbitrary here; the sizing it drives is pinned in `live.rs`.
-    fn broadcaster<P: Packager>() -> Broadcaster<P> {
-        Broadcaster::new(CancelToken::root(), Duration::from_secs(2))
+    use super::{
+        AppHost, CancelToken, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
+        ready::Ready, unmeasured::Unmeasured,
+    };
+    use crate::pools;
+
+    fn broadcaster<P>() -> Broadcaster<P>
+    where
+        P: Packager,
+        P::Config: Default,
+    {
+        Broadcaster::new(
+            CancelToken::root(),
+            Worker::new(WorkerConfig::new()),
+            pools::build().expect("test pools"),
+            P::Config::default(),
+        )
     }
 
     fn host() -> AppHost {

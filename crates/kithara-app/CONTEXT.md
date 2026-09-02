@@ -23,14 +23,14 @@ path or an AssetStore.
 
 ## Broadcast service
 
-The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
-stays `Requested` until the Host exposes its measured output rate, which configures both the ring and the
-encoder and arms the single Host mix tap. App-root cancellation ends the origin and encoder; stopping the
-running phase releases the tap before the encoder drains.
+The crate owns only the service wiring and configured `BroadcastConfig`; packaging, the bounded intake, and the origin belong to `kithara-broadcast`. A request
+stays `Requested` until the Host exposes its measured output rate, which replaces only the configured sample
+rate before `BroadcastOutput` is installed in the single Host `OutputGroup`. App-root cancellation ends the origin and encoder; stopping the
+running phase releases the output group before the encoder drains.
 
-Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves the handle
+Stopping blocks - it closes the bounded intake and waits for the encoder tail - so the toggle moves the handle
 into an iced task and marks the service `Stopping`; only that task's completion message makes it `Off`. The GUI
-tick polls `BroadcastHandle::status`, so a producer released by a device-rate change reaches `Off` the same way.
+tick polls `BroadcastHandle::status`, so an output released by a device-rate change reaches `Off` the same way.
 
 The canon puts this control in the app menu and a recorder module and the app has neither, so its REC cell sits
 in the bar beside the CPU cell.

@@ -108,7 +108,7 @@ fn main() -> AppResult {
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)
-        .base_worker(base_worker)
+        .base_worker(base_worker.clone())
         .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
@@ -123,7 +123,7 @@ fn main() -> AppResult {
     let mut deck_set = DeckSet::new(host, decks);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config, args.host)?;
-    frontend.attach_broadcast(shutdown.clone());
+    frontend.attach_broadcast(shutdown.clone(), base_worker);
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

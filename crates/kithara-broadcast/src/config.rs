@@ -1,7 +1,12 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_platform::time::Duration;
+use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_worker::Priority;
 
 use crate::{BroadcastError, BroadcastResult};
 
@@ -9,11 +14,6 @@ use crate::{BroadcastError, BroadcastResult};
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct BroadcastConfig {
-    /// How long the packager thread waits before polling the mix tap again
-    /// after it found no samples. The floor on how promptly a segment is cut
-    /// once audio resumes, paid for in wake-ups on an idle broadcast.
-    #[builder(default = Duration::from_millis(2))]
-    pub poll_interval: Duration,
     /// Media duration a segment is cut at.
     #[builder(default = Duration::from_secs(4))]
     pub segment_target: Duration,
@@ -29,18 +29,89 @@ pub struct BroadcastConfig {
     /// AAC-LC bit rate the encoder targets.
     #[builder(default = 128_000)]
     pub bit_rate: u64,
+    /// Codec emitted into HLS media segments.
+    #[builder(default = AudioCodec::AacLc)]
+    pub codec: AudioCodec,
+    /// Container carried by HLS media segments.
+    #[builder(default = ContainerFormat::Adts)]
+    pub container: ContainerFormat,
     /// Segments kept fetchable past the playlist window.
     #[builder(default = 3)]
     pub grace: usize,
     /// Segments a client sees in the playlist.
     #[builder(default = 6)]
     pub window: usize,
+    /// Maximum stereo PCM frames waiting between RT and the packager worker.
+    #[builder(default = Defaults::BUFFER_FRAMES)]
+    pub buffer_frames: NonZeroUsize,
+    /// Maximum stereo PCM frames packaged during one worker tick.
+    #[builder(default = Defaults::TICK_FRAMES)]
+    pub tick_frames: NonZeroUsize,
+    /// Maximum tasks admitted to the broadcast dispatcher.
+    #[builder(default = NonZeroUsize::MIN)]
+    pub dispatcher_capacity: NonZeroUsize,
+    /// Consecutive progress passes before the dispatcher yields.
+    #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
+    pub fairness_yield_interval: NonZeroU32,
+    /// Dispatcher park duration when the broadcast has no work.
+    #[builder(default = Duration::from_millis(100))]
+    pub idle_timeout: Duration,
+    /// Threshold for reporting a slow packager tick.
+    #[builder(default = Duration::from_millis(10))]
+    pub slow_tick_threshold: Duration,
+    /// Maximum consecutive packager ticks in one dispatcher visit.
+    #[builder(default = NonZeroU32::MIN)]
+    pub task_burst: NonZeroU32,
+    /// Dispatcher wait duration between deferred RT wakes.
+    #[builder(default = Duration::from_millis(2))]
+    pub wait_timeout: Duration,
+    /// Packager task priority.
+    #[builder(default = Priority::new(0))]
+    pub priority: Priority,
+    /// Maximum compute jobs admitted for the packager task.
+    #[builder(default = NonZeroUsize::MIN)]
+    pub max_compute_tasks: NonZeroUsize,
+    /// Maximum time a graceful stop waits for the bounded PCM tail.
+    #[builder(default = Duration::from_secs(10))]
+    pub stop_timeout: Duration,
+}
+
+struct Defaults;
+
+impl Defaults {
+    const BUFFER_FRAMES: NonZeroUsize = match NonZeroUsize::new(96_000) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    const TICK_FRAMES: NonZeroUsize = match NonZeroUsize::new(4_096) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+}
+
+impl Default for BroadcastConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 impl BroadcastConfig {
     const MILLIS_PER_SECOND: u64 = 1_000;
 
     const MIN_TARGETS: u64 = 3;
+
+    /// Copy this configuration with the measured master sample rate.
+    #[must_use]
+    pub fn with_sample_rate(&self, sample_rate: u32) -> Self {
+        Self {
+            sample_rate,
+            ..self.clone()
+        }
+    }
 
     pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
         Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
@@ -58,6 +129,12 @@ impl BroadcastConfig {
     }
 
     pub(crate) fn validate(&self) -> BroadcastResult<()> {
+        if self.codec != AudioCodec::AacLc || self.container != ContainerFormat::Adts {
+            return Err(BroadcastError::UnsupportedProfile {
+                codec: self.codec,
+                container: self.container,
+            });
+        }
         if self.sample_rate == 0 {
             return Err(BroadcastError::InvalidConfig {
                 field: "sample_rate",
@@ -71,6 +148,11 @@ impl BroadcastConfig {
         }
         if self.window == 0 {
             return Err(BroadcastError::InvalidConfig { field: "window" });
+        }
+        if self.stop_timeout.is_zero() {
+            return Err(BroadcastError::InvalidConfig {
+                field: "stop_timeout",
+            });
         }
 
         let window = u64::try_from(self.window)
@@ -93,6 +175,7 @@ impl BroadcastConfig {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
+    use kithara_stream::{AudioCodec, ContainerFormat};
     use kithara_test_utils::kithara;
 
     use super::BroadcastConfig;
@@ -156,5 +239,22 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn measured_rate_preserves_the_selected_profile() {
+        let configured = BroadcastConfig::builder()
+            .sample_rate(44_100)
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Adts)
+            .bit_rate(192_000)
+            .build();
+
+        let measured = configured.with_sample_rate(48_000);
+
+        assert_eq!(measured.sample_rate, 48_000);
+        assert_eq!(measured.codec, configured.codec);
+        assert_eq!(measured.container, configured.container);
+        assert_eq!(measured.bit_rate, configured.bit_rate);
     }
 }
