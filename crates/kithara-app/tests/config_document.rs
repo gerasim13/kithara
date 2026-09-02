@@ -76,14 +76,14 @@ fn the_app_section_reaches_the_config_patch() {
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
-    let settings = config.app_settings();
-    assert_eq!(settings.eq_bands, Some(5));
+    let app = config.app();
+    assert_eq!(app.eq_bands, Some(5));
     assert_eq!(
-        settings.broadcast_tap_lead,
+        app.broadcast_tap_lead,
         Some(std::time::Duration::from_millis(750))
     );
     assert_eq!(
-        settings.waveform_max_buckets, None,
+        app.waveform_max_buckets, None,
         "a knob the document never names stays unset, so the built value stands"
     );
 }

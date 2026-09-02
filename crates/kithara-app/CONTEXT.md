@@ -363,13 +363,13 @@ variant.
 `ui` and `draw_pool`, both `#[cfg(feature = "gui")]`, are `kithara::ui::source::UiConfigPatch` and
 `DrawPoolLimitsPatch`. They are two top-level sections rather than one nested pair because
 `UiConfig.draw_buffers` is a *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only
-reaches one through `DrawBuffers::try_new`. `Config::ui_settings` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
+reaches one through `DrawBuffers::try_new`. `Config::ui` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
 default, build the `DrawBuffers` from it, then build `UiConfig` through
 `UiConfig::builder().draw_buffers(...)` and apply `ui` onto that value — read before build, never
 patched onto an already-built `UiConfig`, and never routed through `UiConfig::default()`, which would
 build and immediately discard a second `PoolRegion`. `AppConfig::ui` carries the result and `AppUi::new`
 takes it by reference instead of calling
-`UiConfig::default()` itself. `main` calls `.ui(document.ui_settings()?)` on the same builder chain as
+`UiConfig::default()` itself. `main` calls `.ui(document.ui()?)` on the same builder chain as
 `.audio(document.audio())`, `.hls(document.hls())` and `.file(document.file())`;
 the `?` is there because a `draw_pool:` section can name limits the generated schema refuses, and a
 document is refused with a message rather than aborting the process.

@@ -15,7 +15,7 @@ use kithara::{
     play::PlayerConfigPatch,
     queue::QueueConfigPatch,
     stream::dl::DownloaderConfigPatch,
-    worker::{ComputePoolSettings, WorkerConfigPatch},
+    worker::{ComputePool, WorkerConfigPatch},
 };
 use serde::Deserialize;
 
@@ -43,7 +43,7 @@ pub(crate) struct Document {
     pub(crate) downloader: DownloaderConfigPatch,
     /// Draw-pool retention limits `UiConfig::draw_buffers` is built from.
     /// Read before `DrawBuffers` is constructed, never patched onto
-    /// `UiConfig` afterwards -- see `Config::ui_settings`.
+    /// `UiConfig` afterwards -- see `Config::ui`.
     #[cfg(feature = "gui")]
     pub(crate) draw_pool: DrawPoolLimitsPatch,
     pub(crate) drm: Drm,
@@ -61,11 +61,11 @@ pub(crate) struct Document {
     /// (see `UiConfig::screen_cache` in `kithara-ui`). `draw_buffers` is not
     /// among them: it carries `UiConfig`'s own `#[patch(skip)]` because it is
     /// a *built* value, and `draw_pool` above is the document's way of naming
-    /// what it is built from -- see `Config::ui_settings`.
+    /// what it is built from -- see `Config::ui`.
     #[cfg(feature = "gui")]
     pub(crate) ui: UiConfigPatch,
     pub(crate) worker: WorkerConfigPatch,
-    pub(crate) worker_pool: Option<ComputePoolSettings>,
+    pub(crate) worker_pool: Option<ComputePool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -136,7 +136,7 @@ pub(crate) enum SeedAlphabet {
 mod tests {
     use std::num::NonZeroUsize;
 
-    use super::{ComputePoolSettings, Document};
+    use super::{ComputePool, Document};
     use crate::baked::BAKED_DOCUMENT;
 
     #[kithara::test(native, flash(false))]
@@ -255,7 +255,7 @@ mod tests {
         .expect("a valid compute-pool document parses");
 
         match document.worker_pool {
-            Some(ComputePoolSettings::Owned { name, threads }) => {
+            Some(ComputePool::Owned { name, threads }) => {
                 assert_eq!(name, "analysis");
                 assert_eq!(threads.get(), 2);
             }

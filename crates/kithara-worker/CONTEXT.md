@@ -56,14 +56,14 @@ bounded compute seam.
 and `apply` writes only `max_compute_tasks`, leaving whatever `cancel`,
 `runtime`, and `pool` the builder already assembled standing. Those three
 fields are wiring, not settings, and carry `#[patch(skip)]` for it.
-`ComputePoolSettings` is what a document may say about the compute pool. It is
+`ComputePool` is what a document may say about the compute pool. It is
 a section of its own rather than a field of `WorkerConfigPatch`, because `pool` is
 skipped; the embedding surface owns the key it arrives under. `Shared` is
 absent from it on purpose: it carries a live
 `rayon::ThreadPool` only code can hand over, and a document has no way to name
-one. `WorkerConfig::with_pool_settings` is how a decoded `ComputePoolSettings`
+one. `WorkerConfig::with_compute_pool` is how a decoded `ComputePool`
 reaches a real `PoolConfig`. That mapping lives here, not at the construction
-site, because `ComputePoolSettings` is `#[non_exhaustive]`: only this crate can
+site, because `ComputePool` is `#[non_exhaustive]`: only this crate can
 match it exhaustively, so only this crate may write the conversion — anywhere
 else, the match would need a wildcard arm that silently swallows a variant
 added later.

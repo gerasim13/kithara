@@ -18,7 +18,7 @@ use kithara::{
     net::NetOptionsPatch,
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
-    worker::{ComputePoolSettings, WorkerConfigPatch},
+    worker::{ComputePool, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
 use struct_patch::Patch as _;
@@ -237,7 +237,7 @@ impl Config {
     /// the generated draw-buffer schema with, rather than aborting the
     /// process on a value a configuration document can now name.
     #[cfg(feature = "gui")]
-    pub fn ui_settings(&self) -> Result<UiConfig, PoolError> {
+    pub fn ui(&self) -> Result<UiConfig, PoolError> {
         let mut draw_pool = DrawPoolLimits::default();
         draw_pool.apply(self.document.draw_pool.clone());
         let mut config = UiConfig::builder()
@@ -259,7 +259,7 @@ impl Config {
     ///
     /// [`AppConfig`]: crate::config::AppConfig
     #[must_use]
-    pub fn app_settings(&self) -> AppConfigPatch {
+    pub fn app(&self) -> AppConfigPatch {
         self.document.app.clone()
     }
 
@@ -305,7 +305,7 @@ impl Config {
     /// The compute pool the document names, when it names one. `None` leaves
     /// the pool the caller already installed standing.
     #[must_use]
-    pub fn worker_pool(&self) -> Option<ComputePoolSettings> {
+    pub fn worker_pool(&self) -> Option<ComputePool> {
         self.document.worker_pool.clone()
     }
 
@@ -357,7 +357,7 @@ mod tests {
     use kithara::{
         hls::SizeProbeMethod,
         net::{Compression, NetOptions},
-        worker::ComputePoolSettings,
+        worker::ComputePool,
     };
     use struct_patch::Patch as _;
     use tempfile::TempDir;
@@ -475,7 +475,7 @@ mod tests {
             Some(4)
         );
         assert!(
-            matches!(config.worker_pool(), Some(ComputePoolSettings::Disabled {})),
+            matches!(config.worker_pool(), Some(ComputePool::Disabled {})),
             "the accessor hands the application the mode the document named"
         );
     }
@@ -525,7 +525,7 @@ mod tests {
 
     /// `ui` and `draw_pool` are separate document sections because
     /// `UiConfig.draw_buffers` is a *built* value: `DrawPoolLimits` only
-    /// reaches it through `DrawBuffers::try_new`, so `Config::ui_settings`
+    /// reaches it through `DrawBuffers::try_new`, so `Config::ui`
     /// reads `draw_pool` before building it rather than patching `ui` onto
     /// the result afterwards. This test proves that both sections reach one
     /// `UiConfig` through that same code -- the code the binary runs --
@@ -533,7 +533,7 @@ mod tests {
     /// (`max_arena_bytes` defaults to 65536, `max_buffers` to 64,
     /// `command_capacity` to 512). It does not prove that an unnamed field
     /// keeps a *merge-seeded* value rather than a whole-struct reset: the
-    /// base `Config::ui_settings` applies onto is `DrawPoolLimits::default`
+    /// base `Config::ui` applies onto is `DrawPoolLimits::default`
     /// itself, so a reset and a real merge are indistinguishable at this
     /// site. That property is proved separately, by the seeded unit tests in
     /// `kithara-ui`'s `source::config` module, which apply a patch onto a
@@ -550,7 +550,7 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let ui = config
-            .ui_settings()
+            .ui()
             .unwrap_or_else(|error| panic!("the document's draw-pool limits must build: {error}"));
 
         assert_eq!(ui.max_arena_bytes, 131_072);

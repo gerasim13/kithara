@@ -123,7 +123,7 @@ pub struct UiConfig {
     ///
     /// Not a document key: it is a built value assembled from
     /// [`DrawPoolLimits`], which the document names instead -- see
-    /// `Config::ui_settings` in `kithara-app`.
+    /// `Config::ui` in `kithara-app`.
     #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
     #[patch(skip)]
@@ -173,7 +173,7 @@ mod document_tests {
     /// `draw_buffers` is a real field on `UiConfig` but must not be document-
     /// reachable: it is a *built* value assembled from [`DrawPoolLimits`],
     /// which the document names instead through its own top-level section
-    /// (see the field's doc comment and `Config::ui_settings` in
+    /// (see the field's doc comment and `Config::ui` in
     /// `kithara-app`), so a document value here would type and then be
     /// overwritten before it ever reached a compiled document.
     #[cfg(any(feature = "render", feature = "vello"))]

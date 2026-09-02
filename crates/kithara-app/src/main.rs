@@ -101,8 +101,8 @@ fn main() -> AppResult {
         return Ok(());
     }
 
-    let settings = document.app_settings();
-    let directives = settings
+    let app = document.app();
+    let directives = app
         .log_directives
         .clone()
         .unwrap_or_else(|| vec!["info".to_string()]);
@@ -120,7 +120,7 @@ fn main() -> AppResult {
         .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
     worker_config.apply(document.worker());
     if let Some(pool) = document.worker_pool() {
-        worker_config = worker_config.with_pool_settings(pool);
+        worker_config = worker_config.with_compute_pool(pool);
     }
     let base_worker = Worker::new(worker_config);
     let worker = AppWorker::new(
@@ -174,7 +174,7 @@ fn main() -> AppResult {
         .audio(document.audio())
         .hls(document.hls())
         .file(document.file())
-        .ui(document.ui_settings()?)
+        .ui(document.ui()?)
         // The same value tracing is running on, so a document that names no
         // directives still leaves the built configuration agreeing with the
         // process; one that names them has `apply` put back exactly this.
@@ -187,7 +187,7 @@ fn main() -> AppResult {
         .should_accept_invalid_certs(should_accept_invalid_certs)
         .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
-    config.apply(settings);
+    config.apply(app);
 
     let mut host = AppHost::new(HostConfig::builder().build())?;
     let decks = vec![

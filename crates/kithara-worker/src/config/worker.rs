@@ -57,11 +57,11 @@ impl WorkerConfig {
 
     /// Install the compute pool a configuration document named.
     #[must_use]
-    pub fn with_pool_settings(mut self, settings: ComputePoolSettings) -> Self {
-        self.pool = match settings {
-            ComputePoolSettings::Disabled {} => PoolConfig::Disabled,
+    pub fn with_compute_pool(mut self, pool: ComputePool) -> Self {
+        self.pool = match pool {
+            ComputePool::Disabled {} => PoolConfig::Disabled,
             #[cfg(not(target_arch = "wasm32"))]
-            ComputePoolSettings::Owned { name, threads } => {
+            ComputePool::Owned { name, threads } => {
                 PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
             }
         };
@@ -89,7 +89,7 @@ pub(crate) enum PoolConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields, tag = "mode")]
 #[non_exhaustive]
-pub enum ComputePoolSettings {
+pub enum ComputePool {
     /// An empty struct variant, not a unit one: serde checks
     /// `deny_unknown_fields` against a variant's own field list, and a unit
     /// variant has none, so `mode: disabled` would swallow any key beside it.
@@ -126,7 +126,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{ComputePoolSettings, PoolConfig, RayonConfig, WorkerConfig, WorkerConfigPatch};
+    use super::{ComputePool, PoolConfig, RayonConfig, WorkerConfig, WorkerConfigPatch};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
@@ -152,23 +152,23 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn compute_pool_settings_owned_parses_name_and_threads() {
-        let settings: ComputePoolSettings =
+    fn compute_pool_owned_parses_name_and_threads() {
+        let pool: ComputePool =
             serde_yaml_ng::from_str("mode: owned\nname: analysis\nthreads: 2\n")
                 .expect("a valid owned-pool document parses");
 
-        match settings {
-            ComputePoolSettings::Owned { name, threads } => {
+        match pool {
+            ComputePool::Owned { name, threads } => {
                 assert_eq!(name, "analysis");
                 assert_eq!(threads.get(), 2);
             }
-            ComputePoolSettings::Disabled {} => panic!("expected the owned variant"),
+            ComputePool::Disabled {} => panic!("expected the owned variant"),
         }
     }
 
     #[kithara::test(native, flash(false))]
-    fn compute_pool_settings_rejects_a_shared_mode() {
-        let error = serde_yaml_ng::from_str::<ComputePoolSettings>("mode: shared\n")
+    fn compute_pool_rejects_a_shared_mode() {
+        let error = serde_yaml_ng::from_str::<ComputePool>("mode: shared\n")
             .expect_err("a document cannot name a live pool it does not own");
 
         assert!(error.to_string().contains("shared"), "{error}");
@@ -176,15 +176,15 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_disabled_pool_refuses_a_key_it_cannot_use() {
-        let error = serde_yaml_ng::from_str::<ComputePoolSettings>("mode: disabled\nthreads: 4\n")
+        let error = serde_yaml_ng::from_str::<ComputePool>("mode: disabled\nthreads: 4\n")
             .expect_err("a key the disabled mode cannot use must not be dropped in silence");
 
         assert!(error.to_string().contains("threads"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
-    fn with_pool_settings_carries_the_documents_thread_count_and_name() {
-        let owned: ComputePoolSettings =
+    fn with_compute_pool_carries_the_documents_thread_count_and_name() {
+        let owned: ComputePool =
             serde_yaml_ng::from_str("mode: owned\nname: analysis\nthreads: 2\n")
                 .expect("a valid owned-pool document parses");
         let config = WorkerConfig::new()
@@ -192,7 +192,7 @@ mod tests {
                 NonZeroUsize::new(5).expect("nonzero"),
                 "seed",
             ))
-            .with_pool_settings(owned);
+            .with_compute_pool(owned);
 
         match &config.pool {
             PoolConfig::OwnedLazy(pool) => {
@@ -207,14 +207,14 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_disabled_document_replaces_the_pool_the_builder_installed() {
-        let disabled: ComputePoolSettings = serde_yaml_ng::from_str("mode: disabled\n")
+        let disabled: ComputePool = serde_yaml_ng::from_str("mode: disabled\n")
             .expect("a valid disabled-pool document parses");
         let config = WorkerConfig::new()
             .with_owned_pool(RayonConfig::new(
                 NonZeroUsize::new(5).expect("nonzero"),
                 "seed",
             ))
-            .with_pool_settings(disabled);
+            .with_compute_pool(disabled);
 
         match &config.pool {
             PoolConfig::Disabled => {}
