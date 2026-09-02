@@ -72,7 +72,13 @@ stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = ["kithara-worker/probe"]
 mock = ["dep:unimock"]
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-audio/perf", "kithara-decode/perf"]
+perf = [
+    "dep:hotpath",
+    "hotpath/hotpath",
+    "kithara-audio/perf",
+    "kithara-decode/perf",
+    "kithara-warp/perf",
+]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }

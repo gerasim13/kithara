@@ -59,8 +59,14 @@ impl Lockfile {
     }
 
     pub(crate) fn unclassified_encode_dependencies(&self) -> Result<BTreeSet<String>, String> {
-        const NON_ENCODING_DEPENDENCIES: &[&str] =
-            &["bon", "num-traits", "tempfile", "thiserror", "tracing"];
+        const NON_ENCODING_DEPENDENCIES: &[&str] = &[
+            "bon",
+            "num-traits",
+            "tempfile",
+            "thiserror",
+            "tracing",
+            "wasm-bindgen-test",
+        ];
         let encoder = self
             .packages
             .iter()
