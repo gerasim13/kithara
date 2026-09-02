@@ -2,7 +2,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
 deny:
-    cargo deny check
+    cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
+    cargo deny check --disable-fetch
 
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask

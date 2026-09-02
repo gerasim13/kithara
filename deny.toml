@@ -15,6 +15,7 @@ all-features = true
 targets = []
 
 [advisories]
+maximum-db-staleness = "P1D"
 ignore = [
   # paste is unmaintained but only a transitive dev-dep (unimock -> higher-kinded-types -> paste)
   "RUSTSEC-2024-0436",
