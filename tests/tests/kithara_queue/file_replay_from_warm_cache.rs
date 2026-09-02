@@ -7,7 +7,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -70,7 +70,7 @@ fn build_session(cache_path: &Path) -> Session {
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools.clone())
+        HostConfig::offline(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

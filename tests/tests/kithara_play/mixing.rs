@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     events::TrackId,
-    host::{HostOwned, OfflineSessionConfig},
+    host::{HostConfig, HostOwned},
     platform::time::{self, Duration},
     play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition},
     signal::AudioSpec,
@@ -36,7 +36,7 @@ impl MixHarness {
         let pools = pools();
         let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
         let host = OfflineHostHarness::new(
-            OfflineSessionConfig::builder(pools.clone())
+            HostConfig::offline(pools.clone())
                 .sample_rate(sample_rate)
                 .build(),
         )

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
-    host::{HostOwned, OfflineSessionConfig},
+    host::{HostConfig, HostOwned},
     platform::{
         sync::{Arc, Mutex},
         tokio::sync::broadcast::error::TryRecvError,
@@ -16,7 +16,7 @@ use kithara::{
     warp::StretchControls,
 };
 
-use super::OfflineHostHarness;
+use super::{OfflineHostHarness, host::offline_pools};
 use crate::bufpool_ext::{TestPools, pools};
 
 pub struct OfflinePlayerHarness {
@@ -49,15 +49,14 @@ impl OfflinePlayerHarness {
         let pools = pools();
         let sample_rate =
             NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
-        let session = OfflineSessionConfig::builder(pools)
-            .sample_rate(sample_rate)
-            .build();
+        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
         Self::new(options, session)
     }
 
-    pub fn new(options: OfflinePlayerOptions, session: OfflineSessionConfig<TestPools>) -> Self {
+    pub fn new(options: OfflinePlayerOptions, session: HostConfig<TestPools>) -> Self {
         let sample_rate = session.sample_rate();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(session.pools().clone()).build());
+        let pools = offline_pools(&session).clone();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)

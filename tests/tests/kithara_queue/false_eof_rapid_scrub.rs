@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -89,7 +89,7 @@ async fn build_ctx() -> Ctx {
         .worker(worker.clone())
         .store(store)
         .build();
-    let session_config = OfflineSessionConfig::builder(session_pools)
+    let session_config = HostConfig::offline(session_pools)
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, TrackId},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -48,7 +48,7 @@ fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPo
             .build(),
     );
     OfflineQueue::new(
-        OfflineSessionConfig::builder(pools.clone())
+        HostConfig::offline(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(QueueConfig::builder().player(player).store(store).build()),

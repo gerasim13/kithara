@@ -1,6 +1,5 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
-use bon::Builder;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 #[cfg(any(test, feature = "probe"))]
@@ -14,13 +13,14 @@ use kithara_warp::{
     SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
-
+mod config;
 #[cfg(feature = "offline")]
 mod offline;
 mod platform;
 
+pub use config::HostConfig;
 #[cfg(feature = "offline")]
-pub use offline::OfflineSessionConfig;
+use offline::OfflineRuntime;
 use platform::{Platform, PlatformResult};
 
 #[cfg(any(test, feature = "probe"))]
@@ -32,68 +32,6 @@ use crate::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
 };
-
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
-
-/// Configuration for a platform realtime session.
-#[derive(Clone, Copy, Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct RealtimeSessionConfig {
-    /// Initial device-rate hint. Physical route changes may update it later.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
-    #[field(get, copy)]
-    sample_rate_hint: NonZeroU32,
-    /// Optional native output callback-size override. `None` preserves the backend default.
-    #[field(get, copy)]
-    output_block_frames: Option<NonZeroU32>,
-}
-
-impl Default for RealtimeSessionConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-/// Runtime mode and configuration for one Host-owned session.
-#[non_exhaustive]
-pub enum SessionConfig<S> {
-    /// Device-backed platform session.
-    Realtime(RealtimeSessionConfig, PhantomData<fn() -> S>),
-    /// Device-free finite renderer.
-    #[cfg(feature = "offline")]
-    Offline(Box<OfflineSessionConfig<S>>),
-}
-
-impl<S> SessionConfig<S> {
-    /// Configure a platform realtime session.
-    #[must_use]
-    pub const fn realtime(config: RealtimeSessionConfig) -> Self {
-        Self::Realtime(config, PhantomData)
-    }
-}
-
-impl<S> Default for SessionConfig<S> {
-    fn default() -> Self {
-        Self::realtime(RealtimeSessionConfig::default())
-    }
-}
-
-/// Configuration for the shared output session owned by [`Host`].
-#[derive(Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct HostConfig<S> {
-    /// Realtime or offline session selected at Host construction.
-    #[builder(default)]
-    #[field(get)]
-    session: SessionConfig<S>,
-}
 
 /// Typed command proxy for one player value exclusively resident in a Host.
 #[derive(fieldwork::Fieldwork)]
@@ -137,7 +75,7 @@ enum SessionRuntime<S> {
     #[cfg(feature = "offline")]
     Offline {
         platform: Platform<S>,
-        runtime: offline::OfflineRuntime<S>,
+        runtime: OfflineRuntime<S>,
     },
 }
 
@@ -147,7 +85,7 @@ impl<S> SessionRuntime<S> {
     }
 
     #[cfg(feature = "offline")]
-    const fn offline(platform: Platform<S>, runtime: offline::OfflineRuntime<S>) -> Self {
+    const fn offline(platform: Platform<S>, runtime: OfflineRuntime<S>) -> Self {
         Self::Offline { platform, runtime }
     }
 
@@ -168,7 +106,7 @@ impl<S> SessionRuntime<S> {
     }
 
     #[cfg(feature = "offline")]
-    const fn offline_runtime_mut(&mut self) -> Option<&mut offline::OfflineRuntime<S>> {
+    const fn offline_runtime_mut(&mut self) -> Option<&mut OfflineRuntime<S>> {
         match self {
             Self::Offline { runtime, .. } => Some(runtime),
             Self::Realtime(_) => None,
@@ -415,14 +353,18 @@ where
     /// # Errors
     /// Returns an error when the session root or selected runtime cannot start.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
-        match config.session {
-            SessionConfig::Realtime(config, _) => {
-                let root = Self::session_root(config.sample_rate_hint)?;
+        match config {
+            HostConfig::Realtime {
+                sample_rate_hint,
+                output_block_frames,
+                ..
+            } => {
+                let root = Self::session_root(sample_rate_hint)?;
                 let (dispatcher, platform) = Platform::realtime(
                     root.group,
                     root.view.clone(),
                     root.sample_rate,
-                    config.output_block_frames,
+                    output_block_frames,
                 )
                 .resolve()?;
                 Ok(Self::owner(
@@ -433,11 +375,11 @@ where
                 ))
             }
             #[cfg(feature = "offline")]
-            SessionConfig::Offline(config) => {
+            config @ HostConfig::Offline { .. } => {
                 let platform = Platform::offline().resolve()?;
                 let root = Self::session_root(config.sample_rate())?;
                 let (dispatcher, runtime) =
-                    offline::OfflineRuntime::new(*config, root.group, root.view.clone())?;
+                    OfflineRuntime::new(config, root.group, root.view.clone())?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
@@ -510,23 +452,37 @@ mod tests {
 
     #[kithara::test]
     fn realtime_config_preserves_output_block_default_and_allows_override() {
-        let default = RealtimeSessionConfig::builder().build();
-        assert_eq!(default.output_block_frames(), None);
+        let default = HostConfig::<TestPools>::builder().build();
+        let HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } = default
+        else {
+            panic!("default Host config must be realtime");
+        };
+        assert_eq!(output_block_frames, None);
 
         let frames = NonZeroU32::new(128).expect("test block size is non-zero");
-        let configured = RealtimeSessionConfig::builder()
+        let configured = HostConfig::<TestPools>::builder()
             .output_block_frames(frames)
             .build();
-        assert_eq!(configured.output_block_frames(), Some(frames));
+        let HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } = configured
+        else {
+            panic!("realtime builder must create realtime config");
+        };
+        assert_eq!(output_block_frames, Some(frames));
     }
 
     #[kithara::test]
     fn host_root_owns_the_configured_sample_rate() {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-        let config = RealtimeSessionConfig::builder()
+        let config = HostConfig::<TestPools>::builder()
             .sample_rate_hint(sample_rate)
             .build();
-        let root = Host::<TestPools>::session_root(config.sample_rate_hint()).expect("host root");
+        let root = Host::<TestPools>::session_root(config.sample_rate()).expect("host root");
 
         assert_eq!(root.sample_rate, sample_rate);
         assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);

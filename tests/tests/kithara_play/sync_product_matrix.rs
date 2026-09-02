@@ -7,7 +7,7 @@ use kithara::{
     encode::EncodeConfig,
     events::TrackStatus,
     hls::AbrMode,
-    host::{Host, HostConfig, HostOwned, OfflineSessionConfig, SessionConfig, testing::HostProbe},
+    host::{Host, HostConfig, HostOwned, testing::HostProbe},
     output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -296,15 +296,10 @@ fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
 
 fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
     let spec = AudioSpec::new(CHANNELS, sample_rate);
-    let session = OfflineSessionConfig::builder(pools())
+    let session = HostConfig::offline(pools())
         .sample_rate(sample_rate)
         .build();
-    let host = Host::new(
-        HostConfig::builder()
-            .session(SessionConfig::offline(session))
-            .build(),
-    )
-    .unwrap_or_else(|error| panic!("create offline Host: {error}"));
+    let host = Host::new(session).unwrap_or_else(|error| panic!("create offline Host: {error}"));
     let request = OfflineRenderRequest::builder()
         .spec(spec)
         .frames(0..frames)
@@ -343,16 +338,12 @@ impl ProductHarness {
         )
         .expect("offline render block count is non-zero");
         let spec = AudioSpec::new(CHANNELS, sample_rate);
-        let session = OfflineSessionConfig::builder(pools)
+        let session = HostConfig::offline(pools)
             .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
             .build();
-        let mut host = Host::new(
-            HostConfig::builder()
-                .session(SessionConfig::offline(session))
-                .build(),
-        )
-        .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
+        let mut host = Host::new(session)
+            .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {

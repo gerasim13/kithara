@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
     hls::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -118,7 +118,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

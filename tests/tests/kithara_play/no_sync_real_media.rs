@@ -15,7 +15,7 @@ use kithara::{
     bufpool::PoolRegion,
     events::{EventBus, TrackId},
     hls::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -270,7 +270,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
         NonZeroU32::new(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
             .expect("block frames must be non-zero");
     let host = OfflineHostHarness::new(
-        OfflineSessionConfig::builder(pool_region.clone())
+        HostConfig::offline(pool_region.clone())
             .sample_rate(sample_rate)
             .max_block_frames(max_block_frames)
             .build(),

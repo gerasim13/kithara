@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -104,7 +104,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .build(),
     );
 
-    let session = OfflineSessionConfig::builder(pools.clone())
+    let session = HostConfig::offline(pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

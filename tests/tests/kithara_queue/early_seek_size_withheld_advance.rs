@@ -22,7 +22,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{
@@ -81,7 +81,7 @@ struct Harness {
 
 impl Harness {
     fn new(pools: Pools) -> Self {
-        let session = OfflineSessionConfig::builder(pools.clone())
+        let session = HostConfig::offline(pools.clone())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
             .build();
         let host = OfflineHostHarness::new(session).expect("create product offline Host");

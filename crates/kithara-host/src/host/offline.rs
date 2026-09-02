@@ -1,6 +1,5 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
@@ -10,7 +9,7 @@ use kithara_play::{GroupState, PlayError, player::PlayerMember};
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
-use super::{Host, SessionConfig};
+use super::{Host, HostConfig};
 use crate::session::{
     HostDispatcher, RootView,
     offline::{OfflineSessionClient, OfflineTaskConfig},
@@ -37,84 +36,54 @@ fn default_dispatcher_config() -> DispatcherConfig {
         .build()
 }
 
-/// Configuration for one device-free Host session.
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct OfflineSessionConfig<S> {
-    /// Typed output pool shared with the Host's players.
-    #[builder(start_fn)]
-    pub(crate) pools: PoolRegion<S>,
-    /// Exact offline output rate.
-    #[builder(default = Defaults::SAMPLE_RATE)]
-    pub(crate) sample_rate: NonZeroU32,
-    /// Maximum frames processed by one backend/task quantum.
-    #[builder(default = Defaults::BLOCK_FRAMES)]
-    pub(crate) max_block_frames: NonZeroU32,
-    /// Firewheel smoothing window for graph changes.
-    #[builder(default = Defaults::BLOCK_FRAMES)]
-    pub(crate) declick_frames: NonZeroU32,
-    /// Declared device-equivalent latency used by transport calculations.
-    #[builder(default = Duration::ZERO)]
-    pub(crate) declared_latency: Duration,
-    /// Shared worker configuration for the session scheduler.
-    #[builder(default = WorkerConfig::new())]
-    pub(crate) worker: WorkerConfig,
-    /// Dispatcher budgets for the single offline session task.
-    #[builder(default = default_dispatcher_config())]
-    pub(crate) dispatcher: DispatcherConfig,
-    /// Admission, priority, and cancellation configuration for the session task.
-    #[builder(default = TaskConfig::new())]
-    pub(crate) task: TaskConfig,
-    /// Optional automatic test/probe render cadence.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) pacing: Option<Duration>,
-}
-
-impl<S> OfflineSessionConfig<S> {
-    /// Typed output pool shared with every player in this session.
-    #[must_use]
-    pub const fn pools(&self) -> &PoolRegion<S> {
-        &self.pools
-    }
-
-    /// Exact offline output rate.
-    #[must_use]
-    pub const fn sample_rate(&self) -> NonZeroU32 {
-        self.sample_rate
+#[bon::bon]
+impl<S> HostConfig<S> {
+    /// Configure a device-free offline session.
+    #[builder(finish_fn = build)]
+    pub fn offline(
+        #[builder(start_fn)] pools: PoolRegion<S>,
+        #[builder(default = Defaults::SAMPLE_RATE)] sample_rate: NonZeroU32,
+        #[builder(default = Defaults::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
+        #[builder(default = Defaults::BLOCK_FRAMES)] declick_frames: NonZeroU32,
+        #[builder(default = Duration::ZERO)] declared_latency: Duration,
+        #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
+        #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
+        #[builder(default = TaskConfig::new())] task: TaskConfig,
+        #[cfg(any(test, feature = "probe"))] pacing: Option<Duration>,
+    ) -> Self {
+        Self::Offline {
+            pools,
+            sample_rate,
+            max_block_frames,
+            declick_frames,
+            declared_latency,
+            worker,
+            dispatcher: Box::new(dispatcher),
+            task,
+            #[cfg(any(test, feature = "probe"))]
+            pacing,
+        }
     }
 
     /// Maximum frames processed by one backend/task quantum.
     #[must_use]
-    pub const fn max_block_frames(&self) -> NonZeroU32 {
-        self.max_block_frames
-    }
-
-    /// Firewheel smoothing window for graph changes.
-    #[must_use]
-    pub const fn declick_frames(&self) -> NonZeroU32 {
-        self.declick_frames
-    }
-
-    /// Declared device-equivalent latency used by transport calculations.
-    #[must_use]
-    pub const fn declared_latency(&self) -> Duration {
-        self.declared_latency
+    pub const fn max_block_frames(&self) -> Option<NonZeroU32> {
+        match self {
+            Self::Offline {
+                max_block_frames, ..
+            } => Some(*max_block_frames),
+            Self::Realtime { .. } => None,
+        }
     }
 
     /// Optional automatic test/probe render cadence.
     #[cfg(any(test, feature = "probe"))]
     #[must_use]
     pub const fn pacing(&self) -> Option<Duration> {
-        self.pacing
-    }
-}
-
-impl<S> SessionConfig<S> {
-    /// Configure a device-free offline session.
-    #[must_use]
-    pub fn offline(config: OfflineSessionConfig<S>) -> Self {
-        Self::Offline(Box::new(config))
+        match self {
+            Self::Offline { pacing, .. } => *pacing,
+            Self::Realtime { .. } => None,
+        }
     }
 }
 
@@ -134,28 +103,41 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) fn new(
-        config: OfflineSessionConfig<S>,
+        config: HostConfig<S>,
         root: GroupState<PlayerMember>,
         root_view: RootView,
     ) -> Result<StartedOfflineRuntime<S>, PlayError> {
-        let sample_rate = config.sample_rate;
-        let max_block_frames = config.max_block_frames;
+        let HostConfig::Offline {
+            pools,
+            sample_rate,
+            max_block_frames,
+            declick_frames,
+            declared_latency,
+            worker,
+            dispatcher,
+            task,
+            #[cfg(any(test, feature = "probe"))]
+            pacing,
+        } = config
+        else {
+            unreachable!("offline runtime requires offline Host config");
+        };
         let spec = AudioSpec::new(Defaults::CHANNELS, sample_rate);
-        let worker = Worker::new(config.worker);
-        let dispatcher = worker.dispatcher(config.dispatcher);
-        let (client, task) = crate::session::offline::spawn(
+        let worker = Worker::new(worker);
+        let dispatcher = worker.dispatcher(*dispatcher);
+        let (client, task_handle) = crate::session::offline::spawn(
             &dispatcher,
-            config.task,
+            task,
             root,
             root_view,
             OfflineTaskConfig {
-                pools: config.pools,
+                pools,
                 sample_rate,
                 max_block_frames,
-                declick_frames: config.declick_frames,
-                declared_latency: config.declared_latency,
+                declick_frames,
+                declared_latency,
                 #[cfg(any(test, feature = "probe"))]
-                pacing: config.pacing,
+                pacing,
             },
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();
@@ -167,7 +149,7 @@ where
                 spec,
                 _worker: worker,
                 _dispatcher: dispatcher,
-                _task: task,
+                _task: task_handle,
             },
         ))
     }
@@ -280,7 +262,7 @@ struct TimelineOverflow;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_bufpool::testing::TestPools;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_output::{OfflineRenderRequest, OfflineRenderer, RenderSinkError};
     use kithara_platform::CancelScope;
     use kithara_test_utils::kithara;
@@ -294,6 +276,22 @@ mod tests {
         fn write(&mut self, _samples: &[f32]) -> Result<(), RenderSinkError> {
             Ok(())
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn offline_builder_configures_the_host_directly() {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
+        let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let config = HostConfig::offline(pools())
+            .sample_rate(sample_rate)
+            .max_block_frames(block_frames)
+            .build();
+
+        assert_eq!(config.sample_rate(), sample_rate);
+        assert_eq!(config.max_block_frames(), Some(block_frames));
+
+        let host = Host::<TestPools>::new(config).expect("fixture offline Host");
+        assert_eq!(host.requested_sample_rate(), sample_rate);
     }
 
     #[kithara::test(native, flash(false))]

@@ -6,7 +6,7 @@ use std::fmt::Write;
 use kithara::{
     decode::DecoderBackend,
     events::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
@@ -423,7 +423,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let session_config = OfflineSessionConfig::builder(pools)
+    let session_config = HostConfig::offline(pools)
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

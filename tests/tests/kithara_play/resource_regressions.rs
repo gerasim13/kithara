@@ -12,7 +12,7 @@ use kithara::{
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::{
         CancelScope, CancelToken,
         sync::Arc,
@@ -958,7 +958,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         .expect("packaged HLS preload must complete")
         .expect("packaged HLS preload must succeed");
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(region.clone())
+        HostConfig::offline(region.clone())
             .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     );
@@ -1108,7 +1108,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let master_cancel = master_scope.token();
     let worker = play_worker_with_cancel(&region, master_cancel.child());
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(region.clone())
+        HostConfig::offline(region.clone())
             .sample_rate(NonZeroU32::new(SR).expect("sample rate is non-zero"))
             .build(),
     );

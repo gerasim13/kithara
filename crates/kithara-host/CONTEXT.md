@@ -18,8 +18,8 @@ dependency direction is `kithara-host -> kithara-play` and
 ## Offline rendering
 
 `Host` is the sole composition root for both realtime and offline sessions.
-`HostConfig<S>` contains a `SessionConfig<S>` selecting the platform device
-backend or `OfflineSessionConfig<S>`; there is no parallel offline Host type.
+`HostConfig<S>` directly selects the platform device backend or offline
+renderer; there is no nested session config or parallel offline Host type.
 The offline mode owns the same root group, Firewheel graph, limiter, transport,
 and member insertion path as realtime. Only its backend and scheduler differ.
 The backend starts lazily on the first render when no player has started it
@@ -28,7 +28,7 @@ yet, so an empty master mix is valid silence rather than an unavailable graph.
 Its renderer consumes one absolute finite frame range at a time. It may skip
 forward by rendering undisclosed frames, never rewinds an already consumed
 timeline, and writes only the requested range to `RenderSink` in blocks bounded
-by `OfflineSessionConfig::max_block_frames`. The same config supplies the
+by the offline `HostConfig::max_block_frames`. The same config supplies the
 composition root's `PoolRegion<S>`; each block is acquired from its `f32` pool
 and returned after the sink call, preserving the shared hard budget.
 Signal-format mismatch, cancellation, backend failure, and sink failure are
@@ -36,7 +36,7 @@ terminal for that request. The composition owner finalizes the sink on success
 and drops it on error; Host does not own storage or encoding.
 
 The offline session is one `kithara-worker` task. Worker, dispatcher, and task
-budgets come from `OfflineSessionConfig`; rendering is unpaced by default and
+budgets come from the offline Host config; rendering is unpaced by default and
 runs as fast as the caller requests. Optional pacing is probe-only and advances
 the same canonical cursor, so deterministic finite capture must not combine it
 with explicit render requests.
@@ -104,9 +104,9 @@ rejection or fallback state.
 
 ## Route and sample-rate invariant
 
-The selected `SessionConfig` is the only product default for the initial output
-sample rate. `RealtimeSessionConfig` also owns the optional native output block
-override; leaving it unset preserves the backend default. Each inserted Player
+The selected `HostConfig` mode is the only product default for the initial
+output sample rate. Its realtime variant also owns the optional native output
+block override; leaving it unset preserves the backend default. Each inserted Player
 is built for an explicit initial rate and the one-shot `SessionBinding` carries
 only the canonical Host dispatcher. Insertion queries that session and rejects
 a mismatch before the Player can register or start. Session register/start

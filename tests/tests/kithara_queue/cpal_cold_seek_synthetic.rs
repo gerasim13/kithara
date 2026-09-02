@@ -3,7 +3,7 @@
 use kithara::{
     decode::DecoderBackend,
     events::{AudioEvent, Event},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -69,7 +69,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(QueueConfig::builder().player(player).build()),

@@ -13,7 +13,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -97,7 +97,7 @@ fn build_prod_ctx() -> ProdCtx {
 }
 
 fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
-    let session = OfflineSessionConfig::builder(prod.config.worker.pools().clone())
+    let session = HostConfig::offline(prod.config.worker.pools().clone())
         .maybe_pacing(pacing)
         .build();
     let player = PlayerImpl::new(

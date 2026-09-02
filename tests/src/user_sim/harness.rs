@@ -9,7 +9,7 @@ use kithara::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
         TrackId, TrackStatus,
     },
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -138,7 +138,7 @@ impl SimHarness {
                 root: cache_path.into(),
             })
             .build();
-        let session_config = OfflineSessionConfig::builder(pools.clone())
+        let session_config = HostConfig::offline(pools.clone())
             .pacing(Duration::from_millis(10))
             .build();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());

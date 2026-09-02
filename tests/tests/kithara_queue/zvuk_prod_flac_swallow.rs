@@ -6,7 +6,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, Resource},
@@ -153,7 +153,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let recorder = probe_capture::install();
 
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
     );

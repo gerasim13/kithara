@@ -1,7 +1,7 @@
 use kithara::{
     audio::AudioReader,
     events::{Event, EventReceiver, PlayerEvent},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::sync::Arc,
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
@@ -9,7 +9,7 @@ use kithara::{
     },
 };
 
-use super::OfflineResident;
+use super::{OfflineResident, host::offline_pools};
 use crate::bufpool_ext::TestPools;
 
 /// Product Player and Host wired for deterministic finite rendering.
@@ -25,9 +25,10 @@ impl OfflinePlayer {
     ///
     /// Panics if the product offline Host cannot be initialised.
     #[must_use]
-    pub fn new(session: OfflineSessionConfig<TestPools>) -> Self {
+    pub fn new(session: HostConfig<TestPools>) -> Self {
         let sample_rate = session.sample_rate();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(session.pools().clone()).build());
+        let pools = offline_pools(&session).clone();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(sample_rate)

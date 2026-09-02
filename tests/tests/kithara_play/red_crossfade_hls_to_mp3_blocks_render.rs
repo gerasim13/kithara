@@ -7,7 +7,7 @@ use kithara::{
     audio::AudioConfig,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, Resource},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -75,7 +75,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools.clone())
+        HostConfig::offline(pools.clone())
             .sample_rate(NonZeroU32::new(Consts::SR).expect("sample rate is non-zero"))
             .build(),
     );

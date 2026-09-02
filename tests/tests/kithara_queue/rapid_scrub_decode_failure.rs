@@ -6,7 +6,7 @@ use kithara::{
     events::{
         AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
     },
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -261,7 +261,7 @@ impl Harness {
                 root: temp_dir.path().to_path_buf(),
             })
             .build();
-        let session = OfflineSessionConfig::builder(pools.clone())
+        let session = HostConfig::offline(pools.clone())
             .pacing(Duration::from_millis(10))
             .build();
         let player = PlayerImpl::new(

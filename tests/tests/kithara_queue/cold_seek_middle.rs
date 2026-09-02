@@ -3,7 +3,7 @@
 use kithara::{
     assets::AssetStore,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -76,7 +76,7 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let pools = pools();
-    let session = OfflineSessionConfig::builder(pools.clone())
+    let session = HostConfig::offline(pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(
@@ -243,7 +243,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .build(),
     );
 
-    let session = OfflineSessionConfig::builder(pools.clone())
+    let session = HostConfig::offline(pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

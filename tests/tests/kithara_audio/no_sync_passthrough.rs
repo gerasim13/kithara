@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::{
         CancelToken,
         sync::{
@@ -408,7 +408,7 @@ async fn render_passthrough(
     };
 
     let mut target = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     );
@@ -416,7 +416,7 @@ async fn render_passthrough(
     target.load_and_fadein(resource_from_reader(target_audio));
     let mut load = load_audio.take().map(|audio| {
         let mut player = OfflinePlayer::new(
-            OfflineSessionConfig::builder(pools())
+            HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
         );

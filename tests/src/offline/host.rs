@@ -4,11 +4,8 @@ use std::{
 };
 
 use kithara::{
-    bufpool::HasPool,
-    host::{
-        Host, HostConfig, HostLevel, HostOwned, OfflineSessionConfig, SessionConfig,
-        testing::HostProbe,
-    },
+    bufpool::{HasPool, PoolRegion},
+    host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
     output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -30,6 +27,13 @@ use ringbuf::{
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 const GAIN_FLOOR_SECS: f64 = 0.9;
+
+pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
+    match config {
+        HostConfig::Offline { pools, .. } => pools,
+        _ => panic!("BUG: offline harness requires offline Host config"),
+    }
+}
 
 struct HostState<S> {
     host: Host<S>,
@@ -58,7 +62,7 @@ where
     P: PlayerControlSource<Schema = S>,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub fn new(config: OfflineSessionConfig<S>, player: P) -> Result<Self, PlayError> {
+    pub fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
         let host = OfflineHostHarness::new(config)?;
         let member = host.insert(player)?;
         Ok(Self { host, member })
@@ -95,15 +99,13 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Build the same offline Host used by product rendering.
-    pub fn new(config: OfflineSessionConfig<S>) -> Result<Self, PlayError> {
+    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         let spec = AudioSpec::new(CHANNELS, config.sample_rate());
-        let max_block_frames = config.max_block_frames();
+        let max_block_frames = config
+            .max_block_frames()
+            .expect("offline Host config must have a render block size");
         let pacing = config.pacing();
-        let host = Host::new(
-            HostConfig::builder()
-                .session(SessionConfig::offline(config))
-                .build(),
-        )?;
+        let host = Host::new(config)?;
         Ok(Self {
             state: Mutex::new(HostState { host, position: 0 }),
             spec,

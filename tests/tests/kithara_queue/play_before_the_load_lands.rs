@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -38,7 +38,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
-    let session = OfflineSessionConfig::builder(session_pools.clone())
+    let session = HostConfig::offline(session_pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

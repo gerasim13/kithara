@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -94,7 +94,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     );

@@ -7,7 +7,7 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, DownloaderEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -75,7 +75,7 @@ fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = OfflineSessionConfig::builder(pools.clone())
+    let session = HostConfig::offline(pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let player = PlayerImpl::new(

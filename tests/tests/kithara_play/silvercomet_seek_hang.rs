@@ -6,7 +6,7 @@ use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 use kithara::{
     decode::DecoderBackend,
     events::AbrMode,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, thread,
@@ -253,7 +253,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         let downloader = fresh_downloader();
 
         let mut player = OfflinePlayer::new(
-            OfflineSessionConfig::builder(pools())
+            HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
         );

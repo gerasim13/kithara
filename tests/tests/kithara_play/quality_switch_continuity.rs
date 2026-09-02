@@ -19,7 +19,7 @@ use kithara::{
         AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
         Event, EventBus, EventReceiver,
     },
-    host::OfflineSessionConfig,
+    host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
@@ -300,7 +300,7 @@ async fn prepare_player(
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     );

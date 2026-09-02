@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -140,7 +140,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

@@ -7,7 +7,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventReceiver, PlayerEvent},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope, CancelToken,
@@ -318,7 +318,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     );
@@ -457,7 +457,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

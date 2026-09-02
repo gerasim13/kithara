@@ -7,7 +7,7 @@ use kithara::{
     analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     assets::{AssetStore, StorageBackend},
     events::TrackStatus,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -44,7 +44,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
             root: temp.path().to_path_buf(),
         })
         .build();
-    let session_config = OfflineSessionConfig::builder(pools.clone())
+    let session_config = HostConfig::offline(pools.clone())
         .pacing(Duration::from_millis(10))
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());

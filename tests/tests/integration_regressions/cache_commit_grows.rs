@@ -5,7 +5,7 @@ use std::path::Path;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AssetEvent, DownloaderEvent, Event},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -156,7 +156,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         .event_bus(player.bus().clone())
         .build();
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

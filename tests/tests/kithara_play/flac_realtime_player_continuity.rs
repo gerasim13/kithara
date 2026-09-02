@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -161,7 +161,7 @@ async fn run_case(
     let abr = resource.abr_handle();
 
     let mut player = OfflinePlayer::new(
-        OfflineSessionConfig::builder(pools())
+        HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(out_rate).expect("output rate is non-zero"))
             .build(),
     );

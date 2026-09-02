@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -125,7 +125,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(

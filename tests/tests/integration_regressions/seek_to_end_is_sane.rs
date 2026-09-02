@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, PlayerEvent},
-    host::OfflineSessionConfig,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
@@ -115,7 +115,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        HostConfig::offline(pools)
             .sample_rate(sample_rate)
             .max_block_frames(block_frames)
             .build(),
