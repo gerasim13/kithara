@@ -83,7 +83,7 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::{
-            Cmd, Reply, SessionDispatcher,
+            Cmd, Reply, SessionDispatcher, SessionSampleRate,
             testing::{self, test_session},
         },
         test_pools::{TestPools, pools},
@@ -92,8 +92,14 @@ mod tests {
     struct ForeignSession;
 
     impl SessionDispatcher<TestPools> for ForeignSession {
-        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
+                    None,
+                    testing::TEST_SAMPLE_RATE.get(),
+                ))),
+                _ => Ok(Reply::Ok),
+            }
         }
 
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {

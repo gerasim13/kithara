@@ -211,7 +211,7 @@ mod handle {
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
     /// Handle used by resident players to reach their session owner.
@@ -233,6 +233,22 @@ mod handle {
                 reply => Ok(reply),
             }
         }
+
+        fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+            match self.exec_ok(Cmd::QuerySampleRate)? {
+                Reply::SampleRate(sample_rate) => Ok(sample_rate),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session sample rate query".into(),
+                )),
+            }
+        }
+
+        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            let requested = self.sample_rate()?.requested;
+            NonZeroU32::new(requested).ok_or(PlayError::Session(SessionError::InvalidSampleRate(
+                requested,
+            )))
+        }
     }
 
     /// Opaque one-shot capability used to attach a Player to its session.
@@ -241,23 +257,18 @@ mod handle {
     /// this capability down to their resident Player.
     pub struct SessionBinding<S> {
         dispatcher: Arc<dyn SessionDispatcher<S>>,
-        sample_rate: NonZeroU32,
     }
 
     impl<S> SessionBinding<S> {
         /// Wraps the canonical session for one Host insertion.
         #[doc(hidden)]
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>, sample_rate: NonZeroU32) -> Self {
-            Self {
-                dispatcher,
-                sample_rate,
-            }
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
+            Self { dispatcher }
         }
 
-        #[must_use]
-        pub(crate) const fn sample_rate(&self) -> NonZeroU32 {
-            self.sample_rate
+        pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            self.dispatcher.requested_sample_rate()
         }
     }
 
@@ -275,9 +286,9 @@ mod handle {
 
     impl<S> SessionHandle<S> {
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>, sample_rate: NonZeroU32) -> Self {
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
             Self(Arc::new(SessionSlot {
-                binding: Mutex::new(Some(SessionBinding::new(dispatcher, sample_rate))),
+                binding: Mutex::new(Some(SessionBinding::new(dispatcher))),
             }))
         }
 
@@ -316,13 +327,11 @@ mod handle {
                 .ok_or(PlayError::SessionUnbound)
         }
 
-        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
-            self.0
-                .binding
-                .lock()
-                .as_ref()
-                .map(SessionBinding::sample_rate)
-                .ok_or(PlayError::SessionUnbound)
+        delegate::delegate! {
+            to self.dispatcher()? {
+                pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
+                pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            }
         }
 
         #[must_use]
@@ -352,15 +361,6 @@ mod handle {
                 reason: reason.to_owned(),
             })
             .map(|_| ())
-        }
-
-        pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-            match self.exec_ok(Cmd::QuerySampleRate)? {
-                Reply::SampleRate(sample_rate) => Ok(sample_rate),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session sample rate query".into(),
-                )),
-            }
         }
 
         pub fn register_player(
@@ -484,7 +484,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
 
-    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle};
+    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
     use crate::{
         PlayError,
         test_pools::{TestPools, pools},
@@ -512,6 +512,10 @@ mod tests {
     impl SessionDispatcher<TestPools> for RateCapture {
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
+                    None,
+                    sample_rate().get(),
+                ))),
                 Cmd::RegisterPlayer { sample_rate, .. } => {
                     self.0.store(sample_rate, Ordering::Relaxed);
                     Ok(Reply::PlayerRegistered(1))
@@ -531,8 +535,7 @@ mod tests {
 
     #[kithara::test]
     fn session_handle_delegates_explicit_consumer_wake_mode() {
-        let handle: SessionHandle<TestPools> =
-            SessionHandle::new(Arc::new(DefaultSession), sample_rate());
+        let handle: SessionHandle<TestPools> = SessionHandle::new(Arc::new(DefaultSession));
 
         assert_eq!(
             handle.consumer_wake_mode(),
@@ -553,7 +556,7 @@ mod tests {
         ));
 
         handle
-            .bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate()))
+            .bind(SessionBinding::new(Arc::new(DefaultSession)))
             .expect("bind canonical session");
         assert_eq!(
             handle.consumer_wake_mode(),
@@ -561,7 +564,7 @@ mod tests {
         );
         assert!(matches!(handle.exec(Cmd::Tick), Ok(Reply::Ok)));
         assert!(matches!(
-            handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
+            handle.bind(SessionBinding::new(Arc::new(DefaultSession))),
             Err(PlayError::SessionAlreadyBound)
         ));
     }
@@ -570,7 +573,7 @@ mod tests {
     fn session_commands_use_the_bound_host_rate() {
         let capture = Arc::new(RateCapture::default());
         let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
-        let handle = SessionHandle::new(dispatcher, sample_rate());
+        let handle = SessionHandle::new(dispatcher);
 
         let player_id = handle
             .register_player(

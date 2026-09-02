@@ -130,10 +130,7 @@ impl<S> Host<S> {
     {
         let grid_id = player.id();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(
-            dispatcher,
-            self.requested_sample_rate(),
-        ))?;
+        player.attach_session(SessionBinding::new(dispatcher))?;
         Ok((grid_id, player.control()))
     }
 
@@ -221,13 +218,7 @@ impl<S> Host<S> {
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
+        self.dispatcher.sample_rate()
     }
 
     /// Installs the single post-limiter mix tap.

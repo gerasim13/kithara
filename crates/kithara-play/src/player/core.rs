@@ -124,14 +124,7 @@ impl<S> PlayerRuntime<S> {
     }
 
     pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-        self.with_open_result(|runtime| {
-            let player = runtime.core.engine.configured_sample_rate();
-            let session = binding.sample_rate().get();
-            if player != session {
-                return Err(PlayError::SessionSampleRateMismatch { player, session });
-            }
-            runtime.core.engine.attach_session(binding)
-        })
+        self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
     }
 
     pub(super) fn with_open<T>(&self, operation: impl FnOnce(&Self) -> T) -> Result<T, PlayError> {
@@ -236,11 +229,11 @@ impl<S> PlayerRuntime<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
     #[cfg(not(target_arch = "wasm32"))]
     use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
+    use kithara_audio::ConsumerWakeMode;
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
@@ -254,7 +247,7 @@ mod tests {
         effects::eq::generate_log_spaced_bands,
         player::{PlayerConfig, PlayerControlSource},
         resource::{ResourceConfig, ResourceSrc},
-        session::{SessionBinding, testing},
+        session::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, testing},
         test_pools::{TestPools, pools},
     };
 
@@ -277,6 +270,21 @@ mod tests {
 
     fn worker() -> PlayWorker<TestPools> {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
+    }
+
+    struct ForeignRateSession;
+
+    impl SessionDispatcher<TestPools> for ForeignRateSession {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(None, 48_000))),
+                _ => Ok(Reply::Ok),
+            }
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
     }
 
     fn player() -> PlayerImpl<TestPools> {
@@ -714,11 +722,29 @@ mod tests {
                 .worker(worker())
                 .build(),
         );
-        let host_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-        let binding = SessionBinding::new(testing::test_session(), host_rate);
+        let binding = SessionBinding::new(Arc::new(ForeignRateSession));
 
         assert!(matches!(
             PlayerControlSource::attach_session(&mut player, binding),
+            Err(PlayError::SessionSampleRateMismatch {
+                player: 44_100,
+                session: 48_000,
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(Arc::new(ForeignRateSession))
+                .build(),
+        );
+
+        assert!(matches!(
+            player.core.engine.start(),
             Err(PlayError::SessionSampleRateMismatch {
                 player: 44_100,
                 session: 48_000,

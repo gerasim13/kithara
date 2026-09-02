@@ -47,9 +47,7 @@ impl<S> EngineImpl<S> {
         let session = config
             .session
             .take()
-            .map_or_else(SessionHandle::pending, |dispatcher| {
-                SessionHandle::new(dispatcher, config.sample_rate)
-            });
+            .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
@@ -73,7 +71,17 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+        self.validate_session_sample_rate(binding.requested_sample_rate()?.get())?;
         self.session.bind(binding)
+    }
+
+    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
+        let player = self.configured_sample_rate();
+        if player == session {
+            Ok(())
+        } else {
+            Err(PlayError::SessionSampleRateMismatch { player, session })
+        }
     }
 
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
@@ -121,6 +129,7 @@ impl<S> EngineImpl<S> {
             return Ok(id);
         }
 
+        self.validate_session_sample_rate(self.session.requested_sample_rate()?.get())?;
         let id = self.session.register_player(
             self.config.grid_id,
             self.bus.clone(),

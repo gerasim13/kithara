@@ -129,9 +129,10 @@ UI must not drift from the audio
 ## Engine Lifecycle
 
 `PlayerConfig.sample_rate` is mandatory and has no playback-layer default. It
-is the Player's initial session-rate contract; Host attachment must carry the
-same value through `SessionBinding`, and the session handle is the sole source
-for register/start commands. Tests pass their fixture rate explicitly.
+is the Player's initial session-rate contract; Host attachment queries the
+canonical dispatcher carried by `SessionBinding`, and that dispatcher is the
+sole rate source for validation and register/start commands. Tests pass their
+fixture rate explicitly.
 
 `EngineImpl::start` is **atomic single-start**: an internal `start_lock`
 serializes the `running` check-then-act, and `running` flips only after

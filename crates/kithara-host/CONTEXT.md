@@ -79,9 +79,10 @@ rejection or fallback state.
 
 `HostConfig` is the only product default for the initial output sample rate.
 Each inserted Player is built for an explicit initial rate and the one-shot
-`SessionBinding` carries the Host rate; insertion rejects a mismatch before the
-Player can register or start. Session register/start commands derive their rate
-from that binding rather than accepting another caller-supplied value.
+`SessionBinding` carries only the canonical Host dispatcher. Insertion queries
+that session and rejects a mismatch before the Player can register or start.
+Session register/start commands derive their rate from the same query rather
+than accepting another caller-supplied value.
 
 Route changes keep the existing flow: the Host observes the device change and
 the Player receives the resulting sample-rate update through its current

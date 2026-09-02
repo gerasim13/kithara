@@ -144,8 +144,6 @@ fn ring_capacity(config: &BroadcastConfig, tap_lead: Duration) -> BroadcastResul
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use kithara::{
         audio::ConsumerWakeMode,
         platform::{
@@ -163,10 +161,6 @@ mod tests {
 
     /// The lead every test that does not measure the ring starts on air with.
     const TAP_LEAD: Duration = Duration::from_secs(2);
-
-    fn requested_rate() -> NonZeroU32 {
-        NonZeroU32::new(SampleRateSession::REQUESTED_RATE).expect("fixture sample rate is non-zero")
-    }
 
     struct SampleRateSession {
         sample_rate: AtomicU32,
@@ -230,7 +224,7 @@ mod tests {
 
     fn on_air(sample_rate: u32) -> (Stream, Arc<SampleRateSession>, CancelToken) {
         let dispatcher = Arc::new(SampleRateSession::new(sample_rate));
-        let session = SessionHandle::new(dispatcher.clone(), requested_rate());
+        let session = SessionHandle::new(dispatcher.clone());
         let shutdown = CancelToken::root();
         let config = measured_config(&session)
             .expect("sample-rate query")
@@ -242,7 +236,7 @@ mod tests {
     #[kithara::test]
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let dispatcher = Arc::new(SampleRateSession::new(0));
-        let session = SessionHandle::new(dispatcher.clone(), requested_rate());
+        let session = SessionHandle::new(dispatcher.clone());
 
         assert!(measured_config(&session).unwrap().is_none());
         assert!(
@@ -266,8 +260,7 @@ mod tests {
             "the running stream holds the session's mix tap"
         );
 
-        release(&SessionHandle::new(dispatcher.clone(), requested_rate()))
-            .expect("release mix tap");
+        release(&SessionHandle::new(dispatcher.clone())).expect("release mix tap");
         Backend::stop(stream);
 
         assert!(
