@@ -3,9 +3,8 @@ use std::fmt;
 use bon::Builder;
 #[cfg(feature = "beat-nn")]
 use kithara_beat::{BeatConfig, BeatConfigPatch};
+use kithara_macros::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
-use serde::Deserialize;
-use struct_patch::Patch;
 
 struct Consts;
 
@@ -23,11 +22,12 @@ impl Consts {
 ///
 /// [`BeatAnalysisConfigPatch`] is what a configuration document may say about
 /// it.
-#[derive(Clone, Builder, fieldwork::Fieldwork)]
+#[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
+    #[patch(skip)]
     resampler_backend: B,
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     #[field(get(copy))]
@@ -47,102 +47,8 @@ pub struct BeatAnalysisConfig<B> {
     #[cfg(feature = "beat-nn")]
     #[builder(default)]
     #[field(get(copy))]
+    #[patch(nested)]
     pub beat: BeatConfig,
-}
-
-/// What a configuration document may say about [`BeatAnalysisConfig`].
-///
-/// Hand-written rather than derived: `struct-patch` copies a struct's generics
-/// and where-clause verbatim onto the patch it generates, so a patch of a
-/// generic configuration whose generic-carrying field is skipped has a type
-/// parameter no field uses and does not compile. `resampler_backend` is the
-/// caller's own object and is absent on purpose; `deny_unknown_fields` refuses
-/// it by name rather than dropping it silently.
-///
-/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
-/// references are resolved, so the tree it merges into holds secrets in the
-/// clear.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct BeatAnalysisConfigPatch {
-    /// See [`BeatAnalysisConfig::resampler_quality`].
-    pub resampler_quality: Option<ResamplerQuality>,
-    /// See [`BeatAnalysisConfig::detector_min_window_seconds`].
-    pub detector_min_window_seconds: Option<u32>,
-    /// See [`BeatAnalysisConfig::detector_overlap_seconds`].
-    pub detector_overlap_seconds: Option<u32>,
-    /// See [`BeatAnalysisConfig::detector_window_seconds`].
-    pub detector_window_seconds: Option<u32>,
-    /// See [`BeatAnalysisConfig::target_rate`].
-    pub target_rate: Option<u32>,
-    /// See [`BeatAnalysisConfig::block_frames`].
-    pub block_frames: Option<usize>,
-    /// See [`BeatAnalysisConfig::beat`].
-    #[cfg(feature = "beat-nn")]
-    pub beat: BeatConfigPatch,
-}
-
-impl<B> Patch<BeatAnalysisConfigPatch> for BeatAnalysisConfig<B> {
-    fn apply(&mut self, patch: BeatAnalysisConfigPatch) {
-        if let Some(resampler_quality) = patch.resampler_quality {
-            self.resampler_quality = resampler_quality;
-        }
-        if let Some(detector_min_window_seconds) = patch.detector_min_window_seconds {
-            self.detector_min_window_seconds = detector_min_window_seconds;
-        }
-        if let Some(detector_overlap_seconds) = patch.detector_overlap_seconds {
-            self.detector_overlap_seconds = detector_overlap_seconds;
-        }
-        if let Some(detector_window_seconds) = patch.detector_window_seconds {
-            self.detector_window_seconds = detector_window_seconds;
-        }
-        if let Some(target_rate) = patch.target_rate {
-            self.target_rate = target_rate;
-        }
-        if let Some(block_frames) = patch.block_frames {
-            self.block_frames = block_frames;
-        }
-        #[cfg(feature = "beat-nn")]
-        self.beat.apply(patch.beat);
-    }
-
-    fn into_patch(self) -> BeatAnalysisConfigPatch {
-        BeatAnalysisConfigPatch {
-            resampler_quality: Some(self.resampler_quality),
-            detector_min_window_seconds: Some(self.detector_min_window_seconds),
-            detector_overlap_seconds: Some(self.detector_overlap_seconds),
-            detector_window_seconds: Some(self.detector_window_seconds),
-            target_rate: Some(self.target_rate),
-            block_frames: Some(self.block_frames),
-            #[cfg(feature = "beat-nn")]
-            beat: self.beat.into_patch(),
-        }
-    }
-
-    fn into_patch_by_diff(self, previous: Self) -> BeatAnalysisConfigPatch {
-        BeatAnalysisConfigPatch {
-            resampler_quality: (self.resampler_quality != previous.resampler_quality)
-                .then_some(self.resampler_quality),
-            detector_min_window_seconds: (self.detector_min_window_seconds
-                != previous.detector_min_window_seconds)
-                .then_some(self.detector_min_window_seconds),
-            detector_overlap_seconds: (self.detector_overlap_seconds
-                != previous.detector_overlap_seconds)
-                .then_some(self.detector_overlap_seconds),
-            detector_window_seconds: (self.detector_window_seconds
-                != previous.detector_window_seconds)
-                .then_some(self.detector_window_seconds),
-            target_rate: (self.target_rate != previous.target_rate).then_some(self.target_rate),
-            block_frames: (self.block_frames != previous.block_frames).then_some(self.block_frames),
-            #[cfg(feature = "beat-nn")]
-            beat: self.beat.into_patch_by_diff(previous.beat),
-        }
-    }
-
-    fn new_empty_patch() -> BeatAnalysisConfigPatch {
-        BeatAnalysisConfigPatch::default()
-    }
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -250,7 +156,6 @@ mod document_tests {
     use kithara_beat::BeatConfig;
     use kithara_resampler::{ResamplerQuality, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
 

@@ -9,7 +9,6 @@ use kithara::{
     },
     queue::QueueConfig,
 };
-use struct_patch::Patch as _;
 
 use crate::{
     config::AppConfig,

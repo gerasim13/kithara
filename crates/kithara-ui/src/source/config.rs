@@ -1,17 +1,13 @@
 use std::collections::BTreeSet;
 
 use bon::Builder;
-use struct_patch::Patch;
+use kithara_macros::Patch;
 
 #[cfg(any(feature = "render", feature = "vello"))]
 use crate::draw::DrawBuffers;
 
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "LimitsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct Limits {
     #[builder(default = 256 * 1024)]
@@ -25,10 +21,6 @@ pub struct Limits {
 /// Memory retained by the draw pools between frames.
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "DrawPoolLimitsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct DrawPoolLimits {
     /// Hard byte limit shared by every draw buffer kind.
@@ -73,10 +65,6 @@ pub const SCREEN_CACHE: usize = 8;
 /// Canonical compile configuration and its resource limits.
 #[derive(Builder, Clone, Debug, PartialEq, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "UiConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct UiConfig {
     /// The extension kinds the application registers with its hosts.
@@ -93,7 +81,7 @@ pub struct UiConfig {
     #[patch(skip)]
     pub custom_kinds: BTreeSet<String>,
     #[builder(default)]
-    #[patch(name = "LimitsPatch")]
+    #[patch(nested)]
     pub limits: Limits,
     #[builder(default = 64 * 1024)]
     pub max_arena_bytes: usize,
@@ -139,7 +127,6 @@ impl Default for UiConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{DrawPoolLimits, DrawPoolLimitsPatch, LimitsPatch, UiConfig, UiConfigPatch};
     #[cfg(any(feature = "render", feature = "vello"))]

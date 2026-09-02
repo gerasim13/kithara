@@ -2,11 +2,10 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
-use serde::Deserialize;
-use struct_patch::Patch;
 
 use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
 
@@ -45,7 +44,7 @@ pub enum ConsumerWakeMode {
 /// and the optional PCM observer.
 ///
 /// [`AudioConfigPatch`] is what a configuration document may say about it.
-#[derive(Builder, fieldwork::Fieldwork)]
+#[derive(Builder, fieldwork::Fieldwork, Patch)]
 #[builder(start_fn = for_stream)]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
@@ -53,10 +52,12 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     #[builder(start_fn)]
     #[field(get)]
+    #[patch(skip)]
     pub(crate) stream: T::Config,
     /// Decoder construction settings, including decoder-side resampling.
     #[builder(default)]
     #[field(get)]
+    #[patch(skip)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
@@ -68,6 +69,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// overwrites it with the engine's master or configured rate. A document
     /// value would be overwritten by the first host that disagrees with it.
     #[field(get, copy)]
+    #[patch(skip)]
     pub host_sample_rate: Option<NonZeroU32>,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Not a document key: the shipped binary is a real-time
@@ -75,6 +77,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// a player's own session policy sets this explicitly.
     #[field(get, copy)]
     #[builder(default)]
+    #[patch(skip)]
     pub block_on_underrun: bool,
     /// Consumer wake capability for ring pops and reader-event delivery. Not
     /// a document key: a player-managed resource has this value overwritten
@@ -83,6 +86,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// callback.
     #[field(get, copy)]
     #[builder(default)]
+    #[patch(skip)]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
@@ -91,71 +95,22 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub audio_buffer_chunks: usize,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]
+    #[patch(skip)]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
+    #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional format hint (file extension like "mp3", "wav")
+    #[patch(skip)]
     pub(crate) hint: Option<String>,
     /// Media info hint for format detection
+    #[patch(skip)]
     pub(crate) media_info: Option<MediaInfo>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
+    #[patch(skip)]
     pub(crate) observer: Option<Box<dyn AudioObserver>>,
-}
-
-/// What a configuration document may say about [`AudioConfig`].
-///
-/// Hand-written rather than derived: `struct-patch` copies a struct's generics
-/// and where-clause verbatim onto the patch it generates, so a patch of a
-/// generic configuration whose generic-carrying fields are skipped has a type
-/// parameter no field uses and does not compile. The fields absent here are
-/// absent on purpose — see the `AudioConfig` fields documented "not a document
-/// key" — and `deny_unknown_fields` refuses them by name rather than dropping
-/// them silently.
-///
-/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
-/// references are resolved, so the tree it merges into holds secrets in the
-/// clear.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct AudioConfigPatch {
-    /// See [`AudioConfig::preload_chunks`].
-    pub preload_chunks: Option<NonZeroUsize>,
-    /// See [`AudioConfig::audio_buffer_chunks`].
-    pub audio_buffer_chunks: Option<usize>,
-}
-
-impl<T: StreamType, B> Patch<AudioConfigPatch> for AudioConfig<T, B> {
-    fn apply(&mut self, patch: AudioConfigPatch) {
-        if let Some(preload_chunks) = patch.preload_chunks {
-            self.preload_chunks = preload_chunks;
-        }
-        if let Some(audio_buffer_chunks) = patch.audio_buffer_chunks {
-            self.audio_buffer_chunks = audio_buffer_chunks;
-        }
-    }
-
-    fn into_patch(self) -> AudioConfigPatch {
-        AudioConfigPatch {
-            preload_chunks: Some(self.preload_chunks),
-            audio_buffer_chunks: Some(self.audio_buffer_chunks),
-        }
-    }
-
-    fn into_patch_by_diff(self, previous: Self) -> AudioConfigPatch {
-        AudioConfigPatch {
-            preload_chunks: (self.preload_chunks != previous.preload_chunks)
-                .then_some(self.preload_chunks),
-            audio_buffer_chunks: (self.audio_buffer_chunks != previous.audio_buffer_chunks)
-                .then_some(self.audio_buffer_chunks),
-        }
-    }
-
-    fn new_empty_patch() -> AudioConfigPatch {
-        AudioConfigPatch::default()
-    }
 }
 
 impl<T, B> AudioConfig<T, B>
@@ -196,12 +151,10 @@ mod document_tests {
 
     use super::AudioConfigPatch;
 
-    /// `deny_unknown_fields` is hand-written here rather than emitted by
-    /// `#[patch(attribute(...))]`, so a bogus key is what proves it is on the
-    /// type at all. `preload_chunks` and `audio_buffer_chunks` are the patch's
-    /// only declared fields, and `headroom` is neither a substring of either
-    /// nor contains one, so the assertion cannot pass off serde's list of
-    /// valid names.
+    /// `preload_chunks` and `audio_buffer_chunks` are the patch's only
+    /// declared fields, and `headroom` is neither a substring of either nor
+    /// contains one, so the assertion cannot pass off serde's list of valid
+    /// names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error = serde_yaml_ng::from_str::<AudioConfigPatch>("headroom: 8\n")

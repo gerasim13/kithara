@@ -11,6 +11,7 @@ use std::{
 };
 
 use dashmap::DashSet;
+use kithara_macros::Patch;
 #[cfg(test)]
 use kithara_platform::thread;
 use kithara_platform::{
@@ -18,7 +19,6 @@ use kithara_platform::{
     sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
-use struct_patch::Patch;
 
 use super::worker::WorkerSlot;
 use crate::error::AssetsResult;
@@ -52,10 +52,6 @@ pub(crate) trait Flushable: Send + Sync {
 
 /// Tunables for [`FlushHub`].
 #[derive(Clone, Debug, Patch)]
-#[patch(name = "FlushPolicyPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 pub struct FlushPolicy {
     /// Coalesce window: when the worker sees a signal, it sleeps this
     /// long before draining dirty sources, so a burst of mutations
@@ -331,7 +327,6 @@ mod tests {
 
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::*;
 

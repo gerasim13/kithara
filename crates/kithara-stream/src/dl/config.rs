@@ -1,16 +1,12 @@
 use bon::Builder;
 use kithara_abr::{AbrSettings, AbrSettingsPatch};
+use kithara_macros::Patch;
 use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
-use struct_patch::Patch;
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder, Patch)]
 #[builder(start_fn = for_client)]
-#[patch(name = "DownloaderConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct DownloaderConfig {
     /// HTTP client used for all fetches. Cloned by the Downloader to
@@ -22,7 +18,7 @@ pub struct DownloaderConfig {
     pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
-    #[patch(name = "AbrSettingsPatch")]
+    #[patch(nested)]
     pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
@@ -71,7 +67,6 @@ mod tests {
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{DownloaderConfig, DownloaderConfigPatch};
 

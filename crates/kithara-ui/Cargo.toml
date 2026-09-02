@@ -43,6 +43,7 @@ vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:trac
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -68,7 +69,6 @@ ron = { workspace = true }
 roxmltree = { workspace = true }
 serde = { workspace = true }
 skrifa = { workspace = true, optional = true }
-struct-patch = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }

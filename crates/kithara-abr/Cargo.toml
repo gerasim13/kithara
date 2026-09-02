@@ -29,6 +29,7 @@ tls-native = ["kithara-events/tls-native"]
 
 [dependencies]
 kithara-events = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -40,7 +41,6 @@ fieldwork = { workspace = true }
 humantime-serde = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }

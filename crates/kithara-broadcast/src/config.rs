@@ -1,17 +1,13 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use bon::Builder;
+use kithara_macros::Patch;
 use kithara_platform::time::Duration;
-use struct_patch::Patch;
 
 use crate::{BroadcastError, BroadcastResult};
 
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 #[derive(Clone, Debug, Builder, Patch)]
-#[patch(name = "BroadcastConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct BroadcastConfig {
     /// How long the packager thread waits before polling the mix tap again
@@ -101,7 +97,6 @@ impl BroadcastConfig {
 mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{BroadcastConfig, BroadcastConfigPatch, BroadcastError};
 

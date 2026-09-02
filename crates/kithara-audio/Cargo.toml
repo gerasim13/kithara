@@ -63,6 +63,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
@@ -78,7 +79,6 @@ fieldwork = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }

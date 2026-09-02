@@ -1,15 +1,11 @@
 use bon::Builder;
-use struct_patch::Patch;
+use kithara_macros::Patch;
 
 /// Policy for turning the beat model's raw logits into events.
 ///
 /// The chunk geometry the model is run with is not here: it follows the
 /// segmentation `beat_this` was trained on and is not a knob.
 #[derive(Clone, Copy, Debug, Builder, PartialEq, Patch)]
-#[patch(name = "BeatConfigPatch")]
-#[patch(attribute(derive(Clone, Copy, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct BeatConfig {
     /// Logit a frame must exceed to be a peak candidate. `0.0` is probability
@@ -38,7 +34,6 @@ impl Default for BeatConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{BeatConfig, BeatConfigPatch};
 

@@ -49,6 +49,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -62,7 +63,6 @@ fieldwork = { workspace = true }
 humantime-serde = { workspace = true }
 re_mp4 = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

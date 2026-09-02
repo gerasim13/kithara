@@ -239,7 +239,6 @@ mod tests {
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
     use kithara_warp::StretchControls;
-    use struct_patch::Patch as _;
 
     use super::*;
     use crate::{

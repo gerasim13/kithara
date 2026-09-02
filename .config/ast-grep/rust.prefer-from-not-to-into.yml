@@ -26,8 +26,6 @@ message: |
   - `to_$NAME(&self) -> String` (see rust.no-to-string-method)
   - `into_inner(self)` (idiomatic newtype unwrap, leave as is)
   - `into_iter(self)` (IntoIterator method)
-  - `into_patch(self)` (required method of `struct_patch::traits::Patch`;
-    a `From` impl cannot satisfy a trait that names the method)
   - return type `&Y` (reference conversion → AsRef/Deref, separate category)
 
   Suppress with `// ast-grep-ignore: rust.prefer-from-not-to-into` when
@@ -72,7 +70,7 @@ constraints:
   NAME:
     regex: "^(to|into)_[a-z][a-z0-9_]*$"
     not:
-      regex: "^(to_string|into_inner|into_iter|into_patch|into_probe_arg|from_probe_arg)$"
+      regex: "^(to_string|into_inner|into_iter|into_probe_arg|from_probe_arg)$"
   RET:
     not:
       regex: "^(String|Self|&.*)$"

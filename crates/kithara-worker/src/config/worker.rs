@@ -1,19 +1,15 @@
 use std::num::NonZeroUsize;
 
+use kithara_macros::Patch;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::sync::Arc;
 use kithara_platform::{CancelToken, tokio::runtime::Handle};
 use serde::Deserialize;
-use struct_patch::Patch;
 
 /// Shared resources and cancellation parent for a [`Worker`](crate::Worker).
 #[non_exhaustive]
 #[derive(Clone, fieldwork::Fieldwork, Patch)]
 #[fieldwork(opt_in, with)]
-#[patch(name = "WorkerConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 pub struct WorkerConfig {
     #[field(with)]
     pub(crate) max_compute_tasks: NonZeroUsize,
@@ -124,7 +120,6 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{ComputePool, PoolConfig, RayonConfig, WorkerConfig, WorkerConfigPatch};
 

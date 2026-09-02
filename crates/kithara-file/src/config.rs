@@ -4,11 +4,10 @@ use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
-use serde::Deserialize;
-use struct_patch::Patch;
 use url::Url;
 
 /// Source of a file stream: either a remote URL or a local path.
@@ -20,97 +19,10 @@ pub enum FileSrc {
     Local(PathBuf),
 }
 
-/// What a configuration document may say about [`FileConfig`].
-///
-/// Hand-written rather than derived: `struct-patch` copies a struct's generics
-/// and where-clause verbatim onto the patch it generates, so a patch of a
-/// generic configuration whose generic-carrying fields are skipped has a type
-/// parameter no field uses and does not compile. The per-call wiring
-/// (`store`, `pools`, `bus`, `cancel`, `downloader`) and the per-stream input
-/// (`src`, `discriminator`, `headers`) are absent on purpose, and
-/// `deny_unknown_fields` refuses them by name rather than dropping them
-/// silently.
-///
-/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
-/// references are resolved, so the tree it merges into holds secrets in the
-/// clear.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct FileConfigPatch {
-    /// See [`FileConfig::extension`].
-    pub extension: Option<String>,
-    /// See [`FileConfig::event_channel_capacity`].
-    pub event_channel_capacity: Option<usize>,
-    /// See [`FileConfig::reader_event_capacity`].
-    pub reader_event_capacity: Option<usize>,
-    /// See [`FileConfig::tmp_claim_poll_interval`].
-    #[serde(with = "humantime_serde::option")]
-    pub tmp_claim_poll_interval: Option<Duration>,
-    /// See [`FileConfig::look_ahead_bytes`].
-    pub look_ahead_bytes: Option<u64>,
-}
-
-impl<S> Patch<FileConfigPatch> for FileConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn apply(&mut self, patch: FileConfigPatch) {
-        if patch.extension.is_some() {
-            self.extension = patch.extension;
-        }
-        if let Some(event_channel_capacity) = patch.event_channel_capacity {
-            self.event_channel_capacity = event_channel_capacity;
-        }
-        if let Some(reader_event_capacity) = patch.reader_event_capacity {
-            self.reader_event_capacity = reader_event_capacity;
-        }
-        if let Some(tmp_claim_poll_interval) = patch.tmp_claim_poll_interval {
-            self.tmp_claim_poll_interval = tmp_claim_poll_interval;
-        }
-        if patch.look_ahead_bytes.is_some() {
-            self.look_ahead_bytes = patch.look_ahead_bytes;
-        }
-    }
-
-    fn into_patch(self) -> FileConfigPatch {
-        FileConfigPatch {
-            extension: self.extension,
-            event_channel_capacity: Some(self.event_channel_capacity),
-            reader_event_capacity: Some(self.reader_event_capacity),
-            tmp_claim_poll_interval: Some(self.tmp_claim_poll_interval),
-            look_ahead_bytes: self.look_ahead_bytes,
-        }
-    }
-
-    fn into_patch_by_diff(self, previous: Self) -> FileConfigPatch {
-        FileConfigPatch {
-            extension: (self.extension != previous.extension)
-                .then_some(self.extension)
-                .flatten(),
-            event_channel_capacity: (self.event_channel_capacity
-                != previous.event_channel_capacity)
-                .then_some(self.event_channel_capacity),
-            reader_event_capacity: (self.reader_event_capacity != previous.reader_event_capacity)
-                .then_some(self.reader_event_capacity),
-            tmp_claim_poll_interval: (self.tmp_claim_poll_interval
-                != previous.tmp_claim_poll_interval)
-                .then_some(self.tmp_claim_poll_interval),
-            look_ahead_bytes: (self.look_ahead_bytes != previous.look_ahead_bytes)
-                .then_some(self.look_ahead_bytes)
-                .flatten(),
-        }
-    }
-
-    fn new_empty_patch() -> FileConfigPatch {
-        FileConfigPatch::default()
-    }
-}
-
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
-#[derive(Builder)]
+#[derive(Builder, Patch)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
 pub struct FileConfig<S>
@@ -119,21 +31,29 @@ where
 {
     /// File source (remote URL or local path).
     #[builder(start_fn)]
+    #[patch(skip)]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
+    #[patch(skip)]
     pub store: AssetStore<S>,
     /// Buffer-pool facade shared with storage and fallback transport.
+    #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
+    #[patch(skip)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
+    #[patch(skip)]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
+    #[patch(skip)]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
+    #[patch(skip)]
     pub headers: Option<Headers>,
     /// Explicit source-extension hint used before the URL-path extension.
     pub extension: Option<String>,
@@ -152,6 +72,7 @@ where
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
     #[builder(default = Duration::from_millis(10))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub tmp_claim_poll_interval: Duration,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
@@ -357,7 +278,6 @@ mod tests {
 mod document_tests {
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{Duration, FileConfig, FileConfigPatch, FileSrc, Url};
     use crate::test_pools::{TestPools, pools};
@@ -394,11 +314,10 @@ mod document_tests {
         );
     }
 
-    /// `deny_unknown_fields` is hand-written on [`FileConfigPatch`], so only a
-    /// bogus key proves it is on the type at all. `reader_event_capacity_bytes`
-    /// contains a real field name, which is what makes the assertion
-    /// meaningful: serde's "expected one of" list names the real key, so a
-    /// `contains` on the real name alone would pass vacuously.
+    /// `reader_event_capacity_bytes` contains a real field name, which is
+    /// what makes the assertion meaningful: serde's "expected one of" list
+    /// names the real key, so a `contains` on the real name alone would pass
+    /// vacuously.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error =

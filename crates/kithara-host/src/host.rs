@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
+use kithara_macros::Patch;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher,
@@ -11,7 +12,6 @@ use kithara_warp::{
     SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
-use struct_patch::Patch;
 
 mod platform;
 
@@ -35,10 +35,6 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 /// Configuration for the shared output session owned by [`Host`].
 #[derive(Clone, Copy, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "HostConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct HostConfig {
@@ -329,7 +325,6 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{HostConfig, HostConfigPatch, NonZeroU32};
 

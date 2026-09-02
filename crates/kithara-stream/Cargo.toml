@@ -27,6 +27,7 @@ tls-native = ["kithara-net/tls-native", "kithara-events/tls-native", "kithara-ab
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-events = { workspace = true, features = ["abr", "downloader"] }
+kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
@@ -41,7 +42,6 @@ fieldwork = { workspace = true }
 futures = { workspace = true }
 humantime-serde = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }

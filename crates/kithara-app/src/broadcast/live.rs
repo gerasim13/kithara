@@ -155,7 +155,6 @@ mod tests {
         },
         play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
     };
-    use struct_patch::Patch as _;
 
     use super::*;
     use crate::{document::Document, pools::AppPools};

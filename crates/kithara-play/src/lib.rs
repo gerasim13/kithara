@@ -40,7 +40,7 @@ pub use bridge::{
 pub use effects::eq::EqBandConfig;
 #[cfg(any(test, feature = "probe"))]
 pub use engine::apply_mix;
-pub use engine::{EngineConfig, EngineConfigPatch, EngineImpl};
+pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;

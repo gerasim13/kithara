@@ -21,7 +21,6 @@ use kithara_app::{
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
-use struct_patch::Patch as _;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -139,20 +138,13 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let store_settings = document.assets_store();
-    let store = AppStore::builder(pools)
+    let mut store_config = AppStore::builder(pools)
         .cancel(shutdown.child())
-        .backend(document.store_backend())
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
-        .maybe_cache_capacity(store_settings.cache_capacity)
-        .maybe_max_assets(store_settings.max_assets)
-        .maybe_max_bytes(store_settings.max_bytes)
-        .maybe_mem_resource_capacity(store_settings.mem_resource_capacity)
-        .maybe_processing_chunk_size(store_settings.processing_chunk_size)
-        .maybe_processing_gate_poll_interval(store_settings.processing_gate_poll_interval)
-        .maybe_segment_reservation(store_settings.segment_reservation)
-        .build();
+        .into_config();
+    store_config.apply(document.assets_store());
+    let store = AppStore::open(store_config);
     // `eprintln!`, not `tracing::error!`: tracing is up by now, but a startup
     // refusal must not depend on `RUST_LOG` to be seen.
     let drm_policy = match document.drm_policy() {

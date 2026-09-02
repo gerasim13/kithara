@@ -7,13 +7,13 @@ use std::{
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
+use kithara_macros::Patch;
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 use kithara_test_utils::kithara;
-use struct_patch::Patch;
 
 use super::peer::PeerEntry;
 use crate::{
@@ -60,10 +60,6 @@ impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
 /// ABR controller settings.
 #[derive(Clone, Debug, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "AbrSettingsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
@@ -104,10 +100,8 @@ pub struct AbrSettings {
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
-    #[patch(skip_wrap)]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
-    #[patch(skip_wrap)]
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
@@ -320,7 +314,6 @@ impl Drop for AbrController {
 mod tests {
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{AbrSettings, AbrSettingsPatch};
 

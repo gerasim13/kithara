@@ -2,9 +2,9 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
+use kithara_macros::Patch;
 use kithara_platform::time::Duration;
 use serde::{Deserialize, Deserializer};
-use struct_patch::Patch;
 
 use crate::{
     error::{NetError, Retryability},
@@ -151,10 +151,6 @@ impl fmt::Display for RangeSpec {
 }
 
 #[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
-#[patch(name = "RetryPolicyPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct RetryPolicy {
     #[builder(default = Duration::from_millis(100))]
@@ -197,10 +193,6 @@ impl RetryPolicy {
 }
 
 #[derive(Clone, Debug, Builder, Patch)]
-#[patch(name = "NetOptionsPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
@@ -245,7 +237,7 @@ pub struct NetOptions {
     #[patch(skip)]
     pub observer: Option<Observer>,
     #[builder(default)]
-    #[patch(name = "RetryPolicyPatch")]
+    #[patch(nested)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
@@ -623,8 +615,6 @@ mod settings_tests {
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
-
-    use struct_patch::Patch as _;
 
     use super::{Compression, Duration, NetOptions, NetOptionsPatch, RetryPolicy};
 

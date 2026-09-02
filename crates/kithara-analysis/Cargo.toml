@@ -28,6 +28,7 @@ fdk-aac = ["kithara-audio/fdk-aac"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
@@ -52,7 +53,6 @@ derive_more = { workspace = true }
 realfft = { workspace = true, optional = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
 

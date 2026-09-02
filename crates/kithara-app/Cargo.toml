@@ -52,6 +52,7 @@ stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = ["file", "hls", "queue", "resample-rubato", "worker"] }
+kithara-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 delegate = { workspace = true }
@@ -80,7 +81,6 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
-struct-patch = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }

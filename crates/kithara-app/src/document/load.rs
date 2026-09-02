@@ -21,7 +21,6 @@ use kithara::{
     worker::{ComputePool, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
-use struct_patch::Patch as _;
 
 use super::{
     env::{MissingEnv, expand},
@@ -275,31 +274,22 @@ impl Config {
         self.document.pools.clone()
     }
 
-    /// Knobs the document sets on the asset store.
+    /// Knobs the document sets on the asset store. A document that names no
+    /// backend resolves to [`StorageBackend::default`] — a stable root under
+    /// the system temp directory — and deliberately not to
+    /// `AssetStore::open`'s own fallback, which is a fresh unique directory
+    /// per launch and would move the on-disk cache every run.
     #[must_use]
     pub fn assets_store(&self) -> AssetStoreConfigPatch {
-        self.document.assets_store.clone()
+        let mut store = self.document.assets_store.clone();
+        store.backend.get_or_insert_with(StorageBackend::default);
+        store
     }
 
     /// Knobs the document sets on the queue.
     #[must_use]
     pub fn queue(&self) -> QueueConfigPatch {
         self.document.queue.clone()
-    }
-
-    /// Where the asset store keeps its resources. A document that names no
-    /// backend resolves to [`StorageBackend::default`] — a stable root under
-    /// the system temp directory — and deliberately not to
-    /// `AssetStore::open`'s own fallback, which is a fresh unique directory
-    /// per launch and would move the on-disk cache every run. The resolution
-    /// lives here rather than at the construction site so a test can reach it.
-    #[must_use]
-    pub fn store_backend(&self) -> StorageBackend {
-        self.document
-            .assets_store
-            .backend
-            .clone()
-            .unwrap_or_default()
     }
 
     /// The compute pool the document names, when it names one. `None` leaves
@@ -359,7 +349,6 @@ mod tests {
         net::{Compression, NetOptions},
         worker::ComputePool,
     };
-    use struct_patch::Patch as _;
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError, StorageBackend};
@@ -612,8 +601,8 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(
-            config.store_backend(),
-            StorageBackend::default(),
+            config.assets_store().backend,
+            Some(StorageBackend::default()),
             "an unnamed backend must resolve to the stable default root, not \
              to the fresh per-launch temp directory `AssetStore::open` falls \
              back to on its own"
@@ -631,7 +620,7 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(config.store_backend(), StorageBackend::Memory);
+        assert_eq!(config.assets_store().backend, Some(StorageBackend::Memory));
     }
 
     /// The proof the section is gone rather than merely unread: `network` no

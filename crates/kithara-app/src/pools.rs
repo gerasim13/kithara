@@ -2,7 +2,6 @@ use kithara::bufpool::{
     OverallBudget, Percent, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema,
 };
 use serde::Deserialize;
-use struct_patch::Patch as _;
 
 struct Consts;
 

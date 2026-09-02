@@ -19,6 +19,7 @@ embed-small-model = []
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
@@ -27,7 +28,6 @@ rten = { workspace = true }
 rten-tensor = { workspace = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -21,6 +21,7 @@ tls-rustls = ["kithara-encode/tls-rustls"]
 
 [dependencies]
 kithara-encode = { workspace = true, features = ["fdk-aac"] }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 
 arc-swap = { workspace = true }
@@ -30,7 +31,6 @@ bytes = { workspace = true }
 humantime-serde = { workspace = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
-struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }

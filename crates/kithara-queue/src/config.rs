@@ -3,10 +3,9 @@ use std::{fmt, num::NonZeroUsize};
 use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
+use kithara_macros::Patch;
 use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
-use serde::Deserialize;
-use struct_patch::Patch;
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -19,71 +18,6 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize
 /// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
 pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
-/// What a configuration document may say about [`QueueConfig`].
-///
-/// Hand-written rather than derived: `struct-patch` copies a struct's generics
-/// and where-clause verbatim onto the patch it generates, so a patch of a
-/// generic configuration whose generic-carrying fields are skipped has a type
-/// parameter no field uses and does not compile. The per-call wiring
-/// (`player`, `store`, `cancel`) and `should_autoplay` are absent on purpose,
-/// and `deny_unknown_fields` refuses them by name rather than dropping them
-/// silently.
-///
-/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
-/// references are resolved, so the tree it merges into holds secrets in the
-/// clear.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct QueueConfigPatch {
-    /// See [`QueueConfig::max_concurrent_loads`].
-    pub max_concurrent_loads: Option<NonZeroUsize>,
-    /// See [`QueueConfig::prefetch_duration`].
-    pub prefetch_duration: Option<f32>,
-    /// See [`QueueConfig::max_history_size`].
-    pub max_history_size: Option<usize>,
-}
-
-impl<S> Patch<QueueConfigPatch> for QueueConfig<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn apply(&mut self, patch: QueueConfigPatch) {
-        if let Some(max_concurrent_loads) = patch.max_concurrent_loads {
-            self.max_concurrent_loads = max_concurrent_loads;
-        }
-        if let Some(prefetch_duration) = patch.prefetch_duration {
-            self.prefetch_duration = prefetch_duration;
-        }
-        if let Some(max_history_size) = patch.max_history_size {
-            self.max_history_size = max_history_size;
-        }
-    }
-
-    fn into_patch(self) -> QueueConfigPatch {
-        QueueConfigPatch {
-            max_concurrent_loads: Some(self.max_concurrent_loads),
-            prefetch_duration: Some(self.prefetch_duration),
-            max_history_size: Some(self.max_history_size),
-        }
-    }
-
-    fn into_patch_by_diff(self, previous: Self) -> QueueConfigPatch {
-        QueueConfigPatch {
-            max_concurrent_loads: (self.max_concurrent_loads != previous.max_concurrent_loads)
-                .then_some(self.max_concurrent_loads),
-            prefetch_duration: (self.prefetch_duration != previous.prefetch_duration)
-                .then_some(self.prefetch_duration),
-            max_history_size: (self.max_history_size != previous.max_history_size)
-                .then_some(self.max_history_size),
-        }
-    }
-
-    fn new_empty_patch() -> QueueConfigPatch {
-        QueueConfigPatch::default()
-    }
-}
-
 /// Configuration for a [`Queue`](crate::Queue).
 ///
 /// Holds queue-level defaults plus the owned [`PlayerImpl`] instance whose
@@ -92,7 +26,7 @@ where
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Builder)]
+#[derive(Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig<S>
@@ -103,12 +37,15 @@ where
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
 
     /// Player owned and decorated by this queue.
+    #[patch(skip)]
     pub player: PlayerImpl<S>,
 
     /// Shared store used for bare URI track sources.
+    #[patch(skip)]
     pub store: Option<AssetStore<S>>,
 
     /// Max concurrent background prefetch loads. Default: 3.
@@ -122,6 +59,7 @@ where
     /// nothing in the binary. It carries `#[patch(skip)]` for that reason, and
     /// naming it is refused rather than silently dropped.
     #[builder(default = true)]
+    #[patch(skip)]
     pub should_autoplay: bool,
 
     /// Lead time in seconds before EOF at which the next queued track
@@ -185,7 +123,6 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{QueueConfigPatch, tests::config};
 
@@ -207,8 +144,8 @@ mod document_tests {
         );
     }
 
-    /// `deny_unknown_fields` is hand-written on [`QueueConfigPatch`], so only
-    /// a bogus key proves it is on the type at all.
+    /// `concurrent_load_cap` is neither a real key nor a substring of one,
+    /// so the refusal cannot pass off serde's list of valid names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error = serde_yaml_ng::from_str::<QueueConfigPatch>("concurrent_load_cap: 5\n")

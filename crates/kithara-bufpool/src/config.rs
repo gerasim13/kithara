@@ -1,14 +1,10 @@
 use bon::Builder;
-use struct_patch::Patch;
+use kithara_macros::Patch;
 
 use crate::Percent;
 
 /// Policy for one physical buffer pool in a region.
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
-#[patch(name = "PoolConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 pub struct PoolConfig {
     /// Number of reusable payloads allocated during region construction.
     #[builder(default)]
@@ -32,7 +28,6 @@ pub struct PoolConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{Percent, PoolConfig, PoolConfigPatch};
 

@@ -8,11 +8,10 @@ use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
-use serde::Deserialize;
-use struct_patch::Patch;
 use url::Url;
 
 /// Enough rounds for an obstruction another task is already clearing to
@@ -64,123 +63,10 @@ pub enum SizeProbeMethod {
     RangeGet,
 }
 
-/// What a configuration document may say about [`HlsConfig`].
-///
-/// Hand-written rather than derived: `struct-patch` copies a struct's generics
-/// and where-clause verbatim onto the patch it generates, so a patch of a
-/// generic configuration whose generic-carrying fields are skipped has a type
-/// parameter no field uses and does not compile. The per-call wiring
-/// (`store`, `pools`, `bus`, `cancel`, `downloader`), the per-stream input
-/// (`url`, `base_url`, `discriminator`, `headers`, `keys`,
-/// `initial_abr_mode`) and `net_options` are absent on purpose, and
-/// `deny_unknown_fields` refuses them by name rather than dropping them
-/// silently.
-///
-/// `Deserialize` only, never `Serialize`: by the time a patch is typed its
-/// references are resolved, so the tree it merges into holds secrets in the
-/// clear.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
-pub struct HlsConfigPatch {
-    /// See [`HlsConfig::size_probe_method`].
-    pub size_probe_method: Option<SizeProbeMethod>,
-    /// See [`HlsConfig::download_batch_size`].
-    pub download_batch_size: Option<usize>,
-    /// See [`HlsConfig::acquire_attempt_budget`].
-    pub acquire_attempt_budget: Option<u8>,
-    /// See [`HlsConfig::ephemeral_cache_max_media_window`].
-    pub ephemeral_cache_max_media_window: Option<usize>,
-    /// See [`HlsConfig::ephemeral_cache_min_media_window`].
-    pub ephemeral_cache_min_media_window: Option<usize>,
-    /// See [`HlsConfig::ephemeral_cache_non_media_reserve`].
-    pub ephemeral_cache_non_media_reserve: Option<usize>,
-    /// See [`HlsConfig::event_channel_capacity`].
-    pub event_channel_capacity: Option<usize>,
-    /// See [`HlsConfig::look_ahead_bytes`].
-    pub look_ahead_bytes: Option<u64>,
-}
-
-impl<S> Patch<HlsConfigPatch> for HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn apply(&mut self, patch: HlsConfigPatch) {
-        if let Some(size_probe_method) = patch.size_probe_method {
-            self.size_probe_method = size_probe_method;
-        }
-        if let Some(download_batch_size) = patch.download_batch_size {
-            self.download_batch_size = download_batch_size;
-        }
-        if let Some(acquire_attempt_budget) = patch.acquire_attempt_budget {
-            self.acquire_attempt_budget = acquire_attempt_budget;
-        }
-        if let Some(window) = patch.ephemeral_cache_max_media_window {
-            self.ephemeral_cache_max_media_window = window;
-        }
-        if let Some(window) = patch.ephemeral_cache_min_media_window {
-            self.ephemeral_cache_min_media_window = window;
-        }
-        if let Some(reserve) = patch.ephemeral_cache_non_media_reserve {
-            self.ephemeral_cache_non_media_reserve = reserve;
-        }
-        if let Some(event_channel_capacity) = patch.event_channel_capacity {
-            self.event_channel_capacity = event_channel_capacity;
-        }
-        if patch.look_ahead_bytes.is_some() {
-            self.look_ahead_bytes = patch.look_ahead_bytes;
-        }
-    }
-
-    fn into_patch(self) -> HlsConfigPatch {
-        HlsConfigPatch {
-            size_probe_method: Some(self.size_probe_method),
-            download_batch_size: Some(self.download_batch_size),
-            acquire_attempt_budget: Some(self.acquire_attempt_budget),
-            ephemeral_cache_max_media_window: Some(self.ephemeral_cache_max_media_window),
-            ephemeral_cache_min_media_window: Some(self.ephemeral_cache_min_media_window),
-            ephemeral_cache_non_media_reserve: Some(self.ephemeral_cache_non_media_reserve),
-            event_channel_capacity: Some(self.event_channel_capacity),
-            look_ahead_bytes: self.look_ahead_bytes,
-        }
-    }
-
-    fn into_patch_by_diff(self, previous: Self) -> HlsConfigPatch {
-        HlsConfigPatch {
-            size_probe_method: (self.size_probe_method != previous.size_probe_method)
-                .then_some(self.size_probe_method),
-            download_batch_size: (self.download_batch_size != previous.download_batch_size)
-                .then_some(self.download_batch_size),
-            acquire_attempt_budget: (self.acquire_attempt_budget
-                != previous.acquire_attempt_budget)
-                .then_some(self.acquire_attempt_budget),
-            ephemeral_cache_max_media_window: (self.ephemeral_cache_max_media_window
-                != previous.ephemeral_cache_max_media_window)
-                .then_some(self.ephemeral_cache_max_media_window),
-            ephemeral_cache_min_media_window: (self.ephemeral_cache_min_media_window
-                != previous.ephemeral_cache_min_media_window)
-                .then_some(self.ephemeral_cache_min_media_window),
-            ephemeral_cache_non_media_reserve: (self.ephemeral_cache_non_media_reserve
-                != previous.ephemeral_cache_non_media_reserve)
-                .then_some(self.ephemeral_cache_non_media_reserve),
-            event_channel_capacity: (self.event_channel_capacity
-                != previous.event_channel_capacity)
-                .then_some(self.event_channel_capacity),
-            look_ahead_bytes: (self.look_ahead_bytes != previous.look_ahead_bytes)
-                .then_some(self.look_ahead_bytes)
-                .flatten(),
-        }
-    }
-
-    fn new_empty_patch() -> HlsConfigPatch {
-        HlsConfigPatch::default()
-    }
-}
-
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls<S>>::new(config)`.
-#[derive(Builder)]
+#[derive(Builder, Patch)]
 #[builder(start_fn = for_url)]
 #[non_exhaustive]
 pub struct HlsConfig<S>
@@ -189,16 +75,21 @@ where
 {
     /// Master playlist URL.
     #[builder(start_fn)]
+    #[patch(skip)]
     pub url: Url,
     /// Initial ABR mode.
     #[builder(default)]
+    #[patch(skip)]
     pub initial_abr_mode: AbrMode,
     /// Shared asset store.
+    #[patch(skip)]
     pub store: AssetStore<S>,
     /// Buffer-pool facade shared across all components.
+    #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Encryption key handling configuration.
     #[builder(default)]
+    #[patch(skip)]
     pub keys: KeyOptions,
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
     /// compression) for the HTTP client built when no [`downloader`] is
@@ -214,6 +105,7 @@ where
     ///
     /// [`downloader`]: HlsConfig::downloader
     #[builder(default)]
+    #[patch(skip)]
     pub net_options: NetOptions,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
@@ -256,21 +148,27 @@ where
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
     /// Base URL for resolving relative playlist/segment URLs.
+    #[patch(skip)]
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
+    #[patch(skip)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown. The master `CancelToken` whose
     /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
     /// lock-free `is_cancelled()` read on the produce-core; the async-only
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
+    #[patch(skip)]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
+    #[patch(skip)]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
+    #[patch(skip)]
     pub headers: Option<Headers>,
 }
 
@@ -333,7 +231,6 @@ where
 mod document_tests {
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_test_utils::kithara;
-    use struct_patch::Patch as _;
 
     use super::{HlsConfig, HlsConfigPatch, SizeProbeMethod};
     use crate::test_pools::{TestPools, pools};

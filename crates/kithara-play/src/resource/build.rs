@@ -6,7 +6,6 @@ use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use struct_patch::Patch as _;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};

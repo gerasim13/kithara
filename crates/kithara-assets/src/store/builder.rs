@@ -4,10 +4,11 @@
 use std::env;
 use std::{num::NonZeroUsize, path::PathBuf};
 
-use bon::bon;
+use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_events::EventBus;
+use kithara_macros::Patch;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use serde::{Deserialize, Deserializer};
 
@@ -94,20 +95,40 @@ impl<'de> Deserialize<'de> for StorageBackend {
     }
 }
 
-/// What a configuration document can say about the asset store.
+/// Everything an [`AssetStore`] opens with: the tunables a configuration
+/// document may name and the wiring a caller hands over.
 ///
-/// The one patch in the workspace with no configuration struct beside it:
-/// [`AssetStore::open`] is a `#[bon]` builder function, so its knobs are
-/// parameters and there is nothing to derive a patch from. This mirrors those
-/// parameters by hand. An unset field leaves the layer below it deciding.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// [`AssetStoreConfigPatch`] is what a document may say about it.
+#[derive(Builder, Patch)]
+#[builder(
+    start_fn = for_pools,
+    finish_fn = into_config,
+    builder_type(name = AssetStoreBuilder, vis = "pub"),
+    state_mod(vis = "pub")
+)]
 #[non_exhaustive]
-pub struct AssetStoreConfigPatch {
-    /// Where resources live. Unset means whatever the embedder resolves an
-    /// absent backend to; `AssetStore::open` itself falls back to a disk root
-    /// under a fresh temp directory, which is a different place on every
-    /// launch.
+pub struct AssetStoreConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Buffer-pool facade every layer of the store shares.
+    #[builder(start_fn)]
+    #[patch(skip)]
+    pub pools: PoolRegion<S>,
+    /// Master cancel token for the store subtree.
+    #[patch(skip)]
+    pub cancel: Option<CancelToken>,
+    /// Event bus the eviction and lease layers publish on.
+    #[patch(skip)]
+    pub event_bus: Option<EventBus>,
+    /// Shared index-flush hub. Created per store when absent.
+    #[patch(skip)]
+    pub flush_hub: Option<Arc<FlushHub>>,
+    /// Resource-key layout registry. Empty when absent.
+    #[patch(skip)]
+    pub layouts: Option<AssetLayoutRegistry>,
+    /// Where resources live. Unset resolves to a disk root under a fresh
+    /// temp directory, which is a different place on every launch.
     pub backend: Option<StorageBackend>,
     /// Resources the in-memory cache retains before it evicts the
     /// least-recently-used one. Applies to both backends.
@@ -121,50 +142,58 @@ pub struct AssetStoreConfigPatch {
     /// no backend at all, which resolves to disk) configures nothing.
     pub mem_resource_capacity: Option<usize>,
     /// Bytes read, transformed, and written per pass when a resource is
-    /// processed on commit.
+    /// processed on commit. Unset leaves the processing layer's own default.
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
-    #[serde(with = "humantime_serde::option")]
+    /// Unset leaves the processing layer's own default.
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
-    /// only** — the memory backend has no temp file to reserve.
+    /// only** — the memory backend has no temp file to reserve. Unset leaves
+    /// the disk backend's own default.
     pub segment_reservation: Option<u64>,
 }
 
-#[bon]
+impl<S, State> AssetStoreBuilder<S, State>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+    State: asset_store_builder::IsComplete,
+{
+    /// Open the store this configuration describes.
+    #[must_use]
+    pub fn build(self) -> AssetStore<S> {
+        AssetStore::open(self.into_config())
+    }
+}
+
 impl<S> AssetStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Start describing a store over `pools`.
+    pub fn builder(pools: PoolRegion<S>) -> AssetStoreBuilder<S> {
+        AssetStoreConfig::for_pools(pools)
+    }
+
     /// Open a ready-to-use asset store.
-    #[builder(
-        start_fn = builder,
-        builder_type(name = AssetStoreBuilder, vis = "pub"),
-        finish_fn = build
-    )]
     #[must_use]
-    pub fn open(
-        #[builder(start_fn)] pools: PoolRegion<S>,
-        backend: Option<StorageBackend>,
-        cache_capacity: Option<NonZeroUsize>,
-        cancel: Option<CancelToken>,
-        event_bus: Option<EventBus>,
-        flush_hub: Option<Arc<FlushHub>>,
-        layouts: Option<AssetLayoutRegistry>,
-        max_assets: Option<usize>,
-        max_bytes: Option<u64>,
-        mem_resource_capacity: Option<usize>,
-        /// Bytes read, transformed, and written per pass when a resource is
-        /// processed on commit. Unset leaves the processing layer's own
-        /// default.
-        processing_chunk_size: Option<usize>,
-        /// Recheck cadence for a reader blocked on the processing readiness
-        /// gate. Unset leaves the processing layer's own default.
-        processing_gate_poll_interval: Option<Duration>,
-        /// Bytes a fresh segment's temp file is reserved at. Unset leaves the
-        /// disk backend's own default.
-        segment_reservation: Option<u64>,
-    ) -> Self {
+    pub fn open(config: AssetStoreConfig<S>) -> Self {
+        let AssetStoreConfig {
+            pools,
+            backend,
+            cache_capacity,
+            cancel,
+            event_bus,
+            flush_hub,
+            layouts,
+            max_assets,
+            max_bytes,
+            mem_resource_capacity,
+            processing_chunk_size,
+            processing_gate_poll_interval,
+            segment_reservation,
+        } = config;
+
         let availability = AvailabilityIndex::new();
         // The pending-resource index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each

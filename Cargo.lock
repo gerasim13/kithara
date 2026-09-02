@@ -4527,6 +4527,7 @@ dependencies = [
  "fieldwork",
  "humantime-serde",
  "kithara-events",
+ "kithara-macros",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4534,7 +4535,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
@@ -4555,6 +4555,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-events",
+ "kithara-macros",
  "kithara-platform",
  "kithara-resampler",
  "kithara-signal",
@@ -4567,7 +4568,6 @@ dependencies = [
  "ringbuf 0.5.0",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
@@ -4588,6 +4588,7 @@ dependencies = [
  "humantime-serde",
  "iced",
  "kithara",
+ "kithara-macros",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4598,7 +4599,6 @@ dependencies = [
  "serde",
  "serde_yaml_ng",
  "sha2 0.11.0",
- "struct-patch",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -4640,6 +4640,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-drm",
  "kithara-events",
+ "kithara-macros",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4652,7 +4653,6 @@ dependencies = [
  "serde_yaml_ng",
  "serial_test",
  "sha2 0.11.0",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -4684,6 +4684,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-resampler",
@@ -4698,7 +4699,6 @@ dependencies = [
  "ringbuf 0.5.0",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -4716,6 +4716,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "kithara-bufpool",
+ "kithara-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4725,7 +4726,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "smallvec",
- "struct-patch",
  "thiserror 2.0.18",
 ]
 
@@ -4740,13 +4740,13 @@ dependencies = [
  "hls_m3u8",
  "humantime-serde",
  "kithara-encode",
+ "kithara-macros",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ringbuf 0.5.0",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tower-http 0.7.0",
  "tracing",
@@ -4761,13 +4761,13 @@ dependencies = [
  "delegate",
  "hotpath",
  "kithara-bufpool",
+ "kithara-macros",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen-test",
@@ -4946,6 +4946,7 @@ dependencies = [
  "kithara-assets",
  "kithara-bufpool",
  "kithara-events",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -4955,7 +4956,6 @@ dependencies = [
  "re_mp4",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -5001,6 +5001,7 @@ dependencies = [
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5010,7 +5011,6 @@ dependencies = [
  "serde",
  "serde_yaml_ng",
  "serial_test",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -5033,6 +5033,7 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-events",
+ "kithara-macros",
  "kithara-platform",
  "kithara-play",
  "kithara-test-utils",
@@ -5041,7 +5042,6 @@ dependencies = [
  "ringbuf 0.5.0",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
  "triple_buffer",
@@ -5106,6 +5106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-macros"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "kithara-mpa"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5134,6 +5144,7 @@ dependencies = [
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-test-macros",
@@ -5143,7 +5154,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tower-layer",
  "tower-service",
@@ -5212,6 +5222,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
@@ -5229,7 +5240,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "smallvec",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
@@ -5249,13 +5259,13 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-events",
+ "kithara-macros",
  "kithara-platform",
  "kithara-play",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -5337,6 +5347,7 @@ dependencies = [
  "kithara-abr",
  "kithara-bufpool",
  "kithara-events",
+ "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5345,7 +5356,6 @@ dependencies = [
  "kithara-workspace-hack",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "thunderdome",
@@ -5467,6 +5477,7 @@ dependencies = [
  "iced_tiny_skia",
  "iced_wgpu",
  "kithara-bufpool",
+ "kithara-macros",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5484,7 +5495,6 @@ dependencies = [
  "serde",
  "serde_yaml_ng",
  "skrifa 0.37.0",
- "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -5523,13 +5533,13 @@ dependencies = [
  "criterion",
  "delegate",
  "fieldwork",
+ "kithara-macros",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
  "rayon",
  "serde",
  "serde_yaml_ng",
- "struct-patch",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -9095,26 +9105,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "struct-patch"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "562b5d730abba4c29316f65c76f4939ae63ac998a761fbd99c61ed543d183e23"
-dependencies = [
- "struct-patch-derive",
-]
-
-[[package]]
-name = "struct-patch-derive"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4761d4848bf2b974f0a5a93fc69ee63c9f89816c618b3c3c12b8b13690524f1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
 
 [[package]]
 name = "subtle"

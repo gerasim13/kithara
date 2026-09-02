@@ -16,7 +16,7 @@ use kithara::{
     stream::dl::Downloader,
     worker::Worker,
 };
-use struct_patch::Patch;
+use kithara_macros::Patch;
 use url::Url;
 
 use crate::{
@@ -59,10 +59,6 @@ impl AppDrm {
 /// [`AppConfigPatch`].
 #[derive(Clone, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
-#[patch(name = "AppConfigPatch")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
-#[patch(attribute(serde(default, deny_unknown_fields)))]
-#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
