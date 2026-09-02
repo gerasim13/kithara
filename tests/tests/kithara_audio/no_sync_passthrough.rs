@@ -481,7 +481,7 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
             .build(),
         SAMPLE_RATE,
     );
-    let worker = harness.with_player(|player| player.worker().clone());
+    let worker = harness.worker().clone();
     let mut audio = worker
         .open(audio_config(source, stretch, Vec::new()))
         .await

@@ -13,7 +13,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, Instant},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, apply_mix},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -900,10 +900,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     );
-    harness.with_player(|player| {
-        apply_mix([(player, FUSED_FIXTURE_MASTER_LEVEL)])
-            .expect("apply fused seam fixture headroom");
-    });
+    harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
     let first_frame_count = first_frames.len();
     let first = Resource::from_reader(
@@ -1008,7 +1005,9 @@ fn load_tagged_queue<const N: usize>(
     harness.with_player(|player| {
         player.reserve_slots(items.len());
         for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
-            player.replace_item(index, resource, id);
+            player
+                .replace_item(index, resource, id)
+                .expect("replace gapless fixture item");
         }
         player
             .select_item(0, true)

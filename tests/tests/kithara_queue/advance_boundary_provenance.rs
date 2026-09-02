@@ -11,7 +11,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        Resource, ResourceConfig, ResourceSrc, StretchControls, apply_mix,
+        Resource, ResourceConfig, ResourceSrc, StretchControls,
         effects::eq::generate_log_spaced_bands, player::PlayerControl,
     },
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
@@ -70,9 +70,7 @@ type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
 fn with_provenance_headroom(harness: OfflinePlayerHarness) -> OfflinePlayerHarness {
-    harness
-        .with_player(|player| apply_mix([(player, PROVENANCE_LEVEL)]))
-        .expect("apply provenance fixture headroom");
+    harness.set_host_level(PROVENANCE_LEVEL);
     harness
 }
 

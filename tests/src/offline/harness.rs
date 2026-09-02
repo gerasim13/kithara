@@ -11,7 +11,7 @@ use kithara::{
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         effects::eq::EqBandConfig,
-        player::{PlayerControl, PlayerControlSource},
+        player::{Player, PlayerControl, PlayerControlSource},
     },
     warp::StretchControls,
 };
@@ -24,6 +24,7 @@ pub struct OfflinePlayerHarness {
     host: OfflineHostHarness<TestPools>,
     player: Mutex<Option<PlayerImpl<TestPools>>>,
     player_control: PlayerControl<TestPools>,
+    worker: PlayWorker<TestPools>,
 }
 
 #[derive(Clone, bon::Builder)]
@@ -62,7 +63,7 @@ impl OfflinePlayerHarness {
             .gapless_mode(options.gapless_mode)
             .block_on_underrun(options.block_on_underrun)
             .sample_rate(sample_rate)
-            .worker(worker)
+            .worker(worker.clone())
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();
@@ -78,6 +79,7 @@ impl OfflinePlayerHarness {
             host,
             player: Mutex::new(Some(player)),
             player_control,
+            worker,
         }
     }
 
@@ -92,13 +94,21 @@ impl OfflinePlayerHarness {
             .expect("offline harness player was already transferred")
     }
 
-    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerImpl<TestPools>) -> R) -> R {
-        let player = self.player.lock();
-        use_player(
-            player
-                .as_ref()
-                .expect("offline harness player was already transferred"),
-        )
+    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerControl<TestPools>) -> R) -> R {
+        self.ensure_player_inserted();
+        use_player(&self.player_control)
+    }
+
+    pub const fn worker(&self) -> &PlayWorker<TestPools> {
+        &self.worker
+    }
+
+    pub fn set_host_level(&self, level: f32) {
+        self.player
+            .lock()
+            .as_ref()
+            .expect("offline harness player was already transferred")
+            .set_host_level(level);
     }
 
     pub fn insert<P>(&self, player: P) -> HostOwned<P>
@@ -123,20 +133,17 @@ impl OfflinePlayerHarness {
 
     /// Synchronously render `frames` of audio.
     pub fn render(&self, frames: usize) -> Vec<f32> {
+        self.ensure_player_inserted();
+        self.host.render(frames)
+    }
+
+    fn ensure_player_inserted(&self) {
         let mut player = self.player.lock();
-        if player
-            .as_ref()
-            .is_some_and(|player| player.item_count() > 0)
-        {
-            let player = player
-                .take()
-                .expect("offline harness player disappeared before Host insertion");
+        if let Some(player) = player.take() {
             self.host
                 .insert(player)
                 .unwrap_or_else(|error| panic!("insert offline player into Host: {error}"));
         }
-        drop(player);
-        self.host.render(frames)
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
