@@ -273,6 +273,7 @@ pub(super) fn park_after_outcome(
     }
 }
 
+#[kithara::measure(label = "worker.backpressure.wait")]
 fn wait_for_backpressure(wake: &Wake, budgets: SchedulerBudgets) {
     let poll_interval = budgets.backpressure_poll_interval;
     let deadline = budgets.wait_timeout;

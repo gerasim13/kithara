@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::AudioDecoderConfig;
+use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
@@ -34,10 +34,20 @@ where
         let output_buffer_frames =
             NonZeroUsize::try_from(self.player.core.engine.stream_shape()?.max_block_frames)
                 .map_err(|_| PlayError::Internal("session output block exceeds usize".into()))?;
+        let resampler = config.decoder.resampler().cloned().unwrap_or_else(|| {
+            DecoderResamplerSettings::builder()
+                .backend(B::default())
+                .options(
+                    ResamplerOptions::builder()
+                        .chunk_size(output_buffer_frames.get())
+                        .build(),
+                )
+                .build()
+        });
         let decoder = AudioDecoderConfig::builder()
             .backend(config.decoder.backend())
             .gapless_mode(self.player.core.gapless_mode)
-            .maybe_resampler(config.decoder.resampler().cloned())
+            .resampler(resampler)
             .build();
         // Web Warp is an identity stage and does not emit bounded render quanta;
         // keep the browser's chunk-based preload and ring geometry.
@@ -154,5 +164,29 @@ mod tests {
             .build_hls_config(player.worker(), None)
             .expect("valid HLS config");
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
+    }
+
+    #[kithara::test]
+    fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
+
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("bound player reads its session stream shape");
+
+        assert_eq!(
+            prepared
+                .decoder
+                .resampler()
+                .expect("player installs decoder resampling settings")
+                .options()
+                .chunk_size,
+            128,
+        );
     }
 }

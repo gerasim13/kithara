@@ -75,10 +75,12 @@ impl MediaSpan {
         self.consumed_frames += consumed_frames;
         let consumed_frames: f64 = AsPrimitive::as_(consumed_frames);
         let span_frames: f64 = AsPrimitive::as_(self.frames);
-        (
-            self.seconds * consumed_frames / span_frames,
-            consumed_source,
-        )
+        let seconds =
+            consumed_source.map_or(self.seconds * consumed_frames / span_frames, |source| {
+                let source_frames: f64 = AsPrimitive::as_(source.end() - source.start());
+                source_frames / f64::from(source.sample_rate().get())
+            });
+        (seconds, consumed_source)
     }
 
     #[kithara::probe(
@@ -175,6 +177,31 @@ impl PlayerResource {
         self.resource.get().apply_playback_rate(rate)
     }
 
+    #[kithara::probe(
+        requested_frames,
+        read_frames,
+        scratch_before,
+        session_frame,
+        eof = self.eof_seen,
+        failed = self.failed
+    )]
+    fn commit_resource_read(
+        &mut self,
+        requested_frames: usize,
+        read_frames: usize,
+        media_seconds: f64,
+        source: Option<SourceSpan>,
+        scratch_before: usize,
+        session_frame: i64,
+    ) {
+        if read_frames > 0 {
+            self.media_spans
+                .push_back(MediaSpan::new(read_frames, media_seconds, source));
+            self.write_len += read_frames;
+            self.write_pos += read_frames;
+        }
+    }
+
     /// Cached span in seconds: how much of the source is on disk and needs no
     /// further network.
     #[must_use]
@@ -189,8 +216,14 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
-    fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
+    fn fill_scratch(
+        &mut self,
+        target_frames: usize,
+        context: Option<&RenderContext>,
+        metrics: &RtMetrics,
+    ) -> bool {
         let mut eof_reached = self.eof_seen;
+        let session_frame = context.map_or(-1, |context| i64::from(context.output_frames().start));
 
         while target_frames > self.write_len && !eof_reached {
             let needed = target_frames - self.write_len;
@@ -205,6 +238,7 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
+            let scratch_before = self.write_len;
             let start_position = self.resource.get().position();
             let (n, media_seconds, source) = match self.resource.get_mut().read_planar(&mut planar)
             {
@@ -229,13 +263,17 @@ impl PlayerResource {
                     (0, 0.0, None)
                 }
             };
+            self.commit_resource_read(
+                avail,
+                n,
+                media_seconds,
+                source,
+                scratch_before,
+                session_frame,
+            );
             if n == 0 {
                 break;
             }
-            self.media_spans
-                .push_back(MediaSpan::new(n, media_seconds, source));
-            self.write_len += n;
-            self.write_pos += n;
         }
 
         eof_reached
@@ -327,7 +365,7 @@ impl PlayerResource {
     ) -> ReadOutcome {
         self.consumed_media_seconds = 0.0;
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
+        let mut eof_reached = self.fill_scratch(frames_to_read, context, metrics);
 
         if self.write_len == 0 && self.failed && !self.eof_seen {
             let range_len = range.len();
@@ -362,7 +400,7 @@ impl PlayerResource {
 
             if frames_to_write == frames_to_read {
                 let target = self.prefetch_target(frames_to_read);
-                eof_reached |= self.fill_scratch(target, metrics);
+                eof_reached |= self.fill_scratch(target, context, metrics);
             }
 
             if frames_to_write == frames_to_read {
@@ -479,7 +517,8 @@ mod tests {
             SourceSpan::new(100, 130, rate),
         );
 
-        let (_, partial) = span.take(4);
+        let (seconds, partial) = span.take(4);
+        assert!((seconds - 12.0 / f64::from(rate.get())).abs() <= f64::EPSILON);
         assert_eq!(partial, SourceSpan::new(100, 112, rate));
         assert_eq!(span.remaining_frames(), 6);
 

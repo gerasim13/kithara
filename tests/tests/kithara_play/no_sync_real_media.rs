@@ -10,6 +10,8 @@ mod runtime;
 
 use std::{num::NonZeroU32, path::PathBuf};
 
+#[cfg(feature = "perf")]
+use hotpath::HotpathGuardBuilder;
 use kithara::{
     events::{EventBus, TrackId},
     hls::AbrMode,
@@ -39,7 +41,7 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const CAPTURE_SECS: u32 = 2;
 const CAPTURE_START_SECS: f64 = 10.0;
 const CAPTURE_START_STEP_SECS: f64 = 4.0;
@@ -261,7 +263,10 @@ async fn run_real_media_matrix(record_artifacts: bool) {
 }
 
 async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
-    let session = Arc::new(OfflineSession::new_manual());
+    #[cfg(feature = "perf")]
+    let _guard = HotpathGuardBuilder::new(case.label).build();
+
+    let session = Arc::new(OfflineSession::new_manual_with_block_frames(BLOCK_FRAMES));
     let mut failures = Vec::new();
 
     let media_dir = TestTempDir::new();

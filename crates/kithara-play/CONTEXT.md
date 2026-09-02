@@ -104,7 +104,7 @@ that a device callback presented those frames.
 `WarpRenderer::prepare` services format/backend changes and retired engine
 state between checked ticks. `AudioEffect::service_deferred` then prepares
 post-Warp effects. With an elastic backend, live input is split into the
-fixed internal render quantum of 64 output frames; controls are sampled
+configured render quantum; controls are sampled
 for each quantum and `WarpSource` advances only its matching source span. The
 identity/no-backend renderer preserves whole-chunk passthrough. The elastic
 quantum bounds live control response and source processing even when the

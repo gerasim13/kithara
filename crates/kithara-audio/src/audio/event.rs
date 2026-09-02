@@ -65,6 +65,7 @@ impl AudioEvents {
         } = read;
         if matches!(outcome, ReadOutcome::Frames { .. }) {
             let position = session.playhead.position();
+            self.fill_result(true, false, false, position, epoch);
             self.post_seek_output(
                 session.seek_obs.as_ref(),
                 epoch,
