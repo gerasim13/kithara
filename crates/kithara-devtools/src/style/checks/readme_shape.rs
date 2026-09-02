@@ -159,6 +159,13 @@ fn header_violations(rel: &str, document: &Document<'_>, package: &Package) -> V
             format!("{rel} header carries no `{license}` license badge, the license its manifest declares"),
         ));
     }
+    if document.preamble.contains("../") {
+        violations.push(Violation::deny(
+            ID,
+            format!("{rel}:header:escape"),
+            format!("{rel} header reaches outside the package with `../`; crates.io and docs.rs render this README where that path does not exist, so the logo and the license link are repository URLs"),
+        ));
+    }
     violations
 }
 
@@ -320,13 +327,14 @@ mod tests {
     }
 
     fn header(package: &Package) -> String {
-        let mut header =
-            String::from("<img src=\"../../logo.svg\" alt=\"kithara\" width=\"300\">\n\n");
+        let mut header = String::from(
+            "<img src=\"https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg\" alt=\"kithara\" width=\"300\">\n\n",
+        );
         if package.published {
             header.push_str("[![crates.io](https://img.shields.io/crates/v/kithara-demo.svg)](https://crates.io/crates/kithara-demo)\n");
             header.push_str("[![docs.rs](https://docs.rs/kithara-demo/badge.svg)](https://docs.rs/kithara-demo)\n");
         }
-        header.push_str("[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)\n\n");
+        header.push_str("[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)\n\n");
         header
     }
 
@@ -390,6 +398,32 @@ mod tests {
             "crates/kithara-demo/README.md:badge:license"
         );
         assert!(violations[0].message.contains("MPL-2.0"));
+    }
+
+    #[test]
+    fn a_header_that_reaches_outside_the_package_is_denied() {
+        let src = readme(&published(), "## Usage\n\nHow.\n").replace(
+            "https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg",
+            "../../logo.svg",
+        );
+
+        let violations = scan(&published(), &src);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].key,
+            "crates/kithara-demo/README.md:header:escape"
+        );
+    }
+
+    #[test]
+    fn a_relative_link_below_the_header_is_left_alone() {
+        let src = readme(
+            &published(),
+            "## Usage\n\nSee [tooling](../../docs/guides/tooling.md).\n",
+        );
+
+        assert!(scan(&published(), &src).is_empty());
     }
 
     #[test]

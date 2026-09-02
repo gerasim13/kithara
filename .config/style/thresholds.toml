@@ -135,6 +135,11 @@ include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md", "docs/**/*.md"]
 # heading that fits nowhere is usually a contract, and contracts live in
 # `CONTEXT.md`.
 #
+# The header carries no path out of the package. crates.io and docs.rs render a
+# crate README where `../../logo.svg` does not exist, so the logo and the license
+# link are repository URLs. Prose below the header keeps relative links, which
+# `dead_doc_refs` can still resolve.
+#
 # The scope is the crate front pages under `crates/` and nothing else. A
 # package whose README is a guide - `tests/`, `tests/fuzz/`, `xtask/` - carries
 # headings this vocabulary cannot express (nextest profiles, troubleshooting,
