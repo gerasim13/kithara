@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::{
@@ -155,6 +156,14 @@ impl RenderPublisher {
             /// Withdraws the current context at a session-axis discontinuity.
             pub fn clear(&self);
             /// Publishes the exact callback context and its current presentation base.
+            #[kithara::probe(
+                session_epoch = u64::from(context.session_epoch()),
+                transport_revision = context.transport_revision().map_or(0, u64::from),
+                output_start = i64::from(context.output_frames().start),
+                output_end = i64::from(context.output_frames().end),
+                source = frontier.source(),
+                presentation_frame = i64::from(frontier.output())
+            )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
         }
     }

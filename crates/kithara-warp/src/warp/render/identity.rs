@@ -3,6 +3,7 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_test_macros as kithara;
 
 use crate::{RenderReader, RenderSnapshot, StretchControls};
 
@@ -20,6 +21,23 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    #[kithara::probe(
+        session_epoch = u64::from(committed.context().session_epoch()),
+        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
+        output_start,
+        output_end = i64::from(committed.frontier().output()),
+        source_start,
+        source_end = committed.frontier().source()
+    )]
+    fn render_committed(
+        &mut self,
+        committed: RenderSnapshot,
+        source_start: u64,
+        output_start: i64,
+    ) {
+        self.committed = Some(committed);
+    }
+
     pub(crate) fn new(
         _controls: Arc<StretchControls>,
         context: RenderReader,
@@ -60,10 +78,14 @@ where
         if let Some(snapshot) = snapshot
             && self.context.is_current(&snapshot)
             && let Some((source, _)) = self.rendered_source_end
-            && let Some(committed) =
-                snapshot.advance(self.committed.as_ref(), source, chunk.frames())
         {
-            self.committed = Some(committed);
+            let source_start = snapshot.frontier().source();
+            let output_start = i64::from(snapshot.frontier().output());
+            if let Some(committed) =
+                snapshot.advance(self.committed.as_ref(), source, chunk.frames())
+            {
+                self.render_committed(committed, source_start, output_start);
+            }
         }
         Some(chunk)
     }

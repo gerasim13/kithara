@@ -4,6 +4,7 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+use kithara_test_macros as kithara;
 
 use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls};
 
@@ -265,9 +266,28 @@ where
         let Some((source, _)) = self.rendered_source_end else {
             return;
         };
+        let source_start = snapshot.frontier().source();
+        let output_start = i64::from(snapshot.frontier().output());
         if let Some(committed) = snapshot.advance(self.committed.as_ref(), source, output_frames) {
-            self.committed = Some(committed);
+            self.render_committed(committed, source_start, output_start);
         }
+    }
+
+    #[kithara::probe(
+        session_epoch = u64::from(committed.context().session_epoch()),
+        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
+        output_start,
+        output_end = i64::from(committed.frontier().output()),
+        source_start,
+        source_end = committed.frontier().source()
+    )]
+    fn render_committed(
+        &mut self,
+        committed: RenderSnapshot,
+        source_start: u64,
+        output_start: i64,
+    ) {
+        self.committed = Some(committed);
     }
 
     /// Last context and frontier committed by a successful worker render.

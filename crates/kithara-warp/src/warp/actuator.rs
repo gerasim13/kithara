@@ -8,7 +8,9 @@ use {
 use super::WarpConfig;
 #[cfg(feature = "render")]
 use super::WarpRenderer;
-use crate::{RenderPublisher, RenderReader, StretchControls};
+#[cfg(feature = "render")]
+use crate::RenderReader;
+use crate::{RenderPublisher, StretchControls};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
@@ -22,6 +24,7 @@ pub struct Warp<S> {
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
     publisher: Option<RenderPublisher>,
+    #[cfg(feature = "render")]
     reader: RenderReader,
     #[field(get, get_mut)]
     source: S,
@@ -32,11 +35,13 @@ impl<S> Warp<S> {
     #[must_use]
     pub fn new(source: S, config: &WarpConfig) -> Self {
         let publisher = RenderPublisher::default();
+        #[cfg(feature = "render")]
         let reader = publisher.reader();
         Self {
             source,
             stretch: Arc::clone(config.stretch()),
             publisher: Some(publisher),
+            #[cfg(feature = "render")]
             reader,
         }
     }
