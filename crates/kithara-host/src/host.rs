@@ -2,8 +2,10 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
+#[cfg(any(test, feature = "probe"))]
+use kithara_play::TransportRevision;
 use kithara_play::{
-    GroupState, PlayError, SessionBinding, SessionDispatcher,
+    GroupState, PlayError, SessionBinding, SessionDispatcher, Tempo,
     player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
@@ -12,8 +14,12 @@ use kithara_warp::{
     TopologyOperation,
 };
 
+#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
+mod offline;
 mod platform;
 
+#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
+pub use offline::OfflineHost;
 use platform::Platform;
 
 #[cfg(any(test, feature = "probe"))]
@@ -219,6 +225,29 @@ impl<S> Host<S> {
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
         self.dispatcher.sample_rate()
+    }
+
+    /// Change the canonical session tempo at the next render boundary.
+    ///
+    /// # Errors
+    /// Returns an error when the Host rejects or cannot dispatch the update.
+    pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSessionTempo { tempo })
+    }
+
+    /// Read the canonical session transport revision for probes.
+    ///
+    /// # Errors
+    /// Returns an error when the Host cannot answer the query.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
+            Reply::SessionTransport(snapshot) => Ok(snapshot.revision()),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for transport query".into(),
+            )),
+        }
     }
 
     /// Installs the single post-limiter mix tap.

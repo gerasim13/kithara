@@ -11,6 +11,7 @@ pub mod crossfade;
 pub mod deck;
 pub mod mix;
 pub mod pools;
+pub mod recording;
 pub mod sources;
 pub mod state;
 pub mod theme;

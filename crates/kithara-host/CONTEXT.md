@@ -15,6 +15,23 @@ and playback flow. `kithara-warp` owns synchronization and warp contracts. The
 dependency direction is `kithara-host -> kithara-play` and
 `kithara-host -> kithara-warp`; neither lower crate may depend on the Host.
 
+## Offline rendering
+
+`OfflineHost` owns the same root group, Firewheel graph, limiter, transport,
+and member insertion path as `Host`; only its audio backend is different. The
+backend starts lazily on the first render when no player has started it yet, so
+an empty master mix is valid silence rather than an unavailable graph.
+
+Its renderer consumes one absolute finite frame range at a time. It may skip
+forward by rendering undisclosed frames, never rewinds an already consumed
+timeline, and writes only the requested range to `RenderSink` in configured
+bounded blocks. `OfflineHost::new` receives the composition root's
+`PoolRegion<S>`; each block is acquired from its `f32` pool and returned after
+the sink call, preserving the shared hard budget. Signal-format mismatch,
+cancellation, backend failure, and sink failure are terminal for that request.
+The composition owner finalizes the sink on success and drops it on error; Host
+does not own storage or encoding.
+
 ## Runtime boundary
 
 The existing `kithara-engine` session thread is the canonical Host owner and the

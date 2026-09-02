@@ -28,5 +28,10 @@ not the player value or its session dispatcher.
 players with that same schema, while each registered deck retains its existing
 `PoolRegion<S>` handle for graph-node scratch allocation.
 
+With the `offline` feature, `OfflineHost<S>` drives that same owned graph
+without an audio device and implements `kithara_output::OfflineRenderer` for
+exact finite output-frame ranges. Its application-supplied `PoolRegion<S>`
+bounds every rendered PCM block.
+
 The current crate is a mechanical ownership extraction. Runtime invariants and
 dependency boundaries are documented in [`CONTEXT.md`](CONTEXT.md).
