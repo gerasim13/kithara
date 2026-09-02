@@ -249,10 +249,9 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// request.
 pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     match lane {
-        "apple-test" | "linux-test-simulated-clock" | "windows-arm64" | "windows-x64" => {
-            Some("target/nextest/ci/junit.xml")
-        }
-        "apple-test-flash-off" => Some("target-flash-off/nextest/ci/junit.xml"),
+        "apple-test" | "linux-test-simulated-clock" => Some("target/ci-tests/nextest/ci/junit.xml"),
+        "apple-test-flash-off" => Some("target/ci-tests-flash-off/nextest/ci/junit.xml"),
+        "windows-arm64" | "windows-x64" => Some("target/nextest/ci/junit.xml"),
         "apple-ios-test" => Some("target/xcresult/ios-test.junit.xml"),
         "apple-swift-test" => Some("target/xcresult/swift-test.junit.xml"),
         _ => None,
@@ -650,7 +649,9 @@ mod tests {
     #[test]
     fn a_report_left_by_an_earlier_job_is_not_collected_as_this_ones() {
         let directory = tempfile::tempdir().unwrap();
-        let stale = directory.path().join("target/nextest/ci/junit.xml");
+        let stale = directory
+            .path()
+            .join("target/ci-tests/nextest/ci/junit.xml");
         fs::create_dir_all(stale.parent().unwrap()).unwrap();
         fs::write(&stale, "<testsuites/>").unwrap();
 

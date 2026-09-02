@@ -915,7 +915,7 @@ exit 19
         assert!(
             test_job
                 .lines()
-                .any(|line| line.trim() == "junit: target/nextest/ci/junit.xml"),
+                .any(|line| line.trim() == "junit: target/ci-tests/nextest/ci/junit.xml"),
             "linux:test does not publish the nextest JUnit report"
         );
 
@@ -938,9 +938,9 @@ exit 19
         assert_eq!(
             reports,
             [
-                "target-flash-off/nextest/ci/junit.xml",
-                "target/nextest/ci/junit.xml",
-                "target/nextest/ci/junit.xml",
+                "target/ci-tests-flash-off/nextest/ci/junit.xml",
+                "target/ci-tests/nextest/ci/junit.xml",
+                "target/ci-tests/nextest/ci/junit.xml",
                 "target/nextest/ci/junit.xml",
                 "target/nextest/ci/junit.xml",
                 "target/xcresult/ios-test.junit.xml",

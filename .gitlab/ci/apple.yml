@@ -48,7 +48,7 @@ apple:test:
     when: always
     expire_in: 30 days
     reports:
-      junit: target/nextest/ci/junit.xml
+      junit: target/ci-tests/nextest/ci/junit.xml
     paths:
       - .ci-artifacts/junit/
 
@@ -72,7 +72,7 @@ apple:test-flash-off:
     when: always
     expire_in: 30 days
     reports:
-      junit: target-flash-off/nextest/ci/junit.xml
+      junit: target/ci-tests-flash-off/nextest/ci/junit.xml
     paths:
       - .ci-artifacts/junit/
 
