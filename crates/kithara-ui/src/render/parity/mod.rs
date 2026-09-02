@@ -10,6 +10,8 @@
 mod bars;
 mod blocks;
 mod extension;
+mod immediate;
+mod press;
 mod run;
 mod shared;
 mod stepper;
