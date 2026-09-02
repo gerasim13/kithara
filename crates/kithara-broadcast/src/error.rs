@@ -1,12 +1,30 @@
 use std::{io, net::SocketAddr};
 
+use kithara_bufpool::PoolError;
 use kithara_encode::EncodeError;
+use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_worker::TaskError;
 use thiserror::Error;
 
 /// Errors raised while packaging or serving a live stream.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BroadcastError {
+    #[error("HLS broadcast does not support {codec:?} in {container:?}")]
+    UnsupportedProfile {
+        codec: AudioCodec,
+        container: ContainerFormat,
+    },
+
+    #[error("live master output requires stereo, got {channels} channels")]
+    LiveChannelCount { channels: u16 },
+
+    #[error("broadcast PCM capacity overflow")]
+    CapacityOverflow,
+
+    #[error("the composition-owned sample pool rejected broadcast scratch")]
+    Pool(#[from] PoolError),
+
     #[error("ADTS carries no sampling frequency index for {sample_rate} Hz")]
     UnsupportedSampleRate { sample_rate: u32 },
 
@@ -47,6 +65,9 @@ pub enum BroadcastError {
 
     #[error("the live encoder failed")]
     Encode(#[from] EncodeError),
+
+    #[error("the broadcast worker rejected its task")]
+    Worker(#[from] TaskError),
 }
 
 /// Result type for live packaging operations.

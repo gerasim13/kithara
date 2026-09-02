@@ -5,6 +5,7 @@ use kithara_audio::ConsumerWakeMode;
 #[cfg(test)]
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
@@ -19,6 +20,7 @@ use kithara_warp::{
 
 use super::{
     dispatch::run_cmd,
+    graph::tap,
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
@@ -100,6 +102,14 @@ where
 
     pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.state.ctx.as_mut()
+    }
+
+    /// Install the real post-limiter output node in a deterministic graph.
+    ///
+    /// # Errors
+    /// Returns an error when an output is already active or graph installation fails.
+    pub fn enable_outputs(&mut self, outputs: OutputGroup) -> Result<(), PlayError> {
+        tap::enable(&mut self.state, outputs).map_err(Into::into)
     }
 }
 

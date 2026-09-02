@@ -1,18 +1,23 @@
 use std::mem;
 
-use kithara::platform::{
-    CancelToken,
-    time::{Duration, Instant},
-    tokio::task,
+use kithara::{
+    platform::{
+        CancelToken,
+        time::{Duration, Instant},
+        tokio::task,
+    },
+    worker::Worker,
 };
 
 use super::Packager;
-use crate::pools::AppHost;
+use crate::pools::{AppHost, Pools};
 
 pub(crate) struct Broadcaster<P: Packager> {
+    config: P::Config,
+    pools: Pools,
     shutdown: CancelToken,
     pub(super) phase: Phase<P>,
-    tap_lead: Duration,
+    worker: Worker,
 }
 
 pub(super) enum Phase<P: Packager> {
@@ -26,11 +31,18 @@ pub(super) enum Phase<P: Packager> {
 pub(crate) struct BroadcastStop<P: Packager>(pub(super) P::Live);
 
 impl<P: Packager> Broadcaster<P> {
-    pub(crate) const fn new(shutdown: CancelToken, tap_lead: Duration) -> Self {
+    pub(crate) const fn new(
+        shutdown: CancelToken,
+        worker: Worker,
+        pools: Pools,
+        config: P::Config,
+    ) -> Self {
         Self {
+            config,
+            pools,
             shutdown,
             phase: Phase::Off,
-            tap_lead,
+            worker,
         }
     }
 
@@ -44,7 +56,7 @@ impl<P: Packager> Broadcaster<P> {
         if matches!(self.phase, Phase::Running { .. })
             && let Err(error) = P::release(host)
         {
-            tracing::error!(%error, "failed to release broadcast mix tap during shutdown");
+            tracing::error!(%error, "failed to release broadcast output group during shutdown");
         }
     }
 
@@ -60,7 +72,7 @@ impl<P: Packager> Broadcaster<P> {
     pub(crate) fn poll(&mut self, host: &AppHost) {
         if matches!(&self.phase, Phase::Running { live } if !P::is_live(live)) {
             if let Err(error) = P::release(host) {
-                tracing::error!(%error, "failed to release stopped broadcast mix tap");
+                tracing::error!(%error, "failed to release stopped broadcast output group");
             }
             self.phase = Phase::Off;
             return;
@@ -68,7 +80,13 @@ impl<P: Packager> Broadcaster<P> {
         if !matches!(self.phase, Phase::Requested) {
             return;
         }
-        match P::start(host, &self.shutdown, self.tap_lead) {
+        match P::start(
+            host,
+            &self.worker,
+            &self.pools,
+            &self.shutdown,
+            &self.config,
+        ) {
             Ok(Some(live)) => {
                 tracing::info!(url = P::url(&live), "broadcast is live");
                 self.phase = Phase::Running { live };
@@ -87,7 +105,7 @@ impl<P: Packager> Broadcaster<P> {
             Phase::Requested => {}
             Phase::Running { live } => {
                 if let Err(error) = P::release(host) {
-                    tracing::error!(%error, "failed to release broadcast mix tap");
+                    tracing::error!(%error, "failed to release broadcast output group");
                 }
                 self.phase = Phase::Stopping;
                 return Some(BroadcastStop(live));

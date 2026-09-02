@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara::{
     host::HostConfig,
-    platform::{CancelToken, time::Duration},
+    platform::CancelToken,
+    worker::{Worker, WorkerConfig},
 };
 
 use super::{
@@ -10,7 +11,7 @@ use super::{
     broadcaster::{Broadcaster, Phase},
     fixture::Stream,
 };
-use crate::pools::AppHost;
+use crate::pools::{self, AppHost, Pools};
 
 pub(super) struct Ready;
 
@@ -30,6 +31,7 @@ impl Ready {
 }
 
 impl Packager for Ready {
+    type Config = ();
     type Live = Stream;
 
     const IS_AVAILABLE: bool = true;
@@ -40,8 +42,10 @@ impl Packager for Ready {
 
     fn start(
         _host: &AppHost,
+        _worker: &Worker,
+        _pools: &Pools,
         _shutdown: &CancelToken,
-        _tap_lead: Duration,
+        _config: &(),
     ) -> BroadcastResult<Option<Stream>> {
         LIVE.store(true, Ordering::Relaxed);
         Ok(Some(Self::stream()))
@@ -60,7 +64,12 @@ impl Packager for Ready {
 
 #[kithara::test]
 fn an_ended_stream_is_noticed_by_the_next_poll() {
-    let mut broadcaster = Broadcaster::<Ready>::new(CancelToken::root(), Duration::from_secs(2));
+    let mut broadcaster = Broadcaster::<Ready>::new(
+        CancelToken::root(),
+        Worker::new(WorkerConfig::new()),
+        pools::build().expect("test pools"),
+        (),
+    );
     let host = AppHost::new(HostConfig::builder().build()).expect("test host");
     broadcaster.toggle(&host);
     broadcaster.poll(&host);
