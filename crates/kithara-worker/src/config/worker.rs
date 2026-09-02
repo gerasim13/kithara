@@ -39,6 +39,19 @@ impl WorkerConfig {
         }
     }
 
+    /// Install the compute pool a configuration document named.
+    #[must_use]
+    pub fn with_compute_pool(mut self, pool: ComputePool) -> Self {
+        self.pool = match pool {
+            ComputePool::Disabled {} => PoolConfig::Disabled,
+            #[cfg(not(target_arch = "wasm32"))]
+            ComputePool::Owned { name, threads } => {
+                PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
+            }
+        };
+        self
+    }
+
     /// Lazily create an owned Rayon pool on the first admitted compute job.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
@@ -52,19 +65,6 @@ impl WorkerConfig {
     #[must_use]
     pub fn with_pool(mut self, pool: Arc<rayon::ThreadPool>) -> Self {
         self.pool = PoolConfig::Shared(pool);
-        self
-    }
-
-    /// Install the compute pool a configuration document named.
-    #[must_use]
-    pub fn with_compute_pool(mut self, pool: ComputePool) -> Self {
-        self.pool = match pool {
-            ComputePool::Disabled {} => PoolConfig::Disabled,
-            #[cfg(not(target_arch = "wasm32"))]
-            ComputePool::Owned { name, threads } => {
-                PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
-            }
-        };
         self
     }
 }

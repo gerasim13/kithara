@@ -260,7 +260,7 @@ master-volume node, removes the old EQ, and submits one graph update. The audio
 thread never allocates, locks, or reconstructs filters for a layout change.
 
 `EngineImpl` owns the current `EqBandConfig` vector before registration and uses
-it for `eq_band_count`; after registration the session's `PlayerState` owns the
+it for `eq_band_count`; after registration the session's `Deck` owns the
 live graph projection. `SharedEq` is the control-plane gain mirror shared by
 the session and slot handles; no audio processor reads it, and the DSP takes its
 gains from the session's node event queue instead. Reading and writing one gain
@@ -511,7 +511,7 @@ another snapshot.
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
 (`master_volume`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
+`Deck.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
 through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
 finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
 started players
