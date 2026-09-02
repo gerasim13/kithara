@@ -215,10 +215,11 @@ overwrites is `FileSettings::extension`: `hint` is per-call input read twice —
 as the file source's extension and as the decoder's format hint — so it stays
 on `ResourceConfig` and is mapped in once.
 
-`kithara-app` composes the tree in `main.rs`: the crate default, then its
-`resource:` section, then `hls:` into `settings.hls` and `file:` into
-`settings.file`. `sources::build_resource_config` passes the whole value to
-`ResourceConfig::settings` — the only construction site a document reaches.
+`kithara-app` composes the tree in `Config::resource_settings`: the crate
+default, then its `resource:` section, then `hls:` into `settings.hls` and
+`file:` into `settings.file`. `sources::build_resource_config` passes the
+whole value to `ResourceConfig::settings` — the only construction site a
+document reaches.
 
 Six fields carry `#[patch(skip)]`, so naming one in a document is refused
 rather than parsed and silently dropped:
@@ -241,10 +242,10 @@ rather than parsed and silently dropped:
   `ResourceConfig::set_host_sample_rate`.
 - `ResourceSettings::preferred_peak_bitrate` — held for a reader that does not
   exist. `resource/build.rs` forwards it to neither branch, so no ABR
-  controller ever sees it; `ResourceConfig::preferred_peak_bitrate` is its only
-  accessor and nothing in the workspace calls it. Making it a document key
-  would ship a knob the binary ignores, so it stays skipped until the wiring
-  lands.
+  controller ever sees it, and the one caller of
+  `ResourceConfig::preferred_peak_bitrate` is a test asserting the value
+  survives `Loader::build_config`. Making it a document key would ship a knob
+  the binary ignores, so it stays skipped until the wiring lands.
 
 `preload_chunks` is the only field that travels, and `resource/build.rs` reads
 it on both branches.

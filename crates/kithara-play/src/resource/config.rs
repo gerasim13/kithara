@@ -65,11 +65,11 @@ pub struct ResourceSettings {
     pub preload_chunks: NonZeroUsize,
     /// Requested peak-bitrate ceiling in bits per second, held for an ABR
     /// reader that does not exist yet. `resource/build.rs` forwards this to
-    /// neither branch, so no value here changes variant selection today; the
-    /// only accessor is [`ResourceConfig::preferred_peak_bitrate`] and nothing
-    /// in the workspace calls it. Not a document key for exactly that reason:
-    /// a document knob the binary ignores is worse than no knob. Make it one
-    /// when the ABR wiring lands.
+    /// neither branch, so no value here changes variant selection today, and
+    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
+    /// asserting the value survives `Loader::build_config`. Not a document key
+    /// for exactly that reason: a document knob the binary ignores is worse
+    /// than no knob. Make it one when the ABR wiring lands.
     #[builder(default = 0.0)]
     #[patch(skip)]
     pub preferred_peak_bitrate: f64,
