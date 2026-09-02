@@ -59,15 +59,27 @@ where
     B: AudioBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+    pub const DEFAULT_SAMPLE_RATE: NonZeroU32 =
+        match NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE) {
+            Some(sample_rate) => sample_rate,
+            None => unreachable!(),
+        };
 
     #[must_use]
     pub fn new<F>(start_stream_fn: F) -> Self
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
+        Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
+    }
+
+    #[must_use]
+    pub fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
         Self {
-            state: state_for(start_stream_fn),
+            state: state_for(sample_rate, start_stream_fn),
         }
     }
 
@@ -104,17 +116,18 @@ where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
-    state_for(start_stream_fn)
+    state_for(
+        GraphSession::<B, TestPools>::DEFAULT_SAMPLE_RATE,
+        start_stream_fn,
+    )
 }
 
-fn state_for<B, F, S>(start_stream_fn: F) -> SessionState<B, S>
+fn state_for<B, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<B, S>
 where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
     let grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let sample_rate =
-        NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE).expect("fixture sample rate");
     let root = GroupState::unavailable(
         grid_id,
         sample_rate,

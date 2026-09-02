@@ -262,7 +262,8 @@ async fn run_real_media_matrix(record_artifacts: bool) {
 }
 
 async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
-    let session = Arc::new(OfflineSession::new_manual());
+    let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
+    let session = Arc::new(OfflineSession::new_manual_with(sample_rate, BLOCK_FRAMES));
     let mut failures = Vec::new();
 
     let media_dir = TestTempDir::new();

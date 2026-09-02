@@ -250,10 +250,10 @@ impl ProductHarness {
     ) -> Self {
         let server = TestServerHelper::new().await;
         let sources = sources(provider, case.decks, &server).await;
-        let session = Arc::new(OfflineSession::new_manual_with_block_frames(block_frames));
+        let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
+        let session = Arc::new(OfflineSession::new_manual_with(sample_rate, block_frames));
         let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
