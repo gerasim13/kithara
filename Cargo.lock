@@ -5333,6 +5333,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
+ "hotpath",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-signal",

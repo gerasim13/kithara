@@ -10,11 +10,14 @@ use kithara_warp::{
     BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
 
-use super::{Host, Platform, Resident, SessionRoot, SessionRuntime};
-use crate::session::{
-    HostCmd, HostDispatcher, HostReply, Reply,
-    protocol::{HostDispatchError, SyncCmd},
-    testing::{FixtureSession, fixture_member},
+use super::{Host, Platform, Resident, SessionRuntime};
+use crate::{
+    host::SessionRoot,
+    session::{
+        HostCmd, HostDispatcher, HostReply, Reply,
+        protocol::{HostDispatchError, SyncCmd},
+        testing::{FixtureSession, fixture_member},
+    },
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
