@@ -91,7 +91,21 @@ struct ProvenanceDumpContext<'a> {
     current_index: Option<usize>,
 }
 
-impl ProvenanceDumpContext<'_> {
+trait DiagnosticContext {
+    fn onset_window(&self) -> Option<usize>;
+    fn b_onset_window(&self) -> Option<usize>;
+    fn dump(&self) -> String;
+}
+
+impl DiagnosticContext for ProvenanceDumpContext<'_> {
+    fn onset_window(&self) -> Option<usize> {
+        self.onset_window
+    }
+
+    fn b_onset_window(&self) -> Option<usize> {
+        self.b_onset_window
+    }
+
     fn dump(&self) -> String {
         dump(
             self.replays,
@@ -112,7 +126,15 @@ struct SwitchDumpContext<'a> {
     current_index: Option<usize>,
 }
 
-impl SwitchDumpContext<'_> {
+impl DiagnosticContext for SwitchDumpContext<'_> {
+    fn onset_window(&self) -> Option<usize> {
+        self.onset_window
+    }
+
+    fn b_onset_window(&self) -> Option<usize> {
+        self.b_onset_window
+    }
+
     fn dump(&self) -> String {
         dump_with_switch(
             self.replays,
@@ -275,8 +297,17 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         )
     );
 
-    assert_ascending_len(&classes, expected_a_frames, &context);
-    assert_no_ascending_after_b(&classes, &context);
+    assert_ascending_len(
+        &classes,
+        expected_a_frames,
+        "track A ascending length must be exactly one full track before B starts",
+        &context,
+    );
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -327,7 +358,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
         switch_issue_frame,
         current_index: setup.queue.current_index(),
     };
-    let last_ascending_window = require_last_class_window_before_with_switch(
+    let last_ascending_window = require_last_class_window_before(
         &classes,
         FrameClass::Ascending,
         b_onset_window,
@@ -390,8 +421,17 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
         )
     );
 
-    assert_ascending_len_with_switch(&classes, expected_a_frames, &context);
-    assert_no_ascending_after_b_with_switch(&classes, &context);
+    assert_ascending_len(
+        &classes,
+        expected_a_frames,
+        "track A ascending length must be exactly one full track before B starts after variant switch",
+        &context,
+    );
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows after late variant switch",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -797,7 +837,11 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         &context,
     );
 
-    assert_no_ascending_after_b(&classes, &context);
+    assert_no_ascending_after_b(
+        &classes,
+        "B region must not contain Ascending A windows",
+        &context,
+    );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
@@ -1995,7 +2039,7 @@ fn require_last_class_window_before(
     classes: &[FrameClass],
     target: FrameClass,
     before_window: usize,
-    context: &ProvenanceDumpContext<'_>,
+    context: &impl DiagnosticContext,
 ) -> usize {
     classes[..before_window]
         .iter()
@@ -2030,24 +2074,6 @@ fn require_run_containing(
         })
 }
 
-fn require_last_class_window_before_with_switch(
-    classes: &[FrameClass],
-    target: FrameClass,
-    before_window: usize,
-    context: &SwitchDumpContext<'_>,
-) -> usize {
-    classes[..before_window]
-        .iter()
-        .rposition(|class| *class == target)
-        .unwrap_or_else(|| {
-            panic!(
-                "target class {target:?} must appear before window {before_window} \
-                 after late variant switch; {}",
-                context.dump()
-            )
-        })
-}
-
 fn first_sustained_class_window(
     classes: &[FrameClass],
     target: FrameClass,
@@ -2077,10 +2103,13 @@ fn class_count_between(
 fn assert_ascending_len(
     classes: &[FrameClass],
     expected_frames: usize,
-    context: &ProvenanceDumpContext<'_>,
+    label: &str,
+    context: &impl DiagnosticContext,
 ) {
-    let onset_window = context.onset_window.expect("onset window must be set");
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
+    let onset_window = context.onset_window().expect("onset window must be set");
+    let b_onset_window = context
+        .b_onset_window()
+        .expect("B onset window must be set");
     let ascending_frames =
         class_count_between(classes, FrameClass::Ascending, onset_window, b_onset_window)
             * WINDOW_FRAMES;
@@ -2088,26 +2117,7 @@ fn assert_ascending_len(
         ascending_frames,
         expected_frames,
         TRACK_FRAME_TOLERANCE,
-        "track A ascending length must be exactly one full track before B starts",
-        context,
-    );
-}
-
-fn assert_ascending_len_with_switch(
-    classes: &[FrameClass],
-    expected_frames: usize,
-    context: &SwitchDumpContext<'_>,
-) {
-    let onset_window = context.onset_window.expect("onset window must be set");
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
-    let ascending_frames =
-        class_count_between(classes, FrameClass::Ascending, onset_window, b_onset_window)
-            * WINDOW_FRAMES;
-    assert_close_len_with_switch(
-        ascending_frames,
-        expected_frames,
-        TRACK_FRAME_TOLERANCE,
-        "track A ascending length must be exactly one full track before B starts after variant switch",
+        label,
         context,
     );
 }
@@ -2117,7 +2127,7 @@ fn assert_close_len(
     expected: usize,
     tolerance: usize,
     label: &str,
-    context: &ProvenanceDumpContext<'_>,
+    context: &impl DiagnosticContext,
 ) {
     let lower = expected.saturating_sub(tolerance);
     let upper = expected.saturating_add(tolerance);
@@ -2128,41 +2138,14 @@ fn assert_close_len(
     );
 }
 
-fn assert_close_len_with_switch(
-    actual: usize,
-    expected: usize,
-    tolerance: usize,
-    label: &str,
-    context: &SwitchDumpContext<'_>,
-) {
-    let lower = expected.saturating_sub(tolerance);
-    let upper = expected.saturating_add(tolerance);
-    assert!(
-        actual >= lower && actual <= upper,
-        "{label}: expected {expected} +/- {tolerance} frames, got {actual}; {}",
-        context.dump()
-    );
-}
-
-fn assert_no_ascending_after_b(classes: &[FrameClass], context: &ProvenanceDumpContext<'_>) {
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
-    let second_ascending = classes
-        .iter()
-        .enumerate()
-        .skip(b_onset_window + 1)
-        .find_map(|(idx, class)| (*class == FrameClass::Ascending).then_some(idx));
-    assert!(
-        second_ascending.is_none(),
-        "B region must not contain Ascending A windows; second_ascending={second_ascending:?}; {}",
-        context.dump()
-    );
-}
-
-fn assert_no_ascending_after_b_with_switch(
+fn assert_no_ascending_after_b(
     classes: &[FrameClass],
-    context: &SwitchDumpContext<'_>,
+    label: &str,
+    context: &impl DiagnosticContext,
 ) {
-    let b_onset_window = context.b_onset_window.expect("B onset window must be set");
+    let b_onset_window = context
+        .b_onset_window()
+        .expect("B onset window must be set");
     let second_ascending = classes
         .iter()
         .enumerate()
@@ -2170,8 +2153,7 @@ fn assert_no_ascending_after_b_with_switch(
         .find_map(|(idx, class)| (*class == FrameClass::Ascending).then_some(idx));
     assert!(
         second_ascending.is_none(),
-        "B region must not contain Ascending A windows after late variant switch; \
-         second_ascending={second_ascending:?}; {}",
+        "{label}; second_ascending={second_ascending:?}; {}",
         context.dump()
     );
 }
