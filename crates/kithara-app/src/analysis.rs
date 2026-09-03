@@ -252,7 +252,7 @@ impl AnalysisController {
 
     /// End a pass on a stale rate axis and schedule a fresh pass without
     /// overriding a newer queue decision.
-    fn retire_stale_axis(&mut self, queue: &AppQueueControl) {
+    fn retire_stale_axis(&mut self, queue: &AppQueueControl, state: &Mutex<UiState>) {
         let Some(Activity::Running(run)) = &self.activity else {
             return;
         };
@@ -270,7 +270,11 @@ impl AnalysisController {
         );
         self.runner.clear();
         if !self.pending.contains(&track_id) {
-            self.pending.push_front(track_id);
+            if current_track_id(state) == Some(track_id) {
+                self.pending.push_front(track_id);
+            } else {
+                self.pending.push_back(track_id);
+            }
         }
     }
 
@@ -312,7 +316,7 @@ impl AnalysisController {
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
-        self.retire_stale_axis(queue);
+        self.retire_stale_axis(queue, state);
         if self.activity.is_some() {
             return;
         }
@@ -865,7 +869,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_stale_axis_waits_for_its_final_checkpoint_before_reopening() {
         let (_host, queue) = queue();
-        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+        let track_id = TrackId::from(1);
+        let state = state_with_current(&[track_id], 0);
+        let (mut controller, _tx) = controller_with_run(track_id, target("root_a"), None);
 
         // The fixture run is pinned to 44.1 kHz.
         let engine = queue.sample_rate();
@@ -876,7 +882,7 @@ mod tests {
             run.axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         }
 
-        controller.retire_stale_axis(&queue);
+        controller.retire_stale_axis(&queue, &state);
 
         assert!(
             matches!(controller.activity, Some(Activity::Running(_))),
@@ -892,13 +898,15 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_pass_on_the_engine_axis_is_left_alone() {
         let (_host, queue) = queue();
-        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+        let track_id = TrackId::from(1);
+        let state = state_with_current(&[track_id], 0);
+        let (mut controller, _tx) = controller_with_run(track_id, target("root_a"), None);
         let Some(Activity::Running(run)) = controller.activity.as_mut() else {
             panic!("fixture run is active");
         };
         run.axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
 
-        controller.retire_stale_axis(&queue);
+        controller.retire_stale_axis(&queue, &state);
 
         assert!(
             matches!(controller.activity, Some(Activity::Running(_))),
@@ -967,7 +975,7 @@ mod tests {
     }
 
     #[kithara::test(native, tokio)]
-    fn a_stale_axis_does_not_move_a_preempted_track_ahead_of_the_current_one() {
+    async fn a_stale_axis_does_not_move_a_preempted_track_ahead_of_the_current_one() {
         let track_a = TrackId::from(1);
         let track_b = TrackId::from(2);
         let (_host, queue) = queue();
@@ -980,7 +988,7 @@ mod tests {
         let state = state_with_current(&[track_a, track_b], 0);
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let (mut controller, _tx) =
+        let (mut controller, tx) =
             controller_with_run(track_a, target("stale_preempted_axis"), None);
         let engine_axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
         let Some(Activity::Running(run)) = controller.activity.as_mut() else {
@@ -990,6 +998,8 @@ mod tests {
 
         state.lock().current_track_index = Some(1);
         controller.on_track_changed(&queue, &state, &config);
+        assert_eq!(controller.pending.front(), Some(&track_b));
+        controller.on_tracks_changed(&queue, &state, &config);
         assert_eq!(controller.pending.front(), Some(&track_b));
 
         let Some(Activity::Running(run)) = controller.activity.as_mut() else {
@@ -1014,6 +1024,13 @@ mod tests {
             Some(&track_b),
             "the current track stays ahead of the already-preempted run"
         );
+
+        drop(tx);
+        controller.drive(&queue, &state, &config).await;
+        assert!(matches!(
+            controller.activity.as_ref(),
+            Some(Activity::Running(Run { track_id, .. })) if *track_id == track_b
+        ));
         cancel.cancel();
     }
 
