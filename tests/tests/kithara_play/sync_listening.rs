@@ -9,7 +9,9 @@ use kithara_integration_tests::{
 };
 
 use super::sync_product_matrix::{
-    BLOCK_FRAMES, CHANNELS, ProductHarness, Provider, SEQUENTIAL_SYNC, SyncCase,
+    AMBIENT_TRIP_HOP_PROVIDER, AMBIENT_TRIP_HOP_SYNC, BLOCK_FRAMES, CHANNELS, CROSS_STYLE_PROVIDER,
+    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, ProductHarness, Provider,
+    SEQUENTIAL_SYNC, SyncCase, TECHNO_BREAKBEAT_PROVIDER, TECHNO_BREAKBEAT_SYNC,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
@@ -18,19 +20,15 @@ const RIDE_STEPS: usize = 32;
 async fn capture_solo(
     artifacts: &AudioArtifactSet,
     label: &str,
+    case: SyncCase,
+    provider: Provider,
     audible_deck: usize,
 ) -> (PathBuf, Vec<String>) {
     let mut recording = artifacts
         .recording(label, Some(CAPTURE_FRAMES as u64))
         .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
-    let mut harness = ProductHarness::new(SEQUENTIAL_SYNC, Provider::Synthetic, audible_deck).await;
-    capture_frames(
-        &mut harness,
-        SEQUENTIAL_SYNC,
-        CAPTURE_FRAMES,
-        &mut recording,
-    )
-    .await;
+    let mut harness = ProductHarness::new(case, provider, audible_deck).await;
+    capture_frames(&mut harness, case, CAPTURE_FRAMES, &mut recording).await;
     let reader = AudioArtifactSet::finish(recording)
         .unwrap_or_else(|error| panic!("finish {label} recording: {error}"));
     let path = audio_artifact_path(&reader)
@@ -41,17 +39,18 @@ async fn capture_solo(
 async fn capture_mix(
     artifacts: &AudioArtifactSet,
     label: &str,
+    case: SyncCase,
     provider: Provider,
     target_bpm: Option<f64>,
 ) -> (PathBuf, Vec<String>) {
-    let case = SEQUENTIAL_SYNC;
     let mut recording = artifacts
         .recording(label, Some(CAPTURE_FRAMES as u64))
         .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
     let mut harness = ProductHarness::new(case, provider, 0).await;
+    let volume = 1.0 / harness.decks.len() as f32;
     for deck in &harness.decks {
         deck.set_muted(false);
-        deck.set_volume(0.5);
+        deck.set_volume(volume);
     }
     harness.request_sync(case).await;
 
@@ -114,53 +113,60 @@ async fn capture_ride(
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "writes opt-in listening WAVs; ignored-red until Warp alignment is implemented"]
-async fn record_pr150_sync_listening_wavs() {
-    let artifacts = AudioArtifactSet::from_env(
-        "pr150-sync-listening",
-        SEQUENTIAL_SYNC.sample_rate,
-        CHANNELS,
-    )
-    .expect("configure PR150 listening artifacts")
-    .unwrap_or_else(|| panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder"));
+#[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, Provider::Synthetic, None)]
+#[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, Provider::Synthetic, Some(127.0))]
+#[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, Provider::Sweep, Some(145.0))]
+#[case::ambient_trip_hop(
+    "ambient-dub-62-trip-hop-74",
+    AMBIENT_TRIP_HOP_SYNC,
+    AMBIENT_TRIP_HOP_PROVIDER,
+    None
+)]
+#[case::downtempo_house(
+    "downtempo-96-house-124",
+    DOWNTEMPO_HOUSE_SYNC,
+    DOWNTEMPO_HOUSE_PROVIDER,
+    None
+)]
+#[case::techno_breakbeat(
+    "techno-132-breakbeat-140",
+    TECHNO_BREAKBEAT_SYNC,
+    TECHNO_BREAKBEAT_PROVIDER,
+    None
+)]
+#[case::cross_style_four_deck(
+    "ambient-62-downtempo-96-house-124-breakbeat-140",
+    CROSS_STYLE_SYNC,
+    CROSS_STYLE_PROVIDER,
+    None
+)]
+async fn record_sync_listening_wavs(
+    #[case] artifact_case: &str,
+    #[case] case: SyncCase,
+    #[case] provider: Provider,
+    #[case] target_bpm: Option<f64>,
+) {
+    let artifacts = AudioArtifactSet::from_env(artifact_case, case.sample_rate, CHANNELS)
+        .expect("configure sync listening artifacts")
+        .unwrap_or_else(|| {
+            panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder")
+        });
+    let mut paths = Vec::with_capacity(case.decks() + 1);
+    let mut failures = Vec::new();
+    for deck in 0..case.decks() {
+        let label = format!("deck-{}", deck + 1);
+        let (path, deck_failures) = capture_solo(&artifacts, &label, case, provider, deck).await;
+        paths.push((label, path));
+        failures.extend(deck_failures);
+    }
+    let (mix, mix_failures) = capture_mix(&artifacts, "mix", case, provider, target_bpm).await;
+    paths.push(("mix".to_owned(), mix));
+    failures.extend(mix_failures);
 
-    let (deck_a, mut failures) = capture_solo(&artifacts, "01-deck-a-120bpm", 0).await;
-    let (deck_b, deck_b_failures) = capture_solo(&artifacts, "02-deck-b-120bpm", 1).await;
-    let (fixed_mix, fixed_failures) = capture_mix(
-        &artifacts,
-        "03-mix-on-120bpm-grid",
-        Provider::Synthetic,
-        None,
-    )
-    .await;
-    let (ridden_mix, ridden_failures) = capture_mix(
-        &artifacts,
-        "04-mix-riding-120-to-127",
-        Provider::Synthetic,
-        Some(127.0),
-    )
-    .await;
-    let (sweep_mix, sweep_failures) = capture_mix(
-        &artifacts,
-        "05-sweep-mix-riding-120-to-145",
-        Provider::Sweep,
-        Some(145.0),
-    )
-    .await;
-    failures.extend(deck_b_failures);
-    failures.extend(fixed_failures);
-    failures.extend(ridden_failures);
-    failures.extend(sweep_failures);
-
-    let paths = [
-        ("01-deck-a-120bpm", deck_a),
-        ("02-deck-b-120bpm", deck_b),
-        ("03-mix-on-120bpm-grid", fixed_mix),
-        ("04-mix-riding-120-to-127", ridden_mix),
-        ("05-sweep-mix-riding-120-to-145", sweep_mix),
-    ];
     let manifest = serde_json::json!({
-        "case": "pr150-sync-listening",
-        "sample_rate": SEQUENTIAL_SYNC.sample_rate,
+        "case": case.id(),
+        "fixture": artifact_case,
+        "sample_rate": case.sample_rate,
         "channels": CHANNELS,
         "capture_frames": CAPTURE_FRAMES,
         "failures": failures,
@@ -170,8 +176,9 @@ async fn record_pr150_sync_listening_wavs() {
     });
     let manifest = artifacts
         .write_manifest(&manifest)
-        .expect("write PR150 listening manifest");
-    let manifest_path = audio_artifact_path(&manifest).expect("resolve listening manifest path");
+        .expect("write sync listening manifest");
+    let manifest_path =
+        audio_artifact_path(&manifest).expect("resolve sync listening manifest path");
 
     for (label, path) in &paths {
         eprintln!("KITHARA_AUDIO_ARTIFACT {label}: {}", path.display());
@@ -182,7 +189,8 @@ async fn record_pr150_sync_listening_wavs() {
     );
     assert!(
         failures.is_empty(),
-        "PR150 listening capture failed:\n{}",
+        "{} listening capture failed:\n{}",
+        case.id(),
         failures.join("\n"),
     );
 }

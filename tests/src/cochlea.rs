@@ -115,6 +115,29 @@ pub fn synchronization_failures(
     sample_rate: u32,
     target_bpm: f64,
 ) -> Vec<String> {
+    synchronization_failures_with(label, tracks, channels, sample_rate, target_bpm, true)
+}
+
+/// Validate deterministic score fixtures from their exact beat markers.
+#[must_use]
+pub fn marked_synchronization_failures(
+    label: &str,
+    tracks: &[&[f32]],
+    channels: u16,
+    sample_rate: u32,
+    target_bpm: f64,
+) -> Vec<String> {
+    synchronization_failures_with(label, tracks, channels, sample_rate, target_bpm, false)
+}
+
+fn synchronization_failures_with(
+    label: &str,
+    tracks: &[&[f32]],
+    channels: u16,
+    sample_rate: u32,
+    target_bpm: f64,
+    estimate: bool,
+) -> Vec<String> {
     assert!(channels > 0, "synchronization oracle needs a channel");
     assert!(
         sample_rate > 0,
@@ -140,38 +163,49 @@ pub fn synchronization_failures(
             "track {index} must contain complete frames"
         );
 
-        let tempo = estimate_tempo(
-            &Audio {
-                samples: samples.to_vec(),
-                channels,
-                sample_rate,
-            },
-            &TempoOpts::default(),
-        );
-        match tempo.bpm {
-            Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
-            Some(actual) => failures.push(format!(
-                "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
-            )),
-            None => failures.push(format!("{label}: track {index} has no detected tempo")),
-        }
-        if !tempo.clear_rhythm {
-            failures.push(format!(
-                "{label}: track {index} has no clear rhythm: confidence={:.6}",
-                tempo.confidence,
-            ));
-        }
-
         let (markers, downbeats) = rhythm_markers(samples, channel_count, sample_rate);
         let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));
             continue;
         };
-        let marker_period = markers
-            .windows(2)
-            .map(|pair| pair[1] - pair[0])
-            .min()
-            .unwrap_or(beat_period);
+        let marker_period = match markers.windows(2).map(|pair| pair[1] - pair[0]).min() {
+            Some(period) => period,
+            None if estimate => beat_period,
+            None => {
+                failures.push(format!("{label}: track {index} has no detected tempo"));
+                continue;
+            }
+        };
+        if estimate {
+            let tempo = estimate_tempo(
+                &Audio {
+                    samples: samples.to_vec(),
+                    channels,
+                    sample_rate,
+                },
+                &TempoOpts::default(),
+            );
+            match tempo.bpm {
+                Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
+                Some(actual) => failures.push(format!(
+                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                )),
+                None => failures.push(format!("{label}: track {index} has no detected tempo")),
+            }
+            if !tempo.clear_rhythm {
+                failures.push(format!(
+                    "{label}: track {index} has no clear rhythm: confidence={:.6}",
+                    tempo.confidence,
+                ));
+            }
+        } else {
+            let actual = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
+            if (actual - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
+                failures.push(format!(
+                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                ));
+            }
+        }
         if let Some(pair) = markers
             .windows(2)
             .find(|pair| pair[1] - pair[0] == marker_period.saturating_mul(2))
