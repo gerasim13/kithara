@@ -23,6 +23,12 @@ const BLOCK_FRAMES: usize = 512;
 /// ≈ 3 s of rendered audio — plenty for a 0.4 s track.
 const BLOCK_BUDGET: usize = 256;
 
+#[derive(Clone, Copy)]
+enum InitialStart {
+    Play,
+    Select,
+}
+
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
     let spec = AudioSpec {
         channels: CHANNELS,
@@ -132,7 +138,9 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 /// playing must switch the *audio*, not just the bookkeeping: A (quiet)
 /// must dominate the output after the switch-back, B (loud) must stop.
 #[kithara::test(tokio)]
-async fn switch_back_to_consumed_track_switches_audio() {
+#[case::selected(InitialStart::Select)]
+#[case::play_button(InitialStart::Play)]
+async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
     const TRACK_SECS: f64 = 8.0;
     const QUIET: f32 = 0.10;
     const LOUD: f32 = 0.80;
@@ -143,12 +151,15 @@ async fn switch_back_to_consumed_track_switches_audio() {
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD));
 
-    queue
-        .select(id_a, Transition::None)
-        .expect("select track A");
+    match initial_start {
+        InitialStart::Play => queue.play(),
+        InitialStart::Select => queue
+            .select(id_a, Transition::None)
+            .expect("select track A"),
+    }
     let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
-    assert!(mean_a > 0.005, "track A must be audible: mean={mean_a}");
+    assert!(mean_a > 0.005, "track A must start: mean={mean_a}");
 
     queue
         .select(id_b, Transition::None)
@@ -176,60 +187,6 @@ async fn switch_back_to_consumed_track_switches_audio() {
         mean_back < mean_b / 4.0,
         "track B must stop sounding after the switch-back — the UI switched \
          but the audio kept playing B: mean_b={mean_b}, mean_back={mean_back}"
-    );
-    assert_eq!(queue.current_index(), Some(0));
-}
-
-/// The user's exact steps: press Play (not select!), double-click track 2,
-/// double-click track 1. `play()` consumes the slot resource behind the
-/// queue's back, so track 1 still reads `Loaded`; the switch-back must
-/// nevertheless switch the *audio* back to track 1.
-#[kithara::test(tokio)]
-async fn play_button_then_switch_away_and_back_switches_audio() {
-    const TRACK_SECS: f64 = 8.0;
-    const QUIET: f32 = 0.10;
-    const LOUD: f32 = 0.80;
-    const WARMUP_BLOCKS: usize = 64;
-
-    let (harness, queue) = make_fixture();
-
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET));
-    let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD));
-
-    // Step 1: the GUI Play button — playback starts without a select.
-    queue.play();
-    let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS);
-    let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
-    assert!(mean_a > 0.005, "Play must start track A: mean={mean_a}");
-
-    // Step 2: double-click track 2.
-    queue
-        .select(id_b, Transition::None)
-        .expect("select track B");
-    let pcm_b = render_loop(&queue, &harness, WARMUP_BLOCKS);
-    let mean_b = mean_abs(&pcm_b[pcm_b.len() / 2..]);
-    assert!(
-        mean_b > mean_a * 4.0,
-        "track B must dominate: mean_a={mean_a}, mean_b={mean_b}"
-    );
-
-    // Step 3: double-click track 1.
-    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, QUIET));
-    queue
-        .select(id_a, Transition::None)
-        .expect("switch back to track A");
-
-    let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
-    let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
-    assert!(
-        mean_back > 0.005,
-        "track A must sound again after the switch-back: mean={mean_back}"
-    );
-    assert!(
-        mean_back < mean_b / 4.0,
-        "track B must stop after the switch-back — Play consumed A's slot \
-         behind the queue's back and the re-select silently loaded nothing: \
-         mean_b={mean_b}, mean_back={mean_back}"
     );
     assert_eq!(queue.current_index(), Some(0));
 }
