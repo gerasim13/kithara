@@ -145,23 +145,18 @@ async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
     harness.shutdown().await;
 }
 
-async fn run_single(
-    helper: &TestServerHelper,
-    kind: TrackKind,
-    abr: AbrMode,
-    actions: Vec<Action>,
-) {
-    run_single_backend(helper, kind, abr, DecoderBackend::Symphonia, actions).await;
+async fn run_single(kind: TrackKind, abr: AbrMode, actions: Vec<Action>) {
+    run_single_backend(kind, abr, DecoderBackend::Symphonia, actions).await;
 }
 
 async fn run_single_backend(
-    helper: &TestServerHelper,
     kind: TrackKind,
     abr: AbrMode,
     backend: DecoderBackend,
     actions: Vec<Action>,
 ) {
-    let spec = build_spec(helper, kind, abr, backend).await;
+    let helper = TestServerHelper::new().await;
+    let spec = build_spec(&helper, kind, abr, backend).await;
     run_scenario(vec![spec], actions).await;
 }
 
@@ -202,14 +197,7 @@ async fn run_multi(helper: &TestServerHelper, kinds: &[TrackKind], actions: Vec<
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(
-        &helper,
-        kind,
-        abr,
-        scenarios::seek_forward_unbuffered_repro(),
-    )
-    .await;
+    run_single(kind, abr, scenarios::seek_forward_unbuffered_repro()).await;
 }
 
 /// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
@@ -226,8 +214,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case]
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::seek_backward_repro()).await;
+    run_single(kind, abr, scenarios::seek_backward_repro()).await;
 }
 
 /// Bug #7 — seek to 95-99 % crashes the decoder thread. With the
@@ -244,8 +231,7 @@ async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::seek_near_end_repro()).await;
+    run_single(kind, abr, scenarios::seek_near_end_repro()).await;
 }
 
 /// Production symptom: long playback → backward seek → silent hang
@@ -260,14 +246,7 @@ async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(
-        &helper,
-        kind,
-        abr,
-        scenarios::seek_backward_after_long_play_repro(),
-    )
-    .await;
+    run_single(kind, abr, scenarios::seek_backward_after_long_play_repro()).await;
 }
 
 /// Pinpoint: play to natural EOF, then seek backward.
@@ -281,9 +260,7 @@ async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case]
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
     run_single(
-        &helper,
         kind,
         abr,
         scenarios::seek_backward_after_natural_eof_repro(),
@@ -306,8 +283,7 @@ async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[cas
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::scripted_forward_back_end()).await;
+    run_single(kind, abr, scenarios::scripted_forward_back_end()).await;
 }
 
 // ─── Seeded random fuzz ──────────────────────────────────────────────────────
@@ -322,8 +298,7 @@ async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::random_seed(42, 12)).await;
+    run_single(kind, abr, scenarios::random_seed(42, 12)).await;
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
@@ -336,8 +311,7 @@ async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) 
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::random_seed(1337, 12)).await;
+    run_single(kind, abr, scenarios::random_seed(1337, 12)).await;
 }
 
 // ─── Long-play scenarios ─────────────────────────────────────────────────────
@@ -351,14 +325,7 @@ async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(
-        &helper,
-        kind,
-        abr,
-        scenarios::long_play_then_seek_backward(),
-    )
-    .await;
+    run_single(kind, abr, scenarios::long_play_then_seek_backward()).await;
 }
 
 /// 30 s playback then forward seek — Bug #5 path on long playback.
@@ -369,8 +336,7 @@ async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] 
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::long_play_then_seek_forward()).await;
+    run_single(kind, abr, scenarios::long_play_then_seek_forward()).await;
 }
 
 /// Local repro for the "`PastEof` on fresh Loaded" race. The user's
@@ -495,8 +461,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(&helper, kind, abr, scenarios::seek_storm()).await;
+    run_single(kind, abr, scenarios::seek_storm()).await;
 }
 
 /// **Auto-ABR up-switch + seek burst** — repro for the prod bug user
@@ -517,14 +482,7 @@ async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
 #[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 #[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[case] abr: AbrMode) {
-    let helper = TestServerHelper::new().await;
-    run_single(
-        &helper,
-        kind,
-        abr,
-        scenarios::auto_abr_upswitch_then_seek_burst(),
-    )
-    .await;
+    run_single(kind, abr, scenarios::auto_abr_upswitch_then_seek_burst()).await;
 }
 
 // ─── Multi-track (DRM ↔ non-DRM) scenarios ──────────────────────────────────
@@ -620,15 +578,7 @@ mod apple_backend {
     #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
     async fn user_sim_seek_storm_apple(#[case] kind: TrackKind, #[case] abr: AbrMode) {
         kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
-        let helper = TestServerHelper::new().await;
-        run_single_backend(
-            &helper,
-            kind,
-            abr,
-            DecoderBackend::Apple,
-            scenarios::seek_storm(),
-        )
-        .await;
+        run_single_backend(kind, abr, DecoderBackend::Apple, scenarios::seek_storm()).await;
     }
 
     #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -639,9 +589,7 @@ mod apple_backend {
         #[case] abr: AbrMode,
     ) {
         kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
-        let helper = TestServerHelper::new().await;
         run_single_backend(
-            &helper,
             kind,
             abr,
             DecoderBackend::Apple,
