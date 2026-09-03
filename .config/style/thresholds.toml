@@ -79,8 +79,8 @@ deny = 4000
 
 [[doc_size.limits]]
 globs = ["**/CONTEXT.md"]
-warn = 24000
-deny = 48000
+warn = 20000
+deny = 24000
 
 [[doc_size.limits]]
 globs = ["docs/guides/**/*.md"]
