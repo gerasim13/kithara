@@ -64,29 +64,6 @@ async fn fetch_media_playlist_from_network(
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn resolve_url_with_base_override(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let base_url = server.url("/custom/base/");
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    fetch_manager.set_base_url(Some(base_url.clone()));
-
-    let relative_url = "video/480p/playlist.m3u8";
-    let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
-
-    assert!(
-        resolved
-            .as_str()
-            .contains("/custom/base/video/480p/playlist.m3u8"),
-        "Expected resolved URL to contain base path"
-    );
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
 async fn fetch_media_playlist_for_different_variants(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -162,33 +139,28 @@ async fn fetch_manager_error_handling_invalid_url(
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn resolve_multiple_relative_urls(
+#[case::file("segment.ts", "/base/segment.ts")]
+#[case::current_dir("./segment.ts", "/base/segment.ts")]
+#[case::parent_dir("../segment.ts", "/segment.ts")]
+#[case::subdir("subdir/segment.ts", "/base/subdir/segment.ts")]
+#[case::nested_playlist("video/480p/playlist.m3u8", "/base/video/480p/playlist.m3u8")]
+async fn resolve_relative_url(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
+    #[case] relative: &str,
+    #[case] expected_suffix: &str,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let base_url = server.url("/base/");
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     fetch_manager.set_base_url(Some(base_url.clone()));
 
-    let test_cases = vec![
-        ("segment.ts", "/base/segment.ts"),
-        ("./segment.ts", "/base/segment.ts"),
-        ("../segment.ts", "/segment.ts"),
-        ("subdir/segment.ts", "/base/subdir/segment.ts"),
-    ];
-
-    for (relative, expected_suffix) in test_cases {
-        let resolved = fetch_manager.resolve_url(&base_url, relative)?;
-        assert!(
-            resolved.as_str().ends_with(expected_suffix),
-            "Expected {} to end with {}, got {}",
-            relative,
-            expected_suffix,
-            resolved
-        );
-    }
+    let resolved = fetch_manager.resolve_url(&base_url, relative)?;
+    assert!(
+        resolved.as_str().ends_with(expected_suffix),
+        "Expected {relative} to end with {expected_suffix}, got {resolved}"
+    );
 
     Ok(())
 }
