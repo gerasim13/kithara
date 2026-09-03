@@ -45,6 +45,12 @@ enum TrackStateScenario {
     StopAfterPlay,
 }
 
+#[derive(Clone, Copy)]
+enum ReadOutcomeScenario {
+    Playing,
+    Finished,
+}
+
 fn mock_spec() -> AudioSpec {
     AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
@@ -285,7 +291,9 @@ async fn observing_the_seek_epoch_releases_the_held_end() {
 }
 
 #[kithara::test(tokio)]
-async fn read_outcome_full_on_normal_read() {
+#[case::playing(ReadOutcomeScenario::Playing)]
+#[case::finished(ReadOutcomeScenario::Finished)]
+async fn read_outcome_matches_track_state(#[case] scenario: ReadOutcomeScenario) {
     let mut track = make_track_with(60.0, TrackId::allocate());
     let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
     let mut notification_tx = tx;
@@ -296,7 +304,10 @@ async fn read_outcome_full_on_normal_read() {
     let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
-    track.play();
+    match scenario {
+        ReadOutcomeScenario::Playing => track.play(),
+        ReadOutcomeScenario::Finished => track.stop(),
+    }
 
     let outcome = track.read(
         &mut scratch_bufs,
@@ -305,14 +316,17 @@ async fn read_outcome_full_on_normal_read() {
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
-    assert!(matches!(
-        outcome,
-        TrackReadOutcome::Full {
-            position,
-            duration,
-            ..
-        } if position >= 0.0 && duration > 0.0
-    ));
+    match scenario {
+        ReadOutcomeScenario::Playing => assert!(matches!(
+            outcome,
+            TrackReadOutcome::Full {
+                position,
+                duration,
+                ..
+            } if position >= 0.0 && duration > 0.0
+        )),
+        ReadOutcomeScenario::Finished => assert!(matches!(outcome, TrackReadOutcome::Eof)),
+    }
 }
 
 #[kithara::test]
@@ -622,11 +636,17 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
 }
 
 #[kithara::test(tokio)]
-async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
-    let mut track = make_track_with(10.0, TrackId::allocate());
+#[case::inside_lead_window(10.0, 2.0, Some(8.5))]
+#[case::shorter_than_lead_window(0.5, 5.0, None)]
+async fn prefetch_fires_before_handover(
+    #[case] duration: f64,
+    #[case] prefetch_duration: f32,
+    #[case] seek_position: Option<f64>,
+) {
+    let mut track = make_track_with(duration, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
-    track.set_prefetch_duration(2.0);
+    track.set_prefetch_duration(prefetch_duration);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -637,7 +657,9 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
     let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
 
     track.play();
-    track.seek(8.5);
+    if let Some(position) = seek_position {
+        track.seek(position);
+    }
 
     let _ = track.read(
         &mut scratch_bufs,
@@ -725,37 +747,6 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
 }
 
 #[kithara::test(tokio)]
-async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() {
-    let mut track = make_track_with(0.5, TrackId::allocate());
-    let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
-    track.update_fade_duration(0.0, sample_rate);
-    track.set_prefetch_duration(5.0);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-    let _ = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-
-    let notifications = collect_notifications(&mut rx);
-    assert!(
-        notifications
-            .iter()
-            .any(|notification| matches!(notification, PlayerNotification::Requested))
-    );
-}
-
-#[kithara::test(tokio)]
 async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     let mut track = make_track_with(10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
@@ -811,28 +802,4 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     }
     assert_eq!(prefetch_count, 1, "prefetch must fire exactly once");
     assert_eq!(handover_count, 1, "handover must fire exactly once");
-}
-
-#[kithara::test(tokio)]
-async fn read_outcome_eof_when_track_finished() {
-    let mut track = make_track();
-    let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.stop();
-
-    let outcome = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-
-    assert!(matches!(outcome, TrackReadOutcome::Eof));
 }
