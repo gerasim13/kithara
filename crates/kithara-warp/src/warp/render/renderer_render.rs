@@ -9,6 +9,61 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    pub(super) fn source_frames_for_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        speed: f32,
+    ) -> Result<usize, ElasticError> {
+        if remaining == 0 {
+            return Err(ElasticError::EmptySource);
+        }
+        if !self.active
+            && !self.transition_pending()
+            && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
+            && self.unity_passthrough(speed)
+        {
+            return Ok(remaining.min(self.render_quantum_frames.get()));
+        }
+
+        let channels = usize::from(self.spec.channels.max(1));
+        let region = self.region_for(meta.frame_offset);
+        let region_frames = usize::try_from(
+            region
+                .end()
+                .checked_sub(meta.frame_offset)
+                .ok_or(ElasticError::SampleCountOverflow)?
+                .min(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?),
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        if region_frames == 0 {
+            return Err(ElasticError::StationarySourceSpan);
+        }
+        let stretch = (1.0 / f64::from(speed)) * region.correction();
+        let capabilities = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.capabilities())
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        let output_limit = capabilities
+            .max_output_frames()
+            .min(self.render_quantum_frames.get());
+        let source_limit =
+            Self::source_block_limit(stretch, capabilities.max_source_frames(), output_limit)?;
+        let pending_frames = self.pending_frames(channels);
+        let available =
+            source_limit
+                .checked_sub(pending_frames)
+                .ok_or(ElasticError::SourceFrameLimit {
+                    frames: pending_frames,
+                    limit: source_limit,
+                })?;
+        if available == 0 {
+            return Err(ElasticError::InvalidRate(stretch.recip()));
+        }
+        Ok(region_frames.min(available))
+    }
+
     pub(super) fn source_block_limit(
         stretch: f64,
         max_source_frames: usize,

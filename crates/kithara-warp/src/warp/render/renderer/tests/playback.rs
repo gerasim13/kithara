@@ -1,10 +1,10 @@
 use std::{
     collections::HashSet,
-    num::{NonZero, NonZeroU32},
+    num::{NonZero, NonZeroU32, NonZeroUsize},
 };
 
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
@@ -12,6 +12,53 @@ use super::{
     Consts, StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
     render_serviced, renderer, sine, spec,
 };
+use crate::{Warp, WarpConfig, test_pools::pools};
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 15)
+)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_unity(StretchKind::Signalsmith, 1.0, 32)
+)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_fast(StretchKind::Signalsmith, 2.0, 63)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_slow(StretchKind::Bungee, 0.5, 15)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_unity(StretchKind::Bungee, 1.0, 32)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_fast(StretchKind::Bungee, 2.0, 63)
+)]
+fn source_span_is_planned_from_the_output_quantum(
+    #[case] backend: StretchKind,
+    #[case] speed: f32,
+    #[case] expected_source_frames: usize,
+) {
+    let controls = StretchControls::new(speed);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer.prepare(spec());
+
+    let frames = renderer
+        .prepare_quantum(AudioChunkInfo::default(), 128)
+        .expect("test source span is plannable");
+
+    assert_eq!(frames.get(), expected_source_frames);
+}
 
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);

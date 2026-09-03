@@ -182,8 +182,8 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
     let config = kithara_warp::WarpConfig::builder().build();
     let warp = kithara_warp::Warp::new((), &config);
-    let renderer = warp.renderer(spec, pools);
-    let source = WarpSource::new(source, renderer, effects, drain, spec);
+    let renderer = warp.renderer(spec, pools.clone());
+    let source = WarpSource::new(source, renderer, effects, drain, spec, pools);
     let (port, mut pop) = ProducerPort::probe(1);
     let bus = EventBus::new(8);
     let mut events = bus.subscribe();

@@ -1,11 +1,10 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RenderReader, RenderSnapshot, StretchControls};
+use crate::{RenderReader, RenderSnapshot, WarpConfig};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -13,6 +12,7 @@ use crate::{RenderReader, RenderSnapshot, StretchControls};
 pub struct WarpRenderer<S> {
     context: RenderReader,
     committed: Option<RenderSnapshot>,
+    prepared: Option<usize>,
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
 }
@@ -39,7 +39,7 @@ where
     }
 
     pub(crate) fn new(
-        _controls: Arc<StretchControls>,
+        _config: &WarpConfig,
         context: RenderReader,
         _spec: AudioSpec,
         _pools: PoolRegion<S>,
@@ -47,6 +47,7 @@ where
         Self {
             context,
             committed: None,
+            prepared: None,
             rendered_source_end: None,
             schema: PhantomData,
         }
@@ -55,6 +56,35 @@ where
     #[doc(hidden)]
     pub const fn accepts_input(&self) -> bool {
         true
+    }
+
+    #[doc(hidden)]
+    pub fn prepare_quantum(
+        &mut self,
+        _meta: AudioChunkInfo,
+        remaining: usize,
+    ) -> Option<FrameCount> {
+        self.prepared = (remaining > 0).then_some(remaining);
+        self.prepared.map(FrameCount::new)
+    }
+
+    #[doc(hidden)]
+    pub fn prepare_terminal_quantum(
+        &mut self,
+        _meta: AudioChunkInfo,
+        frames: usize,
+    ) -> Option<FrameCount> {
+        let prepared = self.prepared.take()?;
+        if frames == 0 || frames > prepared {
+            return None;
+        }
+        self.prepared = Some(frames);
+        Some(FrameCount::new(frames))
+    }
+
+    #[doc(hidden)]
+    pub const fn render_quantum_frames(&self) -> Option<std::num::NonZeroUsize> {
+        None
     }
 
     #[doc(hidden)]
@@ -67,6 +97,17 @@ where
 
     #[doc(hidden)]
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        self.prepared = None;
+        self.render_prepared(chunk)
+    }
+
+    #[doc(hidden)]
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let frames = self.prepared.take()?;
+        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
+    }
+
+    fn render_prepared(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
         self.rendered_source_end = Some((
             chunk
@@ -105,6 +146,7 @@ where
     #[doc(hidden)]
     pub const fn reset(&mut self) {
         self.committed = None;
+        self.prepared = None;
         self.rendered_source_end = None;
     }
 
@@ -134,8 +176,11 @@ mod tests {
         meta.frame_offset = 41;
         let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
         let input_ptr = input.samples.as_ptr();
+        let config = WarpConfig::builder()
+            .stretch(StretchControls::new(1.5))
+            .build();
         let mut renderer = WarpRenderer::new(
-            StretchControls::new(1.5),
+            &config,
             crate::RenderPublisher::default().reader(),
             spec,
             pools,

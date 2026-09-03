@@ -350,6 +350,27 @@ where
     #[doc(hidden)]
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
+        self.prepared_quantum = None;
+        self.render_at(chunk, self.controls.speed(), snapshot)
+    }
+
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    #[doc(hidden)]
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let prepared = self.prepared_quantum.take()?;
+        if chunk.frames() != prepared.frames {
+            return None;
+        }
+        let snapshot = self.context.load();
+        self.render_at(chunk, prepared.speed, snapshot)
+    }
+
+    fn render_at(
+        &mut self,
+        chunk: AudioChunk,
+        speed: f32,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -365,7 +386,6 @@ where
             return None;
         }
 
-        let speed = self.controls.speed();
         let output = if self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
