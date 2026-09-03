@@ -103,11 +103,8 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
-            data,
-            seek: Arc::new(SeekState::new()),
-            playhead: Arc::new(PlayheadState::new()),
-            position: Arc::new(AtomicU64::new(0)),
             report_len: false,
+            ..Self::new(data)
         }
     }
 }
