@@ -401,11 +401,14 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
         .read(true)
         .write(true)
         .open(target.join(".kithara-job-lease"))?;
+    let heartbeat = target.join(".kithara-job-heartbeat");
 
     assert!(FileLock::try_exclusive(lease).is_err());
+    assert!(heartbeat.is_file());
 
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
+    assert!(!heartbeat.exists());
     Ok(())
 }
 
