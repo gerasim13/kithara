@@ -127,24 +127,9 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
     let worker = Worker::new(WorkerConfig::new());
     let store = memory_asset_store();
     let keys = Arc::new(Mutex::new(Vec::new()));
-    let recorder_config = LiveRecordingConfig::builder()
-        .recording(
-            RecordingConfig::builder()
-                .encode(
-                    EncodeConfig::builder()
-                        .sample_rate(OLD_RATE)
-                        .channels(CHANNELS)
-                        .build(),
-                )
-                .build(),
-        )
-        .buffer_frames(NonZeroUsize::new(131_072).expect("recorder buffer"))
-        .tick_frames(NonZeroUsize::new(4_096).expect("recorder tick"))
-        .build();
-    let (recording_output, recording_handle) = LiveRecorder::start(
-        &worker,
-        &pools,
-        recorder_config,
+    let recorder_config = LiveRecordingConfig::builder(
+        worker.clone(),
+        pools.clone(),
         AssetFactory {
             keys: Arc::clone(&keys),
             source: AssetSource::Local {
@@ -153,9 +138,24 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
             store: store.clone(),
         },
     )
-    .expect("start recorder");
+    .recording(
+        RecordingConfig::builder()
+            .encode(
+                EncodeConfig::builder()
+                    .sample_rate(OLD_RATE)
+                    .channels(CHANNELS)
+                    .build(),
+            )
+            .build(),
+    )
+    .buffer_frames(NonZeroUsize::new(131_072).expect("recorder buffer"))
+    .tick_frames(NonZeroUsize::new(4_096).expect("recorder tick"))
+    .build();
+    let (recording_output, recording_handle) =
+        LiveRecorder::start(recorder_config).expect("start recorder");
     let scope = CancelScope::new(None);
-    let broadcast_config = BroadcastConfig::builder()
+    let broadcast_config = BroadcastConfig::builder(worker, pools.clone())
+        .cancel(scope.token())
         .sample_rate(OLD_RATE)
         .channels(CHANNELS)
         .segment_target(Duration::from_millis(500))
@@ -163,8 +163,7 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
         .tick_frames(NonZeroUsize::new(4_096).expect("broadcast tick"))
         .build();
     let (broadcast_output, broadcast_handle) =
-        Broadcast::start(&worker, &pools, &broadcast_config, Some(scope.token()))
-            .expect("start broadcast");
+        Broadcast::start(broadcast_config).expect("start broadcast");
     let url = broadcast_handle.url().to_owned();
     let base = Url::parse(&url).expect("broadcast URL");
     let client = HttpClient::new(NetOptions::default(), pools, scope.token());

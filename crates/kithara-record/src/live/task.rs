@@ -37,9 +37,8 @@ impl<F> RecordingTask<F>
 where
     F: PartSinkFactory,
 {
-    pub(super) fn new(
-        config: LiveRecordingConfig,
-        factory: F,
+    pub(super) fn new<S>(
+        config: LiveRecordingConfig<F, S>,
         pcm: HeapCons<f32>,
         formats: HeapCons<FormatChange>,
         control: Arc<Control>,
@@ -49,6 +48,7 @@ where
         let generation_capacity = config.generation_capacity.get();
         let rotation_frames = config.rotation_frames;
         let recording = config.recording;
+        let factory = config.factory;
         Self {
             buffer_frames,
             config: recording,

@@ -1,8 +1,6 @@
 use std::error::Error;
 
-use kithara::{platform::CancelToken, worker::Worker};
-
-use crate::pools::{AppHost, Pools};
+use crate::pools::AppHost;
 
 #[cfg(test)]
 mod absent;
@@ -33,13 +31,7 @@ pub(crate) trait Packager: 'static {
     fn is_live(live: &Self::Live) -> bool;
 
     /// `Ok(None)`: no device rate measured yet, so the request stands.
-    fn start(
-        host: &AppHost,
-        worker: &Worker,
-        pools: &Pools,
-        shutdown: &CancelToken,
-        config: &Self::Config,
-    ) -> BroadcastResult<Option<Self::Live>>;
+    fn start(host: &AppHost, config: &Self::Config) -> BroadcastResult<Option<Self::Live>>;
 
     /// Releases the Host output group before the packager drains.
     fn release(host: &AppHost) -> BroadcastResult<()>;
@@ -52,28 +44,19 @@ pub(crate) trait Packager: 'static {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{
-        host::HostConfig,
-        worker::{Worker, WorkerConfig},
-    };
+    use kithara::host::HostConfig;
 
     use super::{
-        AppHost, CancelToken, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
-        ready::Ready, unmeasured::Unmeasured,
+        AppHost, Packager, Phase, absent::Absent, broadcaster::Broadcaster, ready::Ready,
+        unmeasured::Unmeasured,
     };
-    use crate::pools;
 
     fn broadcaster<P>() -> Broadcaster<P>
     where
         P: Packager,
         P::Config: Default,
     {
-        Broadcaster::new(
-            CancelToken::root(),
-            Worker::new(WorkerConfig::new()),
-            pools::build().expect("test pools"),
-            P::Config::default(),
-        )
+        Broadcaster::new(P::Config::default())
     }
 
     fn host() -> AppHost {

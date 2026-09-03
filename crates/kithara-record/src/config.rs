@@ -1,9 +1,12 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use bon::Builder;
+use kithara_bufpool::PoolRegion;
 use kithara_encode::EncodeConfig;
 use kithara_platform::time::Duration;
-use kithara_worker::Priority;
+use kithara_worker::{Priority, Worker};
+
+use crate::PartSinkFactory;
 
 struct Defaults;
 
@@ -57,7 +60,19 @@ fn default_encode_config() -> EncodeConfig {
 /// Bounded live-recorder and worker scheduling configuration.
 #[derive(Builder)]
 #[non_exhaustive]
-pub struct LiveRecordingConfig {
+pub struct LiveRecordingConfig<F, S>
+where
+    F: PartSinkFactory,
+{
+    /// Shared worker used to schedule the recorder task.
+    #[builder(start_fn)]
+    pub(crate) worker: Worker,
+    /// Typed pool facade used for bounded recorder scratch.
+    #[builder(start_fn)]
+    pub(crate) pools: PoolRegion<S>,
+    /// Factory opening each transactional recording part.
+    #[builder(start_fn)]
+    pub(crate) factory: F,
     /// Encoding and container profile for every independently playable part.
     #[builder(default = RecordingConfig::builder().build())]
     pub(crate) recording: RecordingConfig,

@@ -1,7 +1,5 @@
-use kithara::{platform::CancelToken, worker::Worker};
-
 use super::{BroadcastResult, Packager, fixture::Stream};
-use crate::pools::{AppHost, Pools};
+use crate::pools::AppHost;
 
 pub(super) struct Unmeasured;
 
@@ -15,13 +13,7 @@ impl Packager for Unmeasured {
         true
     }
 
-    fn start(
-        _host: &AppHost,
-        _worker: &Worker,
-        _pools: &Pools,
-        _shutdown: &CancelToken,
-        _config: &(),
-    ) -> BroadcastResult<Option<Stream>> {
+    fn start(_host: &AppHost, _config: &()) -> BroadcastResult<Option<Stream>> {
         Ok(None)
     }
 

@@ -1,23 +1,16 @@
 use std::mem;
 
-use kithara::{
-    platform::{
-        CancelToken,
-        time::{Duration, Instant},
-        tokio::task,
-    },
-    worker::Worker,
+use kithara::platform::{
+    time::{Duration, Instant},
+    tokio::task,
 };
 
 use super::Packager;
-use crate::pools::{AppHost, Pools};
+use crate::pools::AppHost;
 
 pub(crate) struct Broadcaster<P: Packager> {
     config: P::Config,
-    pools: Pools,
-    shutdown: CancelToken,
     pub(super) phase: Phase<P>,
-    worker: Worker,
 }
 
 pub(super) enum Phase<P: Packager> {
@@ -31,18 +24,10 @@ pub(super) enum Phase<P: Packager> {
 pub(crate) struct BroadcastStop<P: Packager>(pub(super) P::Live);
 
 impl<P: Packager> Broadcaster<P> {
-    pub(crate) const fn new(
-        shutdown: CancelToken,
-        worker: Worker,
-        pools: Pools,
-        config: P::Config,
-    ) -> Self {
+    pub(crate) const fn new(config: P::Config) -> Self {
         Self {
             config,
-            pools,
-            shutdown,
             phase: Phase::Off,
-            worker,
         }
     }
 
@@ -80,13 +65,7 @@ impl<P: Packager> Broadcaster<P> {
         if !matches!(self.phase, Phase::Requested) {
             return;
         }
-        match P::start(
-            host,
-            &self.worker,
-            &self.pools,
-            &self.shutdown,
-            &self.config,
-        ) {
+        match P::start(host, &self.config) {
             Ok(Some(live)) => {
                 tracing::info!(url = P::url(&live), "broadcast is live");
                 self.phase = Phase::Running { live };

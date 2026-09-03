@@ -211,7 +211,10 @@ impl Origin {
 
     pub(super) fn start() -> Self {
         let scope = CancelScope::new(None);
-        let config = BroadcastConfig::builder()
+        let worker = Worker::new(WorkerConfig::new());
+        let pools = pools();
+        let config = BroadcastConfig::builder(worker.clone(), pools.clone())
+            .cancel(scope.token())
             .sample_rate(SAMPLE_RATE)
             .channels(CHANNELS)
             .segment_target(TARGET)
@@ -219,10 +222,7 @@ impl Origin {
             .grace(GRACE)
             .buffer_frames(BUFFER_FRAMES)
             .build();
-        let worker = Worker::new(WorkerConfig::new());
-        let pools = pools();
-        let (output, handle) =
-            Broadcast::start(&worker, &pools, &config, Some(scope.token())).expect("go on air");
+        let (output, handle) = Broadcast::start(config).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
         let client = HttpClient::new(NetOptions::default(), pools, scope.token());
 

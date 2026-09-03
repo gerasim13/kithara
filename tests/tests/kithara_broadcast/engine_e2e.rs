@@ -144,7 +144,11 @@ impl OnAir {
         gap_after_writes: Option<usize>,
     ) -> Self {
         let buffer_frames = ring_samples / 2;
-        let config = BroadcastConfig::builder()
+        let scope = CancelScope::new(None);
+        let worker = Worker::new(WorkerConfig::new());
+        let pools = pools();
+        let config = BroadcastConfig::builder(worker.clone(), pools.clone())
+            .cancel(scope.token())
             .sample_rate(SESSION_RATE)
             .channels(2)
             .segment_target(TARGET)
@@ -153,11 +157,7 @@ impl OnAir {
                 NonZeroUsize::new(buffer_frames).expect("test broadcast buffer is non-zero"),
             )
             .build();
-        let scope = CancelScope::new(None);
-        let worker = Worker::new(WorkerConfig::new());
-        let pools = pools();
-        let (output, handle) =
-            Broadcast::start(&worker, &pools, &config, Some(scope.token())).expect("go on air");
+        let (output, handle) = Broadcast::start(config).expect("go on air");
         let mut outputs = OutputGroup::new();
         outputs.push(GapOutput {
             gap_after_writes,

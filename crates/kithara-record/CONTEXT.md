@@ -7,6 +7,12 @@
 `RecordingConfig` owns the selected `EncodeConfig`; WAV float32 remains the
 portable encoder default.
 
+`LiveRecordingConfig` is the sole live-recorder construction surface. Its Bon
+builder takes the shared `Worker`, typed `PoolRegion`, and `PartSinkFactory`;
+all bounded intake, rotation, and scheduler limits live in the same value.
+`LiveRecorder::start` consumes that one config and creates no hidden worker,
+pool, or storage owner.
+
 ## Transaction lifecycle
 
 Construction validates the encode profile and, when known, preflights the

@@ -8,7 +8,7 @@ The native encoder it opens is `kithara-encode`'s fdk-aac AAC-LC backend, asked 
 
 ## Configuration
 
-`BroadcastConfig` is the single knob surface. `Segmenter`, `LiveWindow`, and `Broadcast::start` all take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time. It owns the encoding profile, PCM and dispatcher capacities, tick budget, scheduler policy, retention, bind address, and graceful-stop timeout. The app copies it with only the Host-measured sample rate changed.
+`BroadcastConfig` is the sole construction and knob surface. Its Bon builder takes the shared `Worker` and typed `PoolRegion`, and the config also owns the optional cancellation parent, encoding profile, PCM and dispatcher capacities, tick budget, scheduler policy, retention, bind address, and graceful-stop timeout. `Segmenter`, `LiveWindow`, and `Broadcast::start` all take that same config, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time. The app copies it with only the Host-measured sample rate changed.
 
 AAC-LC/ADTS is the default and currently the only HLS profile. Any other configured codec/container pair returns `UnsupportedProfile`; there is no fallback.
 
@@ -56,7 +56,7 @@ The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured seg
 
 ## Service lifecycle
 
-`Broadcast::start` binds the origin before it returns, so the URL on the handle is one a client can already reach. It registers one `BroadcastTask` dispatcher on the caller's shared `kithara-worker::Worker`; the HTTP origin retains its separate current-thread runtime thread.
+`Broadcast::start` consumes one complete `BroadcastConfig` and binds the origin before it returns, so the URL on the handle is one a client can already reach. It registers one `BroadcastTask` dispatcher on the configured shared `kithara-worker::Worker`; the HTTP origin retains its separate current-thread runtime thread.
 
 The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thread as a dedicated virtual-time pacer, while a tokio runtime parks in the OS event loop; enrolling that origin thread would freeze virtual-time quiescence. The cost is that a leak detector counting named platform threads does not see it, so origin shutdown is judged on its socket.
 

@@ -37,7 +37,7 @@ impl Segmenter {
     /// # Errors
     ///
     /// Returns an error for invalid configuration or unsupported ADTS audio.
-    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+    pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
 
         Ok(Self {
@@ -90,9 +90,9 @@ impl Segmenter {
         closed
     }
 
-    pub(crate) fn reconfigure(
+    pub(crate) fn reconfigure<S>(
         &mut self,
-        config: &BroadcastConfig,
+        config: &BroadcastConfig<S>,
     ) -> BroadcastResult<Option<Segment>> {
         config.validate()?;
         let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
@@ -130,9 +130,11 @@ impl Segmenter {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_encode::EncodedAccessUnit;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};
     use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
@@ -146,8 +148,12 @@ mod tests {
         const UNIT_DURATION: u32 = 1_024;
     }
 
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
+    }
+
     fn segmenter() -> Segmenter {
-        Segmenter::new(&BroadcastConfig::builder().build()).expect("segmenter")
+        Segmenter::new(&config()).expect("segmenter")
     }
 
     fn frame_bytes(units: usize) -> usize {
@@ -324,13 +330,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_target_shorter_than_one_tick_is_rejected() {
-        assert!(
-            Segmenter::new(
-                &BroadcastConfig::builder()
-                    .segment_target(Duration::ZERO)
-                    .build()
-            )
-            .is_err()
-        );
+        let mut config = config();
+        config.segment_target = Duration::ZERO;
+
+        assert!(Segmenter::new(&config).is_err());
     }
 }

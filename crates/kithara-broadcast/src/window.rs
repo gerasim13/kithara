@@ -42,7 +42,7 @@ impl LiveWindow {
     /// # Errors
     ///
     /// Returns an error when the configuration cannot form a valid window.
-    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+    pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
 
         Ok(Self {
@@ -116,8 +116,10 @@ impl LiveWindow {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::LiveWindow;
     use crate::{config::BroadcastConfig, segment::Segment};
@@ -129,12 +131,16 @@ mod tests {
         const TIMESCALE: u32 = 48_000;
     }
 
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
+    }
+
     fn listed_window() -> usize {
-        BroadcastConfig::builder().build().window
+        config().window
     }
 
     fn window() -> LiveWindow {
-        LiveWindow::new(&BroadcastConfig::builder().build()).expect("window")
+        LiveWindow::new(&config()).expect("window")
     }
 
     fn segment(seq: u64, discontinuity: bool) -> Segment {
@@ -358,16 +364,15 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_window_the_playlist_rules_reject_is_refused() {
-        assert!(LiveWindow::new(&BroadcastConfig::builder().window(0).build()).is_err());
-        assert!(LiveWindow::new(&BroadcastConfig::builder().sample_rate(0).build()).is_err());
-        assert!(
-            LiveWindow::new(
-                &BroadcastConfig::builder()
-                    .segment_target(Duration::from_millis(500))
-                    .window(5)
-                    .build()
-            )
-            .is_err()
-        );
+        let mut config = config();
+        config.window = 0;
+        assert!(LiveWindow::new(&config).is_err());
+        config.window = 6;
+        config.sample_rate = 0;
+        assert!(LiveWindow::new(&config).is_err());
+        config.sample_rate = 48_000;
+        config.segment_target = Duration::from_millis(500);
+        config.window = 5;
+        assert!(LiveWindow::new(&config).is_err());
     }
 }

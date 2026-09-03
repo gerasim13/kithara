@@ -17,9 +17,9 @@ use crate::{
     window::LiveWindow,
 };
 
-pub(super) struct BroadcastTask {
+pub(super) struct BroadcastTask<S> {
     completed: Option<Sender<()>>,
-    config: BroadcastConfig,
+    config: BroadcastConfig<S>,
     control: Arc<Control>,
     counted_drops: u64,
     counters: Arc<Counters>,
@@ -35,34 +35,41 @@ pub(super) struct BroadcastTask {
     window: LiveWindow,
 }
 
-impl BroadcastTask {
+impl<S> BroadcastTask<S>
+where
+    S: Send + Sync + 'static,
+{
     pub(super) fn new(
-        config: &BroadcastConfig,
+        config: BroadcastConfig<S>,
         pcm: HeapCons<f32>,
         formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         scratch: SampleBuffer,
         completed: Sender<()>,
     ) -> BroadcastResult<Self> {
-        let window = LiveWindow::new(config)?;
+        let window = LiveWindow::new(&config)?;
+        let encoder = Self::open_encoder(&config)?;
+        let segmenter = Segmenter::new(&config)?;
+        let bit_rate = config.bit_rate;
+        let generation_capacity = config.generation_capacity.get();
         Ok(Self {
             completed: Some(completed),
-            config: config.clone(),
+            config,
             control,
             counted_drops: 0,
             counters: Arc::new(Counters::default()),
-            encoder: Some(Self::open_encoder(config)?),
+            encoder: Some(encoder),
             formats,
             frames: 0,
-            generation_capacity: config.generation_capacity.get(),
+            generation_capacity,
             next_format: None,
             origin: Arc::new(Origin {
                 snapshot: ArcSwap::from_pointee(window.snapshot()),
-                master: Arc::from(server::master_playlist(config.bit_rate)),
+                master: Arc::from(server::master_playlist(bit_rate)),
             }),
             pcm,
             scratch: Some(scratch),
-            segmenter: Segmenter::new(config)?,
+            segmenter,
             window,
         })
     }
@@ -75,7 +82,7 @@ impl BroadcastTask {
         Arc::clone(&self.origin)
     }
 
-    fn open_encoder(config: &BroadcastConfig) -> BroadcastResult<StreamEncoder> {
+    fn open_encoder(config: &BroadcastConfig<S>) -> BroadcastResult<StreamEncoder> {
         Ok(StreamEncoder::builder()
             .backend(StreamBackend::Fdk)
             .sample_rate(config.sample_rate)
@@ -217,7 +224,10 @@ impl BroadcastTask {
     }
 }
 
-impl Task for BroadcastTask {
+impl<S> Task for BroadcastTask<S>
+where
+    S: Send + Sync + 'static,
+{
     fn on_cancel(&mut self) {
         self.encoder.take();
         self.complete();

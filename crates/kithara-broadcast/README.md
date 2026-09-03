@@ -21,9 +21,13 @@ use kithara_broadcast::{Broadcast, BroadcastConfig};
 use kithara_output::LiveOutput;
 use kithara_worker::{Worker, WorkerConfig};
 
-let config = BroadcastConfig::builder().sample_rate(48_000).channels(2).build();
 let worker = Worker::new(WorkerConfig::new());
-let (mut output, handle) = Broadcast::start(&worker, &pools, &config, Some(parent))?;
+let config = BroadcastConfig::builder(worker, pools)
+    .cancel(parent)
+    .sample_rate(48_000)
+    .channels(2)
+    .build();
+let (mut output, handle) = Broadcast::start(config)?;
 
 output.write_stereo(frames, left, right);
 
@@ -35,8 +39,9 @@ The packaging core is usable on its own - `Segmenter` and `LiveWindow` take the 
 
 ```rust
 use kithara_broadcast::{BroadcastConfig, LiveWindow, Segmenter};
+use kithara_worker::{Worker, WorkerConfig};
 
-let config = BroadcastConfig::builder().build();
+let config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools).build();
 let mut segmenter = Segmenter::new(&config)?;
 let mut window = LiveWindow::new(&config)?;
 
@@ -51,7 +56,7 @@ let snapshot = window.snapshot();
 
 ## Key Types
 
-- `BroadcastConfig` - the audio, the segments, and the address the origin binds.
+- `BroadcastConfig` - the shared runtime, audio, segments, limits, cancellation, and bind address.
 - `Broadcast` / `BroadcastHandle` - the live service: URL, status, and the graceful end of the broadcast.
 - `BroadcastOutput` - the bounded non-blocking stereo `LiveOutput` installed in the master output group.
 - `Segmenter` - ADTS framing plus segment rotation on the media clock.
