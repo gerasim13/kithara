@@ -913,9 +913,9 @@ exit 19
             .split_once("linux:coverage:")
             .expect("the coverage job follows Linux test");
         assert!(
-            test_job
-                .lines()
-                .any(|line| line.trim() == "junit: target/ci-tests/nextest/ci/junit.xml"),
+            test_job.lines().any(|line| {
+                line.trim() == "junit: .ci-artifacts/junit/linux-test-simulated-clock.xml"
+            }),
             "linux:test does not publish the nextest JUnit report"
         );
 
@@ -938,9 +938,9 @@ exit 19
         assert_eq!(
             reports,
             [
-                "target/ci-tests-flash-off/nextest/ci/junit.xml",
-                "target/ci-tests/nextest/ci/junit.xml",
-                "target/ci-tests/nextest/ci/junit.xml",
+                ".ci-artifacts/junit/apple-test-flash-off.xml",
+                ".ci-artifacts/junit/apple-test.xml",
+                ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
                 "target/nextest/ci/junit.xml",
                 "target/xcresult/ios-test.junit.xml",

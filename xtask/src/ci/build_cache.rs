@@ -14,6 +14,8 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
 
+pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CacheEntry {
     path: PathBuf,
@@ -374,6 +376,30 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(targets)
 }
 
+/// Build directories kept in the executor cache rather than in a checkout.
+///
+/// Linux Docker checkouts are temporary volumes. Their targets live below the
+/// mounted cache root, one per runner slot, so the host budget must discover
+/// them without walking Cargo homes and compiler caches beside them.
+pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    let slots = root.join(TARGET_SLOT_CACHE_NAMESPACE);
+    if !slots.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut targets = Vec::new();
+    for entry in
+        fs::read_dir(&slots).with_context(|| format!("reading build cache {}", slots.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading build cache {}", slots.display()))?;
+        if entry.file_type()?.is_dir() {
+            targets.push(entry.path());
+        }
+    }
+    targets.sort();
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -656,6 +682,18 @@ mod tests {
                 checkout.join("target-stress"),
             ]
         );
+    }
+
+    #[test]
+    fn persistent_runner_slots_are_build_caches_the_budget_owns() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("target-slots/review-linux-aarch64-slot-0");
+        let second = root.path().join("target-slots/review-linux-aarch64-slot-1");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::create_dir_all(root.path().join("review/linux-aarch64/cargo/registry")).unwrap();
+
+        assert_eq!(cached_target_dirs(root.path()).unwrap(), [first, second]);
     }
 
     /// A checkout a job holds still has to answer to the ceiling.
