@@ -193,6 +193,7 @@ async fn warm_hls_worker(
     store: AssetStore<TestPools>,
     worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
+    seek: Option<Duration>,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -219,7 +220,12 @@ async fn warm_hls_worker(
     loop {
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => break,
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                if seek.is_none() {
+                    return audio.position().as_secs_f64();
+                }
+                break;
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while warming HLS worker for {url}")
@@ -230,7 +236,7 @@ async fn warm_hls_worker(
     }
 
     audio
-        .seek(Duration::from_secs(2))
+        .seek(seek.expect("seek checked above"))
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
@@ -244,52 +250,6 @@ async fn warm_hls_worker(
                 panic!("unexpected EOF after HLS warmup seek for {url}")
             }
             Err(e) => panic!("decode error after HLS warmup seek for {url}: {e}"),
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-}
-
-// Same nonblocking warmup contract as `warm_hls_worker`.
-#[kithara::flash(true)]
-async fn warm_hls_worker_without_seek(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> f64 {
-    let wav_info = MediaInfo::builder()
-        .maybe_codec(Some(AudioCodec::Pcm))
-        .maybe_container(Some(ContainerFormat::Wav))
-        .build();
-    let hls_config = HlsConfig::for_url(url.clone())
-        .store(store)
-        .pools(worker.pools().clone())
-        .build();
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .build();
-    let mut audio = worker
-        .open(config)
-        .await
-        .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
-
-    let mut buf = [0.0f32; 4096];
-    loop {
-        audio.preload().expect("preload must succeed");
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
-                return audio.position().as_secs_f64();
-            }
-            Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF while warming HLS worker without seek for {url}")
-            }
-            Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
         sleep(Duration::from_millis(10)).await;
     }
@@ -605,7 +565,14 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_pos = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_pos > 1.0,
         "HLS warmup seek should advance playback position, got {hls_pos}"
@@ -666,7 +633,14 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     let store = asset_store(&temp_dir, true, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_seek = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
@@ -779,10 +753,17 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
 
     let first_pos = match teardown {
         WarmupTeardown::Shutdown | WarmupTeardown::DropOnly => {
-            warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await
+            warm_hls_worker(
+                &hls_url_a,
+                store_a,
+                worker_a.clone(),
+                backend,
+                Some(Duration::from_secs(2)),
+            )
+            .await
         }
         WarmupTeardown::ReadOnlyThenDrop => {
-            warm_hls_worker_without_seek(&hls_url_a, store_a, worker_a.clone(), backend).await
+            warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend, None).await
         }
     };
 
@@ -808,7 +789,14 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
         WarmupTeardown::DropOnly | WarmupTeardown::ReadOnlyThenDrop => drop(worker_a),
     }
 
-    let second_pos = warm_hls_worker(&hls_url_b, store_b, worker_b.clone(), backend).await;
+    let second_pos = warm_hls_worker(
+        &hls_url_b,
+        store_b,
+        worker_b.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         second_pos > 1.0,
         "second HLS warmup after a prior session ({teardown:?}) must still \
@@ -1022,7 +1010,14 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
+    let hls_seek = warm_hls_worker(
+        &hls_url,
+        store.clone(),
+        worker.clone(),
+        backend,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
     assert!(
         hls_seek > 1.0,
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
