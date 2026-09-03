@@ -72,7 +72,10 @@ pub(super) fn append_correlated_evidence(
     run_id: Option<&str>,
     args: &StressReportArgs,
 ) -> bool {
-    let failed = cases.iter().filter(|case| case.failed).collect::<Vec<_>>();
+    let failed = cases
+        .iter()
+        .filter(|case| case.failing())
+        .collect::<Vec<_>>();
     let expected_envelopes = failed
         .iter()
         .filter(|case| requires_envelope(&case.output, &args.evidence))

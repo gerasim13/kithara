@@ -285,7 +285,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             ));
         }
     };
-    let has_failures = junit.cases.iter().any(|case| case.failed || case.flaky);
+    let has_failures = junit.cases.iter().any(CaseTiming::failing);
     if let Err(error) = validate_correlation_metadata(&junit) {
         return unreadable(render_invalid_artifact(
             "INVALID JUNIT",
@@ -1722,6 +1722,64 @@ mod tests {
         );
         assert!(markdown.contains("more problems"), "{markdown}");
         assert!(!markdown.contains(too_wide.as_str()), "{markdown}");
+    }
+
+    /// A retried pass is the only defect whose evidence lives somewhere other
+    /// than the testcase body: nextest keeps the failing attempt inside
+    /// `flakyFailure` and gives the testcase the streams of the run that
+    /// passed. A report that reads the case the ordinary way names the test
+    /// and describes the green run.
+    #[test]
+    fn a_retried_pass_carries_its_failing_attempt_into_the_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        let junit = temp.path().join("junit.xml");
+        fs::write(
+            &junit,
+            r#"<testsuites uuid="run" timestamp="2026-08-16T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-16T12:00:00Z">
+      <flakyFailure type="test failure" message="thread 'seek' panicked at seek.rs:9">thread 'seek' panicked at seek.rs:9:
+seek landed short of the requested frame
+        <system-out>red stdout</system-out>
+      </flakyFailure>
+      <system-out>green stdout</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>"#,
+        )
+        .expect("write junit");
+        let output = temp.path().join("report.md");
+
+        let lane =
+            lane_report(&StressReportArgs::new(junit, inventory, output, 1)).expect("lane report");
+        let markdown = &lane.markdown;
+
+        assert!(markdown.contains("Result: **FLAKY**"), "{markdown}");
+        assert!(markdown.contains("Failure symptom clusters"), "{markdown}");
+        assert!(
+            markdown.contains("seek landed short of the requested frame"),
+            "the symptom must come from the attempt that failed: {markdown}"
+        );
+        assert!(
+            !markdown.contains("green stdout"),
+            "the passing attempt is not the evidence: {markdown}"
+        );
     }
 
     /// One case's runaway retained output names itself and marks the lane

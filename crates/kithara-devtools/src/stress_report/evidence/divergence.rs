@@ -97,7 +97,7 @@ pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
         let group = groups
             .entry(format!("{} {}", case.suite, case.name))
             .or_default();
-        let side = if case.failed {
+        let side = if case.failing() {
             &mut group.failed
         } else {
             &mut group.passed
