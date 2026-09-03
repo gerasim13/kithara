@@ -62,6 +62,16 @@ fn six_styles_expose_every_rhythm_control() {
 }
 
 #[kithara::test(native, flash(false))]
+fn aligned_styles_have_a_stereo_musical_bed() {
+    for (style, _) in STYLES {
+        let name = format!("rhythm_wav_{style}_aligned");
+        let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
+        let ratio = stereo_side_ratio(asset.bytes());
+        assert!(ratio > 0.0001, "{style}: stereo side ratio is only {ratio}");
+    }
+}
+
+#[kithara::test(native, flash(false))]
 fn score_truth_distinguishes_all_three_negative_controls() {
     for (style, _) in STYLES {
         let aligned = artifact(style, "aligned");
@@ -173,4 +183,16 @@ fn assert_markers_agree(
         "{style}/{control}: only {matched}/{} analyzed {kind}s match score within {tolerance} frames: expected={expected:?}, analyzed={analyzed:?}",
         analyzed.len()
     );
+}
+
+fn stereo_side_ratio(wav: &[u8]) -> f64 {
+    let mut side = 0.0;
+    let mut mid = 0.0;
+    for frame in wav[44..].chunks_exact(4) {
+        let left = f64::from(i16::from_le_bytes([frame[0], frame[1]]));
+        let right = f64::from(i16::from_le_bytes([frame[2], frame[3]]));
+        side += (left - right).powi(2);
+        mid += (left + right).powi(2);
+    }
+    side / mid
 }
