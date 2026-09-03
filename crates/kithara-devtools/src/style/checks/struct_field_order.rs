@@ -450,23 +450,24 @@ fn type_sort_key(ty: &Type) -> String {
 }
 
 #[cfg(test)]
+fn default_cfg() -> StructFieldOrderConfig {
+    StructFieldOrderConfig {
+        visibility_order: vec![
+            "pub".to_string(),
+            "pub(crate)".to_string(),
+            "pub(super)".to_string(),
+            "pub(in)".to_string(),
+            "private".to_string(),
+        ],
+        exempt_attrs: vec!["repr".to_string()],
+    }
+}
+
+#[cfg(test)]
 mod fix_tests {
     use std::collections::BTreeMap;
 
     use super::*;
-
-    fn default_cfg() -> StructFieldOrderConfig {
-        StructFieldOrderConfig {
-            visibility_order: vec![
-                "pub".to_string(),
-                "pub(crate)".to_string(),
-                "pub(super)".to_string(),
-                "pub(in)".to_string(),
-                "private".to_string(),
-            ],
-            exempt_attrs: vec!["repr".to_string()],
-        }
-    }
 
     fn run_fix(src: &str) -> (String, Vec<String>) {
         let cfg = default_cfg();
@@ -649,19 +650,6 @@ struct S {
 #[cfg(test)]
 mod detect_tests {
     use super::*;
-
-    fn default_cfg() -> StructFieldOrderConfig {
-        StructFieldOrderConfig {
-            visibility_order: vec![
-                "pub".to_string(),
-                "pub(crate)".to_string(),
-                "pub(super)".to_string(),
-                "pub(in)".to_string(),
-                "private".to_string(),
-            ],
-            exempt_attrs: vec!["repr".to_string()],
-        }
-    }
 
     /// Run the detection scan over a snippet and return the violation keys.
     fn detect(src: &str) -> Vec<String> {

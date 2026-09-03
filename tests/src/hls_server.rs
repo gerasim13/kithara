@@ -9,6 +9,15 @@ use crate::{
     fixture_protocol::{DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode},
 };
 
+macro_rules! url_method {
+    ($self:ident, $path:ident, $message:literal, $resolve:expr) => {
+        #[must_use]
+        pub fn url(&$self, $path: &str) -> Url {
+            $resolve.unwrap_or_else(|| panic!(concat!($message, " `{}`"), $path))
+        }
+    };
+}
+
 /// Compatibility fixture that preserves historical byte-exact HLS payloads.
 ///
 /// Prefer [`PackagedTestServer`] or `HlsFixtureBuilder::packaged_audio_*` for new
@@ -44,36 +53,29 @@ impl TestServer {
         }
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if let Some(url) = match path {
-            "/master.m3u8" => Some(self.plain.master_url()),
-            "/master-init.m3u8" => Some(self.init.master_url()),
-            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
-            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
-            "/v0-init.m3u8" => Some(self.init.media_url(0)),
-            "/v1-init.m3u8" => Some(self.init.media_url(1)),
-            "/v2-init.m3u8" => Some(self.init.media_url(2)),
-            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
-            "/key.bin" => Some(self.plain.key_url()),
-            "/aes/key.bin" => Some(self.encrypted.key_url()),
-            "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
-            "/custom/base/" | "/base/" => Some(self._helper.url(path)),
-            _ => None,
-        } {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.init, path, "/init/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_media_playlist_path(&self.plain, path) {
-            return url;
-        }
-        panic!("unknown TestServer compatibility path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown TestServer compatibility path",
+        route_compat_path(
+            &self.plain,
+            &self.init,
+            &self.encrypted,
+            path,
+            ".bin",
+            ".bin",
+            |path| match path {
+                "/master-init.m3u8" => Some(self.init.master_url()),
+                "/v0-init.m3u8" => Some(self.init.media_url(0)),
+                "/v1-init.m3u8" => Some(self.init.media_url(1)),
+                "/v2-init.m3u8" => Some(self.init.media_url(2)),
+                "/key.bin" => Some(self.plain.key_url()),
+                "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
+                "/custom/base/" | "/base/" => Some(self._helper.url(path)),
+                _ => None,
+            },
+        )
+    );
 }
 
 #[::kithara::fixture]
@@ -540,31 +542,22 @@ impl HlsTestServer {
         self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if path == "/master.m3u8" {
-            return self.created.master_url();
-        }
-        if path == "/key.bin" {
-            return self.created.key_url();
-        }
-        if let Some(variant_part) = path
-            .strip_prefix("/playlist/v")
-            .and_then(|s| s.strip_suffix(".m3u8"))
-        {
-            let variant: usize = variant_part
+    url_method!(
+        self,
+        path,
+        "unknown HlsTestServer path",
+        route_hls_path(&self.created, path, ".bin", "_init.bin", |fixture, path| {
+            if path == "/key.bin" {
+                return Some(fixture.key_url());
+            }
+            let variant = path
+                .strip_prefix("/playlist/v")?
+                .strip_suffix(".m3u8")?
                 .parse()
                 .expect("invalid HlsTestServer playlist path");
-            return self.created.media_url(variant);
-        }
-        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.created, path, "/init/", "_init.bin") {
-            return url;
-        }
-        panic!("unknown HlsTestServer path `{path}`")
-    }
+            Some(fixture.media_url(variant))
+        })
+    );
 }
 
 /// Preferred packaged-audio fixture for new synthetic HLS audio tests.
@@ -580,31 +573,25 @@ impl PackagedTestServer {
         Self::with_delay_rules(Vec::new()).await
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        let aliased = match path {
-            "/master.m3u8" | "/master-init.m3u8" => Some(self.plain.master_url()),
-            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
-            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
-            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
-            "/key.bin" | "/aes/key.bin" => Some(self.encrypted.key_url()),
-            "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
-            _ => None,
-        };
-        if let Some(url) = aliased {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".m4s") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.plain, path, "/init/", ".mp4") {
-            return url;
-        }
-        if let Some(url) = route_media_playlist_path(&self.plain, path) {
-            return url;
-        }
-        panic!("unknown PackagedTestServer path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown PackagedTestServer path",
+        route_compat_path(
+            &self.plain,
+            &self.plain,
+            &self.encrypted,
+            path,
+            ".m4s",
+            ".mp4",
+            |path| match path {
+                "/master-init.m3u8" => Some(self.plain.master_url()),
+                "/key.bin" => Some(self.encrypted.key_url()),
+                "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
+                _ => None,
+            },
+        )
+    );
 
     /// Build a server whose plain (3-variant AAC fMP4) fixture applies the
     /// given per-segment server-side delays. Lets tests pin behaviour
@@ -767,22 +754,55 @@ impl AbrTestServer {
         }
     }
 
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        if path == "/master.m3u8" {
-            return self.created.master_url();
-        }
-        if let Some(url) = route_media_playlist_path(&self.created, path) {
-            return url;
-        }
-        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
-            return url;
-        }
-        if let Some(url) = route_init_path(&self.created, path, "/init/", ".bin") {
-            return url;
-        }
-        panic!("unknown AbrTestServer path `{path}`")
-    }
+    url_method!(
+        self,
+        path,
+        "unknown AbrTestServer path",
+        route_hls_path(
+            &self.created,
+            path,
+            ".bin",
+            ".bin",
+            route_media_playlist_path,
+        )
+    );
+}
+
+fn route_compat_path(
+    plain: &CreatedHls,
+    init: &CreatedHls,
+    encrypted: &CreatedHls,
+    path: &str,
+    segment_ext: &str,
+    init_ext: &str,
+    unique_alias: impl FnOnce(&str) -> Option<Url>,
+) -> Option<Url> {
+    unique_alias(path)
+        .or_else(|| match path {
+            "/master.m3u8" => Some(plain.master_url()),
+            "/master-encrypted.m3u8" => Some(encrypted.master_url()),
+            "/video/480p/playlist.m3u8" => Some(plain.media_url(1)),
+            "/v0-encrypted.m3u8" => Some(encrypted.media_url(0)),
+            "/aes/key.bin" => Some(encrypted.key_url()),
+            _ => None,
+        })
+        .or_else(|| route_segment_path(plain, path, "/seg/", segment_ext))
+        .or_else(|| route_init_path(init, path, "/init/", init_ext))
+        .or_else(|| route_media_playlist_path(plain, path))
+}
+
+fn route_hls_path(
+    fixture: &CreatedHls,
+    path: &str,
+    segment_ext: &str,
+    init_ext: &str,
+    alias: impl FnOnce(&CreatedHls, &str) -> Option<Url>,
+) -> Option<Url> {
+    (path == "/master.m3u8")
+        .then(|| fixture.master_url())
+        .or_else(|| alias(fixture, path))
+        .or_else(|| route_segment_path(fixture, path, "/seg/", segment_ext))
+        .or_else(|| route_init_path(fixture, path, "/init/", init_ext))
 }
 
 /// Resolve a `/<prefix>vX_Y<ext>` segment path on the given fixture.

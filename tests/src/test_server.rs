@@ -377,96 +377,92 @@ impl HlsFixtureBuilder {
 
     #[must_use]
     pub fn packaged_audio_signal_aac_he(
-        mut self,
+        self,
         sample_rate: u32,
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.set_packaged_audio_codec_source(
-            AudioCodec::AacHe,
-            sample_rate,
-            channels,
-            PackagedAudioSource::Signal(signal),
-        );
-        self
+        self.packaged_audio_signal(AudioCodec::AacHe, sample_rate, channels, signal)
     }
 
     #[must_use]
     pub fn packaged_audio_signal_aac_he_v2(
-        mut self,
+        self,
         sample_rate: u32,
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.set_packaged_audio_codec_source(
-            AudioCodec::AacHeV2,
-            sample_rate,
-            channels,
-            PackagedAudioSource::Signal(signal),
-        );
-        self
+        self.packaged_audio_signal(AudioCodec::AacHeV2, sample_rate, channels, signal)
     }
 
     #[must_use]
     pub fn packaged_audio_per_variant_pcm_aac_lc(
-        mut self,
+        self,
         sample_rate: u32,
         channels: u16,
         patterns: Vec<PcmPattern>,
     ) -> Self {
-        self.set_packaged_audio_codec_source(
-            AudioCodec::AacLc,
-            sample_rate,
-            channels,
-            PackagedAudioSource::PerVariantPcm { patterns },
-        );
-        self
+        self.packaged_audio_per_variant_pcm(AudioCodec::AacLc, sample_rate, channels, patterns)
     }
 
     #[must_use]
     pub fn packaged_audio_per_variant_pcm_flac(
+        self,
+        sample_rate: u32,
+        channels: u16,
+        patterns: Vec<PcmPattern>,
+    ) -> Self {
+        self.packaged_audio_per_variant_pcm(AudioCodec::Flac, sample_rate, channels, patterns)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_aac_lc(
+        self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.packaged_audio_signal(AudioCodec::AacLc, sample_rate, channels, signal)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_flac(
+        self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.packaged_audio_signal(AudioCodec::Flac, sample_rate, channels, signal)
+    }
+
+    fn packaged_audio_signal(
         mut self,
+        codec: AudioCodec,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.set_packaged_audio_codec_source(
+            codec,
+            sample_rate,
+            channels,
+            PackagedAudioSource::Signal(signal),
+        );
+        self
+    }
+
+    fn packaged_audio_per_variant_pcm(
+        mut self,
+        codec: AudioCodec,
         sample_rate: u32,
         channels: u16,
         patterns: Vec<PcmPattern>,
     ) -> Self {
         self.set_packaged_audio_codec_source(
-            AudioCodec::Flac,
+            codec,
             sample_rate,
             channels,
             PackagedAudioSource::PerVariantPcm { patterns },
-        );
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_signal_aac_lc(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        signal: PackagedSignal,
-    ) -> Self {
-        self.set_packaged_audio_codec_source(
-            AudioCodec::AacLc,
-            sample_rate,
-            channels,
-            PackagedAudioSource::Signal(signal),
-        );
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_signal_flac(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        signal: PackagedSignal,
-    ) -> Self {
-        self.set_packaged_audio_codec_source(
-            AudioCodec::Flac,
-            sample_rate,
-            channels,
-            PackagedAudioSource::Signal(signal),
         );
         self
     }
