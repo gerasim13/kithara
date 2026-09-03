@@ -14,6 +14,10 @@ pub struct CaseTiming {
     pub output: String,
     pub suite: String,
     pub failed: bool,
+    /// The case failed an attempt and passed a later one. It is not a failure
+    /// and it is not a clean pass: a report that counts only failures reads a
+    /// retried run as green.
+    pub flaky: bool,
     /// The retained output hit the per-case budget and lost its tail. The case
     /// itself stays valid evidence; reports must name the truncation.
     pub output_truncated: bool,
@@ -35,7 +39,8 @@ pub(crate) struct JunitReport {
 /// negative, non-finite, or not a number. A skipped stress testcase is also
 /// rejected because it is not per-iteration execution evidence. The testcase
 /// limit rejects the artifact; an oversized retained output only truncates its
-/// own case and marks it [`CaseTiming::output_truncated`].
+/// own case and marks it [`CaseTiming::output_truncated`]. A case that passed
+/// on a retry is not a failure and is marked [`CaseTiming::flaky`].
 pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
     parse_junit_report(xml).map(|report| report.cases)
 }
@@ -95,6 +100,10 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
         let failed = node
             .children()
             .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
+        let flaky = !failed
+            && node
+                .children()
+                .any(|child| child.has_tag_name("flakyFailure"));
         let timestamp = node.attribute("timestamp").map(str::to_owned);
         let (output, output_truncated) = failure_output(node);
         cases.push(CaseTiming {
@@ -104,6 +113,7 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
             output,
             suite,
             failed,
+            flaky,
             output_truncated,
             secs,
         });
@@ -291,6 +301,24 @@ stack backtrace:
 
         assert_eq!(cases.len(), 1);
         assert!(!cases[0].failed);
+    }
+
+    /// A retried pass is the one outcome a failure count cannot see, and it is
+    /// the outcome a stress run is looking for.
+    #[test]
+    fn a_test_that_passed_on_a_retry_is_recorded_as_flaky() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(cases[0].flaky);
+    }
+
+    #[test]
+    fn a_failed_case_is_not_also_flaky() {
+        let cases = parse_junit(XML).expect("parse junit");
+
+        let failed = cases.iter().find(|case| case.failed).expect("failed case");
+        assert!(!failed.flaky);
     }
 
     #[test]

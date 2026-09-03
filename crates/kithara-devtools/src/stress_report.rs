@@ -109,6 +109,10 @@ impl StressReportArgs {
 #[derive(Debug, Default)]
 struct TestStats {
     failed_iterations: BTreeSet<usize>,
+    /// Iterations that failed an attempt and passed a later one. Held apart
+    /// from failures: a retried pass is neither, and folding it into either
+    /// column is how a run that reproduced a defect reports as green.
+    flaky_iterations: BTreeSet<usize>,
     observed_iterations: BTreeSet<usize>,
     max_secs: f64,
 }
@@ -208,13 +212,20 @@ pub(crate) struct LaneReport {
     pub(crate) readable: bool,
 }
 
-/// How often one test failed in one lane.
+/// How often one test failed, and how often it only passed on a retry, in one
+/// lane.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LaneRate {
     pub(crate) attempts: usize,
     pub(crate) failed: usize,
+    pub(crate) flaky: usize,
 }
 
+/// Reads one lane's `JUnit` artifact and states what it recorded.
+///
+/// A retried pass counts against the lane. It is the outcome a stress run exists
+/// to find, and reading only `failed` is what let a lane that reproduced a defect
+/// fifty times report as clean.
 pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     validate_expected_count(args.expected_count)?;
     let unreadable = |markdown: String| {
@@ -274,7 +285,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             ));
         }
     };
-    let has_failures = junit.cases.iter().any(|case| case.failed);
+    let has_failures = junit.cases.iter().any(|case| case.failed || case.flaky);
     if let Err(error) = validate_correlation_metadata(&junit) {
         return unreadable(render_invalid_artifact(
             "INVALID JUNIT",
@@ -369,11 +380,12 @@ pub(crate) fn validate_primary_evidence(
         junit.timestamp.as_deref(),
     );
     let failed = junit.cases.iter().filter(|case| case.failed).count();
-    if report.complete && failed == 0 {
+    let flaky = junit.cases.iter().filter(|case| case.flaky).count();
+    if report.complete && failed == 0 && flaky == 0 {
         Ok(())
     } else {
         println!(
-            "stress run evidence: complete={complete}, failed cases={failed}",
+            "stress run evidence: complete={complete}, failed cases={failed}, retried cases={flaky}",
             complete = report.complete,
         );
         Err(NotClean::reported("stress run evidence"))
@@ -777,6 +789,15 @@ impl AttemptRecords {
             .max()
             .unwrap_or(0)
     }
+
+    /// Executions the runner failed and then retried into a pass.
+    ///
+    /// Summed over every test rather than counted per test, because a lane is
+    /// judged by whether any execution needed a retry at all. The exit code
+    /// cannot say: the runner reports success once the retry passes.
+    pub(crate) fn retried(&self) -> usize {
+        self.rates.values().map(|rate| rate.flaky).sum()
+    }
 }
 
 /// Reads every report a command lane kept and counts what its runner recorded.
@@ -807,6 +828,9 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
                         rate.failed += 1;
                         records.failed_in.entry(id).or_default().insert(attempt);
                     }
+                    if case.flaky {
+                        rate.flaky += 1;
+                    }
                 }
             }
             Err(_) => {
@@ -822,6 +846,9 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
 /// An exit code says a run was rejected; it does not say in which test. When the
 /// command runs its tests under a runner that writes a report, this is where that
 /// report becomes the sentence a reader needs: this test, this often.
+///
+/// Retried passes are named separately. No exit code and no failure row carries
+/// them, so without that line the sentence over the table reads as a clean lane.
 pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords) {
     if records.is_empty() {
         return;
@@ -831,6 +858,7 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
         .iter()
         .filter(|(_, rate)| rate.failed > 0)
         .collect::<Vec<_>>();
+    let retried = records.retried();
     out.push_str("\n## What the lane's own runner recorded\n");
     if failures.is_empty() {
         // A heading with nothing under it reads as evidence that failed to
@@ -874,6 +902,9 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
                 let _ = writeln!(out, "| `{named}` | {measured} |");
             }
         }
+    }
+    if retried > 0 {
+        let _ = writeln!(out, "\n- Attempts that only passed on a retry: `{retried}`");
     }
     if !records.silent.is_empty() {
         let _ = writeln!(
@@ -983,6 +1014,9 @@ fn collect_stats(
         if case.failed {
             stats.failed_iterations.insert(iteration);
         }
+        if case.flaky {
+            stats.flaky_iterations.insert(iteration);
+        }
     }
     (tests, observed_iterations)
 }
@@ -1041,6 +1075,7 @@ fn render(
                 id.clone(),
                 LaneRate {
                     failed: stats.failed_iterations.len(),
+                    flaky: stats.flaky_iterations.len(),
                     attempts: stats.observed_iterations.len(),
                 },
             )
@@ -1052,6 +1087,10 @@ fn render(
         .values()
         .map(|stats| stats.failed_iterations.len())
         .sum::<usize>();
+    let flaky_attempts = tests
+        .values()
+        .map(|stats| stats.flaky_iterations.len())
+        .sum::<usize>();
     let attempts = tests
         .values()
         .map(|stats| stats.observed_iterations.len())
@@ -1062,6 +1101,8 @@ fn render(
         "INCOMPLETE"
     } else if failed_attempts > 0 {
         "FAILED"
+    } else if flaky_attempts > 0 {
+        "FLAKY"
     } else {
         "PASSED"
     };
@@ -1081,6 +1122,7 @@ fn render(
     let _ = writeln!(out, "- Testcases read: `{}`", cases.len());
     let _ = writeln!(out, "- Unique test iterations: `{attempts}`");
     let _ = writeln!(out, "- Failed attempts: `{failed_attempts}`");
+    let _ = writeln!(out, "- Retried passes: `{flaky_attempts}`");
     let _ = writeln!(out, "- Quarantined iterations: `{}`", quarantined.len());
 
     if problems.total > 0 {
@@ -1098,6 +1140,7 @@ fn render(
     }
 
     render_quarantine(&mut out, &quarantined);
+    render_flakes(&mut out, &tests);
     render_failures(&mut out, tests);
     RenderedReport {
         complete,
@@ -1163,6 +1206,9 @@ fn quarantine_poisoned_iterations(
         stats
             .failed_iterations
             .retain(|iteration| !quarantined.contains_key(iteration));
+        stats
+            .flaky_iterations
+            .retain(|iteration| !quarantined.contains_key(iteration));
     }
     observed.retain(|iteration| !quarantined.contains_key(iteration));
     quarantined
@@ -1177,6 +1223,39 @@ fn render_quarantine(out: &mut String, quarantined: &BTreeMap<usize, (usize, usi
     );
     for (iteration, (failed, total)) in quarantined {
         let _ = writeln!(out, "| {iteration} | {failed} / {total} |");
+    }
+}
+
+fn render_flakes(out: &mut String, tests: &BTreeMap<TestId, TestStats>) {
+    let mut flakes = tests
+        .iter()
+        .filter(|(_, stats)| !stats.flaky_iterations.is_empty())
+        .collect::<Vec<_>>();
+    if flakes.is_empty() {
+        return;
+    }
+    flakes.sort_by_key(|(id, stats)| (Reverse(stats.flaky_iterations.len()), (*id).clone()));
+    let _ = writeln!(
+        out,
+        "\n## Tests that only passed on a retry\n\nThese attempts failed and were retried into a pass. Nothing in the failure count above can see them, and a run that reproduced a defect this way is not a clean run.\n\n| test | retried / attempts | rate | retried iterations (zero-based) |\n|---|---:|---:|---|"
+    );
+    for ((suite, name), stats) in flakes.iter().take(MAX_FAILURE_ROWS) {
+        let retried = stats.flaky_iterations.len();
+        let attempts = stats.observed_iterations.len();
+        let id = markdown_cell(&format!("{suite} {name}"));
+        let _ = writeln!(
+            out,
+            "| `{id}` | {retried} / {attempts} | {} | {} |",
+            rate_percent(retried, attempts),
+            render_iterations(&stats.flaky_iterations),
+        );
+    }
+    if flakes.len() > MAX_FAILURE_ROWS {
+        let _ = writeln!(
+            out,
+            "\nShowing the first {MAX_FAILURE_ROWS} of {} retried tests. The JUnit artifact is exhaustive.",
+            flakes.len()
+        );
     }
 }
 
@@ -1312,6 +1391,7 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
+            flaky: false,
             secs,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
@@ -1351,6 +1431,50 @@ mod tests {
         assert!(!markdown.contains("demo::tests other"), "{markdown}");
     }
 
+    /// A retried pass is neither a failure nor a clean pass. Counting only
+    /// failures let a lane that reproduced a defect and passed on the second
+    /// attempt report as green.
+    #[test]
+    fn a_run_whose_only_defect_is_a_retried_pass_is_not_passed() {
+        let cases = vec![
+            case("seek", 0, false, 0.1),
+            CaseTiming {
+                flaky: true,
+                ..case("seek", 1, false, 0.25)
+            },
+            case("seek", 2, false, 0.2),
+        ];
+
+        let report = render(&cases, &inventory(&["seek"]), 3, None, None);
+        let markdown = &report.markdown;
+
+        assert!(markdown.contains("Result: **FLAKY**"), "{markdown}");
+        assert!(markdown.contains("- Failed attempts: `0`"), "{markdown}");
+        assert!(markdown.contains("- Retried passes: `1`"), "{markdown}");
+    }
+
+    /// A count says a retry happened; only a row says which test needed it.
+    #[test]
+    fn a_retried_pass_names_the_test_and_the_iteration() {
+        let cases = vec![
+            case("seek", 0, false, 0.1),
+            CaseTiming {
+                flaky: true,
+                ..case("seek", 1, false, 0.25)
+            },
+        ];
+
+        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let markdown = &report.markdown;
+
+        assert!(
+            markdown.contains("## Tests that only passed on a retry"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("demo::tests seek"), "{markdown}");
+        assert!(markdown.contains("| 1 / 2 |"), "{markdown}");
+    }
+
     #[test]
     fn a_bounded_cell_keeps_the_line_tail() {
         let line = format!("DEBUG target: {} queued=7", "x".repeat(400));
@@ -1387,6 +1511,7 @@ mod tests {
             rate,
             LaneRate {
                 failed: 0,
+                flaky: 0,
                 attempts: 3
             },
             "{}",
@@ -1454,6 +1579,7 @@ mod tests {
             rate,
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 2
             },
             "{}",
@@ -1903,6 +2029,7 @@ mod tests {
                         ("demo::tests".to_owned(), (*test).to_owned()),
                         LaneRate {
                             failed: *failed,
+                            flaky: 0,
                             attempts: *attempts,
                         },
                     )
@@ -1985,7 +2112,14 @@ mod tests {
     }
 
     fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
-        (name.to_owned(), LaneRate { failed, attempts })
+        (
+            name.to_owned(),
+            LaneRate {
+                failed,
+                flaky: 0,
+                attempts,
+            },
+        )
     }
 
     /// A lane whose verdict is one exit code per attempt has no per-test rate to
@@ -2170,6 +2304,7 @@ mod tests {
             records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 3
             }
         );
@@ -2202,6 +2337,7 @@ mod tests {
             records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
             LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 4
             }
         );

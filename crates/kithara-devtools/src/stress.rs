@@ -758,6 +758,9 @@ fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<S
 /// is all it can say. Either way the number is the one a one-shot gate cannot
 /// produce: a sanitizer that aborts on one attempt in two is green half the time,
 /// and half the time is what has kept its defect open.
+///
+/// A lane launched per repeat records no retried passes: exit codes cannot say
+/// that an attempt failed and was retried into a pass.
 fn command_lane_report(
     paths: &Paths,
     mode: &StressModeConfig,
@@ -798,10 +801,13 @@ fn command_lane_report(
     // repeats it was given. Requiring the recorded repeats to match what was
     // asked is what keeps a run that stopped early out of the comparison.
     let short = mode.owns_repeats && records.repeats() != count;
+    let retried = records.retried();
     let result = if observed != expected || short {
         "INCOMPLETE"
     } else if failed > 0 {
         "FAILED"
+    } else if retried > 0 {
+        "FLAKY"
     } else {
         "PASSED"
     };
@@ -809,6 +815,7 @@ fn command_lane_report(
     let _ = writeln!(markdown, "- Requested attempts: `{expected}`");
     let _ = writeln!(markdown, "- Observed attempts: `{observed}`");
     let _ = writeln!(markdown, "- Rejected attempts: `{failed}`");
+    let _ = writeln!(markdown, "- Retried passes: `{retried}`");
     if mode.owns_repeats {
         let _ = writeln!(
             markdown,
@@ -854,6 +861,7 @@ fn command_lane_report(
             BTreeMap::new(),
             Some(stress_report::LaneRate {
                 failed,
+                flaky: 0,
                 attempts: observed,
             }),
         )
@@ -1699,6 +1707,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             report.rates[&measured_case()],
             stress_report::LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 3
             }
         );
@@ -1806,6 +1815,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             report.attempts,
             Some(stress_report::LaneRate {
                 failed: 1,
+                flaky: 0,
                 attempts: 4
             })
         );
