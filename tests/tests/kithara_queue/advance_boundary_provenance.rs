@@ -901,18 +901,20 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
     let left = deinterleave_left(&rendered, usize::from(CHANNELS));
     let classes = classify_tone_windows(&left, TONE_WINDOW_FRAMES, SAMPLE_RATE);
     let runs = collect_runs(&classes);
-    let onset_window = require_first_tone_window(
+    let onset_window = require_tone_window(
         &classes,
         ToneClass::A440,
         0,
+        1,
         &runs,
         None,
         setup.queue.current_index(),
     );
-    let b_onset_window = require_first_sustained_tone_window(
+    let b_onset_window = require_tone_window(
         &classes,
         ToneClass::B880,
         0,
+        SUSTAINED_DESCENDING_WINDOWS,
         &runs,
         Some(onset_window),
         setup.queue.current_index(),
@@ -1960,42 +1962,32 @@ fn require_ascending_near_onset(
     first_ascending_window
 }
 
-fn require_first_tone_window(
+fn require_tone_window(
     classes: &[ToneClass],
     target: ToneClass,
     min_frame: usize,
+    consecutive_windows: usize,
     runs: &[ToneRun],
     onset_window: Option<usize>,
     current_index: Option<usize>,
 ) -> usize {
     let start_window = min_frame / TONE_WINDOW_FRAMES;
     classes
-        .iter()
+        .windows(consecutive_windows)
         .enumerate()
         .skip(start_window)
-        .find_map(|(idx, class)| (*class == target).then_some(idx))
+        .find_map(|(window, slice)| slice.iter().all(|class| *class == target).then_some(window))
         .unwrap_or_else(|| {
+            let requirement = if consecutive_windows == 1 {
+                "target tone class"
+            } else {
+                "sustained target tone class"
+            };
             panic!(
-                "target tone class {target:?} must be rendered from frame {min_frame}; {}",
+                "{requirement} {target:?} must be rendered from frame {min_frame}; {}",
                 tone_dump(runs, onset_window, None, current_index)
             )
         })
-}
-
-fn require_first_sustained_tone_window(
-    classes: &[ToneClass],
-    target: ToneClass,
-    min_frame: usize,
-    runs: &[ToneRun],
-    onset_window: Option<usize>,
-    current_index: Option<usize>,
-) -> usize {
-    first_sustained_window(classes, target, min_frame, TONE_WINDOW_FRAMES).unwrap_or_else(|| {
-        panic!(
-            "sustained target tone class {target:?} must be rendered from frame {min_frame}; {}",
-            tone_dump(runs, onset_window, None, current_index)
-        )
-    })
 }
 
 fn first_sustained_window<T: Copy + PartialEq>(
