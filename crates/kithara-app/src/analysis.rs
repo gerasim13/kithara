@@ -960,7 +960,7 @@ mod tests {
         .await;
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, tokio)]
     fn a_stale_axis_does_not_move_a_preempted_track_ahead_of_the_current_one() {
         let track_a = TrackId::from(1);
         let track_b = TrackId::from(2);
