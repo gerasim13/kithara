@@ -166,15 +166,6 @@ async fn open_resource(
     open_resource_full(url, store, backend, Some("mp3"), worker).await
 }
 
-async fn open_resource_with_worker(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), worker).await
-}
-
 fn resource_config_with_worker(
     url: &url::Url,
     store: AssetStore<TestPools>,
@@ -634,7 +625,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
         );
     }
 
-    let mut ok = open_resource_with_worker(&ok_url, store, worker, backend).await;
+    let mut ok = open_resource(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut ok, "mp3_after_hls_initial").await > 0);
     let forward = seek_and_read(
         &mut ok,
@@ -681,8 +672,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first =
-        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
+    let mut first = open_resource(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "shared_mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -702,7 +692,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker.clone(), backend).await;
+    let mut second = open_resource(&ok_url, store, worker.clone(), backend).await;
     assert!(read_some(&mut second, "shared_mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
@@ -1038,8 +1028,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
         "HLS warmup should advance playback position before mp3 transition, got {hls_seek}"
     );
 
-    let mut first =
-        open_resource_with_worker(&ok_url, store.clone(), worker.clone(), backend).await;
+    let mut first = open_resource(&ok_url, store.clone(), worker.clone(), backend).await;
     assert!(read_some(&mut first, "mp3_first_initial").await > 0);
     let first_forward = seek_and_read(
         &mut first,
@@ -1059,7 +1048,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     );
     drop(first);
 
-    let mut second = open_resource_with_worker(&ok_url, store, worker, backend).await;
+    let mut second = open_resource(&ok_url, store, worker, backend).await;
     assert!(read_some(&mut second, "mp3_second_initial").await > 0);
     let second_forward = seek_and_read(
         &mut second,
