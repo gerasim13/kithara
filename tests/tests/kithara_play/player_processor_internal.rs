@@ -24,9 +24,7 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{
-    SampleRateTrackingReader, SeekTrackingReader, TestPcmReader,
-};
+use kithara_integration_tests::audio_mock::{MockReader, TestPcmReader};
 use ringbuf::traits::{Consumer, Producer};
 
 use crate::bufpool_ext::pools;
@@ -69,7 +67,7 @@ fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> B
 }
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
-    let (reader, _recorded) = SampleRateTrackingReader::with_duration(
+    let (reader, _recorded) = MockReader::sample_rate_tracking_with_duration(
         AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
         duration,
     );
@@ -84,7 +82,7 @@ fn create_tracking_player_resource(
     src: &str,
     seek_log: Arc<Mutex<Vec<u64>>>,
 ) -> Box<PlayerResource> {
-    let resource = Resource::from_reader(SeekTrackingReader::new(seek_log), None);
+    let resource = Resource::from_reader(MockReader::seek_tracking(seek_log), None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
@@ -94,7 +92,7 @@ fn create_tracking_player_resource(
 #[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
-    let (reader, recorded) = SampleRateTrackingReader::new(AudioSpec::new(
+    let (reader, recorded) = MockReader::sample_rate_tracking(AudioSpec::new(
         2,
         NonZeroU32::new(44100).expect("test rate"),
     ));
@@ -164,7 +162,7 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) = SampleRateTrackingReader::new(AudioSpec::new(
+    let (reader, _recorded) = MockReader::sample_rate_tracking(AudioSpec::new(
         2,
         NonZeroU32::new(44100).expect("test rate"),
     ));

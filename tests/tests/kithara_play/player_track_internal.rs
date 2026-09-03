@@ -24,9 +24,7 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{
-    LiveFrontierReader, MisreportedDurationReader, TestPcmReader,
-};
+use kithara_integration_tests::audio_mock::{MockReader, TestPcmReader};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Split},
@@ -320,7 +318,7 @@ async fn read_outcome_full_on_normal_read() {
 #[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let frontier_ns = Arc::new(AtomicU64::new(0));
-    let reader = LiveFrontierReader::new(mock_spec(), Arc::clone(&frontier_ns));
+    let reader = MockReader::live_frontier(mock_spec(), Arc::clone(&frontier_ns));
     let src: Arc<str> = Arc::from("frontier.flac");
     let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
     let track = make_track_from_resource(resource, src, TrackId::allocate());
@@ -467,7 +465,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
 async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
     let src = Arc::from("misreported.mp3");
     let resource = Resource::from_reader(
-        MisreportedDurationReader::new(mock_spec(), 900),
+        MockReader::misreported_duration(mock_spec(), 900),
         Some(Arc::clone(&src)),
     );
     let mut track = make_track_from_resource(resource, src, TrackId::allocate());
