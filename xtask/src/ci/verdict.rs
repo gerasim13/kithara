@@ -15,7 +15,7 @@ use kithara_devtools::{
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::{environment, run::PipelineKind};
+use super::run::PipelineKind;
 
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
@@ -249,11 +249,13 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// request.
 pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     match lane {
-        "apple-test" | "linux-test-simulated-clock" => Some("ci-tests/nextest/ci/junit.xml"),
-        "apple-test-flash-off" => Some("ci-tests-flash-off/nextest/ci/junit.xml"),
-        "windows-arm64" | "windows-x64" => Some("nextest/ci/junit.xml"),
-        "apple-ios-test" => Some("xcresult/ios-test.junit.xml"),
-        "apple-swift-test" => Some("xcresult/swift-test.junit.xml"),
+        "apple-test"
+        | "apple-test-flash-off"
+        | "linux-test-simulated-clock"
+        | "windows-arm64"
+        | "windows-x64" => Some("target/nextest/ci/junit.xml"),
+        "apple-ios-test" => Some("target/xcresult/ios-test.junit.xml"),
+        "apple-swift-test" => Some("target/xcresult/swift-test.junit.xml"),
         _ => None,
     }
 }
@@ -278,7 +280,7 @@ pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
     let Some(report) = produced_report(lane) else {
         return Ok(());
     };
-    let path = environment::current_target_dir(root)?.join(report);
+    let path = root.join(report);
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
     }
@@ -291,7 +293,7 @@ pub(crate) fn gather(root: &Path, lane: &str, failed: bool) -> Result<()> {
     let directory = root.join(REPORT_DIR);
     fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
     if let Some(report) = produced_report(lane) {
-        let from = environment::current_target_dir(root)?.join(report);
+        let from = root.join(report);
         if from.exists() {
             let to = directory.join(format!("{lane}.xml"));
             fs::copy(&from, &to)
@@ -649,9 +651,7 @@ mod tests {
     #[test]
     fn a_report_left_by_an_earlier_job_is_not_collected_as_this_ones() {
         let directory = tempfile::tempdir().unwrap();
-        let stale = directory
-            .path()
-            .join("target/ci-tests/nextest/ci/junit.xml");
+        let stale = directory.path().join("target/nextest/ci/junit.xml");
         fs::create_dir_all(stale.parent().unwrap()).unwrap();
         fs::write(&stale, "<testsuites/>").unwrap();
 

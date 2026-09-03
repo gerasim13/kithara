@@ -507,29 +507,6 @@ fn build_target_dir(
     Ok(project_root.join("target"))
 }
 
-pub(crate) fn current_target_dir(project_root: &Path) -> Result<PathBuf> {
-    let current_project = env::var_os("CI_PROJECT_DIR").map(PathBuf::from);
-    if cfg!(target_os = "linux") && is_gitlab() && current_project.as_deref() == Some(project_root)
-    {
-        let shared_root = env::var_os("KITHARA_CI_CACHE_ROOT")
-            .map(PathBuf::from)
-            .context("KITHARA_CI_CACHE_ROOT must name the persistent Linux cache")?;
-        let trust = CacheTrust::from_environment()?;
-        let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-        let target_scope = format!("{}-{platform}", trust.as_str());
-        let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
-        return build_target_dir(
-            project_root,
-            &shared_root,
-            &target_scope,
-            true,
-            true,
-            concurrent_id.as_deref(),
-        );
-    }
-    Ok(project_root.join("target"))
-}
-
 fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
