@@ -578,6 +578,16 @@ where
 
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
+                if data.spec() == self.spec
+                    && self
+                        .warp
+                        .prepare_quantum(data.meta, data.frames())
+                        .is_some_and(|frames| frames.get() == data.frames())
+                {
+                    return self
+                        .render_quantum(data, epoch)
+                        .map_or(TrackStep::StateChanged, TrackStep::Produced);
+                }
                 self.pending_input = Some(PendingInput {
                     chunk: data,
                     consumed_frames: 0,
@@ -1013,7 +1023,9 @@ mod tests {
     #[kithara::test(native)]
     #[case::q16(16)]
     #[case::q32(32)]
-    fn source_chunks_are_partitioned_without_losing_terminal_input(#[case] quantum_frames: usize) {
+    fn unity_source_chunks_bypass_staging_without_losing_terminal_input(
+        #[case] quantum_frames: usize,
+    ) {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let pools = pools();
         let input_frames = [20_usize, 20, 10];
@@ -1049,14 +1061,7 @@ mod tests {
             flush_deferred(&mut source);
         }
 
-        let expected_frames = input_frames
-            .into_iter()
-            .flat_map(|frames| {
-                std::iter::repeat_n(quantum_frames, frames / quantum_frames)
-                    .chain(std::iter::once(frames % quantum_frames).filter(|frames| *frames > 0))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(output_frames, expected_frames);
+        assert_eq!(output_frames, input_frames);
         assert_eq!(output_samples, expected_samples);
     }
 
@@ -1209,8 +1214,6 @@ mod tests {
         let effects = Vec::new();
         let mut source = source_stage(&pools, source, effects, initial);
 
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        flush_deferred(&mut source);
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("initial unity span must pass through");
         };
@@ -1218,8 +1221,6 @@ mod tests {
         assert_eq!(&data.samples[..], &first_samples);
 
         *discontinuity.lock() = SourceDiscontinuity::new(8, changed);
-        flush_deferred(&mut source);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
         flush_deferred(&mut source);
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("post-discontinuity unity span must pass through");

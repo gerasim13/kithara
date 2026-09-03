@@ -23,7 +23,7 @@ where
             && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
             && self.unity_passthrough(speed)
         {
-            return Ok(remaining.min(self.render_quantum_frames.get()));
+            return Ok(remaining);
         }
 
         let channels = usize::from(self.spec.channels.max(1));

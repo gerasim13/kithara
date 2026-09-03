@@ -21,7 +21,7 @@ use crate::{Warp, WarpConfig, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_unity(StretchKind::Signalsmith, 1.0, 32)
+    case::signalsmith_unity(StretchKind::Signalsmith, 1.0, 128)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -33,7 +33,7 @@ use crate::{Warp, WarpConfig, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_unity(StretchKind::Bungee, 1.0, 32)
+    case::bungee_unity(StretchKind::Bungee, 1.0, 128)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
