@@ -110,47 +110,6 @@ v2-init.m3u8
 }
 
 #[must_use]
-pub fn test_media_playlist(variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:4.0,
-seg/v{}_0.bin
-#EXTINF:4.0,
-seg/v{}_1.bin
-#EXTINF:4.0,
-seg/v{}_2.bin
-#EXT-X-ENDLIST
-"#,
-        variant, variant, variant
-    )
-}
-
-#[must_use]
-pub fn test_media_playlist_with_init(variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-MAP:URI="init/v{}.bin"
-#EXTINF:4.0,
-seg/v{}_0.bin
-#EXTINF:4.0,
-seg/v{}_1.bin
-#EXTINF:4.0,
-seg/v{}_2.bin
-#EXT-X-ENDLIST
-"#,
-        variant, variant, variant, variant
-    )
-}
-
-#[must_use]
 pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{variant}-SEG-{segment}:");
     let mut data = prefix.into_bytes();
@@ -719,9 +678,8 @@ pub mod abr {
 pub mod compat {
     pub use super::{
         AbrTestServer, HlsTestServer, TestServer, abr, master_playlist, test_master_playlist,
-        test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist,
-        test_media_playlist_encrypted, test_media_playlist_with_init, test_segment_data,
-        test_server,
+        test_master_playlist_encrypted, test_master_playlist_with_init,
+        test_media_playlist_encrypted, test_segment_data, test_server,
     };
 }
 

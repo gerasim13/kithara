@@ -459,7 +459,10 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
         ),
     )
     .expect("create product offline queue");
-    let tick_handle = task::spawn(drive_queue_ticks(queue.control()));
+    let tick_handle = task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
 
     let hls_config = ResourceConfig::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid packaged HLS URL"),

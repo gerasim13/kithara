@@ -142,7 +142,8 @@ fn build_queue_with_tick(
     )
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
+    let tick_handle =
+        tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

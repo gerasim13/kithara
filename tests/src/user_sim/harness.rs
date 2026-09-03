@@ -144,7 +144,7 @@ impl SimHarness {
         // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
         // `drive_queue_ticks` (the async chokepoint propagates ambient only) — see
         // that fn's doc for why a real-paced driver false-HANGs buffered sources.
-        let tick = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
+        let tick = tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(

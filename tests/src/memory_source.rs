@@ -241,11 +241,7 @@ impl StreamType for UnknownLenStream {
     }
 }
 
-#[derive(Default)]
-pub struct UnknownLenStreamConfig {
-    pub source: Option<MemorySource>,
-    pub event_bus: Option<EventBus>,
-}
+pub type UnknownLenStreamConfig = MemStreamConfig;
 
 /// Create a `Stream` from a `MemorySource`.
 #[must_use]

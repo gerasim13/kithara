@@ -66,7 +66,10 @@ fn build_session(cache_path: &Path) -> Session {
         ),
     )
     .expect("create product offline queue");
-    let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let tick = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),

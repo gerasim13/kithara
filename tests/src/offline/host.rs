@@ -99,12 +99,12 @@ pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
 /// The flash gate keeps the spawned task on virtual time. Without it, buffered
 /// sources can outrun the real-time ticker and trigger false hang timeouts.
 #[kithara::flash(true)]
-pub async fn drive_queue_ticks<S>(queue: QueueControl<S>)
+pub async fn drive_queue_ticks<S>(queue: QueueControl<S>, interval: Duration)
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     loop {
-        sleep(Duration::from_millis(50)).await;
+        sleep(interval).await;
         if queue.tick().is_err() {
             break;
         }

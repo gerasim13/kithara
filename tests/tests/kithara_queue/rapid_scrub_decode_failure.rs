@@ -268,7 +268,10 @@ impl Harness {
         )
         .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
+        let tick = tokio::task::spawn(drive_queue_ticks(
+            queue.control(),
+            Duration::from_millis(50),
+        ));
 
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
             .downloader(downloader)
