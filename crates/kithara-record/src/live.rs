@@ -7,7 +7,7 @@ use kithara_platform::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use kithara_signal::AudioSpec;
-use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake};
+use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake, Worker};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -179,6 +179,7 @@ pub struct LiveRecordingHandle {
     dispatcher: Dispatcher,
     task: TaskHandle,
     wake: Wake,
+    _worker: Worker,
 }
 
 impl LiveRecordingHandle {
@@ -240,7 +241,8 @@ impl LiveRecorder {
         let sample_rate = NonZeroU32::new(config.recording.encode().sample_rate)
             .ok_or(LiveRecordingError::InvalidSampleRate)?;
         let spec = AudioSpec::new(config.recording.encode().channels, sample_rate);
-        let dispatcher = config.worker.dispatcher(
+        let worker = config.worker.clone();
+        let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
                 .name("kithara-record")
                 .capacity(config.dispatcher_capacity)
@@ -285,6 +287,7 @@ impl LiveRecorder {
             dispatcher,
             task,
             wake,
+            _worker: worker,
         };
         Ok((output, handle))
     }
