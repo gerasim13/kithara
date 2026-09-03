@@ -31,7 +31,13 @@ help:
 
 [no-exit-message]
 [positional-arguments]
-_xtask *ARGS: _xtask-ready
+_xtask *ARGS:
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="$PWD/target"; if [[ "$system" = Linux ]]; then slot="${CI_CONCURRENT_ID:?a Linux CI build needs its runner slot}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-slot-$slot"; fi; mkdir -p "$build_target"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+
+[no-exit-message]
+[positional-arguments]
+[private]
+_xtask-unleased *ARGS: _xtask-ready
     @exec just _xtask-cached strict "$@"
 
 [no-exit-message]
