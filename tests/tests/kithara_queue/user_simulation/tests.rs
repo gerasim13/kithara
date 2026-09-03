@@ -84,17 +84,17 @@ async fn build_spec(
     let url = match kind {
         TrackKind::Mp3File => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
         TrackKind::Mp3StreamHq => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
-        TrackKind::HlsAacLcAbr4 => build_hls_aac_abr(helper, false).await,
-        TrackKind::HlsMixedCodecAbr4 => build_hls_mixed_codec_abr(helper).await,
-        TrackKind::HlsAacLcDrmAbr4 => build_hls_aac_abr(helper, true).await,
+        TrackKind::HlsAacLcAbr4 => build_hls_abr(helper, false, false).await,
+        TrackKind::HlsMixedCodecAbr4 => build_hls_abr(helper, false, true).await,
+        TrackKind::HlsAacLcDrmAbr4 => build_hls_abr(helper, true, false).await,
     };
     TrackSpec::new(url, backend)
         .with_abr_mode(abr)
         .with_backend(backend)
 }
 
-/// Production-shaped 4-variant AAC-LC ladder, optional AES-128 DRM.
-async fn build_hls_aac_abr(helper: &TestServerHelper, drm: bool) -> Url {
+/// Production-shaped 4-variant AAC-LC ladder with optional DRM or FLAC tail.
+async fn build_hls_abr(helper: &TestServerHelper, drm: bool, mixed_codec: bool) -> Url {
     let mut builder = HlsFixtureBuilder::new()
         .variant_count(4)
         .segments_per_variant(16)
@@ -107,29 +107,13 @@ async fn build_hls_aac_abr(helper: &TestServerHelper, drm: bool) -> Url {
             iv_hex: Some(hex_encode(&AES_IV)),
         });
     }
+    if mixed_codec {
+        builder = builder.override_variant_codec(3, AudioCodec::Flac);
+    }
     helper
         .create_hls(builder)
         .await
         .expect("create 4-variant HLS fixture")
-        .master_url()
-}
-
-/// 4-variant ladder where the top variant is FLAC — mirrors prod
-/// `master.m3u8` (3 AAC + 1 FLAC lossless). Switching to variant 3
-/// from any of 0-2 forces a cross-codec recreate; harness asserts
-/// the codec snapshot survives the move (Bug #4-adjacent).
-async fn build_hls_mixed_codec_abr(helper: &TestServerHelper) -> Url {
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(4)
-        .segments_per_variant(16)
-        .segment_duration_secs(4.0)
-        .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000, 8_000_000])
-        .packaged_audio_aac_lc(44_100, 2)
-        .override_variant_codec(3, AudioCodec::Flac);
-    helper
-        .create_hls(builder)
-        .await
-        .expect("create mixed-codec ladder")
         .master_url()
 }
 
@@ -163,12 +147,13 @@ async fn run_single_backend(
 /// Multi-track helper. Builds N `TrackSpecs` and appends them to the
 /// same Queue so scenarios can `SelectAt(idx)` between them. ABR
 /// mode is `Auto(None)` for every track (production default).
-async fn run_multi(helper: &TestServerHelper, kinds: &[TrackKind], actions: Vec<Action>) {
+async fn run_multi(kinds: &[TrackKind], actions: Vec<Action>) {
+    let helper = TestServerHelper::new().await;
     let mut specs = Vec::with_capacity(kinds.len());
     for kind in kinds {
         specs.push(
             build_spec(
-                helper,
+                &helper,
                 *kind,
                 AbrMode::Auto(None),
                 DecoderBackend::Symphonia,
@@ -499,8 +484,7 @@ async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[c
 #[case::drm_then_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
 #[case::flac_then_drm(&[TrackKind::HlsMixedCodecAbr4, TrackKind::HlsAacLcDrmAbr4])]
 async fn user_sim_switch_track_then_seek(#[case] kinds: &[TrackKind]) {
-    let helper = TestServerHelper::new().await;
-    run_multi(&helper, kinds, scenarios::switch_track_then_seek()).await;
+    run_multi(kinds, scenarios::switch_track_then_seek()).await;
 }
 
 /// Many `SelectAt` + seek bounces between two tracks. Lights up the
@@ -511,13 +495,7 @@ async fn user_sim_switch_track_then_seek(#[case] kinds: &[TrackKind]) {
 #[case::drm_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
 #[case::drm_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
 async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: &[TrackKind]) {
-    let helper = TestServerHelper::new().await;
-    run_multi(
-        &helper,
-        kinds,
-        scenarios::bounce_between_tracks_with_seeks(),
-    )
-    .await;
+    run_multi(kinds, scenarios::bounce_between_tracks_with_seeks()).await;
 }
 
 /// Long play on first track, switch to next, seek inside immediately.
@@ -529,8 +507,7 @@ async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: &[TrackKind]) 
 #[case::drm_then_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
 #[case::drm_then_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
 async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: &[TrackKind]) {
-    let helper = TestServerHelper::new().await;
-    run_multi(&helper, kinds, scenarios::long_play_then_switch_then_seek()).await;
+    run_multi(kinds, scenarios::long_play_then_switch_then_seek()).await;
 }
 
 /// Three-track DRM-heavy playlist: DRM → plain → DRM. The second
@@ -548,7 +525,6 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: &[TrackKind]) {
     TrackKind::HlsAacLcAbr4,
 ])]
 async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
-    let helper = TestServerHelper::new().await;
     // Walk all three with seeks: 0 → seek mid → 1 → seek mid → 2 → seek mid.
     let actions = vec![
         Action::PlayFor(Duration::from_secs(2)),
@@ -563,7 +539,7 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
         Action::SeekRatio(0.5),
         Action::PlayFor(Duration::from_secs(2)),
     ];
-    run_multi(&helper, kinds, actions).await;
+    run_multi(kinds, actions).await;
 }
 
 // ─── Apple decoder backend (macOS/iOS) ─────────────────────────────────────
