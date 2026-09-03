@@ -179,6 +179,27 @@ enum ToneClass {
     Unknown,
 }
 
+#[derive(Clone, Copy)]
+enum CrossfadeFlavor {
+    Plain,
+    Eq,
+    EqStretch,
+}
+
+impl CrossfadeFlavor {
+    fn player_config(self) -> OfflinePlayerOptions {
+        let builder = OfflinePlayerOptions::builder().crossfade_duration(CROSSFADE_SECS);
+        match self {
+            Self::Plain => builder.build(),
+            Self::Eq => builder.eq_layout(generate_log_spaced_bands(10)).build(),
+            Self::EqStretch => builder
+                .eq_layout(generate_log_spaced_bands(10))
+                .timestretch(StretchControls::new(1.0))
+                .build(),
+        }
+    }
+}
+
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -610,48 +631,38 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(temp_dir: TestTempDir) {
+#[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]
+#[case::eq(false, "crossfade FLAC eq", CrossfadeFlavor::Eq)]
+#[case::eq_stretch(false, "crossfade FLAC eq stretch", CrossfadeFlavor::EqStretch)]
+#[case::resampled(true, "crossfade resampled FLAC", CrossfadeFlavor::Plain)]
+async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
+    temp_dir: TestTempDir,
+    #[case] resampled: bool,
+    #[case] label: &str,
+    #[case] flavor: CrossfadeFlavor,
+) {
     let server = TestServerHelper::new().await;
+    let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
+        (
+            RESAMPLED_RENDER_RATE,
+            collapse_resampled_noise_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            true,
+        )
+    } else {
+        (
+            SAMPLE_RATE,
+            collapse_short_unknown_islands as fn(&[ClassRun]) -> Vec<ClassRun>,
+            false,
+        )
+    };
     run_crossfade_flac_case(
         &server,
         &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC",
-        false,
-        crossfade_player_config,
-    )
-    .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC eq",
-        false,
-        crossfade_eq_player_config,
-    )
-    .await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq_stretch(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let timestretch = StretchControls::new(1.0);
-
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        SAMPLE_RATE,
-        collapse_short_unknown_islands,
-        "crossfade FLAC eq stretch",
-        false,
-        || crossfade_eq_stretch_player_config(&timestretch),
+        sample_rate,
+        collapse_runs,
+        label,
+        provenance_headroom,
+        || flavor.player_config(),
     )
     .await;
 }
@@ -691,21 +702,6 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
         "app-layer crossfade FLAC queue.current_index must advance to track B at end; {}",
         context.dump()
     );
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    run_crossfade_flac_case(
-        &server,
-        &temp_dir,
-        RESAMPLED_RENDER_RATE,
-        collapse_resampled_noise_islands,
-        "crossfade resampled FLAC",
-        true,
-        crossfade_player_config,
-    )
-    .await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -973,19 +969,6 @@ async fn run_crossfade_flac_case(
         collapse_runs,
         label,
     );
-}
-
-fn crossfade_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::builder()
-        .crossfade_duration(CROSSFADE_SECS)
-        .build()
-}
-
-fn crossfade_eq_player_config() -> OfflinePlayerOptions {
-    OfflinePlayerOptions::builder()
-        .crossfade_duration(CROSSFADE_SECS)
-        .eq_layout(generate_log_spaced_bands(10))
-        .build()
 }
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
