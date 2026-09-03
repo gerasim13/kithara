@@ -62,6 +62,7 @@ pub(crate) struct Dependent {
     pub(crate) timeout: u32,
     pub(crate) depth: u32,
     pub(crate) needs: Vec<String>,
+    pub(crate) artifact: Option<CiLaneArtifact>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,6 +172,7 @@ pub(crate) fn render(
             timeout: lane.timeout_minutes,
             depth: lane.fetch_depth,
             needs: lane.needs.clone(),
+            artifact: lane.artifact.clone(),
         })
         .collect();
 
@@ -228,6 +230,7 @@ pub(crate) fn run(args: &LanesArgs, ctx: &Ctx) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ArtifactWhen;
 
     fn lane(role: &str, kinds: &[&str], needs: &[&str]) -> CiLaneConfig {
         CiLaneConfig {
@@ -280,8 +283,17 @@ mod tests {
     // Asking for one lane must bring what reads its artifact, and nothing else.
     #[test]
     fn selecting_one_lane_brings_only_its_own_dependents() {
+        let mut catalog = catalog();
+        let dependent = catalog
+            .get_mut("deep-stress-report")
+            .expect("the dependent lane is in the catalog");
+        dependent.artifact = Some(CiLaneArtifact {
+            name: "quality-report".to_owned(),
+            path: "target/consolidated-quality-report.md".to_owned(),
+            when: ArtifactWhen::Failure,
+        });
         let selection = render(
-            &catalog(),
+            &catalog,
             &args("deep", PipelineKind::Nightly, &["deep-stress"]),
         )
         .expect("the stress lane renders");
@@ -297,6 +309,10 @@ mod tests {
             .collect();
         assert_eq!(names, ["deep-stress"]);
         assert_eq!(dependent, ["deep-stress-report"]);
+        assert_eq!(
+            field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
+            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+        );
     }
 
     #[test]

@@ -1,19 +1,14 @@
-use std::io::Cursor;
+use std::{io::Cursor, num::NonZeroUsize};
 
 use bytes::Bytes;
 use kithara::{
-    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed},
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     net::{HttpClient, NetError, NetOptions},
-    platform::{
-        CancelScope,
-        sync::{
-            Arc,
-            atomic::{AtomicU64, Ordering},
-        },
-        time::Duration,
-    },
+    output::LiveOutput,
+    platform::{CancelScope, sync::Mutex, time::Duration},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
+    worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
@@ -30,7 +25,11 @@ pub(super) const WINDOW: usize = 6;
 pub(super) const GRACE: usize = 3;
 pub(super) const SEGMENT_FRAMES: u64 = 24_000;
 
-const CHUNK_FRAMES: u64 = 2_400;
+const CHUNK_FRAMES: usize = 2_400;
+const BUFFER_FRAMES: NonZeroUsize = match NonZeroUsize::new(512_000) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
 
 /// Non-progress watchdog: the wait resolves as soon as the segment is reported.
 const PACKAGER_DEADLINE: Duration = Duration::from_secs(20);
@@ -167,8 +166,8 @@ pub(super) fn assert_carries_the_tone(pcm: &[f32], tone_hz: f64, sample_rate: u3
 
 pub(super) struct Origin {
     pub(super) handle: BroadcastHandle,
-    dropped: Arc<AtomicU64>,
-    released: Arc<AtomicU64>,
+    output: Mutex<SignalOutput>,
+    _worker: Worker,
     scope: CancelScope,
     client: HttpClient,
     base: Url,
@@ -176,10 +175,9 @@ pub(super) struct Origin {
 
 impl Origin {
     pub(super) async fn advance_to(&self, segments: u64) {
-        self.released.fetch_max(
-            SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2,
-            Ordering::Release,
-        );
+        self.output
+            .lock()
+            .write_until(SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2);
         wait_until(
             PACKAGER_DEADLINE,
             "the packager reaches the segment",
@@ -190,7 +188,7 @@ impl Origin {
     }
 
     pub(super) fn drop_samples(&self, samples: u64) {
-        self.dropped.fetch_add(samples, Ordering::Release);
+        self.output.lock().drop_samples(samples);
     }
 
     pub(super) async fn get(&self, path: &str) -> Result<Bytes, u16> {
@@ -212,30 +210,29 @@ impl Origin {
     }
 
     pub(super) fn start() -> Self {
-        let released = Arc::new(AtomicU64::new(0));
-        let dropped = Arc::new(AtomicU64::new(0));
         let scope = CancelScope::new(None);
-        let config = BroadcastConfig::builder()
+        let worker = Worker::new(WorkerConfig::new());
+        let pools = pools();
+        let config = BroadcastConfig::builder(worker.clone(), pools.clone())
+            .cancel(scope.token())
             .sample_rate(SAMPLE_RATE)
             .channels(CHANNELS)
             .segment_target(TARGET)
             .window(WINDOW)
             .grace(GRACE)
+            .buffer_frames(BUFFER_FRAMES)
             .build();
-        let feed = PacedSine {
-            released: Arc::clone(&released),
-            dropped: Arc::clone(&dropped),
-            produced: 0,
-            closed: false,
-        };
-        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
+        let (output, handle) = Broadcast::start(config).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
-        let client = HttpClient::new(NetOptions::default(), pools(), scope.token());
+        let client = HttpClient::new(NetOptions::default(), pools, scope.token());
 
         Self {
             handle,
-            released,
-            dropped,
+            output: Mutex::new(SignalOutput {
+                output,
+                produced: 0,
+            }),
+            _worker: worker,
             scope,
             client,
             base,
@@ -249,39 +246,33 @@ impl Drop for Origin {
     }
 }
 
-struct PacedSine {
-    dropped: Arc<AtomicU64>,
-    released: Arc<AtomicU64>,
-    closed: bool,
+struct SignalOutput {
+    output: BroadcastOutput,
     produced: u64,
 }
 
-impl LivePcmFeed for PacedSine {
-    fn close(&mut self) {
-        self.closed = true;
+impl SignalOutput {
+    fn drop_samples(&mut self, samples: u64) {
+        let frames = samples / u64::from(CHANNELS);
+        let frames = usize::try_from(frames).expect("test gap fits one address space");
+        self.output.write_stereo(frames, &[], &[]);
     }
 
-    fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
-        let dropped = self.dropped.swap(0, Ordering::AcqRel);
-        let pending = self
-            .released
-            .load(Ordering::Acquire)
-            .saturating_sub(self.produced);
-        let frames = pending.min(CHUNK_FRAMES);
-
+    fn write_until(&mut self, target: u64) {
         let tone = Wave::sine(TONE_HZ);
-        for frame in self.produced..self.produced + frames {
-            let frame = usize::try_from(frame).expect("the feed stays inside one address space");
-            let sample = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;
-            for _ in 0..CHANNELS {
-                out.push(sample);
+        while self.produced < target {
+            let remaining = target - self.produced;
+            let chunk_frames = u64::try_from(CHUNK_FRAMES).expect("test chunk fits u64");
+            let frames = usize::try_from(remaining.min(chunk_frames))
+                .expect("test chunk fits one address space");
+            let frames_u64 = u64::try_from(frames).expect("test chunk fits u64");
+            let mut left = Vec::with_capacity(frames);
+            for frame in self.produced..self.produced + frames_u64 {
+                let frame = usize::try_from(frame).expect("test signal fits one address space");
+                left.push(f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0);
             }
-        }
-        self.produced += frames;
-
-        FeedChunk {
-            dropped,
-            has_ended: self.closed && pending == frames,
+            self.output.write_stereo(frames, &left, &left);
+            self.produced += frames_u64;
         }
     }
 }

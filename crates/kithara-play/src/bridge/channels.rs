@@ -1,10 +1,18 @@
 use kithara_audio::SeekBegin;
 use kithara_events::TrackId;
+use kithara_output::LiveOutput;
 use kithara_platform::{
-    sync::{Arc, atomic::AtomicU64},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
-use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
+use kithara_signal::AudioSpec;
+use ringbuf::{
+    HeapCons, HeapProd, HeapRb,
+    traits::{Observer, Producer, Split},
+};
 use smallvec::SmallVec;
 
 use super::PlaybackShared;
@@ -39,6 +47,31 @@ impl MixTapWriter {
 impl From<MixTapWriter> for (HeapProd<f32>, Arc<AtomicU64>) {
     fn from(writer: MixTapWriter) -> Self {
         (writer.samples, writer.drops)
+    }
+}
+
+impl LiveOutput for MixTapWriter {
+    fn reconfigure(&mut self, _spec: AudioSpec) {}
+
+    fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
+        let stereo = 2;
+        let writable = frames
+            .min(left.len())
+            .min(right.len())
+            .min(self.samples.vacant_len() / stereo);
+        let pushed = self.samples.push_iter(
+            left[..writable]
+                .iter()
+                .zip(&right[..writable])
+                .flat_map(|(&left, &right)| [left, right]),
+        );
+        let dropped = frames.saturating_mul(stereo).saturating_sub(pushed);
+        if dropped > 0 {
+            self.drops.fetch_add(
+                u64::try_from(dropped).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+        }
     }
 }
 

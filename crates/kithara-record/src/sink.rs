@@ -24,3 +24,15 @@ pub trait RecordingSink: Send + 'static {
     /// Discard the open transaction. Calling this more than once is harmless.
     fn abort(&mut self);
 }
+
+/// Opens the transactional destination for each independently playable part.
+pub trait PartSinkFactory: Send + 'static {
+    /// Concrete transaction used by the recording core.
+    type Sink: RecordingSink;
+
+    /// Open one part by its one-based sequence number.
+    ///
+    /// # Errors
+    /// Returns the destination's acquisition failure.
+    fn open(&mut self, part: u64) -> Result<Self::Sink, <Self::Sink as RecordingSink>::Error>;
+}

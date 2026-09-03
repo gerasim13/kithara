@@ -28,7 +28,7 @@ use crate::{
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
-        CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
+        CursorShape, Hit, Hover, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
             pointer_button, pointer_position, portable_modifiers, portable_scroll,
             portable_text_input,
@@ -60,6 +60,14 @@ impl Detent {
             map_event,
             stepper: Stepper::default(),
         }
+    }
+
+    /// The hand this surface asks for, which is the one the immediate host
+    /// puts over the same flow: the surface reads as a thing that steps while
+    /// the pointer is over it, and goes on reading that way for as long as a
+    /// drag it started lasts, wherever the pointer has got to.
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        Hover::new(CursorShape::ResizeV).cursor(self.stepper.dragging(), hit)
     }
 
     /// Offers one input to this surface, answering whether the surface took it.
@@ -615,6 +623,9 @@ impl Widget for Node {
             && hit.over()
         {
             return cursor_icon(spot.cursor());
+        }
+        if let Some(detent) = &self.detent {
+            return cursor_icon(detent.cursor(&hit));
         }
         let leaf = match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.cursor(&hit),

@@ -1597,11 +1597,20 @@ fn the_dispatch_collector_is_read_only_and_does_not_mirror_the_source_verdict() 
     );
 
     let collect = named_step(job, "Collect the source run jobs");
+    let env = mapping_field(collect, "env")
+        .as_mapping()
+        .expect("the collector has an environment");
+    assert_eq!(
+        mapping_field(env, "RUN_ATTEMPT").as_str(),
+        Some("${{ github.event.workflow_run.run_attempt }}")
+    );
     let script = mapping_field(collect, "run")
         .as_str()
         .expect("dispatch collector is a script");
     for contract in [
         "gh api \"repos/$REPOSITORY/actions/runs/$RUN_ID/jobs\"",
+        "--name quality-report-${RUN_ID}-${RUN_ATTEMPT}",
+        "quality/consolidated-quality-report.md",
         "target/dispatch-report.md",
         "$GITHUB_STEP_SUMMARY",
     ] {
@@ -1829,6 +1838,14 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
         Some("${{ inputs.lane }}"),
         "the executor's job carries the lane's name"
     );
+    let upload = named_step(job, "Upload the lane's report");
+    let upload_inputs = mapping_field(upload, "with")
+        .as_mapping()
+        .expect("the lane upload has inputs");
+    assert_eq!(
+        mapping_field(upload_inputs, "name").as_str(),
+        Some("${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}")
+    );
 }
 
 // The other half of the same tree. Each calling job has to be named, because
@@ -1986,4 +2003,19 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         BTreeSet::from(["select".to_owned(), "run".to_owned()]),
         "a dependent lane runs after the matrix it reads"
     );
+    let dependent = workflow_job(jobs, "dependent");
+    let with = mapping_field(dependent, "with")
+        .as_mapping()
+        .expect("the dependent lane call passes inputs");
+    for (name, value) in [
+        ("artifact-name", "${{ matrix.artifact.name || '' }}"),
+        ("artifact-path", "${{ matrix.artifact.path || '' }}"),
+        ("artifact-when", "${{ matrix.artifact.when || 'always' }}"),
+    ] {
+        assert_eq!(
+            mapping_field(with, name).as_str(),
+            Some(value),
+            "the dependent lane loses `{name}`"
+        );
+    }
 }

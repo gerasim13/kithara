@@ -510,9 +510,14 @@ where
         let Some((input, at)) = picker::pointing(event, &mut self.double_click, self.scale) else {
             return Ok(false);
         };
+        let covered = self.covering_surface(at);
         for engine in self.routers() {
             let owner = engine.owner();
             let held = engine.captures_pointer();
+            if !held && covered.is_some_and(|index| !self.popovers[index].controls.contains(&owner))
+            {
+                continue;
+            }
             let routed = engine.route(input, at);
             if routed.repaint {
                 self.root.edit_widget(owner, |mut widget| {
@@ -531,6 +536,19 @@ where
             }
         }
         Ok(false)
+    }
+
+    /// The open surface this point lands in, when one covers it.
+    ///
+    /// A surface floats above the document, so the room it covers is its own.
+    /// The topmost one wins, the same order a press outside them is dismissed
+    /// in, and an engine that already holds the pointer keeps it either way.
+    fn covering_surface(&self, at: Option<Pt>) -> Option<usize> {
+        let at = at?;
+        let point = Point::new(at.x.into(), at.y.into());
+        self.popovers.iter().rposition(|popover| {
+            popover.state.standing().is_some() && popover.state.surface().contains(point)
+        })
     }
 
     fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {

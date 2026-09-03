@@ -1,20 +1,15 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     self,
-    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed, RingFeed},
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
     events::TrackId,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelScope,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicU64, Ordering},
-        },
-        time::Duration,
-    },
-    play::{MixTapWriter, Resource},
+    output::{LiveOutput, OutputGroup},
+    platform::{CancelScope, time::Duration},
+    play::Resource,
     signal::AudioSpec,
+    worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -23,7 +18,6 @@ use kithara_integration_tests::{
     waits::wait_until,
 };
 use kithara_test_fixtures::signal::Wave;
-use ringbuf::{HeapRb, traits::Split};
 use url::Url;
 
 use super::origin::{Playlist, assert_carries_the_tone, decode_adts_left};
@@ -88,36 +82,32 @@ fn left_channel(interleaved: &[f32]) -> Vec<f32> {
     interleaved.iter().step_by(2).copied().collect()
 }
 
-/// The packager's read side under the test's control. While stalled the feed
-/// hands over nothing and leaves the ring untouched, so a render longer than
-/// the ring overruns it by arithmetic instead of by winning a race against the
-/// packager thread.
-struct StallableFeed {
-    inner: RingFeed,
-    draining: Arc<AtomicBool>,
-}
-
-impl LivePcmFeed for StallableFeed {
-    fn close(&mut self) {
-        self.inner.close();
-    }
-
-    fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
-        if self.draining.load(Ordering::Acquire) {
-            self.inner.poll(out)
-        } else {
-            FeedChunk::default()
-        }
-    }
-}
-
 struct OnAir {
-    drops: Arc<AtomicU64>,
-    draining: Arc<AtomicBool>,
     handle: BroadcastHandle,
+    _worker: Worker,
     scope: CancelScope,
     client: HttpClient,
     base: Url,
+}
+
+struct GapOutput {
+    gap_after_writes: Option<usize>,
+    output: BroadcastOutput,
+    writes: usize,
+}
+
+impl LiveOutput for GapOutput {
+    fn reconfigure(&mut self, spec: AudioSpec) {
+        self.output.reconfigure(spec);
+    }
+
+    fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
+        if self.gap_after_writes == Some(self.writes) {
+            self.output.write_stereo(frames, &[], &[]);
+        }
+        self.output.write_stereo(frames, left, right);
+        self.writes = self.writes.saturating_add(1);
+    }
 }
 
 impl OnAir {
@@ -148,54 +138,46 @@ impl OnAir {
         String::from_utf8(self.get("v/0/live.m3u8").await).expect("the playlist is text")
     }
 
-    fn start(harness: &OfflinePlayerHarness, ring_samples: usize) -> Self {
-        let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
-        let drops = Arc::new(AtomicU64::new(0));
-        harness
-            .host()
-            .install_mix_tap(MixTapWriter::new(pcm, Arc::clone(&drops)))
-            .expect("enable the mix tap");
-
-        let config = BroadcastConfig::builder()
+    fn start(
+        harness: &OfflinePlayerHarness,
+        ring_samples: usize,
+        gap_after_writes: Option<usize>,
+    ) -> Self {
+        let buffer_frames = ring_samples / 2;
+        let scope = CancelScope::new(None);
+        let worker = Worker::new(WorkerConfig::new());
+        let pools = pools();
+        let config = BroadcastConfig::builder(worker.clone(), pools.clone())
+            .cancel(scope.token())
             .sample_rate(SESSION_RATE)
             .channels(2)
             .segment_target(TARGET)
             .window(WINDOW)
+            .buffer_frames(
+                NonZeroUsize::new(buffer_frames).expect("test broadcast buffer is non-zero"),
+            )
             .build();
-        let scope = CancelScope::new(None);
-        let draining = Arc::new(AtomicBool::new(true));
-        let feed = StallableFeed {
-            inner: RingFeed::new(samples, Arc::clone(&drops)),
-            draining: Arc::clone(&draining),
-        };
-        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
+        let (output, handle) = Broadcast::start(config).expect("go on air");
+        let mut outputs = OutputGroup::new();
+        outputs.push(GapOutput {
+            gap_after_writes,
+            output,
+            writes: 0,
+        });
+        harness
+            .host()
+            .enable_outputs(outputs)
+            .expect("enable the master output group");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
-        let client = HttpClient::new(NetOptions::default(), pools(), scope.token());
+        let client = HttpClient::new(NetOptions::default(), pools, scope.token());
 
         Self {
             handle,
+            _worker: worker,
             scope,
             client,
             base,
-            drops,
-            draining,
         }
-    }
-
-    /// Stop the packager reading the ring, so the render alone decides how far
-    /// past the ring's capacity the producer runs.
-    fn stall(&self) {
-        self.draining.store(false, Ordering::Release);
-    }
-
-    /// Let the packager read again. Its next poll hands over what survived in
-    /// the ring and reports the whole gap behind it.
-    fn resume(&self) {
-        self.draining.store(true, Ordering::Release);
-    }
-
-    fn tap_drops(&self) -> u64 {
-        self.drops.load(Ordering::Relaxed)
     }
 
     /// Wait until the packager has eaten the ring empty: with the render
@@ -203,9 +185,8 @@ impl OnAir {
     /// package. Audio pushed after that starts against an empty ring, so a
     /// render that fits the ring cannot break the stream a second time.
     async fn wait_until_drained(&self) {
-        let lost = self.tap_drops();
         wait_until(Self::DRAIN_DEADLINE, "the packager reads the drops", || {
-            self.handle.status().dropped_samples >= lost
+            self.handle.status().dropped_samples > 0
         })
         .await
         .expect("the packager accounts for every dropped sample");
@@ -251,7 +232,7 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     const TONE_RENDER_FRAMES: usize = 110_250;
 
     let harness = playing_harness();
-    let on_air = OnAir::start(&harness, ROOMY_RING);
+    let on_air = OnAir::start(&harness, ROOMY_RING, None);
 
     render_tone(&harness, TONE_RENDER_FRAMES);
     on_air.handle.stop();
@@ -278,37 +259,17 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
-    /// Stereo samples the ring holds. `TAIL_FRAMES` fits inside it, so the
-    /// tail cannot break the stream a second time, while `OVERRUN_FRAMES` is
-    /// ten times over.
-    const TIGHT_RING: usize = 22_050;
-    const LEAD_FRAMES: usize = 8_820;
+async fn an_intake_gap_breaks_the_served_playlist() {
+    const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
+    const GAP_AFTER_WRITES: usize = 100;
     const OVERRUN_FRAMES: usize = 110_250;
     const TAIL_FRAMES: usize = 8_820;
     const TAIL_TONE_FRAMES: usize = 4_410;
-    /// The stalled render offers at least `OVERRUN_FRAMES * 2` samples. The
-    /// ring absorbs its capacity twice at most: once into a poll already in
-    /// flight when the stall lands, once to refill behind it. The rest is lost
-    /// whatever the packager thread got scheduled to do.
-    const LOST_AT_LEAST: usize = OVERRUN_FRAMES * 2 - TIGHT_RING * 2;
 
     let harness = playing_harness();
-    let on_air = OnAir::start(&harness, TIGHT_RING);
+    let on_air = OnAir::start(&harness, ROOMY_RING, Some(GAP_AFTER_WRITES));
 
-    render_tone(&harness, LEAD_FRAMES);
-    let before = on_air.tap_drops();
-
-    on_air.stall();
     render_tone(&harness, OVERRUN_FRAMES);
-    on_air.resume();
-    let lost = usize::try_from(on_air.tap_drops() - before).expect("a sample count fits a usize");
-    assert!(
-        lost >= LOST_AT_LEAST,
-        "{OVERRUN_FRAMES} frames against an unread {TIGHT_RING}-sample ring \
-         lose at least {LOST_AT_LEAST} samples, lost {lost}"
-    );
-
     on_air.wait_until_drained().await;
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
