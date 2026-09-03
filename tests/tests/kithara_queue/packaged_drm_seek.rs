@@ -8,7 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep, timeout},
+        time::{Duration, Instant, timeout},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
@@ -130,16 +130,6 @@ async fn run_drm_seek_case(
         .expect("create encrypted HLS fixture");
     let url = created.master_url();
     run_seek_scenario(&url, backend, abr, temp).await;
-}
-
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<AppPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {

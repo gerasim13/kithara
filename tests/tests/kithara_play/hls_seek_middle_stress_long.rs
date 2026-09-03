@@ -26,7 +26,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue},
+    offline::{OfflinePlayer, OfflineQueue, drive_queue_ticks},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -122,16 +122,6 @@ async fn render_until_position(
 
 fn segment_for_target(target: f64) -> usize {
     if target < 8.0 { 1 } else { 2 }
-}
-
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 #[kithara::flash(true)]

@@ -22,7 +22,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, drive_queue_ticks},
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
@@ -79,16 +79,6 @@ fn register_fast_mp3(helper: &TestServerHelper) -> BehaviorHandle {
 
 fn fast_url(handle: &BehaviorHandle) -> Url {
     handle.child_url("track.mp3")
-}
-
-#[kithara::flash(true)]
-async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
-    loop {
-        sleep(Duration::from_millis(50)).await;
-        if queue.tick().is_err() {
-            break;
-        }
-    }
 }
 
 fn build_queue_with_tick(

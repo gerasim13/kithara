@@ -111,29 +111,19 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
 }
 
 #[kithara::test(tokio)]
-async fn a_failure_flags_the_entry_that_played() {
-    let (harness, queue, _first, playing) = fixture_playing_the_second_copy();
-
-    publish_leading_failure(&harness, playing);
-    render_loop(&queue, &harness, WARMUP_BLOCKS);
-
-    let status = status_of(&queue, playing);
-    assert!(
-        matches!(status, TrackStatus::Failed(_)),
-        "the entry that played must be the one flagged: {status:?}"
-    );
-}
-
-#[kithara::test(tokio)]
-async fn a_failure_spares_an_entry_that_only_shares_the_url() {
+#[case::played_entry(true)]
+#[case::same_url_entry(false)]
+async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
     let (harness, queue, first, playing) = fixture_playing_the_second_copy();
 
     publish_leading_failure(&harness, playing);
     render_loop(&queue, &harness, WARMUP_BLOCKS);
 
-    let status = status_of(&queue, first);
-    assert!(
-        !matches!(status, TrackStatus::Failed(_)),
-        "an entry that never played must not be flagged for sharing a URL: {status:?}"
+    let id = if played_entry { playing } else { first };
+    let status = status_of(&queue, id);
+    assert_eq!(
+        matches!(status, TrackStatus::Failed(_)),
+        played_entry,
+        "only the entry that played may be flagged: {status:?}"
     );
 }
