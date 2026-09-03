@@ -324,90 +324,96 @@ impl AnalysisController {
         }
 
         while let Some(track_id) = self.pending.pop_front() {
-            // Track gone from the queue since it was enqueued: skip.
-            let Some(source) = queue.track_source(track_id) else {
-                continue;
-            };
-
-            let Some(cfg) = resource_config_from_source(source, config) else {
-                continue;
-            };
-            let target = match AnalysisTarget::for_config(&cfg) {
-                Ok(target) => Some(target),
-                Err(error) => {
-                    Self::reject_target(state, track_id, &error);
-                    continue;
-                }
-            };
-            let is_current = current_track_id(state) == Some(track_id);
-            let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
-                warn!("analysis: the engine reports no sample rate; pass not opened");
-                continue;
-            };
-
-            let mut served = false;
-            let mut resume = None;
-            let decode = match plan_analysis(target.as_ref(), &mut self.cache, rate) {
-                Plan::Serve { progress, refill } => {
-                    if is_current {
-                        state.lock().set_analysis(Some(progress.analysis().clone()));
-                        served = true;
-                    }
-                    if refill && progress.is_resumable() {
-                        resume = Some(*progress);
-                    }
-                    refill
-                }
-                Plan::Decode => true,
-            };
-            if !decode {
-                continue;
+            if let Some(run) = self.open_run(track_id, queue, state, config) {
+                self.activity = Some(Activity::Running(run));
+                return;
             }
-
-            // An unkeyable source cannot be cached, so a background decode
-            // would be thrown away; decode it only for display.
-            if !is_current && target.is_none() {
-                continue;
-            }
-
-            // A refill keeps what it just served on screen: the pass produces
-            // the missing artifact, not a blank deck.
-            if is_current && !served {
-                state.lock().set_analysis(None);
-            }
-
-            // The handle waits where this track's load will find it. A track
-            // already loaded keeps it waiting until it loads again, so a pass
-            // opened mid-play warms nothing this time round.
-            let queue = queue.clone();
-            let rx = if let Some(progress) = resume {
-                match self.runner.resume(cfg, progress, move |producer| {
-                    queue.attach_observer(track_id, producer);
-                }) {
-                    Ok(rx) => rx,
-                    Err(error) => {
-                        warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
-                        continue;
-                    }
-                }
-            } else {
-                let token = target.as_ref().map_or_else(
-                    || format!("track:{}", u64::from(track_id)).into(),
-                    |target| token_for(target.key()),
-                );
-                self.runner.analyze(cfg, token, rate, move |producer| {
-                    queue.attach_observer(track_id, producer);
-                })
-            };
-            self.activity = Some(Activity::Running(Run {
-                target,
-                axis: rate,
-                rx,
-                shown_revision: None,
-                track_id,
-            }));
-            return;
         }
+    }
+
+    fn open_run(
+        &mut self,
+        track_id: TrackId,
+        queue: &AppQueueControl,
+        state: &Mutex<UiState>,
+        config: &AppConfig,
+    ) -> Option<Run> {
+        let source = queue.track_source(track_id)?;
+        let cfg = resource_config_from_source(source, config)?;
+        let target = match AnalysisTarget::for_config(&cfg) {
+            Ok(target) => Some(target),
+            Err(error) => {
+                Self::reject_target(state, track_id, &error);
+                return None;
+            }
+        };
+        let is_current = current_track_id(state) == Some(track_id);
+        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+            warn!("analysis: the engine reports no sample rate; pass not opened");
+            return None;
+        };
+
+        let mut served = false;
+        let mut resume = None;
+        let decode = match plan_analysis(target.as_ref(), &mut self.cache, rate) {
+            Plan::Serve { progress, refill } => {
+                if is_current {
+                    state.lock().set_analysis(Some(progress.analysis().clone()));
+                    served = true;
+                }
+                if refill && progress.is_resumable() {
+                    resume = Some(*progress);
+                }
+                refill
+            }
+            Plan::Decode => true,
+        };
+        if !decode {
+            return None;
+        }
+
+        // An unkeyable source cannot be cached, so a background decode
+        // would be thrown away; decode it only for display.
+        if !is_current && target.is_none() {
+            return None;
+        }
+
+        // A refill keeps what it just served on screen: the pass produces
+        // the missing artifact, not a blank deck.
+        if is_current && !served {
+            state.lock().set_analysis(None);
+        }
+
+        // The handle waits where this track's load will find it. A track
+        // already loaded keeps it waiting until it loads again, so a pass
+        // opened mid-play warms nothing this time round.
+        let queue = queue.clone();
+        let rx = if let Some(progress) = resume {
+            match self.runner.resume(cfg, progress, move |producer| {
+                queue.attach_observer(track_id, producer);
+            }) {
+                Ok(rx) => rx,
+                Err(error) => {
+                    warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
+                    return None;
+                }
+            }
+        } else {
+            let token = target.as_ref().map_or_else(
+                || format!("track:{}", u64::from(track_id)).into(),
+                |target| token_for(target.key()),
+            );
+            self.runner.analyze(cfg, token, rate, move |producer| {
+                queue.attach_observer(track_id, producer);
+            })
+        };
+        Some(Run {
+            target,
+            axis: rate,
+            rx,
+            shown_revision: None,
+            track_id,
+        })
     }
 
     fn reject_target(state: &Mutex<UiState>, track_id: TrackId, error: &DecodeError) {
