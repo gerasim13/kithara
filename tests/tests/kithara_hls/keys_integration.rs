@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use kithara::{
-    drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
+    drm::{DecryptContext, DrmError, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry},
     platform::{sync::Arc, time::Duration},
     play::policy::{DomainKeyPolicy, DomainKeyRule},
@@ -23,6 +23,18 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
     reg
 }
 
+fn uppercase_key(key: Bytes) -> Result<Bytes, DrmError> {
+    Ok(Bytes::from(key.to_ascii_uppercase()))
+}
+
+fn reverse_key(key: Bytes) -> Result<Bytes, DrmError> {
+    Ok(Bytes::from(key.iter().rev().copied().collect::<Vec<_>>()))
+}
+
+fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
+    Ok(Bytes::from_static(b"MODIFIED"))
+}
+
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
@@ -39,45 +51,28 @@ async fn fetch_and_cache_key(
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn key_processor_applied(
+#[case::uppercase(uppercase_key, true, b"0123456789ABCDEF")]
+#[case::reverse(reverse_key, true, b"fedcba9876543210")]
+#[case::unmatched(sentinel_key, false, b"0123456789abcdef")]
+async fn key_processor_cases(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
+    #[case] process: fn(Bytes) -> Result<Bytes, DrmError>,
+    #[case] matches_host: bool,
+    #[case] expected: &[u8],
 ) -> HlsResult<()> {
     let server = test_server.await;
-
-    let processor: kithara::hls::KeyProcessor =
-        Arc::new(|key: Bytes| Ok(Bytes::from(key.to_ascii_uppercase())));
-
     let key_url = server.url("/aes/key.bin");
-    let host = key_url.host_str().expect("host").to_string();
-    let registry = registry_for_host(&host, processor);
+    let host = if matches_host {
+        key_url.host_str().expect("host")
+    } else {
+        "other.example"
+    };
+    let registry = registry_for_host(host, Arc::new(process));
     let key_store = test_key_store(&assets_fixture, Some(registry));
 
     let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
-    assert_eq!(key.as_ref(), b"0123456789ABCDEF");
-
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn key_store_with_different_processors(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-) -> HlsResult<()> {
-    let server = test_server.await;
-
-    let reverse_processor: kithara::hls::KeyProcessor = Arc::new(|key: Bytes| {
-        let reversed = key.iter().rev().copied().collect::<Vec<_>>();
-        Ok(Bytes::from(reversed))
-    });
-
-    let key_url = server.url("/aes/key.bin");
-    let host = key_url.host_str().expect("host").to_string();
-    let registry = registry_for_host(&host, reverse_processor);
-    let key_store = test_key_store(&assets_fixture, Some(registry));
-
-    let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
-    assert_eq!(key.as_ref(), b"fedcba9876543210");
+    assert_eq!(key.as_ref(), expected);
 
     Ok(())
 }
@@ -108,25 +103,6 @@ async fn key_store_caching_behavior(
     let key2 = key_store.get_raw_key(&key_url, None).await?;
 
     assert_eq!(key1, key2);
-
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn unmatched_domain_uses_raw_key(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-) -> HlsResult<()> {
-    let server = test_server.await;
-
-    let sentinel_processor: kithara::hls::KeyProcessor =
-        Arc::new(|_key: Bytes| Ok(Bytes::from_static(b"MODIFIED")));
-    let registry = registry_for_host("other.example", sentinel_processor);
-    let key_store = test_key_store(&assets_fixture, Some(registry));
-
-    let key_url = server.url("/aes/key.bin");
-    let key = key_store.get_raw_key(&key_url, None).await?;
-    assert_eq!(key.as_ref(), b"0123456789abcdef");
 
     Ok(())
 }
