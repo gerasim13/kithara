@@ -88,6 +88,7 @@ struct ProvenanceDumpContext<'a> {
     runs: &'a [ClassRun],
     onset_window: Option<usize>,
     b_onset_window: Option<usize>,
+    switch_issue_frame: Option<usize>,
     current_index: Option<usize>,
 }
 
@@ -107,43 +108,23 @@ impl DiagnosticContext for ProvenanceDumpContext<'_> {
     }
 
     fn dump(&self) -> String {
-        dump(
-            self.replays,
-            self.runs,
-            self.onset_window,
-            self.b_onset_window,
-            self.current_index,
-        )
-    }
-}
-
-struct SwitchDumpContext<'a> {
-    replays: &'a [Replay],
-    runs: &'a [ClassRun],
-    onset_window: Option<usize>,
-    b_onset_window: Option<usize>,
-    switch_issue_frame: usize,
-    current_index: Option<usize>,
-}
-
-impl DiagnosticContext for SwitchDumpContext<'_> {
-    fn onset_window(&self) -> Option<usize> {
-        self.onset_window
-    }
-
-    fn b_onset_window(&self) -> Option<usize> {
-        self.b_onset_window
-    }
-
-    fn dump(&self) -> String {
-        dump_with_switch(
-            self.replays,
-            self.runs,
-            self.onset_window,
-            self.b_onset_window,
-            self.switch_issue_frame,
-            self.current_index,
-        )
+        match self.switch_issue_frame {
+            Some(switch_issue_frame) => dump_with_switch(
+                self.replays,
+                self.runs,
+                self.onset_window,
+                self.b_onset_window,
+                switch_issue_frame,
+                self.current_index,
+            ),
+            None => dump(
+                self.replays,
+                self.runs,
+                self.onset_window,
+                self.b_onset_window,
+                self.current_index,
+            ),
+        }
     }
 }
 
@@ -259,6 +240,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     let last_ascending_window = require_last_class_window_before(
@@ -279,6 +261,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
 
@@ -374,12 +357,12 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
     );
     let onset_frame = frame_for_window(onset_window);
     let phase_start_frame = onset_frame.saturating_add(WINDOW_FRAMES);
-    let search_context = SwitchDumpContext {
+    let search_context = ProvenanceDumpContext {
         replays: &[],
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
-        switch_issue_frame,
+        switch_issue_frame: Some(switch_issue_frame),
         current_index: setup.queue.current_index(),
     };
     let last_ascending_window = require_last_class_window_before(
@@ -395,12 +378,12 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
         last_ascending_end_frame,
         PHASE_TOL_UNITS,
     );
-    let context = SwitchDumpContext {
+    let context = ProvenanceDumpContext {
         replays: &replays,
         runs: &runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
-        switch_issue_frame,
+        switch_issue_frame: Some(switch_issue_frame),
         current_index: setup.queue.current_index(),
     };
 
@@ -628,6 +611,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
         runs: &raw_runs,
         onset_window: Some(onset_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
 
@@ -801,6 +785,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         runs: &runs,
         onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     let last_ascending_window = require_last_class_window_before(
@@ -837,6 +822,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         runs: &runs,
         onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
+        switch_issue_frame: None,
         current_index: setup.queue.current_index(),
     };
     assert!(
