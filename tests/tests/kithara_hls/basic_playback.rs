@@ -129,37 +129,33 @@ async fn test_hls_session_creation(
     Ok(())
 }
 
-/// Test HLS with init segments.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_with_init_segments(
-    temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
-    info!("Testing HLS with init segments");
-
-    let _stream = HlsStreamBuilder::new()
-        .with_init()
-        .build(&server, temp_dir.path(), rt_cancel)
-        .await;
-
-    info!("Stream with init segments opened successfully");
-    Ok(())
+#[derive(Clone, Copy)]
+enum StreamOptions {
+    Init,
+    NeverCancel,
+    LimitedCache,
 }
 
-/// Test HLS with different options configurations.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_with_different_options(
+#[case::init_segments(StreamOptions::Init)]
+#[case::never_cancel(StreamOptions::NeverCancel)]
+#[case::limited_cache(StreamOptions::LimitedCache)]
+async fn hls_stream_options_open(
     temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+    #[case] options: StreamOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
-    info!("Testing HLS with custom options");
+    let (builder, cancel) = match options {
+        StreamOptions::Init => (HlsStreamBuilder::new().with_init(), rt_cancel),
+        StreamOptions::NeverCancel => (HlsStreamBuilder::new(), CancelToken::never()),
+        StreamOptions::LimitedCache => (
+            HlsStreamBuilder::new().max_assets(1).max_bytes(1024),
+            CancelToken::never(),
+        ),
+    };
 
-    let _stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancelToken::never())
-        .await;
-
-    info!("HLS source opened successfully with custom options");
+    let _stream = builder.build(&server, temp_dir.path(), cancel).await;
     Ok(())
 }
 
@@ -240,22 +236,5 @@ async fn test_init_segment_at_stream_start(
     );
 
     info!("INIT segment correctly at stream start");
-    Ok(())
-}
-
-/// Test HLS with limited cache.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
-
-    info!("Testing HLS with limited cache");
-
-    let _stream = HlsStreamBuilder::new()
-        .max_assets(1)
-        .max_bytes(1024)
-        .build(&server, temp_dir.path(), CancelToken::never())
-        .await;
-
-    info!("HLS source opened successfully with limited cache");
     Ok(())
 }
