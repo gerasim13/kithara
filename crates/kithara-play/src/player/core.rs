@@ -5,7 +5,7 @@ use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::StretchControls;
+use kithara_warp::{BeatGridSnapshot, StretchControls};
 use tracing::debug;
 
 use self::lifecycle::{CloseAdmission, PlayerLifecycle};
@@ -21,7 +21,12 @@ use crate::{
     worker::{EngineLoad, PlayWorker},
 };
 
-type EnqueuedItem = (TrackId, Arc<str>, f64);
+pub(crate) struct EnqueuedItem {
+    pub(crate) beat_grid: Option<BeatGridSnapshot>,
+    pub(crate) duration_seconds: f64,
+    pub(crate) item_id: TrackId,
+    pub(crate) src: Arc<str>,
+}
 
 /// Phase-neutral state shared across every player phase.
 ///
@@ -179,11 +184,17 @@ impl<S> PlayerRuntime<S> {
         };
         self.phase.lock().set_abr_handle(item.abr_handle);
         let src = Arc::clone(item.player_resource.src());
+        let enqueued = EnqueuedItem {
+            beat_grid: item.beat_grid,
+            duration_seconds: item.duration_seconds,
+            item_id: item.item_id,
+            src,
+        };
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             item_id: item.item_id,
             resource: Box::new(item.player_resource),
         });
-        Ok(Some((item.item_id, src, item.duration_seconds)))
+        Ok(Some(enqueued))
     }
 
     /// Remove all items from the queue.
@@ -193,6 +204,7 @@ impl<S> PlayerRuntime<S> {
     {
         self.unarm_next();
         self.core.items.clear_all();
+        let _ = self.core.engine.set_track_grid(None);
         self.set_status(PlayerStatus::Unknown);
         let _ = self.send_to_slot(PlayerCmd::Clear);
         self.enter_stopped();

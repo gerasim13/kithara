@@ -1,8 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_analysis::BeatArtifact;
+use std::num::NonZeroU32;
+
+use kithara_analysis::{BeatArtifact, BeatGridConfig};
 use kithara_test_fixtures::assets::by_name;
 use kithara_test_utils::kithara;
+use kithara_warp::{
+    AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
+    FrameUncertainty, MapAxis, MapPoint, MapPosition,
+};
 use num_traits::cast;
 
 const STYLES: [(&str, f64); 6] = [
@@ -28,6 +34,7 @@ impl Consts {
     const MARKER_MATCH_RATIO: f64 = 0.75;
     const MARKER_TOLERANCE_BEATS: f64 = 0.12;
     const SAMPLE_RATE: f64 = 48_000.0;
+    const SAMPLE_RATE_HZ: u32 = 48_000;
     const SECONDS_PER_MINUTE: f64 = 60.0;
     const TEMPO_TOLERANCE_RATIO: f64 = 0.04;
     const TOTAL_FRAMES: u64 = 48_000 * 12;
@@ -122,6 +129,86 @@ fn score_truth_distinguishes_all_three_negative_controls() {
 }
 
 #[kithara::test(native, flash(false))]
+fn every_score_map_forms_exact_production_grid_geometry() {
+    let axis = AssetAxis::new(
+        NonZeroU32::new(Consts::SAMPLE_RATE_HZ).expect("fixture sample rate"),
+        Consts::TOTAL_FRAMES,
+    );
+    for (style, bpm) in STYLES {
+        for control in CONTROLS {
+            let artifact = artifact(style, control);
+            let grid = BeatGridSnapshot::try_from(
+                BeatGridConfig::builder()
+                    .artifact(&artifact)
+                    .id(BeatGridId::allocate().expect("fixture grid identity"))
+                    .revision(BeatGridRevision::first())
+                    .axis(axis)
+                    .uncertainty(FrameUncertainty::new(0.0).expect("exact fixture uncertainty"))
+                    .build(),
+            )
+            .unwrap_or_else(|error| panic!("{style}/{control}: build grid: {error}"));
+
+            assert_eq!(grid.axis(), MapAxis::Asset(axis));
+            assert_eq!(
+                resolved_frame(&grid, 0.0),
+                cast::<u64, f64>(artifact.downbeats()[0]).expect("fixture frame fits f64"),
+                "{style}/{control}: beat zero must be the first downbeat"
+            );
+            let first_ordinal = if control == "one_beat_bar_late" {
+                -1.0
+            } else {
+                0.0
+            };
+            assert_eq!(
+                resolved_frame(&grid, first_ordinal),
+                cast::<u64, f64>(artifact.beats()[0]).expect("fixture frame fits f64"),
+                "{style}/{control}: first marker ordinal"
+            );
+            let position = MapPoint::new(
+                grid.stamp(),
+                MapPosition::Asset(
+                    AssetFrame::new(
+                        cast::<u64, f64>(artifact.beats()[0]).expect("fixture frame fits f64"),
+                    )
+                    .expect("fixture frame"),
+                ),
+            );
+            let BeatGridQuery::Resolved(tempo) = grid.tempo_at(position) else {
+                panic!("{style}/{control}: tempo must resolve");
+            };
+            assert!(
+                (f64::from(*tempo.value()) - bpm).abs() < 0.01,
+                "{style}/{control}: grid tempo {} differs from {bpm}",
+                f64::from(*tempo.value())
+            );
+            let BeatGridQuery::Resolved(meter) = grid.meter_at(MapPoint::new(
+                grid.stamp(),
+                Beat::new(0.0).expect("fixture downbeat"),
+            )) else {
+                panic!("{style}/{control}: meter must resolve");
+            };
+            assert_eq!(meter.value().beats_per_bar(), 4);
+
+            if control == "missing_beat" {
+                let before = artifact.beats()[4];
+                let after = artifact.beats()[5];
+                let middle =
+                    cast::<u64, f64>(before + after).expect("fixture frame fits f64") / 2.0;
+                assert_eq!(
+                    resolved_frame(&grid, 5.0),
+                    middle,
+                    "{style}: missing marker must preserve its beat ordinal"
+                );
+                assert_eq!(
+                    resolved_frame(&grid, 6.0),
+                    cast::<u64, f64>(after).expect("fixture frame fits f64")
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test(native, flash(false))]
 fn production_analysis_agrees_with_independent_score_truth() {
     for (style, bpm) in STYLES {
         for control in CONTROLS {
@@ -202,6 +289,20 @@ fn assert_markers_agree(
         "{style}/{control}: only {matched}/{} analyzed {kind}s match score within {tolerance} frames: expected={expected:?}, analyzed={analyzed:?}",
         analyzed.len()
     );
+}
+
+fn resolved_frame(grid: &BeatGridSnapshot, beat: f64) -> f64 {
+    let point = MapPoint::new(
+        grid.stamp(),
+        Beat::new(beat).expect("fixture beat is finite"),
+    );
+    let BeatGridQuery::Resolved(position) = grid.position_at(point) else {
+        panic!("beat {beat} must resolve on fixture grid");
+    };
+    let MapPosition::Asset(frame) = *position.value().value() else {
+        panic!("fixture grid must use the asset axis");
+    };
+    f64::try_from(frame).expect("fixture frame is representable")
 }
 
 fn stereo_side_ratio(wav: &[u8]) -> f64 {

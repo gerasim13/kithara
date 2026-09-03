@@ -10,7 +10,7 @@ use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use kithara_warp::StretchControls;
+use kithara_warp::{BeatGridSnapshot, StretchControls};
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
@@ -35,6 +35,8 @@ where
     pub(crate) initial_abr_mode: AbrMode,
     /// Shared asset store used by playback and derived resources.
     pub(crate) store: AssetStore<S>,
+    /// Immutable beat geometry for this exact track load, when available.
+    pub(crate) beat_grid: Option<BeatGridSnapshot>,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
@@ -113,6 +115,7 @@ where
             src: self.src.clone(),
             initial_abr_mode: self.initial_abr_mode,
             store: self.store.clone(),
+            beat_grid: self.beat_grid.clone(),
             decoder: self.decoder.clone(),
             keys: self.keys.clone(),
             preload_chunks: self.preload_chunks,

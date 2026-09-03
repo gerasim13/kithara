@@ -1,4 +1,5 @@
 use kithara_platform::sync::Arc;
+use kithara_warp::BeatGridSnapshot;
 
 #[cfg(test)]
 use super::super::core::PlayerImpl;
@@ -38,6 +39,7 @@ impl PendingNextState {
 /// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
+    pub(crate) beat_grid: Option<BeatGridSnapshot>,
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) item_id: TrackId,

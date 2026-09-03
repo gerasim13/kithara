@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
+use kithara_warp::BeatGridSnapshot;
 use tracing::debug;
 
 use super::{QueuedResource, playlist::Playlist};
@@ -10,6 +11,7 @@ use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
+    pub(crate) beat_grid: Option<BeatGridSnapshot>,
     pub(crate) player_resource: PlayerResource,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
@@ -109,6 +111,7 @@ impl ItemQueue {
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
+        let beat_grid = resource.beat_grid().cloned();
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
@@ -118,6 +121,7 @@ impl ItemQueue {
 
         Ok(Some(TakenItem {
             abr_handle,
+            beat_grid,
             player_resource,
             item_id,
             duration_seconds,

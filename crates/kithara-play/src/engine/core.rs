@@ -9,6 +9,7 @@ use kithara_platform::{
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_warp::BeatGridSnapshot;
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info};
@@ -395,6 +396,11 @@ impl<S> EngineImpl<S> {
         info!(player_id, "engine stopped");
         self.emit(EngineEvent::Stopped);
         Ok(())
+    }
+
+    pub(crate) fn set_track_grid(&self, grid: Option<BeatGridSnapshot>) -> Result<(), PlayError> {
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        self.session.set_track_grid(player_id, grid)
     }
 
     pub fn subscribe(&self) -> kithara_events::EventReceiver {

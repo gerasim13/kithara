@@ -19,11 +19,10 @@ caller-owned `Vec<u8>` writer.
 
 `BeatArtifact` is identity-free detector output, not a live beat grid. The only
 live grid contract is `kithara-warp::BeatGrid`, whose owning Track/Player
-supplies identity and revision. This crate does not fabricate a
-`BeatGridSnapshot`: the current detector artifact has confidence and
-provenance, but no calibrated maximum frame error suitable for
-`FrameUncertainty`. A future adapter must consume that real fact rather than
-substitute zero or reinterpret confidence as timing error.
+supplies identity and revision. Converting `BeatGridConfig` into a
+`BeatGridSnapshot` requires those owner facts, the source axis, and a calibrated
+`FrameUncertainty`; detector confidence remains provenance and is never
+reinterpreted as timing error.
 
 ## Track analysis
 
