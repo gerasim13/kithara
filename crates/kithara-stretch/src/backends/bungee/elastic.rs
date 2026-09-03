@@ -21,8 +21,6 @@ pub(crate) struct BungeeElastic {
 }
 
 impl BungeeElastic {
-    const LATENCY_PROBE_BLOCKS: usize = 4;
-
     fn frame_count(frames: usize) -> Result<u128, ElasticError> {
         frames.to_u128().ok_or(ElasticError::SampleCountOverflow)
     }
@@ -91,7 +89,7 @@ impl BungeeElastic {
     {
         let probe_frames = config.max_source_frames().min(config.max_output_frames());
         let request = ElasticRequest::new(probe_frames, probe_frames)?;
-        for _ in 0..Self::LATENCY_PROBE_BLOCKS {
+        for _ in 0..StreamCore::PIPELINE_GRAINS {
             core.probe_silence(request)?;
         }
         let source_frames = core.source_latency_frames()?;
