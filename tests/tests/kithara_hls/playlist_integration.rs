@@ -41,56 +41,26 @@ async fn fetch_master_playlist_from_network(
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[case::v0(0)]
+#[case::v1(1)]
 async fn fetch_media_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
+    #[case] variant: usize,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    let media_url = server.url("/v0.m3u8");
+    let media_url = server.url(&format!("/v{variant}.m3u8"));
 
     let media_playlist = fetch_manager
         .media_playlist(
             &key_for(&assets_fixture, &media_url),
             &media_url,
-            VariantId(0),
+            VariantId(variant),
         )
         .await?;
-
-    let segment_count = media_playlist.segments.len();
-    assert_eq!(segment_count, 3);
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn fetch_media_playlist_for_different_variants(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-
-    let media_url_0 = server.url("/v0.m3u8");
-    let media_playlist_0 = fetch_manager
-        .media_playlist(
-            &key_for(&assets_fixture, &media_url_0),
-            &media_url_0,
-            VariantId(0),
-        )
-        .await?;
-    assert_eq!(media_playlist_0.segments.len(), 3);
-
-    let media_url_1 = server.url("/v1.m3u8");
-    let media_playlist_1 = fetch_manager
-        .media_playlist(
-            &key_for(&assets_fixture, &media_url_1),
-            &media_url_1,
-            VariantId(1),
-        )
-        .await?;
-    assert_eq!(media_playlist_1.segments.len(), 3);
+    assert_eq!(media_playlist.segments.len(), 3);
 
     Ok(())
 }
