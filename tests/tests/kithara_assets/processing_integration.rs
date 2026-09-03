@@ -79,7 +79,7 @@ fn create_xor_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessCtx
     Arc::new(XorProcessor::new(xor_key, call_count))
 }
 
-fn build_test_processing_scope(
+fn build_test_scope(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
 ) -> AssetScope<TestPools> {
@@ -107,38 +107,11 @@ fn build_test_processing_scope(
     }
 }
 
-fn build_test_scope_no_processing(
-    temp_dir: &kithara_integration_tests::TestTempDir,
-    asset_root: &str,
-) -> AssetScope<TestPools> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        AssetStore::builder(pools())
-            .backend(StorageBackend::Disk {
-                root: (temp_dir.path()).into(),
-            })
-            .layouts(literal_layouts())
-            .build()
-            .scope::<LiteralLayout>(&source(asset_root))
-            .expect("scope")
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = temp_dir;
-        AssetStore::builder(pools())
-            .backend(StorageBackend::Memory)
-            .layouts(literal_layouts())
-            .build()
-            .scope::<LiteralLayout>(&source(asset_root))
-            .expect("scope")
-    }
-}
-
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(&temp_dir, "test-processing");
+    let scope = build_test_scope(&temp_dir, "test-processing");
 
     let key = scope.key(&resource("data.bin")).unwrap();
 
@@ -176,7 +149,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(&temp_dir, "test-cache");
+    let scope = build_test_scope(&temp_dir, "test-cache");
 
     let key = scope.key(&resource("cached.bin")).unwrap();
     let ctx = create_xor_processor(0xAB, Arc::clone(&call_count));
@@ -218,7 +191,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(&temp_dir, "test-partial");
+    let scope = build_test_scope(&temp_dir, "test-partial");
 
     let key = scope.key(&resource("partial.bin")).unwrap();
     let ctx = create_xor_processor(0xFF, Arc::clone(&call_count));
@@ -260,7 +233,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(&temp_dir, "test-eof");
+    let scope = build_test_scope(&temp_dir, "test-eof");
 
     let key = scope.key(&resource("eof.bin")).unwrap();
     let ctx = create_xor_processor(0x00, Arc::clone(&call_count));
@@ -290,7 +263,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
-    let scope = build_test_scope_no_processing(&temp_dir, "no-processing");
+    let scope = build_test_scope(&temp_dir, "no-processing");
 
     let key = scope.key(&resource("test.bin")).unwrap();
 
