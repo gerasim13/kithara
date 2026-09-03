@@ -14,9 +14,7 @@ use std::{
 
 use kithara::{
     self,
-    audio::{
-        AudioControl, AudioRead, AudioSession, DecodeError, PendingReason, ReadOutcome, SeekOutcome,
-    },
+    audio::{AudioControl, AudioRead, AudioSession, DecodeError, ReadOutcome, SeekOutcome},
     decode::TrackMetadata,
     events::EventBus,
     platform::{sync::Arc, time::Duration},
@@ -27,7 +25,7 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::audio_mock::{Fault, MockReader, TestPcmReader};
 
 use crate::bufpool_ext::pools;
 
@@ -40,72 +38,6 @@ fn make_player_resource(seconds: f64) -> PlayerResource {
     let resource = Resource::from_reader(reader, None);
     PlayerResource::new(resource, Arc::from("test.mp3"), &pools())
         .expect("player resource fits the test pool budget")
-}
-
-struct PendingReader {
-    bus: EventBus,
-    meta: TrackMetadata,
-    spec: AudioSpec,
-}
-
-impl PendingReader {
-    fn new() -> Self {
-        Self {
-            bus: EventBus::default(),
-            meta: TrackMetadata::default(),
-            spec: mock_spec(),
-        }
-    }
-}
-
-impl AudioRead for PendingReader {
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            reason: PendingReason::Buffering,
-            position: Duration::ZERO,
-        })
-    }
-
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Ok(ReadOutcome::Pending {
-            reason: PendingReason::Buffering,
-            position: Duration::ZERO,
-        })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-}
-
-impl AudioSession for PendingReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(1))
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.meta
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-}
-
-impl AudioControl for PendingReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
 }
 
 struct ChunkReader {
@@ -372,7 +304,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 
 #[kithara::test(tokio)]
 async fn zero_read_without_eof_is_not_error() {
-    let reader = PendingReader::new();
+    let reader = MockReader::faulty(mock_spec(), Fault::Stall);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("pending"), &pools())
         .expect("player resource fits the test pool budget");
@@ -390,7 +322,7 @@ async fn zero_read_without_eof_is_not_error() {
 /// through, heard as a looped/glitched frame during seek.
 #[kithara::test(tokio)]
 async fn read_zeroes_output_when_no_data_available() {
-    let reader = PendingReader::new();
+    let reader = MockReader::faulty(mock_spec(), Fault::Stall);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("pending"), &pools())
         .expect("player resource fits the test pool budget");
@@ -459,70 +391,6 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     assert!(matches!(result2, BlockReadOutcome::Eof));
 }
 
-/// Reader that returns a typed decode `Err` on every read — models
-/// the in-the-wild scenario where the audio worker's PCM producer
-/// closed mid-stream after a transient decoder failure (e.g. failed
-/// seek leaves symphonia's atom reader cursor invalid, next
-/// `next_chunk` returns `isomp4: no atom pending read`).
-struct FailingReader {
-    bus: EventBus,
-    meta: TrackMetadata,
-    spec: AudioSpec,
-}
-
-impl FailingReader {
-    fn new() -> Self {
-        Self {
-            bus: EventBus::default(),
-            meta: TrackMetadata::default(),
-            spec: mock_spec(),
-        }
-    }
-}
-
-impl AudioRead for FailingReader {
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Err(DecodeError::InvalidData {
-            detail: "mock: decoder failed mid-stream",
-        })
-    }
-    fn read_planar<'a>(
-        &mut self,
-        _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
-        Err(DecodeError::InvalidData {
-            detail: "mock: decoder failed mid-stream",
-        })
-    }
-    fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-    fn position(&self) -> Duration {
-        Duration::ZERO
-    }
-}
-
-impl AudioSession for FailingReader {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(169))
-    }
-    fn metadata(&self) -> &TrackMetadata {
-        &self.meta
-    }
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-}
-
-impl AudioControl for FailingReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Ok(SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        })
-    }
-}
-
 /// Contract test for the user-reported "preliminary EOF" bug.
 ///
 /// Before the fix, any `Err` from the underlying audio reader set
@@ -534,7 +402,7 @@ impl AudioControl for FailingReader {
 /// distinguish "track aborted mid-stream" from "track played out".
 #[kithara::test(tokio)]
 async fn read_returns_failed_not_eof_on_decoder_error() {
-    let reader = FailingReader::new();
+    let reader = MockReader::faulty(mock_spec(), Fault::DecodeError);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &pools())
         .expect("player resource fits the test pool budget");
