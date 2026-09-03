@@ -525,7 +525,7 @@ pub struct PackagedTestServer {
 impl PackagedTestServer {
     #[must_use]
     pub async fn new() -> Self {
-        Self::with_delay_rules(Vec::new()).await
+        Self::from_builders(packaged_plain_builder(), packaged_encrypted_builder()).await
     }
 
     url_method!(
@@ -554,20 +554,11 @@ impl PackagedTestServer {
     /// without delays as it is unaffected by these scenarios.
     #[must_use]
     pub async fn with_delay_rules(delay_rules: Vec<DelayRule>) -> Self {
-        let helper = TestServerHelper::new().await;
-        let plain = helper
-            .create_hls(packaged_plain_builder().delay_rules(delay_rules))
-            .await
-            .expect("create packaged plain HLS fixture");
-        let encrypted = helper
-            .create_hls(packaged_encrypted_builder())
-            .await
-            .expect("create packaged encrypted HLS fixture");
-        Self {
-            plain,
-            encrypted,
-            _helper: helper,
-        }
+        Self::from_builders(
+            packaged_plain_builder().delay_rules(delay_rules),
+            packaged_encrypted_builder(),
+        )
+        .await
     }
 
     /// Build a server whose encrypted fixture applies the given HTTP
@@ -575,13 +566,21 @@ impl PackagedTestServer {
     /// built without error rules and stays usable for unaffected tests.
     #[must_use]
     pub async fn with_error_rules(error_rules: Vec<HttpErrorRule>) -> Self {
+        Self::from_builders(
+            packaged_plain_builder(),
+            packaged_encrypted_builder().error_rules(error_rules),
+        )
+        .await
+    }
+
+    async fn from_builders(plain: HlsFixtureBuilder, encrypted: HlsFixtureBuilder) -> Self {
         let helper = TestServerHelper::new().await;
         let plain = helper
-            .create_hls(packaged_plain_builder())
+            .create_hls(plain)
             .await
             .expect("create packaged plain HLS fixture");
         let encrypted = helper
-            .create_hls(packaged_encrypted_builder().error_rules(error_rules))
+            .create_hls(encrypted)
             .await
             .expect("create packaged encrypted HLS fixture");
         Self {
