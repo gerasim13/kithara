@@ -1,3 +1,5 @@
+use std::iter;
+
 use kithara::{
     platform::{sync::Arc, time::Duration},
     stream::AudioCodec,
@@ -354,7 +356,7 @@ impl HlsTestServer {
             if let Some(data) = init_data {
                 Self::scan_data_mismatches(data, offset, &actual[..init_count], 0, &mut mismatch);
             } else {
-                Self::scan_repeated_mismatches(0, &actual[..init_count], 0, &mut mismatch);
+                Self::scan_mismatches(iter::repeat(0), &actual[..init_count], 0, &mut mismatch);
             }
             checked = init_count;
         }
@@ -387,24 +389,29 @@ impl HlsTestServer {
         mismatch: &mut impl FnMut(usize, u8, u8),
     ) {
         let Ok(data_offset) = usize::try_from(data_offset) else {
-            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            Self::scan_mismatches(iter::repeat(0), actual, base_index, mismatch);
             return;
         };
 
         if data_offset >= data.len() {
-            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            Self::scan_mismatches(iter::repeat(0), actual, base_index, mismatch);
             return;
         }
 
         let data_len = actual.len().min(data.len() - data_offset);
-        Self::scan_slice_mismatches(
-            &data[data_offset..data_offset + data_len],
+        Self::scan_mismatches(
+            data[data_offset..data_offset + data_len].iter().copied(),
             &actual[..data_len],
             base_index,
             mismatch,
         );
         if data_len < actual.len() {
-            Self::scan_repeated_mismatches(0, &actual[data_len..], base_index + data_len, mismatch);
+            Self::scan_mismatches(
+                iter::repeat(0),
+                &actual[data_len..],
+                base_index + data_len,
+                mismatch,
+            );
         }
     }
 
@@ -428,23 +435,25 @@ impl HlsTestServer {
 
             if off_in_seg < prefix_bytes.len() {
                 let prefix_len = n.min(prefix_bytes.len() - off_in_seg);
-                Self::scan_slice_mismatches(
-                    &prefix_bytes[off_in_seg..off_in_seg + prefix_len],
+                Self::scan_mismatches(
+                    prefix_bytes[off_in_seg..off_in_seg + prefix_len]
+                        .iter()
+                        .copied(),
                     &actual[checked..checked + prefix_len],
                     base_index + checked,
                     mismatch,
                 );
                 if prefix_len < n {
-                    Self::scan_repeated_mismatches(
-                        0xFF,
+                    Self::scan_mismatches(
+                        iter::repeat(0xFF),
                         &actual[checked + prefix_len..checked + n],
                         base_index + checked + prefix_len,
                         mismatch,
                     );
                 }
             } else {
-                Self::scan_repeated_mismatches(
-                    0xFF,
+                Self::scan_mismatches(
+                    iter::repeat(0xFF),
                     &actual[checked..checked + n],
                     base_index + checked,
                     mismatch,
@@ -456,28 +465,15 @@ impl HlsTestServer {
         }
     }
 
-    fn scan_slice_mismatches(
-        expected: &[u8],
+    fn scan_mismatches(
+        expected: impl IntoIterator<Item = u8>,
         actual: &[u8],
         base_index: usize,
         mismatch: &mut impl FnMut(usize, u8, u8),
     ) {
-        for (index, (&expected_byte, &actual_byte)) in expected.iter().zip(actual).enumerate() {
+        for (index, (expected_byte, &actual_byte)) in expected.into_iter().zip(actual).enumerate() {
             if actual_byte != expected_byte {
                 mismatch(base_index + index, expected_byte, actual_byte);
-            }
-        }
-    }
-
-    fn scan_repeated_mismatches(
-        expected: u8,
-        actual: &[u8],
-        base_index: usize,
-        mismatch: &mut impl FnMut(usize, u8, u8),
-    ) {
-        for (index, &actual_byte) in actual.iter().enumerate() {
-            if actual_byte != expected {
-                mismatch(base_index + index, expected, actual_byte);
             }
         }
     }
