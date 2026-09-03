@@ -58,6 +58,13 @@ fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usiz
     (0, Consts::MAX_ZERO_READS, false)
 }
 
+/// Break sites carried into the continuity panic message.
+///
+/// A stress artifact keeps only the panic, and `info!` from a test binary never
+/// reaches it, so a bare count cannot say whether the phase jumped once over a
+/// segment gap or drifted everywhere.
+const MAX_REPORTED_BREAKS: usize = 5;
+
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
 #[kithara::test(
@@ -348,6 +355,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
         let mut total_frames_read = 0u64;
         let mut continuity_breaks = 0u64;
+        let mut first_breaks: Vec<String> = Vec::new();
         let mut prev_phase: Option<usize> = None;
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
@@ -407,15 +415,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 let next_desc = (pp + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
                     continuity_breaks += 1;
-                    if continuity_breaks <= 5 {
-                        info!(
-                            frame = total_frames_read,
-                            prev_phase = pp,
-                            first_phase,
-                            expected_asc = next_asc,
-                            expected_desc = next_desc,
-                            "inter-chunk continuity break"
-                        );
+                    if first_breaks.len() < MAX_REPORTED_BREAKS {
+                        first_breaks.push(format!(
+                            "inter-chunk@{total_frames_read}: {pp}->{first_phase} (expected {next_asc} or {next_desc})"
+                        ));
                     }
                 }
             }
@@ -427,11 +430,11 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 let next_desc = (p0 + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if p1 != next_asc && p1 != next_desc {
                     continuity_breaks += 1;
-                    if continuity_breaks <= 5 {
-                        info!(
-                            frame = total_frames_read + f as u64,
-                            p0, p1, "intra-chunk continuity break"
-                        );
+                    if first_breaks.len() < MAX_REPORTED_BREAKS {
+                        let frame = total_frames_read + f as u64;
+                        first_breaks.push(format!(
+                            "intra-chunk@{frame}: {p0}->{p1} (expected {next_asc} or {next_desc})"
+                        ));
                     }
                 }
             }
@@ -470,8 +473,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let max_breaks = 10u64;
         assert!(
             continuity_breaks <= max_breaks,
-            "too many continuity breaks after seek-to-0: {} (>{} tolerance) - data corruption or segment gap",
-            continuity_breaks, max_breaks
+            "too many continuity breaks after seek-to-0: {} (>{} tolerance) \
+             - data corruption or segment gap; total_frames_read={}, \
+             expected_frames={}, first breaks: {:?}",
+            continuity_breaks, max_breaks, total_frames_read, expected_frames, first_breaks
         );
 
         info!("All phases passed");
