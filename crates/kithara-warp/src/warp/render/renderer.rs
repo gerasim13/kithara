@@ -41,7 +41,7 @@ pub struct WarpRenderer<S> {
     pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
     /// Maximum output frames between samples of live temporal controls.
-    pub(super) render_quantum_frames: NonZeroUsize,
+    pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Engine kind currently prepared by the scheduler shell.
@@ -168,11 +168,11 @@ where
         Some(FrameCount::new(frames))
     }
 
-    /// Output quantum when this target has elastic DSP and needs worker staging.
+    /// Whether this target has elastic DSP and needs worker staging.
     #[doc(hidden)]
     #[must_use]
-    pub const fn render_quantum_frames(&self) -> Option<NonZeroUsize> {
-        Some(self.render_quantum_frames)
+    pub const fn requires_staging(&self) -> bool {
+        true
     }
 
     /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.

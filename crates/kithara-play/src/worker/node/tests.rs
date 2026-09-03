@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::num::NonZeroU32;
 
 use kithara_audio::{
     AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
@@ -40,7 +37,6 @@ fn test_node<S>(
     DecoderNode {
         seek_obs,
         source,
-        retired_chunk: None,
         port,
         preload_gate,
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
@@ -53,13 +49,6 @@ fn test_node<S>(
 
 struct PersistentEofSource {
     seek: Arc<SeekState>,
-}
-
-struct RetiringSource {
-    pools: Pools,
-    seek: Arc<SeekState>,
-    retired: Arc<AtomicUsize>,
-    chunks_left: usize,
 }
 
 struct CommitSource {
@@ -84,26 +73,6 @@ impl AudioSource for CommitSource {
         self.chunk.take().map_or(TrackStep::Eof, |chunk| {
             TrackStep::Produced(Fetch::rendered(chunk, 7, self.source_end))
         })
-    }
-}
-
-impl AudioSource for RetiringSource {
-    type Chunk = AudioChunk;
-
-    fn retire_chunk(&self, _chunk: AudioChunk) {
-        self.retired.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
-    fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        if self.chunks_left == 0 {
-            return TrackStep::Eof;
-        }
-        self.chunks_left -= 1;
-        TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
     }
 }
 
@@ -232,7 +201,6 @@ fn decoder_node_records_engine_load_on_produced() {
 
     let mut node = DecoderNode {
         source,
-        retired_chunk: None,
         port,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         preload_gate: Arc::new(PreloadGate::default()),
@@ -268,7 +236,6 @@ fn worker_telemetry_throttles_immediate_repeats() {
 
     let mut node = DecoderNode {
         source,
-        retired_chunk: None,
         port,
         seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         preload_gate: gate,
@@ -304,11 +271,7 @@ fn worker_telemetry_throttles_immediate_repeats() {
 
 #[kithara::test]
 fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
-    fn drain_marker(
-        port: &mut ProducerPort,
-        pop: &mut impl FnMut() -> Option<Fetch<AudioChunk>>,
-    ) -> Fetch<AudioChunk> {
-        let _ = port.flush();
+    fn drain_marker(pop: &mut impl FnMut() -> Option<Fetch<AudioChunk>>) -> Fetch<AudioChunk> {
         pop().expect("producer pushed a terminal marker")
     }
 
@@ -330,7 +293,7 @@ fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
         Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     );
     assert_eq!(eof_node.tick(), TickResult::Progress);
-    let eof_marker = drain_marker(&mut eof_node.port, &mut eof_pop);
+    let eof_marker = drain_marker(&mut eof_pop);
 
     let (failed_port, mut failed_pop) = ProducerPort::probe(1);
     let failed_source = Unimock::new((
@@ -348,7 +311,7 @@ fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
         Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     );
     let _ = failed_node.tick();
-    let failed_marker = drain_marker(&mut failed_node.port, &mut failed_pop);
+    let failed_marker = drain_marker(&mut failed_pop);
 
     assert!(matches!(eof_marker, Fetch::NaturalEof { .. }));
     assert!(matches!(failed_marker, Fetch::Failure { .. }));
@@ -380,7 +343,6 @@ fn eof_marker_and_deferred_event_keep_the_decode_epoch() {
     let live_epoch = seek_state.begin(Duration::from_secs(1));
     assert_eq!(live_epoch, 1, "seek overtakes the deferred EOF flush");
 
-    let _ = node.port.flush();
     let marker = pop().expect("producer pushed an EOF marker");
     assert!(matches!(&marker, Fetch::NaturalEof { .. }));
     assert_eq!(
@@ -568,35 +530,4 @@ fn decoder_node_seek_rearms_preload_gate() {
         gate.is_ready_for_epoch(epoch),
         "post-seek refill must open the new seek epoch"
     );
-}
-
-#[kithara::test]
-fn decoder_node_retires_displaced_seek_chunk_from_recycle_shell() {
-    let pools = pools();
-    let (port, _pop) = ProducerPort::probe(1);
-    let seek = Arc::new(SeekState::new());
-    let retired = Arc::new(AtomicUsize::new(0));
-    let source = RetiringSource {
-        pools: pools.clone(),
-        seek: Arc::clone(&seek),
-        retired: Arc::clone(&retired),
-        chunks_left: 2,
-    };
-    let mut node = test_node(
-        source,
-        port,
-        Arc::new(PreloadGate::default()),
-        Arc::clone(&seek) as Arc<dyn SeekObserve>,
-    );
-
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert!(node.port.has_pending(), "second chunk must occupy overflow");
-
-    SeekControl::begin(&*seek, Duration::from_secs(1));
-    let _ = node.tick();
-    assert_eq!(retired.load(Ordering::Relaxed), 0);
-
-    node.recycle();
-    assert_eq!(retired.load(Ordering::Relaxed), 1);
 }

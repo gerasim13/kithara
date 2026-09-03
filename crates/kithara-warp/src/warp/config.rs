@@ -5,11 +5,6 @@ use kithara_platform::sync::Arc;
 
 use crate::StretchControls;
 
-const DEFAULT_RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(32) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
-
 /// Fixed resources used to construct one resident [`super::Warp`].
 #[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
@@ -20,10 +15,10 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
-    /// Maximum output frames planned before live temporal controls are sampled again.
-    #[builder(default = DEFAULT_RENDER_QUANTUM_FRAMES)]
+    /// Optional output-frame cap between samples of live temporal controls.
+    /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[field(get, copy)]
-    render_quantum_frames: NonZeroUsize,
+    render_quantum_frames: Option<NonZeroUsize>,
 }
 
 #[cfg(test)]
@@ -33,11 +28,11 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    #[case::default(None, 32)]
-    #[case::configured(Some(64), 64)]
+    #[case::default(None, None)]
+    #[case::configured(Some(64), Some(64))]
     fn render_quantum_is_configurable_in_frames(
         #[case] configured: Option<usize>,
-        #[case] expected: usize,
+        #[case] expected: Option<usize>,
     ) {
         let config = WarpConfig::builder()
             .maybe_render_quantum_frames(
@@ -46,6 +41,9 @@ mod tests {
             )
             .build();
 
-        assert_eq!(config.render_quantum_frames().get(), expected);
+        assert_eq!(
+            config.render_quantum_frames().map(NonZeroUsize::get),
+            expected
+        );
     }
 }

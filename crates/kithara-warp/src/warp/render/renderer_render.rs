@@ -45,9 +45,10 @@ where
             .as_ref()
             .map(|engine| engine.capabilities())
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        let output_limit = capabilities
-            .max_output_frames()
-            .min(self.render_quantum_frames.get());
+        let output_limit = self.render_quantum_frames.map_or_else(
+            || capabilities.max_output_frames(),
+            |frames| capabilities.max_output_frames().min(frames.get()),
+        );
         let source_limit =
             Self::source_block_limit(stretch, capabilities.max_source_frames(), output_limit)?;
         let pending_frames = self.pending_frames(channels);

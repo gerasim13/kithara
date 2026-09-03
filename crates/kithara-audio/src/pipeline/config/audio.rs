@@ -11,6 +11,12 @@ use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
 struct Consts;
 
 impl Consts {
+    /// Output ring depth. wasm needs a deeper ring because its worker is
+    /// scheduled coarsely.
+    #[cfg(not(target_arch = "wasm32"))]
+    const AUDIO_BUFFER_CHUNKS: usize = 10;
+    #[cfg(target_arch = "wasm32")]
+    const AUDIO_BUFFER_CHUNKS: usize = 32;
     /// Chunks buffered before preload readiness is signalled.
     const PRELOAD_CHUNKS: usize = 3;
 }
@@ -81,10 +87,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) block_on_underrun: bool,
-    /// Explicit output-ring depth in producer chunks. `None` lets the playback
-    /// composition root preserve its frame horizon after Warp partitioning.
+    /// Output-ring depth in producer chunks.
+    #[builder(default = Consts::AUDIO_BUFFER_CHUNKS)]
     #[field(get, copy)]
-    pub(crate) audio_buffer_chunks: Option<usize>,
+    pub(crate) audio_buffer_chunks: usize,
 }
 
 impl<T, B> AudioConfig<T, B>

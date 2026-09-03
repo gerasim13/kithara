@@ -106,7 +106,7 @@ where
         C: Into<TrackConfig<T, B>>,
     {
         let config = config.into();
-        let audio_buffer_chunks = config.resolved_audio_buffer_chunks();
+        let audio_buffer_chunks = config.audio().audio_buffer_chunks();
         let TrackConfig {
             audio,
             effects,

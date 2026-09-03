@@ -83,8 +83,8 @@ where
     }
 
     #[doc(hidden)]
-    pub const fn render_quantum_frames(&self) -> Option<std::num::NonZeroUsize> {
-        None
+    pub const fn requires_staging(&self) -> bool {
+        false
     }
 
     #[doc(hidden)]

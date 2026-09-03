@@ -45,8 +45,8 @@ where
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
     pub(crate) preload_chunks: NonZeroUsize,
-    /// Optional output-ring depth. Player preparation otherwise preserves the
-    /// platform frame horizon from the configured Warp quantum.
+    /// Optional output-ring depth in producer chunks.
+    /// When omitted, the audio pipeline keeps its platform default.
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
