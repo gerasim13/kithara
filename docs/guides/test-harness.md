@@ -61,5 +61,9 @@ validation scope.
 - Test logs and generated data stay at a reasonable size.
 - `src/` is production code, not a fixture warehouse. Large fixtures, local
   servers, generated content, and multi-step scenarios belong in `tests/`;
-  small unit tests and tiny helpers under `#[cfg(test)]` stay next to the code.
+  small unit-test modules may stay next to the code under `#[cfg(test)]`.
+- Keep test helpers inside test modules. Do not add test-only fields, methods,
+  functions, or branches to production types and implementations.
+- Observe internal state through real behavior, events, or USDT probes attached
+  to real operations. Do not add no-op functions solely as probe points.
 - Any public API change comes with tests that capture the contract.

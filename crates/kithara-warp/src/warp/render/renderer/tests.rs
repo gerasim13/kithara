@@ -143,7 +143,8 @@ fn render_commits_the_context_captured_for_the_operation() {
 
     let output = render_serviced(&mut renderer, input).expect("unity render succeeds");
     let snapshot = renderer
-        .render_snapshot()
+        .committed
+        .as_ref()
         .expect("successful render commits a snapshot");
 
     assert_eq!(output.frames(), 1);

@@ -53,12 +53,13 @@ where
         }
     }
 
-    #[doc(hidden)]
+    /// Whether the renderer can accept another source chunk.
+    #[must_use]
     pub const fn accepts_input(&self) -> bool {
         true
     }
 
-    #[doc(hidden)]
+    /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(
         &mut self,
         _meta: AudioChunkInfo,
@@ -68,7 +69,7 @@ where
         self.prepared.map(FrameCount::new)
     }
 
-    #[doc(hidden)]
+    /// Shrink a prepared source span at true EOF.
     pub fn prepare_terminal_quantum(
         &mut self,
         _meta: AudioChunkInfo,
@@ -82,26 +83,27 @@ where
         Some(FrameCount::new(frames))
     }
 
-    #[doc(hidden)]
+    /// Whether rendering needs worker-owned staging buffers.
+    #[must_use]
     pub const fn requires_staging(&self) -> bool {
         false
     }
 
-    #[doc(hidden)]
+    /// Drain one buffered output chunk after source EOF or a transition.
     pub const fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
 
-    #[doc(hidden)]
+    /// Prepare deferred renderer state for the current source format.
     pub const fn prepare(&mut self, _spec: AudioSpec) {}
 
-    #[doc(hidden)]
+    /// Render one complete decoded source chunk.
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.prepared = None;
         self.render_prepared(chunk)
     }
 
-    #[doc(hidden)]
+    /// Render the source span selected by [`Self::prepare_quantum`].
     pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let frames = self.prepared.take()?;
         (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
@@ -131,26 +133,21 @@ where
         Some(chunk)
     }
 
-    /// Last context and frontier committed by a successful worker render.
-    #[doc(hidden)]
+    /// Exact decoded-source boundary represented by the latest emitted samples.
     #[must_use]
-    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
-        self.committed.as_ref()
-    }
-
-    #[doc(hidden)]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
     }
 
-    #[doc(hidden)]
+    /// Discard renderer state after a source discontinuity.
     pub const fn reset(&mut self) {
         self.committed = None;
         self.prepared = None;
         self.rendered_source_end = None;
     }
 
-    #[doc(hidden)]
+    /// Whether a live transition still owns buffered samples.
+    #[must_use]
     pub const fn transition_pending(&self) -> bool {
         false
     }

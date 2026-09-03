@@ -83,15 +83,6 @@ impl<T> Outlet<T> {
         }
     }
 
-    /// Whether both the ring buffer and the overflow slot are full.
-    ///
-    /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
-    /// return `Err`.
-    #[cfg(test)]
-    pub(crate) fn is_full(&self) -> bool {
-        self.overflow.is_some() && self.producer.is_full()
-    }
-
     fn notify(&self) {
         if let Some(wake) = &self.wake {
             wake.wake();
@@ -155,15 +146,6 @@ impl<T> Outlet<T> {
         let _ = self.push_or_park(item);
         Ok(())
     }
-
-    delegate::delegate! {
-        to self.overflow {
-            /// Whether an item is currently parked in the overflow slot.
-            #[call(is_some)]
-            #[cfg(test)]
-            pub(crate) const fn has_pending(&self) -> bool;
-        }
-    }
 }
 
 /// The input port of a node.
@@ -174,9 +156,6 @@ pub(crate) struct Inlet<T> {
 impl<T> Inlet<T> {
     delegate::delegate! {
         to self.consumer {
-            /// Check if the inlet is empty.
-            #[cfg(test)]
-            pub(crate) fn is_empty(&self) -> bool;
             /// Pop an item from the inlet. Returns `None` if empty.
             pub(crate) fn try_pop(&mut self) -> Option<T>;
         }
@@ -237,25 +216,20 @@ mod tests {
     #[kithara::test]
     fn connect_push_pop() {
         let (mut out, mut inl) = connect::<i32>(2, None);
-        assert!(inl.is_empty());
-        assert!(!out.is_full());
+        assert_eq!(inl.try_pop(), None);
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
         assert_eq!(out.try_push(3), Ok(()));
-        assert!(out.has_pending());
         assert_eq!(out.try_push(4), Err(4));
-        assert!(out.is_full());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(inl.try_pop(), Some(2));
         assert_eq!(inl.try_pop(), None);
 
         assert!(out.flush());
-        assert!(!out.has_pending());
         assert_eq!(inl.try_pop(), Some(3));
         assert_eq!(inl.try_pop(), None);
-        assert!(inl.is_empty());
     }
 
     #[kithara::test]
@@ -264,11 +238,9 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(out.try_push(3), Ok(()));
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(2));
         assert!(out.flush());
@@ -281,14 +253,13 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        assert!(out.has_pending());
 
         assert!(!out.flush());
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert!(out.flush());
-        assert!(!out.has_pending());
+        assert_eq!(inl.try_pop(), Some(2));
+        assert_eq!(inl.try_pop(), None);
     }
 
     #[kithara::test]
@@ -298,8 +269,8 @@ mod tests {
         assert!(out.can_push_direct());
         out.push_direct(1);
         assert!(!out.can_push_direct());
-        assert!(!out.has_pending());
         assert_eq!(inl.try_pop(), Some(1));
+        assert_eq!(inl.try_pop(), None);
         assert!(out.can_push_direct());
     }
 

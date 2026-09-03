@@ -131,7 +131,6 @@ where
     }
 
     /// Select the next source span that fits the configured output quantum.
-    #[doc(hidden)]
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,
@@ -153,7 +152,6 @@ where
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
-    #[doc(hidden)]
     pub fn prepare_terminal_quantum(
         &mut self,
         _meta: AudioChunkInfo,
@@ -169,7 +167,6 @@ where
     }
 
     /// Whether this target has elastic DSP and needs worker staging.
-    #[doc(hidden)]
     #[must_use]
     pub const fn requires_staging(&self) -> bool {
         true
@@ -271,14 +268,12 @@ where
     }
 
     /// Whether a live active-to-unity transition still owns queued samples.
-    #[doc(hidden)]
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
         self.pending_unity_meta.is_some()
     }
 
     /// Whether the renderer can accept another source chunk without dropping it.
-    #[doc(hidden)]
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
@@ -351,15 +346,7 @@ where
         self.committed = Some(committed);
     }
 
-    /// Last context and frontier committed by a successful worker render.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
-        self.committed.as_ref()
-    }
-
     /// Exact decoded-source boundary represented by the latest emitted samples.
-    #[doc(hidden)]
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
