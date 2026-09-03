@@ -234,7 +234,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
+    let runs = collect_runs(&classes);
     let onset_window = require_first_non_silence(&classes, &runs, setup.queue.current_index());
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
@@ -333,7 +333,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
+    let runs = collect_runs(&classes);
     let onset_window = require_first_non_silence_with_switch(
         &classes,
         &runs,
@@ -556,7 +556,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let raw_runs = class_runs(&classes);
+    let raw_runs = collect_runs(&classes);
     let collapsed_runs = collapse_resampled_noise_islands(&raw_runs);
     let replays: Vec<Replay> = Vec::new();
     let onset_window = require_first_non_silence(&classes, &raw_runs, setup.queue.current_index());
@@ -755,7 +755,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let runs = class_runs(&classes);
+    let runs = collect_runs(&classes);
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
         seek_issue_frame,
@@ -868,7 +868,7 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         render_until_tone_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     let left = deinterleave_left(&rendered, usize::from(CHANNELS));
     let classes = classify_tone_windows(&left, TONE_WINDOW_FRAMES, SAMPLE_RATE);
-    let runs = tone_runs(&classes);
+    let runs = collect_runs(&classes);
     let onset_window = require_first_tone_window(
         &classes,
         ToneClass::A440,
@@ -1740,8 +1740,13 @@ impl RenderProgress {
 
         if self.descending_seen_at.is_none() {
             self.descending_seen_at = detect_descending_from.and_then(|min_frame| {
-                first_sustained_class_window(&self.classes, FrameClass::Descending, min_frame)
-                    .map(frame_for_window)
+                first_sustained_window(
+                    &self.classes,
+                    FrameClass::Descending,
+                    min_frame,
+                    WINDOW_FRAMES,
+                )
+                .map(frame_for_window)
             });
         }
 
@@ -1789,8 +1794,9 @@ impl ToneRenderProgress {
         }
 
         if self.b_seen_at.is_none() {
-            self.b_seen_at = first_sustained_tone_window(&self.classes, ToneClass::B880, 0)
-                .map(tone_frame_for_window);
+            self.b_seen_at =
+                first_sustained_window(&self.classes, ToneClass::B880, 0, TONE_WINDOW_FRAMES)
+                    .map(tone_frame_for_window);
         }
     }
 
@@ -1974,7 +1980,7 @@ fn require_first_sustained_tone_window(
     onset_window: Option<usize>,
     current_index: Option<usize>,
 ) -> usize {
-    first_sustained_tone_window(classes, target, min_frame).unwrap_or_else(|| {
+    first_sustained_window(classes, target, min_frame, TONE_WINDOW_FRAMES).unwrap_or_else(|| {
         panic!(
             "sustained target tone class {target:?} must be rendered from frame {min_frame}; {}",
             tone_dump(runs, onset_window, None, current_index)
@@ -1982,16 +1988,17 @@ fn require_first_sustained_tone_window(
     })
 }
 
-fn first_sustained_tone_window(
-    classes: &[ToneClass],
-    target: ToneClass,
+fn first_sustained_window<T: Copy + PartialEq>(
+    classes: &[T],
+    target: T,
     min_frame: usize,
+    window_frames: usize,
 ) -> Option<usize> {
     classes
         .windows(SUSTAINED_DESCENDING_WINDOWS)
         .enumerate()
         .find_map(|(window, slice)| {
-            let starts_after_gate = tone_frame_for_window(window) >= min_frame;
+            let starts_after_gate = window * window_frames >= min_frame;
             (starts_after_gate && slice.iter().all(|class| *class == target)).then_some(window)
         })
 }
@@ -2003,12 +2010,13 @@ fn require_first_sustained_descending_window(
     onset_window: Option<usize>,
     current_index: Option<usize>,
 ) -> usize {
-    first_sustained_class_window(classes, FrameClass::Descending, min_frame).unwrap_or_else(|| {
-        panic!(
-            "sustained Descending B onset must be rendered from frame {min_frame}; {}",
-            dump(&[], runs, onset_window, None, current_index)
-        )
-    })
+    first_sustained_window(classes, FrameClass::Descending, min_frame, WINDOW_FRAMES)
+        .unwrap_or_else(|| {
+            panic!(
+                "sustained Descending B onset must be rendered from frame {min_frame}; {}",
+                dump(&[], runs, onset_window, None, current_index)
+            )
+        })
 }
 
 fn require_first_sustained_descending_window_with_switch(
@@ -2019,20 +2027,21 @@ fn require_first_sustained_descending_window_with_switch(
     switch_issue_frame: usize,
     current_index: Option<usize>,
 ) -> usize {
-    first_sustained_class_window(classes, FrameClass::Descending, min_frame).unwrap_or_else(|| {
-        panic!(
-            "sustained Descending B onset must be rendered from frame {min_frame} \
+    first_sustained_window(classes, FrameClass::Descending, min_frame, WINDOW_FRAMES)
+        .unwrap_or_else(|| {
+            panic!(
+                "sustained Descending B onset must be rendered from frame {min_frame} \
              after late variant switch; {}",
-            dump_with_switch(
-                &[],
-                runs,
-                onset_window,
-                None,
-                switch_issue_frame,
-                current_index,
+                dump_with_switch(
+                    &[],
+                    runs,
+                    onset_window,
+                    None,
+                    switch_issue_frame,
+                    current_index,
+                )
             )
-        )
-    })
+        })
 }
 
 fn require_last_class_window_before(
@@ -2071,20 +2080,6 @@ fn require_run_containing(
                 "window {window} must belong to a {target:?} run; {}",
                 context.dump()
             )
-        })
-}
-
-fn first_sustained_class_window(
-    classes: &[FrameClass],
-    target: FrameClass,
-    min_frame: usize,
-) -> Option<usize> {
-    classes
-        .windows(SUSTAINED_DESCENDING_WINDOWS)
-        .enumerate()
-        .find_map(|(window, slice)| {
-            let starts_after_gate = frame_for_window(window) >= min_frame;
-            (starts_after_gate && slice.iter().all(|class| *class == target)).then_some(window)
         })
 }
 
@@ -2169,7 +2164,7 @@ fn assert_crossfade_contract(
     let left_raw = deinterleave_left(rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
-    let raw_runs = class_runs(&classes);
+    let raw_runs = collect_runs(&classes);
     let collapsed_runs = collapse_runs(&raw_runs);
     let onset_window = require_first_non_silence(&classes, &raw_runs, queue.current_index());
     let b_onset_window = require_first_sustained_descending_window(
@@ -2246,28 +2241,7 @@ fn assert_no_late_sustained_ascending(
     );
 }
 
-fn class_runs(classes: &[FrameClass]) -> Vec<ClassRun> {
-    let Some((&first, rest)) = classes.split_first() else {
-        return Vec::new();
-    };
-    let mut runs = Vec::new();
-    let mut current = (first, 0, 1);
-
-    for (idx, class) in rest.iter().copied().enumerate() {
-        let window = idx + 1;
-        if class == current.0 {
-            current.2 += 1;
-        } else {
-            runs.push(current);
-            current = (class, window, 1);
-        }
-    }
-
-    runs.push(current);
-    runs
-}
-
-fn tone_runs(classes: &[ToneClass]) -> Vec<ToneRun> {
+fn collect_runs<T: Copy + PartialEq>(classes: &[T]) -> Vec<(T, usize, usize)> {
     let Some((&first, rest)) = classes.split_first() else {
         return Vec::new();
     };
