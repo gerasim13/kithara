@@ -590,11 +590,21 @@ fn normalize_signature(text: &str) -> String {
     /// one axis these tables order by.
     static DIGEST: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"[0-9a-f]{16,}").expect("digest regex"));
+    /// A cache key spells an authority's `host:port` with the colon percent-
+    /// escaped, which glues the port to a hex escape so no word boundary falls
+    /// before its digits and the number pass steps over it. The port is as
+    /// volatile as the one in the URL beside it, which that pass does
+    /// normalize: leaving it standing split nine divergence rows of
+    /// `packaged_abr_switch_keeps_player_continuity` into eighteen, one per
+    /// attempt, in run 33752112563.
+    static ESCAPED_PORT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"~3[aA]\d+").expect("escaped port regex"));
     let text = strip_ansi(text).replace(['\r', '\n'], " ");
     let text = VOLATILE.replace_all(&text, "$1=<volatile>");
     let text = PANIC_THREAD.replace_all(&text, "panicked at");
     let text = HEX.replace_all(&text, "0x<address>");
     let text = UUID.replace_all(&text, "<uuid>");
+    let text = ESCAPED_PORT.replace_all(&text, "~3a<port>");
     let text = DIGEST.replace_all(&text, |captures: &Captures<'_>| {
         let matched = &captures[0];
         if matched.bytes().any(|byte| byte.is_ascii_alphabetic()) {
@@ -814,6 +824,16 @@ mod tests {
 
     /// A decimal counter is not an identity, and the tables these signatures
     /// feed are ordered by exactly such counters.
+    /// The cache key writes `127.0.0.1:34265` as `127.0.0.1~3a34265`, and the
+    /// number pass needs a word boundary the hex escape denies it.
+    #[test]
+    fn an_escaped_authority_port_does_not_separate_a_failure_from_a_pass() {
+        let first = normalize_signature("rel_path=track/127.0.0.1~3a34265~oabc/stream");
+        let second = normalize_signature("rel_path=track/127.0.0.1~3a39797~oabc/stream");
+
+        assert_eq!(first, second, "{first} vs {second}");
+    }
+
     #[test]
     fn a_long_decimal_counter_is_not_read_as_a_digest() {
         let normalized = normalize_signature("committed=1207437641712345678 state=Runnable");
