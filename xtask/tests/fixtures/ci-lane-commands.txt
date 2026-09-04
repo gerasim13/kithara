@@ -435,31 +435,49 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
@@ -467,54 +485,73 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=target-flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -1623,90 +1660,130 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just
   just test run --flash=off
-    CARGO_TARGET_DIR=<root>/target/flash-off
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache
