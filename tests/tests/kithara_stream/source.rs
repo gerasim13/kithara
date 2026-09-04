@@ -11,82 +11,40 @@ fn test_data() -> Vec<u8> {
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-#[case::start_0(SeekFrom::Start(0), 0, b"ABCDE")]
-#[case::start_5(SeekFrom::Start(5), 5, b"FGHIJ")]
-#[case::start_10(SeekFrom::Start(10), 10, b"KLMNO")]
-#[case::start_20(SeekFrom::Start(20), 20, b"UVWXY")]
-#[case::start_25(SeekFrom::Start(25), 25, b"Z")]
-#[case::end_minus_5(SeekFrom::End(-5), 21, b"VWXYZ")]
-#[case::end_minus_10(SeekFrom::End(-10), 16, b"QRSTU")]
-#[case::end_minus_26(SeekFrom::End(-26), 0, b"ABCDE")]
-fn seek_reads_correct_bytes(
-    test_data: Vec<u8>,
-    #[case] seek_from: SeekFrom,
-    #[case] expected_pos: u64,
-    #[case] expected: &[u8],
-) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let pos = stream.seek(seek_from).unwrap();
-    assert_eq!(pos, expected_pos);
-
-    let mut buf = vec![0u8; expected.len()];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, expected.len());
-    assert_eq!(&buf[..n], expected);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-#[case::start_zero(SeekFrom::Start(0), 0, b"ABCDE")]
-#[case::start_eof(SeekFrom::Start(26), 26, b"")]
-#[case::end_zero(SeekFrom::End(0), 26, b"")]
-fn seek_after_read_returns_expected_bytes(
-    test_data: Vec<u8>,
-    #[case] seek_from: SeekFrom,
-    #[case] expected_pos: u64,
-    #[case] expected: &[u8],
-) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let mut buf = [0u8; 10];
-    let _ = stream.read(&mut buf).unwrap();
-
-    let pos = stream.seek(seek_from).unwrap();
-    assert_eq!(pos, expected_pos);
-
-    let mut buf = [0u8; 5];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, expected.len());
-    assert_eq!(&buf[..n], expected);
-}
-
-/// `SeekFrom::Current(offset)` after reading `initial_read` bytes must land
-/// at `initial_read + offset` and return `expected` on the next read.
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-#[case::forward(5, 5, 10, b"KLMNO")]
-#[case::backward(10, -5, 5, b"FGHIJ")]
-fn seek_current_moves_and_reads(
+#[case::start_0(0, SeekFrom::Start(0), 5, 0, b"ABCDE")]
+#[case::start_5(0, SeekFrom::Start(5), 5, 5, b"FGHIJ")]
+#[case::start_10(0, SeekFrom::Start(10), 5, 10, b"KLMNO")]
+#[case::start_20(0, SeekFrom::Start(20), 5, 20, b"UVWXY")]
+#[case::start_25(0, SeekFrom::Start(25), 1, 25, b"Z")]
+#[case::end_minus_5(0, SeekFrom::End(-5), 5, 21, b"VWXYZ")]
+#[case::end_minus_10(0, SeekFrom::End(-10), 5, 16, b"QRSTU")]
+#[case::end_minus_26(0, SeekFrom::End(-26), 5, 0, b"ABCDE")]
+#[case::after_read_start_0(10, SeekFrom::Start(0), 5, 0, b"ABCDE")]
+#[case::after_read_start_eof(10, SeekFrom::Start(26), 5, 26, b"")]
+#[case::after_read_end_0(10, SeekFrom::End(0), 5, 26, b"")]
+#[case::current_forward(5, SeekFrom::Current(5), 5, 10, b"KLMNO")]
+#[case::current_backward(10, SeekFrom::Current(-5), 5, 5, b"FGHIJ")]
+fn seek_returns_expected_bytes(
     test_data: Vec<u8>,
     #[case] initial_read: usize,
-    #[case] offset: i64,
+    #[case] seek_from: SeekFrom,
+    #[case] read_len: usize,
     #[case] expected_pos: u64,
     #[case] expected: &[u8],
 ) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
-    let mut buf = vec![0u8; initial_read];
-    let n = stream.read(&mut buf).unwrap();
-    assert_eq!(n, initial_read);
+    if initial_read > 0 {
+        let mut buf = vec![0u8; initial_read];
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, initial_read);
+    }
 
-    let pos = stream.seek(SeekFrom::Current(offset)).unwrap();
+    let pos = stream.seek(seek_from).unwrap();
     assert_eq!(pos, expected_pos);
 
-    let mut buf = vec![0u8; expected.len()];
+    let mut buf = vec![0u8; read_len];
     let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, expected.len());
     assert_eq!(&buf[..n], expected);
