@@ -125,7 +125,9 @@ struct RenderedReport {
     /// evidence census can be held to the same set as the rate tables.
     quarantined: BTreeSet<usize>,
     markdown: String,
-    complete: bool,
+    /// What the evidence is missing, or `None` when it accounts for every
+    /// requested attempt of every selected test.
+    incomplete: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +173,21 @@ impl EvidenceProblems {
             self.rows.push(problem);
         }
     }
+
+    /// The shortfall in one sentence, or `None` when there is none.
+    ///
+    /// The run document names why a lane may not stand beside the others, and
+    /// the lane already phrased every problem it found. Re-deriving a cause
+    /// there is how a summary came to assert "fewer iterations than requested"
+    /// about a lane that had reported every iteration it was asked for.
+    fn shortfall(&self) -> Option<String> {
+        let first = self.rows.first()?;
+        let rest = self.total.saturating_sub(1);
+        if rest == 0 {
+            return Some(first.clone());
+        }
+        Some(format!("{first}; and {rest} further problem(s)"))
+    }
 }
 
 /// Summarizes one nextest stress run.
@@ -200,11 +217,15 @@ pub(crate) struct LaneReport {
     pub(crate) attempts: Option<LaneRate>,
     pub(crate) verdict: Result<()>,
     pub(crate) markdown: String,
-    /// Whether every requested iteration is accounted for. A readable lane can
-    /// still fall short of its own request — quarantined repeats, truncated
-    /// output, a run that stopped early — and a rate measured over the
-    /// survivors answers a different question than the run asked.
-    pub(crate) complete: bool,
+    /// What bars this lane from the comparison, or `None` when nothing does.
+    ///
+    /// A readable lane can still fall short of its own request — quarantined
+    /// repeats, a run that stopped early, a selected test its report never
+    /// names — and a rate measured over the survivors answers a different
+    /// question than the run asked. A partial evidence overlay is not one of
+    /// these: a truncated census or a missing envelope costs the diagnosis, not
+    /// the counts, which are read from the `JUnit` report alone.
+    pub(crate) incomplete: Option<String>,
     /// Whether the lane produced valid per-attempt evidence at all. A lane
     /// whose artifact was missing or invalid has nothing to stand in a
     /// comparison — counting it as trustworthy is how a run summary
@@ -235,7 +256,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
             readable: false,
-            complete: false,
+            incomplete: Some("the lane produced no readable evidence".to_owned()),
         })
     };
     let inventory = match read_inventory(&args.inventory) {
@@ -334,10 +355,12 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         );
     }
     if !correlated_complete || !truncated.is_empty() {
-        report.complete = false;
-        mark_incomplete(&mut report.markdown);
+        let _ = writeln!(
+            report.markdown,
+            "\nThe evidence overlays above are partial. Every requested attempt is still accounted for: the counts, the rates and the verdict are read from the JUnit report, which none of the problems above touches."
+        );
     }
-    let verdict = if report.complete && !has_failures {
+    let verdict = if report.incomplete.is_none() && !has_failures {
         Ok(())
     } else {
         Err(NotClean::reported("stress evidence"))
@@ -348,7 +371,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         rates: report.rates,
         attempts: None,
         readable: true,
-        complete: report.complete,
+        incomplete: report.incomplete,
     })
 }
 
@@ -381,12 +404,12 @@ pub(crate) fn validate_primary_evidence(
     );
     let failed = junit.cases.iter().filter(|case| case.failed).count();
     let flaky = junit.cases.iter().filter(|case| case.flaky).count();
-    if report.complete && failed == 0 && flaky == 0 {
+    if report.incomplete.is_none() && failed == 0 && flaky == 0 {
         Ok(())
     } else {
         println!(
             "stress run evidence: complete={complete}, failed cases={failed}, retried cases={flaky}",
-            complete = report.complete,
+            complete = report.incomplete.is_none(),
         );
         Err(NotClean::reported("stress run evidence"))
     }
@@ -941,16 +964,6 @@ pub(crate) fn write_report(path: &Path, markdown: &str) -> Result<()> {
     fs::write(path, markdown).with_context(|| format!("write stress report {}", path.display()))
 }
 
-fn mark_incomplete(markdown: &mut String) {
-    for result in ["PASSED", "FAILED"] {
-        let marker = format!("- Result: **{result}**");
-        if let Some(index) = markdown.find(&marker) {
-            markdown.replace_range(index..index + marker.len(), "- Result: **INCOMPLETE**");
-            return;
-        }
-    }
-}
-
 /// Validate each testcase against the selection and fold the survivors into
 /// per-test stats; every rejection becomes an evidence problem.
 fn collect_stats(
@@ -1082,7 +1095,7 @@ fn render(
         })
         .collect();
     let observed_count = observed_iterations.len();
-    let complete = problems.total == 0;
+    let incomplete = problems.shortfall();
     let failed_attempts = tests
         .values()
         .map(|stats| stats.failed_iterations.len())
@@ -1097,7 +1110,7 @@ fn render(
         .sum::<usize>();
     let result = if problems.invalid {
         "INVALID JUNIT"
-    } else if !complete {
+    } else if incomplete.is_some() {
         "INCOMPLETE"
     } else if failed_attempts > 0 {
         "FAILED"
@@ -1143,7 +1156,7 @@ fn render(
     render_flakes(&mut out, &tests);
     render_failures(&mut out, tests);
     RenderedReport {
-        complete,
+        incomplete,
         rates,
         markdown: out,
         quarantined: quarantined.into_keys().collect(),
@@ -1423,7 +1436,7 @@ mod tests {
         let report = render(&cases, &inventory(&["seek", "other"]), 3, None, None);
         let markdown = &report.markdown;
 
-        assert!(report.complete, "{markdown}");
+        assert!(report.incomplete.is_none(), "{markdown}");
         assert!(markdown.contains("Result: **FAILED**"), "{markdown}");
         assert!(markdown.contains("1 / 3"), "{markdown}");
         assert!(markdown.contains("33.33%"), "{markdown}");
@@ -1595,13 +1608,13 @@ mod tests {
         let partial = render(&cases, &inventory, 2, None, None);
         let complete = render(&cases, &inventory, 1, None, None);
 
-        assert!(!partial.complete, "{}", partial.markdown);
+        assert!(partial.incomplete.is_some(), "{}", partial.markdown);
         assert!(
             partial.markdown.contains("Result: **INCOMPLETE**"),
             "{}",
             partial.markdown
         );
-        assert!(complete.complete, "{}", complete.markdown);
+        assert!(complete.incomplete.is_none(), "{}", complete.markdown);
         assert!(
             complete.markdown.contains("Result: **PASSED**"),
             "{}",
@@ -1615,7 +1628,7 @@ mod tests {
 
         let report = render(&cases, &inventory(&["seek"]), 2, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report.markdown.contains("Result: **INCOMPLETE**"),
             "{}",
@@ -1638,7 +1651,7 @@ mod tests {
 
         let report = render(&cases, &inventory(&["seek"]), 3, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report.markdown.contains("Result: **INVALID JUNIT**"),
             "{}",
@@ -1679,7 +1692,7 @@ mod tests {
         let report = render(&cases, &inventory(&["seek"]), 1, None, None);
         let markdown = &report.markdown;
 
-        assert!(!report.complete, "{markdown}");
+        assert!(report.incomplete.is_some(), "{markdown}");
         assert!(markdown.contains("duplicate iteration 0"), "{markdown}");
         assert!(markdown.contains("out-of-range iteration 2"), "{markdown}");
         assert!(markdown.contains("has no stress iteration"), "{markdown}");
@@ -1843,10 +1856,11 @@ seek landed short of the requested frame
             lane.markdown
         );
         assert!(
-            lane.markdown.contains("Result: **INCOMPLETE**"),
-            "{}",
+            lane.markdown.contains("Result: **FAILED**"),
+            "a lost output tail costs the diagnosis, not the verdict: {}",
             lane.markdown
         );
+        assert_eq!(lane.incomplete, None, "{}", lane.markdown);
         assert!(!lane.rates.is_empty(), "the case still counts in rates");
         assert!(lane.verdict.is_err(), "a failed attempt keeps the verdict");
     }
@@ -1970,13 +1984,79 @@ seek landed short of the requested frame
         assert!(markdown.contains("Failed attempts: `1`"), "{markdown}");
     }
 
+    /// A lane's counts come from its `JUnit` report; the evidence overlays only
+    /// explain them. Run 33752112563 grew a census log past the line pass's
+    /// record bound, and folding that shortfall into completeness struck a lane
+    /// holding every requested iteration — and five failing tests nothing else
+    /// reported — out of the comparison, under a reason its own section denied.
+    #[test]
+    fn a_partial_evidence_overlay_leaves_a_complete_lane_complete() {
+        const FAILED: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        let junit = temp.path().join("junit.xml");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        fs::write(&junit, FAILED).expect("write junit");
+        let args = StressReportArgs {
+            junit,
+            inventory,
+            line_log: Some(temp.path().join("census-that-was-never-written.log")),
+            envelope_dir: None,
+            pressure_log: None,
+            output: temp.path().join("report.md"),
+            expected_count: 1,
+            allow_missing: false,
+            evidence: StressEvidenceConfig::default(),
+        };
+
+        let lane = lane_report(&args).expect("lane report");
+
+        assert_eq!(lane.incomplete, None, "{}", lane.markdown);
+        assert!(
+            lane.markdown.contains("Result: **FAILED**"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            !lane.markdown.contains("Result: **INCOMPLETE**"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown
+                .contains("The evidence overlays above are partial."),
+            "{}",
+            lane.markdown
+        );
+    }
+
     #[test]
     fn selected_test_missing_from_junit_fails_closed() {
         let cases = vec![case("seek", 0, false, 0.1)];
 
         let report = render(&cases, &inventory(&["seek", "missing"]), 1, None, None);
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
             report
                 .markdown
@@ -2480,12 +2560,26 @@ seek landed short of the requested frame
     }
 
     #[test]
-    fn missing_supplementary_evidence_marks_a_report_incomplete() {
-        let mut markdown = "# Stress evidence\n\n- Result: **FAILED**\n".to_owned();
+    fn a_shortfall_names_the_problem_it_was_measured_from() {
+        let cases = vec![case("seek", 0, false, 0.1)];
 
-        mark_incomplete(&mut markdown);
+        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
 
-        assert!(markdown.contains("Result: **INCOMPLETE**"), "{markdown}");
-        assert!(!markdown.contains("Result: **FAILED**"), "{markdown}");
+        let reason = report
+            .incomplete
+            .expect("a report short of its iterations must name the shortfall");
+        assert!(reason.contains("missing requested iterations"), "{reason}");
+    }
+
+    #[test]
+    fn a_shortfall_counts_the_problems_it_could_not_fit() {
+        let cases = vec![case("seek", 0, false, 0.1)];
+
+        let report = render(&cases, &inventory(&["seek", "read"]), 2, None, None);
+
+        let reason = report
+            .incomplete
+            .expect("a report with several problems must name the shortfall");
+        assert!(reason.contains("further problem(s)"), "{reason}");
     }
 }

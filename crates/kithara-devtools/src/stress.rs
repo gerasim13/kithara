@@ -743,8 +743,8 @@ fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<S
     if !lane.readable {
         return Some("evidence artifact missing or invalid".to_owned());
     }
-    if !lane.complete {
-        return Some("incomplete evidence: fewer iterations than requested".to_owned());
+    if let Some(reason) = &lane.incomplete {
+        return Some(format!("incomplete evidence: {reason}"));
     }
     None
 }
@@ -789,7 +789,7 @@ fn command_lane_report(
                 attempts: None,
                 verdict: Err(NotClean::reported("stress evidence")),
                 readable: false,
-                complete: false,
+                incomplete: Some("the lane recorded no attempts".to_owned()),
             };
         }
     };
@@ -872,8 +872,24 @@ fn command_lane_report(
         attempts,
         verdict,
         readable: true,
-        complete: observed == expected && !short,
+        incomplete: command_lane_shortfall(observed, expected, short),
     }
+}
+
+/// Why a command lane may not stand beside the others, or `None`.
+///
+/// A lane launched per repeat falls short when the run rejected launches; a
+/// lane that repeats inside one launch falls short when its own report records
+/// fewer repeats than it was given. Both leave a rate measured over fewer
+/// attempts than requested, and which one it was is what the run document has
+/// to print instead of guessing.
+fn command_lane_shortfall(observed: usize, expected: usize, short: bool) -> Option<String> {
+    if observed != expected {
+        return Some(format!(
+            "the lane recorded {observed} of {expected} requested attempts"
+        ));
+    }
+    short.then(|| "the command recorded fewer repeats than it was given".to_owned())
 }
 
 /// The denominator a log finding may be reported against, or `None` when the log
@@ -1835,7 +1851,30 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &StressEvidenceConfig::default(),
         );
 
-        assert!(!report.complete, "{}", report.markdown);
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
+    }
+
+    /// The run document is the only place a reader learns why a lane was struck
+    /// out, and it used to assert one cause for every shortfall. Run 33752112563
+    /// printed "fewer iterations than requested" against a lane whose own
+    /// section reported all fifty it was asked for.
+    #[test]
+    fn an_excluded_lane_is_named_by_the_shortfall_it_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = self_repeating_lane(&temp, "", &[false, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+        let reason = exclusion_reason(true, &report).expect("a short lane must be excluded");
+
+        assert!(
+            reason.contains("fewer repeats than it was given"),
+            "{reason}"
+        );
     }
 
     #[test]
