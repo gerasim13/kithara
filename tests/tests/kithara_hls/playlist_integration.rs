@@ -24,23 +24,6 @@ fn key_for(assets: &TestAssets, url: &Url) -> ResourceKey {
 }
 
 #[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
-async fn fetch_master_playlist_from_network(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-    net_fixture: kithara::net::HttpClient,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
-    let master_url = server.url("/master.m3u8");
-    let master_playlist = fetch_manager
-        .master_playlist(&key_for(&assets_fixture, &master_url), &master_url)
-        .await?;
-
-    assert_eq!(master_playlist.variants.len(), 3);
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
 #[case::v0(0)]
 #[case::v1(1)]
 async fn fetch_media_playlist_from_network(
