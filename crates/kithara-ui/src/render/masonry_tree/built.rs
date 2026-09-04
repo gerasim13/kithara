@@ -194,7 +194,8 @@ pub struct MasonryNode<Action> {
 
 impl<Action> MasonryNode<Action> {
     pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
-        let Some(target) = EngineTarget::new(self.geometry(), plan) else {
+        let node = self.widget.id();
+        let Some(target) = EngineTarget::new(node, self.geometry(), plan) else {
             return;
         };
         let index = if prepend {

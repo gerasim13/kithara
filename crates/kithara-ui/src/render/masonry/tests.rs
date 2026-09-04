@@ -4034,6 +4034,12 @@ fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> T
         .transform()
 }
 
+/// A module id the facade hands to an engine, so the control inside it is
+/// mounted as `InputOwner::Engine` and the engine stands on the module rather
+/// than on the control. Every other fixture here names an id of its own, which
+/// is the shape where the two are the same node.
+const HOSTED_MODULE: &str = "gallery-table-tab";
+
 const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
     Object(
         id: "travel",
@@ -4161,6 +4167,55 @@ fn a_mounted_table_repaints_the_row_under_the_pointer() {
         .unwrap_or_else(|error| panic!("hovered Table must repaint: {error}"));
 
     assert_ne!(hovered.encoding().draw_data, idle_draw_data);
+}
+
+/// A wheel over a list whose engine stands above it still repaints the list.
+///
+/// A module the document hands to an engine mounts its controls as
+/// `InputOwner::Engine`, so the engine is hosted on the module's content rather
+/// than on the table inside it. The offset a wheel moves is read where the
+/// table is drawn, and Masonry paints the widget that asked for paint and no
+/// other, so a repaint aimed anywhere else leaves the list standing still.
+#[kithara::test]
+fn a_mounted_table_repaints_after_scrolling_under_a_hosted_engine() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        HOSTED_MODULE,
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Table(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTrackReads {
+        loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (idle, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("unscrolled Table must draw: {error}"));
+    let idle_draw_data = idle.encoding().draw_data.clone();
+    let skin = builtin::skin();
+    let row_y = skin.table.header_height + skin.table.grid_gap + skin.table.row_height / 2.0;
+    root.handle_pointer_event(pointer_scroll(
+        20.0,
+        row_y.into(),
+        ScrollDelta::LineDelta(0.0, -1.0),
+    ))
+    .unwrap_or_else(|error| panic!("Table scroll must route: {error}"));
+    let (scrolled, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("scrolled Table must repaint: {error}"));
+
+    assert_ne!(scrolled.encoding().draw_data, idle_draw_data);
 }
 
 #[kithara::test]

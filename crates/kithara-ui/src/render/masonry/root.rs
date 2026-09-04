@@ -528,8 +528,8 @@ where
                 continue;
             }
             let routed = engine.route(input, at);
-            if routed.repaint {
-                self.root.edit_widget(owner, |mut widget| {
+            for node in &routed.repaint {
+                self.root.edit_widget(*node, |mut widget| {
                     widget.ctx.request_paint_only();
                 });
             }
