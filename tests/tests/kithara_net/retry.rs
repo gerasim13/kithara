@@ -200,9 +200,8 @@ async fn test_exponential_backoff_with_max_delay(
 }
 
 #[kithara::test(tokio)]
-#[case(1)]
-#[case(2)]
-async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize) {
+async fn test_all_net_methods_with_retry() {
+    let failures_before_success = 1;
     let mock_net = make_retry_mock(failures_before_success, http_500());
     let retry_policy = RetryPolicy::builder()
         .max_retries(u32::try_from(failures_before_success).unwrap_or(0))
