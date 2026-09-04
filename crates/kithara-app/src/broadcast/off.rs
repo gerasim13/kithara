@@ -1,7 +1,5 @@
-use kithara::platform::{CancelToken, time::Duration};
-
 use super::state::{BroadcastResult, Packager};
-use crate::pools::AppHost;
+use crate::{config::AppBroadcastConfig, pools::AppHost};
 
 pub(crate) struct Backend;
 
@@ -10,6 +8,7 @@ pub(crate) struct Backend;
 pub(crate) enum Stream {}
 
 impl Packager for Backend {
+    type Config = AppBroadcastConfig;
     type Live = Stream;
 
     const IS_AVAILABLE: bool = false;
@@ -18,11 +17,7 @@ impl Packager for Backend {
         match *live {}
     }
 
-    fn start(
-        _host: &AppHost,
-        _shutdown: &CancelToken,
-        _tap_lead: Duration,
-    ) -> BroadcastResult<Option<Stream>> {
+    fn start(_host: &AppHost, _config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
         Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
     }
 

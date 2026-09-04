@@ -75,23 +75,27 @@ Copy `.config/bridge/config.example.toml` to
 to UID 504 (`kithara-sync`), mode `0600`. The GitHub token needs
 `Contents: write`, `Pull requests: read` and `Commit statuses: write`. Validate
 with `ci bridge validate` (no network mutation), then `ci host activate-bridge`.
+`github_branch` and `gitlab_branch` are separate keys because the sides
+disagree — GitLab `develop`, GitHub `main` — and a swap is silent: GitHub
+answers an unknown base with an empty pull list.
 
 The daemon keeps running the executable that was installed, not the one on
-`main`: a fix changes nothing until `ci host install-services` reinstalls it
+`develop`: a fix changes nothing until `ci host install-services` reinstalls it
 from a reviewed GitLab commit, then `activate-bridge` and `activate`. launchd
 keeps the definition it loaded, so skipping `activate` silently leaves the
 maintenance agents on the old cadence; `launchctl print` reports what is loaded.
 
-The bridge moves `main` only by fast-forward, in whichever direction is behind,
-and never synthesizes a replacement commit or force-pushes a diverged branch.
+The bridge moves either default branch only by fast-forward, in whichever
+direction is behind, and never synthesizes a replacement commit or force-pushes
+a diverged branch.
 
-GitHub pull requests are verified before merge. While both `main` refs are
+GitHub pull requests are verified before merge. While both default branches are
 equal, the bridge reserves the exact head and base pair, publishes one
 quarantine ref, and starts its GitLab pipeline; the result lands on the head
 commit under the status context `kithara/gitlab-verification`. Branch protection
 must require that context on `main` and forbid direct pushes and bypasses, or
-the verifier is advisory. Once `main` moves, the next attempt reserves against
-the new base with a new ref.
+the verifier is advisory. Once the default branch moves, the next attempt
+reserves against the new base with a new ref.
 
 A pull request changing a CI control path is rejected before a pipeline exists;
 port it through a GitLab merge request: the code judging pull requests changes
@@ -163,7 +167,22 @@ sitting `pending` while the pipeline reads as hung.
 
 ## GitLab project settings
 
-Protect `main`, release tags, the `release` environment, and the runner, release
-and bridge credentials. Keep release publication manual and restricted to
-maintainers. Give the nightly and weekly schedules the kind variable
+Protect `develop`, release tags, the `release` environment, and the runner,
+release and bridge credentials. Keep release publication manual and restricted
+to maintainers. Give the nightly and weekly schedules the kind variable
 `.gitlab-ci.yml` reads.
+
+### Renaming the default branch
+
+Pipeline rules read `$CI_DEFAULT_BRANCH`, so the repository needs no edit; what
+follows the name is outside it, and the order matters:
+
+1. Create the branch, then move the default-branch setting — until it moves, a
+   push to the new branch dispatches as the `branch` kind, not the `main`
+   kind.
+2. Protect it before deleting the old one: protected variables reach protected
+   branches only, so release jobs fail on a missing secret instead.
+3. Repoint the schedules; a schedule keeps the branch it was created with.
+4. Retarget open merge requests, which GitLab closes with their target branch.
+5. Set `gitlab_branch` on the host, then `ci host activate-bridge`.
+6. Delete the old branch last.

@@ -5,10 +5,12 @@
 mod config;
 mod core;
 mod error;
+mod live;
 mod sink;
 
 pub use core::RecordingCore;
 
-pub use config::RecordingConfig;
-pub use error::{RecordingError, RecordingResult};
-pub use sink::RecordingSink;
+pub use config::{LiveRecordingConfig, RecordingConfig};
+pub use error::{LiveRecordingError, RecordingError, RecordingResult};
+pub use live::{LiveRecorder, LiveRecordingHandle, LiveRecordingReport, RecordingOutput};
+pub use sink::{PartSinkFactory, RecordingSink};

@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(any(test, feature = "probe"))]
 use kithara_play::TransportRevision;
@@ -27,7 +28,6 @@ use platform::{Platform, PlatformResult};
 use crate::api::SessionDuckingMode;
 use crate::{
     api::HostLevel,
-    bridge::MixTapWriter,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -280,20 +280,43 @@ impl<S> Host<S> {
         }
     }
 
-    /// Installs the single post-limiter mix tap.
+    /// Installs one post-limiter group for simultaneous independent outputs.
     ///
     /// # Errors
-    /// Returns an error when a tap is active or graph dispatch fails.
-    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::EnableMixTap { writer })
+    /// Returns an error when an output group is active or graph dispatch fails.
+    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::EnableOutput { outputs })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for output group".into(),
+            )),
+        }
     }
 
-    /// Removes the post-limiter mix tap.
+    /// Removes the post-limiter output group.
     ///
     /// # Errors
     /// Returns an error when graph dispatch fails.
-    pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
+    pub fn disable_outputs(&self) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::DisableMixTap)
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::RestartOutput { sample_rate })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for stream restart".into(),
+            )),
+        }
     }
 
     /// Restart the current output route while preserving Host-owned graph state.

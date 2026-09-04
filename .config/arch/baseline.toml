@@ -209,7 +209,6 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
 
 [shared_state]
-"crates/kithara-app/src/state.rs" = 1
 "crates/kithara-ffi/src/native/bridge/event_bridge.rs" = 1
 "crates/kithara-ffi/src/native/bridge/item_bridge.rs" = 1
 "crates/kithara-queue/src/queue/state.rs" = 1

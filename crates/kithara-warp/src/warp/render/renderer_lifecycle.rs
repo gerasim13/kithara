@@ -156,17 +156,16 @@ where
         if !self.active {
             return Ok(true);
         }
-        let tail_frames = self
+        let frame_limit = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
-            .terminal_chunk_frames();
-        let tail_samples = SampleCount::new(
-            tail_frames
-                .checked_mul(channels)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
+            .latency()
+            .output_frames();
+        let sample_limit = frame_limit
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let scratch = self
             .scratch
             .as_mut()
@@ -174,28 +173,23 @@ where
                 "output scratch is unavailable",
             ))?;
         let start = scratch.len();
-        let end = start
-            .checked_add(tail_samples.get())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        if end > scratch.capacity() {
-            return Err(ElasticError::OutputFrameLimit {
-                frames: end / channels,
-                limit: scratch.capacity() / channels,
-            });
+        if start >= sample_limit {
+            return Ok(false);
         }
         scratch
-            .ensure_len(end)
+            .ensure_len(sample_limit)
             .map_err(|_| ElasticError::PoolCapacity)?;
         let drain = self
             .engine
             .as_mut()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .flush(&mut scratch[start..end])?;
+            .flush(&mut scratch[start..sample_limit])?;
         let rendered_frames = FrameCount::new(drain.frames());
-        if rendered_frames.get() > tail_frames {
+        let available_frames = (sample_limit - start) / channels;
+        if rendered_frames.get() > available_frames {
             return Err(ElasticError::EngineOutputFrameCount {
                 actual: rendered_frames.get(),
-                expected: tail_frames,
+                expected: available_frames,
             });
         }
         let rendered_samples = rendered_frames
@@ -310,12 +304,12 @@ where
         self.emit(Some(samples), held_source_frames)
     }
 
-    #[doc(hidden)]
+    /// Prepare deferred renderer state for the current source format.
     pub fn prepare(&mut self, spec: AudioSpec) {
         self.service_target(spec);
     }
 
-    #[doc(hidden)]
+    /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         let snapshot = self.context.load();
         if let Some(scratch) = self.scratch.as_mut() {
@@ -353,9 +347,29 @@ where
         output
     }
 
-    #[doc(hidden)]
+    /// Render one complete decoded source chunk.
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
+        self.prepared_quantum = None;
+        self.render_at(chunk, self.controls.speed(), snapshot)
+    }
+
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let prepared = self.prepared_quantum.take()?;
+        if chunk.frames() != prepared.frames {
+            return None;
+        }
+        let snapshot = self.context.load();
+        self.render_at(chunk, prepared.speed, snapshot)
+    }
+
+    fn render_at(
+        &mut self,
+        chunk: AudioChunk,
+        speed: f32,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -371,7 +385,6 @@ where
             return None;
         }
 
-        let speed = self.controls.speed();
         let output = if self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
@@ -383,7 +396,7 @@ where
         output
     }
 
-    #[doc(hidden)]
+    /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();

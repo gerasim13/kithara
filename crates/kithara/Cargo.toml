@@ -94,7 +94,7 @@ tls-native = [
     "kithara-abr?/tls-native",
 ]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
-broadcast = ["dep:kithara-broadcast"]
+broadcast = ["output", "dep:kithara-broadcast"]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = [

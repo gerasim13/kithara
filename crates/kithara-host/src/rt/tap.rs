@@ -1,4 +1,4 @@
-use core::num::{NonZeroU32, NonZeroUsize};
+use core::num::NonZeroU32;
 
 use firewheel::{
     StreamInfo,
@@ -9,26 +9,19 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_platform::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
+use kithara_output::{LiveOutput, OutputGroup};
+use kithara_platform::sync::Mutex;
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
-use ringbuf::{
-    HeapProd,
-    traits::{Observer, Producer},
-};
-
-use crate::bridge::MixTapWriter;
 
 pub(crate) struct TapNode {
-    writer: Mutex<Option<MixTapWriter>>,
+    outputs: Mutex<Option<OutputGroup>>,
 }
 
 impl TapNode {
-    pub(crate) fn new(writer: MixTapWriter) -> Self {
+    pub(crate) fn new(outputs: OutputGroup) -> Self {
         Self {
-            writer: Mutex::new(Some(writer)),
+            outputs: Mutex::new(Some(outputs)),
         }
     }
 }
@@ -41,7 +34,7 @@ impl AudioNode for TapNode {
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
-        TapProcessor::new(self.writer.lock().take(), cx.stream_info.sample_rate)
+        TapProcessor::new(self.outputs.lock().take(), cx.stream_info.sample_rate)
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -55,23 +48,26 @@ impl AudioNode for TapNode {
 }
 
 struct TapProcessor {
+    outputs: Option<OutputGroup>,
     sample_rate: NonZeroU32,
-    writer: Option<(HeapProd<f32>, Arc<AtomicU64>)>,
 }
 
 impl TapProcessor {
-    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("BUG: 2 is non-zero");
-
-    fn new(writer: Option<MixTapWriter>, sample_rate: NonZeroU32) -> Self {
+    fn new(mut outputs: Option<OutputGroup>, sample_rate: NonZeroU32) -> Self {
+        if let Some(outputs) = outputs.as_mut() {
+            outputs.reconfigure(AudioSpec::new(2, sample_rate));
+        }
         Self {
+            outputs,
             sample_rate,
-            writer: writer.map(Into::into),
         }
     }
 
     fn adopt_rate(&mut self, sample_rate: NonZeroU32) {
         if sample_rate != self.sample_rate {
-            self.writer = None;
+            if let Some(outputs) = self.outputs.as_mut() {
+                outputs.reconfigure(AudioSpec::new(2, sample_rate));
+            }
             self.sample_rate = sample_rate;
         }
     }
@@ -90,65 +86,79 @@ impl AudioNodeProcessor for TapProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let Some((pcm, drops)) = self.writer.as_mut() else {
+        let Some(outputs) = self.outputs.as_mut() else {
             return ProcessStatus::ClearAllOutputs;
         };
-        let stereo = Self::STEREO.get();
         let [left, right, ..] = buffers.inputs else {
-            drops.fetch_add(dropped_samples(info.frames, 0, stereo), Ordering::Relaxed);
+            outputs.write_stereo(info.frames, &[], &[]);
             return ProcessStatus::ClearAllOutputs;
         };
-        let frames = info
-            .frames
-            .min(pcm.vacant_len() / stereo)
-            .min(left.len())
-            .min(right.len());
-        let interleaved = left[..frames]
-            .iter()
-            .zip(&right[..frames])
-            .flat_map(|(&left, &right)| [left, right]);
-        let pushed = pcm.push_iter(interleaved);
-        let dropped = dropped_samples(info.frames, pushed, stereo);
-        if dropped > 0 {
-            drops.fetch_add(dropped, Ordering::Relaxed);
-        }
+        outputs.write_stereo(info.frames, left, right);
 
         ProcessStatus::ClearAllOutputs
     }
 }
 
-fn dropped_samples(frames: usize, pushed: usize, stereo: usize) -> u64 {
-    u64::try_from(frames * stereo - pushed).unwrap_or(u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::{
+        Arc,
+        atomic::AtomicU64,
+        mpsc::{self, Sender},
+    };
     use ringbuf::{
         HeapRb,
         traits::{Observer, Split},
     };
 
     use super::*;
+    use crate::bridge::MixTapWriter;
+
+    struct RateOutput(Sender<AudioSpec>);
+
+    impl LiveOutput for RateOutput {
+        fn reconfigure(&mut self, spec: AudioSpec) {
+            let _ = self.0.send(spec);
+        }
+
+        fn write_stereo(&mut self, _frames: usize, _left: &[f32], _right: &[f32]) {}
+    }
 
     fn rate(hz: u32) -> NonZeroU32 {
         NonZeroU32::new(hz).expect("test rate is non-zero")
     }
 
     #[kithara::test]
-    fn a_changed_device_rate_ends_the_feed() {
+    fn a_new_route_receives_the_current_device_rate() {
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let mut outputs = OutputGroup::new();
+        outputs.push(RateOutput(observed_tx));
+
+        let _processor = TapProcessor::new(Some(outputs), rate(48_000));
+
+        assert_eq!(
+            observed_rx.recv().expect("initial route format"),
+            AudioSpec::new(2, rate(48_000))
+        );
+    }
+
+    #[kithara::test]
+    fn a_changed_device_rate_keeps_the_feed() {
         const CAPACITY: usize = 64;
 
         let (pcm, cons) = HeapRb::<f32>::new(CAPACITY).split();
         let writer = MixTapWriter::new(pcm, Arc::new(AtomicU64::new(0)));
-        let mut processor = TapProcessor::new(Some(writer), rate(44_100));
+        let mut outputs = OutputGroup::new();
+        outputs.push(writer);
+        let mut processor = TapProcessor::new(Some(outputs), rate(44_100));
 
         processor.adopt_rate(rate(44_100));
         assert!(cons.write_is_held(), "an equal rate keeps the feed running");
 
         processor.adopt_rate(rate(48_000));
         assert!(
-            !cons.write_is_held(),
-            "a rate change must end the feed rather than relabel the samples"
+            cons.write_is_held(),
+            "a rate change reconfigures the feed instead of ending it"
         );
     }
 }

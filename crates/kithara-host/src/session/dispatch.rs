@@ -26,6 +26,11 @@ where
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
+        HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        #[cfg(any(test, feature = "probe"))]
+        HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -162,10 +167,14 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::EnableMixTap { writer } => match tap::enable(state, writer) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
+        Cmd::EnableMixTap { writer } => {
+            let mut outputs = kithara_output::OutputGroup::new();
+            outputs.push(writer);
+            match tap::enable(state, outputs) {
+                Ok(()) => Reply::Ok,
+                Err(err) => Reply::Err(err),
+            }
+        }
         Cmd::DisableMixTap => {
             tap::disable(state);
             Reply::Ok
@@ -409,6 +418,7 @@ mod tests {
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
+    use kithara_output::OutputGroup;
     use kithara_platform::sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -1269,7 +1279,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn mix_tap_rejects_a_second_consumer_and_is_cleared_by_idle_teardown() {
+    fn output_group_is_one_tap_and_is_cleared_by_idle_teardown() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1277,14 +1287,12 @@ mod tests {
         start_player_cmd(&mut state, id);
 
         let drops = Arc::new(AtomicU64::new(0));
+        let mut outputs = OutputGroup::new();
+        outputs.push(mix_tap_writer(&drops));
+        outputs.push(mix_tap_writer(&drops));
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::EnableMixTap {
-                    writer: mix_tap_writer(&drops),
-                },
-            ),
-            Reply::Ok
+            run_host_cmd(&mut state, HostCmd::EnableOutput { outputs },),
+            HostReply::Ok
         ));
         assert!(
             matches!(state.mix_tap, Some(MixTap::Installed(_))),

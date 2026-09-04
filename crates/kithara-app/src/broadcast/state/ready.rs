@@ -1,9 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara::{
-    host::HostConfig,
-    platform::{CancelToken, time::Duration},
-};
+use kithara::host::HostConfig;
 
 use super::{
     BroadcastResult, Packager,
@@ -30,6 +27,7 @@ impl Ready {
 }
 
 impl Packager for Ready {
+    type Config = ();
     type Live = Stream;
 
     const IS_AVAILABLE: bool = true;
@@ -38,11 +36,7 @@ impl Packager for Ready {
         LIVE.load(Ordering::Relaxed)
     }
 
-    fn start(
-        _host: &AppHost,
-        _shutdown: &CancelToken,
-        _tap_lead: Duration,
-    ) -> BroadcastResult<Option<Stream>> {
+    fn start(_host: &AppHost, _config: &()) -> BroadcastResult<Option<Stream>> {
         LIVE.store(true, Ordering::Relaxed);
         Ok(Some(Self::stream()))
     }
@@ -60,7 +54,7 @@ impl Packager for Ready {
 
 #[kithara::test]
 fn an_ended_stream_is_noticed_by_the_next_poll() {
-    let mut broadcaster = Broadcaster::<Ready>::new(CancelToken::root(), Duration::from_secs(2));
+    let mut broadcaster = Broadcaster::<Ready>::new(());
     let host = AppHost::new(HostConfig::builder().build()).expect("test host");
     broadcaster.toggle(&host);
     broadcaster.poll(&host);

@@ -1,4 +1,5 @@
 use firewheel::FirewheelCtx;
+use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
@@ -18,7 +19,16 @@ pub(crate) type StartStreamFn<B> =
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
-    ApplyMix { levels: Box<[HostLevel]> },
+    ApplyMix {
+        levels: Box<[HostLevel]>,
+    },
+    EnableOutput {
+        outputs: OutputGroup,
+    },
+    #[cfg(any(test, feature = "probe"))]
+    RestartOutput {
+        sample_rate: u32,
+    },
     Shutdown,
 }
 

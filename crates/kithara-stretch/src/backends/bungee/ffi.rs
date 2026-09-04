@@ -2,7 +2,7 @@ use std::{cell::Cell, marker::PhantomData, ptr::NonNull, slice};
 
 use bungee_sys::{BungeeStretcher, InputChunk, OutputChunk, Request, SampleRates, stretcher};
 
-use crate::ElasticError;
+use crate::{BungeeConfig, ElasticError};
 
 #[derive(Clone, Copy)]
 pub(super) struct AnalysisInput<'a> {
@@ -41,7 +41,11 @@ unsafe impl Send for NativeStretcher {}
 impl NativeStretcher {
     const OUTPUT_ENDPOINT_COUNT: usize = 2;
 
-    pub(super) fn new(sample_rate: u32, channels: usize) -> Result<Self, ElasticError> {
+    pub(super) fn new(
+        sample_rate: u32,
+        channels: usize,
+        config: BungeeConfig,
+    ) -> Result<Self, ElasticError> {
         let input = i32::try_from(sample_rate)
             .map_err(|_| ElasticError::EnginePreparation("Bungee sample rate is out of range"))?;
         let channels = i32::try_from(channels)
@@ -52,7 +56,7 @@ impl NativeStretcher {
                 output: input,
             },
             channels,
-            0,
+            config.log2_synthesis_hop_adjust(),
         );
         Ok(Self {
             inner: NonNull::new(inner).ok_or(ElasticError::EnginePreparation(

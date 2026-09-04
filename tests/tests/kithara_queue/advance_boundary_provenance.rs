@@ -11,10 +11,11 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        Resource, ResourceConfig, ResourceSrc, StretchControls,
-        effects::eq::generate_log_spaced_bands, player::PlayerControl,
+        Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands,
+        player::PlayerControl,
     },
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -992,7 +993,11 @@ fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> Off
     OfflinePlayerOptions::builder()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
-        .timestretch(Arc::clone(timestretch))
+        .warp(
+            WarpConfig::builder()
+                .stretch(Arc::clone(timestretch))
+                .build(),
+        )
         .build()
 }
 

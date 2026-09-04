@@ -7,6 +7,7 @@ use kithara::{
     encode::{StreamBackend, StreamEncoder},
     platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
+    worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
@@ -35,7 +36,7 @@ fn sine(frames: usize) -> Vec<f32> {
 }
 
 fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
-    let config = BroadcastConfig::builder()
+    let config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .bit_rate(BIT_RATE)

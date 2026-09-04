@@ -1743,7 +1743,7 @@ os = "linux"
 fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
-artifact = { name = "quality-report", path = "target/quality-report.md" }
+artifact = { name = "quality-report", path = "target/consolidated-quality-report.md" }
 steps = [
   { args = [
     "ci",
@@ -2399,7 +2399,7 @@ hard_invariant = true
 
 [[quality.assessment.deep_stages]]
 name = "wasm-tests"
-command = ["just", "platform", "wasm", "test"]
+command = ["just", "test", "wasm"]
 tools = ["wasm-tests"]
 hard_invariant = true
 
