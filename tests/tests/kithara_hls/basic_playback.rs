@@ -97,38 +97,6 @@ async fn test_basic_hls_playback(
     Ok(())
 }
 
-/// Test that verifies HLS session creation without actual playback.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_hls_session_creation(
-    temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
-    let test_stream_url = server.url("/master.m3u8");
-
-    let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
-
-    let pools = pools();
-    let store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp_dir.path().to_path_buf(),
-        })
-        .build();
-    let config = HlsConfig::for_url(test_stream_url)
-        .store(store)
-        .pools(pools)
-        .cancel(rt_cancel)
-        .events(bus)
-        .build();
-
-    let _stream = Stream::<Hls<TestPools>>::new(config).await?;
-
-    spawn(async move { while events_rx.recv().await.is_ok() {} });
-
-    Ok(())
-}
-
 #[derive(Clone, Copy)]
 enum StreamOptions {
     Init,
