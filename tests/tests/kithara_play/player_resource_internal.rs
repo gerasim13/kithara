@@ -302,20 +302,6 @@ async fn reset_for_seek_drops_buffered_samples() {
     );
 }
 
-#[kithara::test(tokio)]
-async fn zero_read_without_eof_is_not_error() {
-    let reader = MockReader::faulty(mock_spec(), Fault::Stall);
-    let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &pools())
-        .expect("player resource fits the test pool budget");
-
-    let mut left = vec![0.0f32; 128];
-    let mut right = vec![0.0f32; 128];
-    let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..128, &RtMetrics::default());
-    assert!(matches!(result, BlockReadOutcome::Full { frames: 0 }));
-}
-
 /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
 /// in progress), `read()` must zero-fill the output buffers. Otherwise
 /// the caller's stale samples from the previous audio-thread cycle leak
@@ -389,6 +375,10 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result2 = pr.read(&mut output2, 0..4096, &RtMetrics::default());
     assert!(matches!(result2, BlockReadOutcome::Eof));
+
+    let mut output3: Vec<&mut [f32]> = vec![&mut left, &mut right];
+    let result3 = pr.read(&mut output3, 0..4096, &RtMetrics::default());
+    assert!(matches!(result3, BlockReadOutcome::Eof));
 }
 
 /// Contract test for the user-reported "preliminary EOF" bug.
@@ -428,28 +418,4 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
         "frames_until_eof must NOT report an EOF after a decode failure \
          (otherwise the Queue treats it as a natural-end signal)"
     );
-}
-
-#[kithara::test(tokio)]
-async fn read_returns_eof_when_already_drained() {
-    let reader = TestPcmReader::new(mock_spec(), 0.01);
-    let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
-        .expect("player resource fits the test pool budget");
-
-    let mut left = vec![0.0f32; 4096];
-    let mut right = vec![0.0f32; 4096];
-
-    loop {
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        match pr.read(&mut output, 0..4096, &RtMetrics::default()) {
-            BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial { .. } => {}
-            BlockReadOutcome::Eof => break,
-            BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
-        }
-    }
-
-    let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
-    assert!(matches!(result, BlockReadOutcome::Eof));
 }
