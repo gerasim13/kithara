@@ -1,12 +1,49 @@
+# Cargo never collects a target directory: a lockfile, toolchain or source
+# change leaves the previous artifacts behind, and this one passes a gigabyte
+# per checkout. Reset it when the inputs that decide its contents change.
+#
+# `xtask` charges this directory and the Linux slot caches against the host
+# budget and evicts from both, but it cannot evict a target directory whose
+# lease a running job holds — the state a refused job finds. This runs before
+# the lane takes that lease, which is the room it can still free.
+#
+# The stamp is what the directory is filled from, not the commit that happened
+# to be checked out: `xtask`'s own sources, the workspace crate it links, the
+# lockfile and toolchain that decide what it compiles against, and the
+# configuration it parses. Keying on the commit instead threw a good build
+# directory away on every push and spent a minute of every pipeline recompiling
+# `proc-macro2` and `serde` to get the same bytes.
+#
+# The path is the checkout's own. Since #277 the Linux bootstrap builds into a
+# slot directory shared across checkouts, and that one is left alone on purpose:
+# resetting it whenever the next job's inputs differ from the last one's is the
+# rebuild-per-checkout that sharing was introduced to end.
+#
+# Not applied to Windows, whose shell is not this one; that lane has no runner
+# today.
+.unix-job:
+  before_script:
+    - |
+      stamp=target/xtask-self-cache/.inputs
+      inputs=$(git ls-files -s xtask crates/kithara-devtools .config Cargo.toml Cargo.lock rust-toolchain.toml | git hash-object --stdin)
+      if [ "$(cat "$stamp" 2>/dev/null)" != "$inputs" ]; then
+        rm -rf target/xtask-self-cache
+        mkdir -p target/xtask-self-cache
+        printf '%s' "$inputs" > "$stamp"
+      fi
+
 .macos-job:
+  extends: .unix-job
   tags:
     - kithara-macos
 
 .linux-job:
+  extends: .unix-job
   tags:
     - kithara-linux
 
 .android-job:
+  extends: .unix-job
   tags:
     - kithara-android
 
@@ -18,6 +55,7 @@
     - kithara-windows
 
 .release-job:
+  extends: .unix-job
   tags:
     - kithara-release
 
