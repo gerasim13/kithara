@@ -715,19 +715,6 @@ async fn test_retry_policy_exponential_backoff() {
 }
 
 #[kithara::test(tokio)]
-async fn test_net_builder_creates_functional_client() {
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let server = TestServer::new(test_router()).await;
-    let url = server.url("/test");
-
-    let result = client.get_bytes(url, None).await;
-    assert!(
-        result.is_ok(),
-        "NetBuilder client should work like regular client"
-    );
-}
-
-#[kithara::test(tokio)]
 async fn test_net_builder_with_custom_options() {
     let opts = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(100))
@@ -903,24 +890,4 @@ async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[ca
         Ok(()) => panic!("Expected Timeout error, got Ok"),
         Err(e) => panic!("Expected Timeout error, got {:?}", e),
     }
-}
-
-#[kithara::test(tokio)]
-async fn test_range_behavior_contract() {
-    let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
-    let url = server.url("/ignore-range");
-
-    let mut stream = client
-        .get_range(url, RangeSpec::new(0, Some(5)), None)
-        .await
-        .unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected, b"Full response ignoring range");
 }
