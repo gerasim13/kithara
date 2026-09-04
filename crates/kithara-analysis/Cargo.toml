@@ -30,7 +30,6 @@ fdk-aac = ["kithara-audio/fdk-aac"]
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-warp = { workspace = true }
 
 bon = { workspace = true }
 bytes = { workspace = true }

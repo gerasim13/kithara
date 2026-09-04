@@ -59,12 +59,11 @@ where
     /// processor and the item is not current.
     fn load_current_item(&self) -> Result<bool, PlayError> {
         let index = self.current_index();
-        let Some(item) = self.enqueue_to_processor(index)? else {
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
             return Ok(false);
         };
-        self.core.engine.set_track_grid(item.beat_grid)?;
-        self.publish_current_track_snapshot(item.duration_seconds);
-        self.start_playback(item.item_id);
+        self.publish_current_track_snapshot(duration_seconds);
+        self.start_playback(item_id);
         Ok(true)
     }
 

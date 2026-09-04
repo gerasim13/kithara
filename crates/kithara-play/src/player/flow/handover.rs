@@ -13,7 +13,6 @@ use crate::{
     api::{EngineEvent, TrackId},
     bridge::PlayerCmd,
     error::PlayError,
-    player::core::EnqueuedItem,
 };
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
@@ -26,7 +25,6 @@ enum ArmDecision {
 }
 
 struct ActivatedPending {
-    beat_grid: Option<kithara_warp::BeatGridSnapshot>,
     item_id: TrackId,
     duration_seconds: f64,
 }
@@ -74,7 +72,6 @@ where
             let duration_seconds = pending.duration_seconds;
             pending.state = PendingNextState::ActivatedReady;
             Some(ActivatedPending {
-                beat_grid: pending.beat_grid.clone(),
                 item_id,
                 duration_seconds,
             })
@@ -125,18 +122,11 @@ where
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
         }
 
-        let Some(EnqueuedItem {
-            beat_grid,
-            duration_seconds,
-            item_id,
-            src,
-        }) = self.enqueue_to_processor(index)?
-        else {
+        let Some((item_id, src, duration_seconds)) = self.enqueue_to_processor(index)? else {
             return Ok(None);
         };
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
-                beat_grid,
                 item_id,
                 index,
                 duration_seconds,
@@ -173,7 +163,6 @@ where
             return Ok(());
         };
 
-        self.core.engine.set_track_grid(activated.beat_grid)?;
         self.start_playback(activated.item_id);
         self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
@@ -303,7 +292,6 @@ mod tests {
 
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
-                beat_grid: None,
                 item_id: TrackId::allocate(),
                 src: Arc::from("next.mp3"),
                 state: PendingNextState::Armed,

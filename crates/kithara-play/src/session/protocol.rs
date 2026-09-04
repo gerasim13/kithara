@@ -1,7 +1,7 @@
 mod wire {
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, BeatGridSnapshot, SyncError};
+    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -76,10 +76,6 @@ mod wire {
         },
         StopPlayer {
             player_id: PlayerId,
-        },
-        SetTrackGrid {
-            player_id: PlayerId,
-            grid: Option<BeatGridSnapshot>,
         },
         AllocateSlot {
             player_id: PlayerId,
@@ -211,7 +207,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_warp::{BeatGridId, BeatGridSnapshot};
+    use kithara_warp::BeatGridId;
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
@@ -459,15 +455,6 @@ mod handle {
 
         pub fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
             self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
-        }
-
-        pub fn set_track_grid(
-            &self,
-            player_id: PlayerId,
-            grid: Option<BeatGridSnapshot>,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetTrackGrid { player_id, grid })
-                .map(|_| ())
         }
 
         pub fn tick(&self) -> Result<(), PlayError> {

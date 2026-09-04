@@ -11,8 +11,7 @@ use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
-    BeatGridSnapshot, PresentationFrontier, RenderContext, RenderPublisher, StretchControls,
-    WarpConfig,
+    PresentationFrontier, RenderContext, RenderPublisher, StretchControls, WarpConfig,
 };
 use tracing::warn;
 
@@ -70,8 +69,6 @@ pub struct Resource {
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
-    #[field(get, vis = "pub(crate)")]
-    beat_grid: Option<BeatGridSnapshot>,
     priority: Option<TrackPriority>,
     #[field(with)]
     playback_rate: PlaybackRate,
@@ -185,7 +182,6 @@ impl Resource {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
         let stretch = Arc::clone(&config.stretch);
-        let beat_grid = config.beat_grid.clone();
         let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
@@ -208,7 +204,6 @@ impl Resource {
                 Self::from_stream_audio(track, src, &worker).await?
             }
         };
-        resource.beat_grid = beat_grid;
         resource.reader.0 = CancelGuard(cancel);
         Ok(resource)
     }
@@ -232,7 +227,6 @@ impl Resource {
         let mut resource = Self {
             src,
             bus,
-            beat_grid: None,
             priority: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),

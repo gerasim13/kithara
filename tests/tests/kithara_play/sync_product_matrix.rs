@@ -3,7 +3,6 @@
 use std::{env, io, num::NonZeroU32, path::Path};
 
 use kithara::{
-    analysis::{BeatArtifact, BeatGridConfig},
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
     events::TrackStatus,
@@ -22,9 +21,8 @@ use kithara::{
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{
-        AlignmentSource, AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, FrameUncertainty, LoadGeneration, MapAxis, MapPoint, MapPosition,
-        PresentationFrontier, SessionFrame, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
+        AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
+        SyncGroup, SyncIntent, SyncOperation,
     },
 };
 use kithara_app::recording::AssetPartSink;
@@ -356,12 +354,6 @@ impl RecordingSink for FailingPartSink {
 
 struct OfflineRecordingArtifact;
 
-#[derive(Clone)]
-struct FixtureSource {
-    beat_grid: Option<BeatGridSnapshot>,
-    uri: String,
-}
-
 fn recording_key(store: &AssetStore<TestPools>, name: &str) -> ResourceKey {
     let source = AssetSource::Local {
         path: env::temp_dir().join("kithara-offline-rendering-test"),
@@ -454,15 +446,14 @@ impl ProductHarness {
             let deck = host
                 .insert(queue)
                 .unwrap_or_else(|error| panic!("{}: insert deck {index}: {error}", case.id));
-            let config =
-                ResourceConfig::for_src(ResourceSrc::parse(&source.uri).unwrap_or_else(|error| {
-                    panic!("{}: parse source {}: {error}", case.id, source.uri)
-                }))
-                .store(memory_asset_store())
-                .initial_abr_mode(AbrMode::manual(0))
-                .discriminator(format!("{}-{provider:?}-{index}", case.id))
-                .maybe_beat_grid(source.beat_grid)
-                .build();
+            let config = ResourceConfig::for_src(
+                ResourceSrc::parse(&source)
+                    .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
+            )
+            .store(memory_asset_store())
+            .initial_abr_mode(AbrMode::manual(0))
+            .discriminator(format!("{}-{provider:?}-{index}", case.id))
+            .build();
             let id = deck
                 .append(TrackSource::Config(Box::new(config)))
                 .unwrap_or_else(|error| panic!("{}: append deck {index}: {error}", case.id));
@@ -758,27 +749,6 @@ impl ProductHarness {
         }
         pcm
     }
-
-    fn track_grids(&self, case: SyncCase) -> Vec<BeatGridSnapshot> {
-        self.host
-            .topology()
-            .unwrap_or_else(|error| panic!("{}: query Host topology: {error}", case.id))
-            .members()
-            .iter()
-            .map(|deck| {
-                let deck = deck
-                    .group_topology()
-                    .unwrap_or_else(|| panic!("{}: Host member is not a deck group", case.id));
-                assert_eq!(
-                    deck.members().len(),
-                    1,
-                    "{}: selected deck must publish one active track grid",
-                    case.id
-                );
-                deck.members()[0].grid().clone()
-            })
-            .collect()
-    }
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(10)))]
@@ -865,11 +835,7 @@ fn offline_renderer_publishes_only_complete_recordings() {
     );
 }
 
-async fn sources(
-    provider: Provider,
-    decks: usize,
-    server: &TestServerHelper,
-) -> Vec<FixtureSource> {
+async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) -> Vec<String> {
     match provider {
         Provider::Synthetic => cycle_paths(
             &[
@@ -884,7 +850,11 @@ async fn sources(
             .iter()
             .cycle()
             .take(decks)
-            .map(|name| rhythm_source(name))
+            .map(|name| {
+                asset_path(
+                    by_name(name).unwrap_or_else(|| panic!("missing rhythm fixture `{name}`")),
+                )
+            })
             .collect(),
         Provider::Library => cycle_paths_from_strings(&library_paths(), decks),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
@@ -904,7 +874,7 @@ async fn sources(
                 protection,
             )
             .await;
-            vec![FixtureSource::from(url); decks]
+            vec![url; decks]
         }
         Provider::HlsMp3(protection) => {
             let hls = hls(
@@ -914,13 +884,13 @@ async fn sources(
                 protection,
             )
             .await;
-            let mp3 = asset_path(&rhythm_mp3_deck_b_120bpm_48k());
+            let mp3 = asset_path(rhythm_mp3_deck_b_120bpm_48k());
             (0..decks)
                 .map(|index| {
                     if index.is_multiple_of(2) {
-                        FixtureSource::from(hls.clone())
+                        hls.clone()
                     } else {
-                        FixtureSource::from(mp3.clone())
+                        mp3.clone()
                     }
                 })
                 .collect()
@@ -928,81 +898,24 @@ async fn sources(
     }
 }
 
-fn cycle_paths(assets: &[Asset], count: usize) -> Vec<FixtureSource> {
+fn cycle_paths(assets: &[Asset], count: usize) -> Vec<String> {
     assets
         .iter()
         .cycle()
         .take(count)
-        .map(|asset| FixtureSource::from(asset_path(asset)))
+        .map(|asset| {
+            asset
+                .path()
+                .expect("native product fixture is materialized on disk")
+                .to_str()
+                .expect("fixture path is UTF-8")
+                .to_owned()
+        })
         .collect()
 }
 
-fn cycle_paths_from_strings(paths: &[String], count: usize) -> Vec<FixtureSource> {
-    paths
-        .iter()
-        .cycle()
-        .take(count)
-        .cloned()
-        .map(FixtureSource::from)
-        .collect()
-}
-
-impl From<String> for FixtureSource {
-    fn from(uri: String) -> Self {
-        Self {
-            beat_grid: None,
-            uri,
-        }
-    }
-}
-
-fn rhythm_source(name: &str) -> FixtureSource {
-    let wav = by_name(name).unwrap_or_else(|| panic!("missing rhythm fixture `{name}`"));
-    let suffix = name
-        .strip_prefix("rhythm_wav_")
-        .unwrap_or_else(|| panic!("invalid rhythm fixture name `{name}`"));
-    let beat_name = format!("rhythm_expected_beat_{suffix}");
-    let beat = by_name(&beat_name).unwrap_or_else(|| panic!("missing rhythm map `{beat_name}`"));
-    let artifact = BeatArtifact::try_from(beat.bytes())
-        .unwrap_or_else(|error| panic!("decode rhythm map `{beat_name}`: {error}"));
-    let axis = wav_axis(wav.bytes());
-    let id = BeatGridId::allocate().expect("rhythm track grid identity");
-    let beat_grid = BeatGridSnapshot::try_from(
-        BeatGridConfig::builder()
-            .artifact(&artifact)
-            .id(id)
-            .revision(BeatGridRevision::first())
-            .axis(axis)
-            .uncertainty(FrameUncertainty::new(0.0).expect("exact fixture uncertainty"))
-            .build(),
-    )
-    .unwrap_or_else(|error| panic!("build rhythm grid `{beat_name}`: {error}"));
-    FixtureSource {
-        beat_grid: Some(beat_grid),
-        uri: asset_path(&wav),
-    }
-}
-
-fn wav_axis(wav: &[u8]) -> AssetAxis {
-    let u16_at = |offset| u16::from_le_bytes([wav[offset], wav[offset + 1]]);
-    let u32_at = |offset| {
-        u32::from_le_bytes([
-            wav[offset],
-            wav[offset + 1],
-            wav[offset + 2],
-            wav[offset + 3],
-        ])
-    };
-    let channels = u64::from(u16_at(22));
-    let sample_bytes = u64::from(u16_at(34)) / 8;
-    let frame_bytes = channels * sample_bytes;
-    assert!(
-        frame_bytes > 0,
-        "rhythm WAV must have a non-zero frame size"
-    );
-    let sample_rate = NonZeroU32::new(u32_at(24)).expect("rhythm WAV sample rate");
-    let frame_count = u64::from(u32_at(40)) / frame_bytes;
-    AssetAxis::new(sample_rate, frame_count)
+fn cycle_paths_from_strings(paths: &[String], count: usize) -> Vec<String> {
+    paths.iter().cycle().take(count).cloned().collect()
 }
 
 fn library_paths() -> [String; 2] {
@@ -1028,7 +941,7 @@ fn library_paths() -> [String; 2] {
     ]
 }
 
-fn asset_path(asset: &Asset) -> String {
+fn asset_path(asset: Asset) -> String {
     asset
         .path()
         .expect("native product fixture is materialized on disk")
@@ -1111,51 +1024,6 @@ async fn run(case: SyncCase, provider: Provider) {
         case.id,
         failures.join("\n"),
     );
-}
-
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(60))
-)]
-async fn rhythm_resources_publish_their_exact_fixture_grids() {
-    let case = DOWNTEMPO_HOUSE_SYNC;
-    let harness = ProductHarness::new(case, DOWNTEMPO_HOUSE_PROVIDER, 0).await;
-    let grids = harness.track_grids(case);
-
-    assert_eq!(grids.len(), 2);
-    for (grid, (first_beat, bpm)) in grids.iter().zip([(30_000.0, 96.0), (23_226.0, 124.0)]) {
-        assert_eq!(
-            grid.axis(),
-            MapAxis::Asset(AssetAxis::new(
-                NonZeroU32::new(48_000).expect("fixture sample rate"),
-                48_000 * 12,
-            ))
-        );
-        let beat = MapPoint::new(grid.stamp(), Beat::new(0.0).expect("first fixture beat"));
-        let BeatGridQuery::Resolved(position) = grid.position_at(beat) else {
-            panic!("fixture grid must resolve beat zero: {grid:?}");
-        };
-        assert_eq!(
-            f64::try_from(*position.value().value()).expect("asset frame is representable"),
-            first_beat,
-        );
-        let position = MapPoint::new(
-            grid.stamp(),
-            MapPosition::Asset(AssetFrame::new(first_beat).expect("first fixture frame")),
-        );
-        let BeatGridQuery::Resolved(tempo) = grid.tempo_at(position) else {
-            panic!("fixture grid must resolve tempo at beat zero: {grid:?}");
-        };
-        assert!(
-            (f64::from(*tempo.value()) - bpm).abs() < 0.01,
-            "fixture grid tempo {} differs from {bpm}",
-            f64::from(*tempo.value()),
-        );
-    }
 }
 
 #[kithara::test(

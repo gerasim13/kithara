@@ -19,13 +19,3 @@ pub trait BeatGrid: MaybeSend + MaybeSync + 'static {
     /// a later revision than the snapshot it replaces.
     fn snapshot(&self) -> BeatGridSnapshot;
 }
-
-impl BeatGrid for BeatGridSnapshot {
-    fn id(&self) -> BeatGridId {
-        Self::id(self)
-    }
-
-    fn snapshot(&self) -> BeatGridSnapshot {
-        self.clone()
-    }
-}

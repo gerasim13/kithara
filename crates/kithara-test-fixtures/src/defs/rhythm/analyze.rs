@@ -4,7 +4,9 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use kithara_analysis::{AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder};
+use kithara_analysis::{
+    AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatArtifact,
+};
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
 };
@@ -31,7 +33,7 @@ impl Consts {
     const SAMPLE_SCALE: f32 = 32_768.0;
 }
 
-pub(super) fn beat(wav: &[u8]) -> Vec<u8> {
+pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
     let reader = WavReader::parse(wav).unwrap_or_else(|error| panic!("rhythm WAV: {error}"));
     let rate = reader.spec.sample_rate;
     let (mut results, _producer) = worker().analyze(
@@ -46,13 +48,11 @@ pub(super) fn beat(wav: &[u8]) -> Vec<u8> {
     .unwrap_or_else(|| panic!("production rhythm analysis produced no result"));
     let analysis = progress.analysis();
     assert!(analysis.is_settled(), "rhythm analysis must cover the WAV");
-    let artifact = analysis
+    analysis
         .beat()
         .unwrap_or_else(|| panic!("production rhythm analysis produced no beat artifact"))
-        .artifact();
-    let mut bytes = Vec::new();
-    artifact.write_to(&mut bytes);
-    bytes
+        .artifact()
+        .clone()
 }
 
 fn worker() -> &'static AnalysisWorker {

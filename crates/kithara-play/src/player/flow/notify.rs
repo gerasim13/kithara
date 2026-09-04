@@ -353,7 +353,6 @@ mod tests {
             panic!("BUG: an active phase must carry a pending slot");
         };
         *pending = Some(PendingNext {
-            beat_grid: None,
             item_id,
             src: Arc::from(src),
             state: PendingNextState::ActivatedReady,

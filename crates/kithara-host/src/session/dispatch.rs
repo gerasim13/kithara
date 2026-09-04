@@ -1,10 +1,7 @@
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_play::PlayError;
-use kithara_warp::{
-    BeatGridSnapshot, SyncAdmission as WarpSyncAdmission, SyncCapability, SyncGroup, SyncMember,
-    SyncOperation, SyncRejected, TopologyOperation,
-};
+use kithara_warp::{SyncCapability, SyncGroup, SyncOperation, SyncRejected, TopologyOperation};
 use tracing::{debug, trace, warn};
 
 use super::{
@@ -69,7 +66,7 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
 fn transact_root<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     operation: SyncOperation<kithara_play::player::PlayerMember>,
-) -> Result<WarpSyncAdmission, SyncRejected<kithara_play::player::PlayerMember>> {
+) -> Result<kithara_warp::SyncAdmission, SyncRejected<kithara_play::player::PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             kithara_warp::SyncError::CapabilityUnavailable {
@@ -132,10 +129,6 @@ where
         Cmd::StopPlayer { player_id } => match lifecycle::stop_player(state, player_id) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
-        },
-        Cmd::SetTrackGrid { player_id, grid } => match set_track_grid(state, player_id, grid) {
-            Ok(()) => Reply::Ok,
-            Err(error) => Reply::Err(error),
         },
         Cmd::AllocateSlot { player_id } => {
             slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
@@ -218,65 +211,6 @@ where
             Reply::SampleRate(SessionSampleRate::new(measured, state.sample_rate_hint))
         }
         Cmd::Tick => tick_session(state),
-    }
-}
-
-fn set_track_grid<B: AudioBackend, S>(
-    state: &mut SessionState<B, S>,
-    player_id: PlayerId,
-    grid: Option<BeatGridSnapshot>,
-) -> Result<(), SessionError> {
-    let index = player_index(state, player_id)?;
-    let deck_id = state
-        .graph
-        .deck(index)
-        .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
-        .grid_id;
-    let topology = state
-        .root
-        .with_group(deck_id, SyncGroup::topology)
-        .ok_or(SessionError::PlayerNotFound(player_id))??;
-    let operations = match (topology.members(), grid) {
-        ([], None) => return Ok(()),
-        ([], Some(grid)) => Box::new([TopologyOperation::Attach {
-            member: SyncMember::Grid {
-                alignment: None,
-                grid: Box::new(grid),
-            },
-        }]),
-        ([current], None) => Box::new([TopologyOperation::Detach {
-            member: current.grid().id(),
-        }]),
-        ([current], Some(grid)) if current.grid().stamp() == grid.stamp() => return Ok(()),
-        ([current], Some(grid)) => Box::new([TopologyOperation::Replace {
-            member: current.grid().id(),
-            replacement: SyncMember::Grid {
-                alignment: None,
-                grid: Box::new(grid),
-            },
-        }]),
-        _ => {
-            return Err(SessionError::Graph(
-                "player synchronization group owns more than one active track".to_owned(),
-            ));
-        }
-    };
-    let operation = SyncOperation::Topology {
-        base: topology.stamp(),
-        operations,
-    };
-    match transact_root(state, operation) {
-        Ok(WarpSyncAdmission::TopologyChanged { .. }) => {
-            state.publish_root();
-            Ok(())
-        }
-        Ok(_) => Err(SessionError::Graph(
-            "track-grid topology update did not change topology".to_owned(),
-        )),
-        Err(rejected) => {
-            let (error, _) = rejected.into();
-            Err(SessionError::from(error))
-        }
     }
 }
 
@@ -490,10 +424,7 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_test_utils::kithara;
-    use kithara_warp::{
-        AssetAxis, BeatGrid, BeatGridId as TrackGridId, BeatGridRevision, BeatGridSnapshot,
-        BeatGridState, BeatGridUnavailable, MapAxis,
-    };
+    use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -664,30 +595,6 @@ mod tests {
         state.root.snapshot()
     }
 
-    fn track_grid() -> BeatGridSnapshot {
-        BeatGridSnapshot::unavailable(
-            TrackGridId::allocate().expect("fixture track grid id"),
-            BeatGridRevision::first(),
-            MapAxis::Asset(AssetAxis::new(
-                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE).expect("fixture sample rate"),
-                u64::from(TestState::DEFAULT_SAMPLE_RATE),
-            )),
-        )
-    }
-
-    fn track_grid_ids(state: &TestState, player_id: u64) -> Vec<TrackGridId> {
-        let deck_id = deck_by_player_id(state, player_id).grid_id;
-        state
-            .root
-            .with_group(deck_id, SyncGroup::topology)
-            .expect("player deck group exists")
-            .expect("player deck topology is valid")
-            .members()
-            .iter()
-            .map(|member| member.grid().id())
-            .collect()
-    }
-
     fn assert_route_boundary(before: &BeatGridSnapshot, boundary: &BeatGridSnapshot) {
         assert_eq!(
             boundary.state(),
@@ -759,51 +666,6 @@ mod tests {
         assert_eq!(retained.stamp(), started.stamp());
         assert_eq!(retained.members(), started.members());
         assert_eq!(deck_count(&state), 0);
-    }
-
-    #[kithara::test]
-    fn selected_track_grid_is_attached_replaced_and_detached() {
-        let mut state = test_state(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-        let first = track_grid();
-        let second = track_grid();
-
-        assert!(track_grid_ids(&state, player_id).is_empty());
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetTrackGrid {
-                    player_id,
-                    grid: Some(first.clone()),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert_eq!(track_grid_ids(&state, player_id), [first.id()]);
-
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetTrackGrid {
-                    player_id,
-                    grid: Some(second.clone()),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert_eq!(track_grid_ids(&state, player_id), [second.id()]);
-
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetTrackGrid {
-                    player_id,
-                    grid: None,
-                },
-            ),
-            Reply::Ok
-        ));
-        assert!(track_grid_ids(&state, player_id).is_empty());
     }
 
     #[kithara::test]
