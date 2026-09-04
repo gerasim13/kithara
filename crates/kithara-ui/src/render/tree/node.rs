@@ -89,17 +89,21 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         }
         .measure(group.measure())
         .padding(padding(group.padding_x(), group.padding_y()));
+        let lit = group.lit().filter(|lit| self.ctx.flag(Some(lit.flag())));
         let element = wheeled(
             bordered(
                 filled(
                     container(flex).width(size.0).height(size.1),
-                    group.background(),
+                    lit.map_or_else(|| group.background(), |lit| lit.background()),
                     group.background_alpha(),
                     group.round(),
                     self.skin,
                 ),
                 group.frame(),
-                (group.frame_color(), group.frame_width()),
+                (
+                    lit.map_or_else(|| group.frame_color(), |lit| lit.frame_color()),
+                    group.frame_width(),
+                ),
                 size,
                 self.skin,
             ),

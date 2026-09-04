@@ -1,7 +1,8 @@
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    Band, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, Snap, SplitMount,
+    Band, Ctx, Group, GroupMount, Host, Lit, Measured, Module, PlacedMount, Popover, Snap,
+    SplitMount,
 };
 use crate::{
     compile::{Address, CompiledNode, CompiledUi, SplitCell},
@@ -256,21 +257,18 @@ struct RowNode<'a> {
 }
 
 fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Group<'a> {
-    let active = ctx.flag(node.active);
     let padding = node.pad.unwrap_or(ctx.skin.layout.grid_pad);
-    let background = active
-        .then_some(node.active_background)
-        .flatten()
-        .or(node.background);
-    let frame_color = active
-        .then_some(node.active_frame_color)
-        .flatten()
-        .or(node.frame_color)
-        .unwrap_or(ctx.skin.divider.color);
+    let frame_color = node.frame_color.unwrap_or(ctx.skin.divider.color);
+    let lit = node.active.map(|flag| Lit {
+        flag,
+        background: node.active_background.or(node.background),
+        frame_color: node.active_frame_color.unwrap_or(frame_color),
+    });
     Group {
         round,
-        background,
+        lit,
         frame_color,
+        background: node.background,
         axis: Axis::Horizontal,
         measure: node.measure,
         alignment: node.align,
@@ -479,6 +477,7 @@ where
             frame: *frame,
             background: *background,
             background_alpha: *background_alpha,
+            lit: None,
             frame_color: ctx.skin.divider.color,
             frame_width: ctx.skin.divider.width,
             surface: surface.as_ref(),
