@@ -13,7 +13,7 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
     let pools = pools();
     let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
         .with_waveform(BUCKETS)
-        .with_beat_detector(beat_detector(), GridParams::default());
+        .with_beat_detector(Box::new(beat_detector()), GridParams::default());
     let mut beat = builder.take_detector();
     let mut analyzers = builder
         .build(spec().sample_rate, "order-harness".into())
