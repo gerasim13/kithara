@@ -355,9 +355,12 @@ impl Registry {
             sleep(deadline.saturating_duration_since(Instant::now())).await;
         };
         tokio::pin!(abr_deadline_wait);
+        let mut deadline_elapsed = false;
 
         poll_fn(|cx| {
-            let deadline_elapsed = abr_deadline_wait.as_mut().poll(cx).is_ready();
+            if !deadline_elapsed {
+                deadline_elapsed = abr_deadline_wait.as_mut().poll(cx).is_ready();
+            }
             aggregate.abr_ticked |= inner.abr.poll_ticks(cx, Instant::now(), deadline_elapsed);
             while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
                 self.add(entry);
