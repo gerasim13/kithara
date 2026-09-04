@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! `ItemDidPlayToEnd` is published for whichever track in the player's
-//! arena hit EOF, not for the one being heard:
+//! Completion events are published for whichever track in the player's
+//! arena reached EOF or failed, not for the one being heard:
 //! `PlayerImpl::process_notifications` walks every active slot, and a slot
 //! holds more than one track. An orphaned slot decoding ahead, or the
 //! outgoing half of a crossfade, reaches its own end while the current
@@ -11,7 +11,7 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef},
+    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
@@ -31,6 +31,18 @@ const WARMUP_BLOCKS: usize = 64;
 const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const QUIET: f32 = 0.10;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Completion {
+    Eof,
+    Failure,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NonLeadingRole {
+    Background,
+    Outgoing,
+}
 
 fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -86,9 +98,8 @@ fn render_loop(
     pcm
 }
 
-/// Three loaded tracks, the middle one playing. The first track — never
-/// selected, standing in for the background slot — reports natural EOF.
-fn fixture_with_background_eof() -> (
+/// Three loaded tracks with the first standing in for a non-leading slot.
+fn non_leading_fixture() -> (
     OfflinePlayerHarness,
     QueueControl<TestPools>,
     TrackRef,
@@ -106,39 +117,75 @@ fn fixture_with_background_eof() -> (
     )
 }
 
+fn publish_completion(
+    harness: &OfflinePlayerHarness,
+    completion: Completion,
+    role: NonLeadingRole,
+    track: TrackRef,
+) {
+    let item = match role {
+        NonLeadingRole::Background => ItemRole::Background(track),
+        NonLeadingRole::Outgoing => ItemRole::Outgoing(track),
+    };
+    let event = match completion {
+        Completion::Eof => PlayerEvent::ItemDidPlayToEnd { item },
+        Completion::Failure => PlayerEvent::ItemDidFail { item },
+    };
+    harness.player().bus().publish(Event::Player(event));
+}
+
 /// Field log, 2026-08-26: a background HLS slot hit EOF 5 s after the
 /// current track started and the queue advanced on it, cutting a track
 /// with minutes left. The queue must key the advance on the track that
 /// ended being the current one.
 #[kithara::test(tokio)]
-async fn background_track_eof_does_not_advance_the_queue() {
-    let (harness, queue, stale, current) = fixture_with_background_eof();
+#[case::background_eof(Completion::Eof, NonLeadingRole::Background)]
+#[case::outgoing_eof(Completion::Eof, NonLeadingRole::Outgoing)]
+#[case::background_failure(Completion::Failure, NonLeadingRole::Background)]
+async fn non_leading_completion_does_not_advance_the_queue(
+    #[case] completion: Completion,
+    #[case] role: NonLeadingRole,
+) {
+    let (harness, queue, stale, current) = non_leading_fixture();
+    let stale_id = stale.id;
 
     queue
         .select(current, Transition::None)
         .expect("select the current track");
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
-    harness
-        .player()
-        .bus()
-        .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Background(stale),
-        }));
+    publish_completion(&harness, completion, role, stale);
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
     assert_eq!(
         queue.current_index(),
         Some(1),
-        "EOF from a track that is not current must leave the current track selected"
+        "{completion:?} from a track that is not current must leave the current track selected"
     );
+
+    if completion == Completion::Failure {
+        let status = queue
+            .tracks()
+            .into_iter()
+            .find(|entry| entry.id == stale_id)
+            .map(|entry| entry.status)
+            .expect("the background entry must still be in the queue");
+        assert!(
+            !matches!(status, TrackStatus::Failed(_)),
+            "a background track's failure must not mark the entry failed: {status:?}"
+        );
+    }
 }
 
 /// The audible half of the same defect: the listener hears the current
 /// track handed over to the successor while it is still playing.
 #[kithara::test(tokio)]
-async fn background_track_eof_does_not_cut_the_current_track_audio() {
-    let (harness, queue, stale, current) = fixture_with_background_eof();
+#[case::eof(Completion::Eof)]
+#[case::failure(Completion::Failure)]
+async fn background_completion_does_not_cut_the_current_track_audio(
+    #[case] completion: Completion,
+) {
+    let (harness, queue, stale, current) = non_leading_fixture();
 
     queue
         .select(current, Transition::None)
@@ -147,49 +194,16 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
     let before = mean_abs(&before_pcm[before_pcm.len() / 2..]);
     assert!(
         before > 0.005,
-        "the current track must be audible before the background EOF: mean={before}"
+        "the current track must be audible before the background {completion:?}: mean={before}"
     );
 
-    harness
-        .player()
-        .bus()
-        .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Background(stale),
-        }));
+    publish_completion(&harness, completion, NonLeadingRole::Background, stale);
     let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
 
     assert!(
         after > before / 2.0,
-        "the current track must keep sounding through a background track's EOF — \
+        "the current track must keep sounding through a background track's {completion:?} — \
          the quieter successor took over instead: before={before}, after={after}"
-    );
-}
-
-/// The other non-leading role: `commit_next` promotes the successor inside
-/// the *current* slot, so the faded-out track ends there — its own slot is
-/// still the held one. The queue has already moved on with the pre-arm;
-/// answering that end again would skip a track the listener just started.
-#[kithara::test(tokio)]
-async fn outgoing_crossfade_half_eof_does_not_advance_the_queue() {
-    let (harness, queue, outgoing, current) = fixture_with_background_eof();
-
-    queue
-        .select(current, Transition::None)
-        .expect("select the current track");
-    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
-
-    harness
-        .player()
-        .bus()
-        .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Outgoing(outgoing),
-        }));
-    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
-
-    assert_eq!(
-        queue.current_index(),
-        Some(1),
-        "the end of a crossfade's outgoing half must leave the promoted track selected"
     );
 }
