@@ -61,15 +61,18 @@ where
     /// described yet". Reading the second as end-of-stream is how a variant
     /// holding six of its seven segments reported EOF on its first chunk,
     /// which failed the incoming generation of an ABR up-switch and discarded
-    /// the transition for good. [`ByteMap::len`] is the layout's own statement
-    /// that its extent is final, and it is the only thing that may turn an
-    /// undescribed index into an end.
+    /// the transition for good. [`ByteMap::segment_count`] separates the two:
+    /// an index the layout counts is a segment still owed.
     fn ensure_cursor(&mut self) -> EnsureCursor {
         if self.cursor.is_some() {
             return EnsureCursor::Ready;
         }
         let Some(desc) = self.segments.segment_at_index(self.next_segment_index) else {
-            return if self.segments.len().is_some() {
+            return if self
+                .segments
+                .segment_count()
+                .is_none_or(|count| self.next_segment_index >= count)
+            {
                 EnsureCursor::Eof
             } else {
                 EnsureCursor::Pending

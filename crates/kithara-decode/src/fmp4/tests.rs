@@ -125,11 +125,12 @@ fn pull_one_chunk(
 }
 
 /// An HLS variant between the playlist landing and the first segment
-/// settling: it knows how many segments it has, has not described any of
-/// them, and has published no final extent.
+/// settling: it counts its segments and states its extent, but has not
+/// described any segment yet.
 struct PublishedButUndescribed {
     init_range: Range<u64>,
     count: u32,
+    total: u64,
 }
 
 impl ByteMap for PublishedButUndescribed {
@@ -138,7 +139,7 @@ impl ByteMap for PublishedButUndescribed {
     }
 
     fn len(&self) -> Option<u64> {
-        None
+        Some(self.total)
     }
 
     fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
@@ -168,10 +169,12 @@ impl ByteMap for PublishedButUndescribed {
 fn an_undescribed_segment_is_not_the_end_of_the_stream() {
     let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 3);
     let init_range = 0..segmented.segments[0].byte_range.start;
+    let total = segmented.segments[2].byte_range.end;
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(PublishedButUndescribed {
         init_range,
         count: 3,
+        total,
     });
     let mut demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build demuxer");
