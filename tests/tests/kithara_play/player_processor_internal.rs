@@ -125,25 +125,14 @@ fn processor_renders_silence_when_no_tracks() {
 }
 
 #[kithara::test]
-fn processor_seek_without_tracks_does_not_panic() {
+#[case::seek(PlayerCmd::Seek {
+    seconds: 30.0,
+    seek_epoch: 1,
+})]
+#[case::playback_rate(PlayerCmd::SetPlaybackRate(2.0))]
+fn processor_command_without_tracks_does_not_panic(#[case] command: PlayerCmd) {
     let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
-            seconds: 30.0,
-            seek_epoch: 1,
-        })
-        .ok();
-    processor.drain_commands();
-}
-
-#[kithara::test]
-fn processor_set_playback_rate_without_tracks_does_not_panic() {
-    let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetPlaybackRate(2.0))
-        .ok();
+    control.cmd_tx.try_push(command).ok();
     processor.drain_commands();
 }
 
