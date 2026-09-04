@@ -14,5 +14,5 @@ mod hand;
 pub(in crate::render) mod immediate;
 mod press;
 mod run;
-mod shared;
+pub(in crate::render) mod shared;
 mod stepper;
