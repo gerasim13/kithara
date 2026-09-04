@@ -73,6 +73,9 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Use repo harnesses for acceptance and formatting: `just test` and `just fmt`.
   Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped
   probes only, not final validation claims.
+- Production types and functions must not gain fields, methods, or behavior
+  solely for tests. Attach USDT probes only to real operations; never add a
+  no-op function just to expose a probe point.
 - Do not preserve backward compatibility.
 
 ## Command Routing

@@ -6,7 +6,7 @@ use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_macros::Patch;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_warp::{BeatGridId, StretchControls};
+use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
 use crate::{
     PlayWorker,
@@ -36,11 +36,14 @@ pub struct PlayerConfig<S> {
     #[builder(default = allocate_grid_id())]
     #[patch(skip)]
     pub(crate) grid_id: BeatGridId,
-    /// Per-deck time-stretch control handle, shared with the UI and the
-    /// worker Warp chain (see `kithara_warp::StretchControls`).
-    #[builder(default = StretchControls::new(1.0))]
-    #[patch(skip)]
-    pub(crate) timestretch: Arc<StretchControls>,
+    /// Per-deck Warp resources and live temporal controls. A document reaches
+    /// them under `player.warp:`; the live [`StretchControls`] handle inside
+    /// is shared with the deck and the UI and is not a document key.
+    ///
+    /// [`StretchControls`]: kithara_warp::StretchControls
+    #[builder(default = WarpConfig::builder().build())]
+    #[patch(nested)]
+    pub(crate) warp: WarpConfig,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     #[patch(skip)]
@@ -113,7 +116,7 @@ impl<S> Clone for PlayerConfig<S> {
     fn clone(&self) -> Self {
         Self {
             grid_id: self.grid_id,
-            timestretch: Arc::clone(&self.timestretch),
+            warp: self.warp.clone(),
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
             block_on_underrun: self.block_on_underrun,
@@ -135,6 +138,7 @@ impl<S> Clone for PlayerConfig<S> {
 impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
+            .field("warp", &self.warp)
             .field("gapless_mode", &self.gapless_mode)
             .field("crossfade_duration", &self.crossfade_duration)
             .field("default_rate", &self.default_rate)

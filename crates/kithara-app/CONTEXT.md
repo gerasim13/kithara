@@ -23,14 +23,14 @@ path or an AssetStore.
 
 ## Broadcast service
 
-The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
-stays `Requested` until the Host exposes its measured output rate, which configures both the ring and the
-encoder and arms the single Host mix tap. App-root cancellation ends the origin and encoder; stopping the
-running phase releases the tap before the encoder drains.
+The crate owns only the service wiring; `main` builds the complete `BroadcastConfig` with the app's shared worker, pools, and cancellation parent. Packaging, the bounded intake, and the origin belong to `kithara-broadcast`. A request
+stays `Requested` until the Host exposes its measured output rate, which replaces only the configured sample
+rate before `BroadcastOutput` is installed in the single Host `OutputGroup`. App-root cancellation ends the origin and encoder; stopping the
+running phase releases the output group before the encoder drains.
 
-Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves the handle
+Stopping blocks - it closes the bounded intake and waits for the encoder tail - so the toggle moves the handle
 into an iced task and marks the service `Stopping`; only that task's completion message makes it `Off`. The GUI
-tick polls `BroadcastHandle::status`, so a producer released by a device-rate change reaches `Off` the same way.
+tick polls `BroadcastHandle::status`, so an output released by a device-rate change reaches `Off` the same way.
 
 The canon puts this control in the app menu and a recorder module and the app has neither, so its REC cell sits
 in the bar beside the CPU cell.
@@ -281,7 +281,7 @@ contract. The patches travel whole: `AppConfig` carries `hls`, `file` and `audio
 stops the store builder one step short with `into_config()` to patch `assets_store`. Nothing is copied field by
 field, so a knob those crates add later needs no edit here.
 
-Four sections carry a rule that is not the owning crate's. `net` is applied before `--insecure`, an override that can
+Five sections carry a rule that is not the owning crate's. `net` is applied before `--insecure`, an override that can
 turn verification off and never back on. `assets_store`'s `backend` resolves to `StorageBackend::default` when
 unnamed — a stable root under the system temp directory, deliberately not `AssetStore::open`'s own fallback, which
 takes a fresh directory per launch and would move the cache every run. `pools` is composed here from
@@ -289,7 +289,10 @@ takes a fresh directory per launch and would move the cache every run. `pools` i
 leaves no single crate type to carry. `ui` and `draw_pool` are two sections rather than one nested pair because
 `UiConfig.draw_buffers` is a *built* `DrawBuffers` and `DrawPoolLimits` reaches one only through
 `DrawBuffers::try_new`; `Config::ui` therefore reads `draw_pool` before it builds — never onto an already-built
-`UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`.
+`UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`. `broadcast` is
+the one section no patch on `AppConfig` carries: a `BroadcastConfig` is built from the shared worker and pools, which
+exist only in `main`, so the section is applied to the built value there. It is `#[cfg(feature = "broadcast")]` on
+both sides, so a build without the service has no such field and refuses a document that names one.
 
 The audio session is the exception `app` carries. `HostConfig` is a session-mode enum, Realtime or Offline, not a
 configuration struct, so it has no patch and a document cannot flip a running application from one mode to the other.

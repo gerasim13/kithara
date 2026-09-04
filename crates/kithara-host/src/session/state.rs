@@ -7,6 +7,7 @@ use firewheel::{
 };
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
+use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{GroupState, player::PlayerMember};
 use kithara_warp::{
@@ -23,7 +24,7 @@ use super::{
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::{MixTapWriter, SharedEq},
+    bridge::SharedEq,
     effects::eq::{EqBandConfig, GainDb},
     rt::{LimiterNode, MasterEqNode},
 };
@@ -145,7 +146,7 @@ pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConf
 }
 
 pub(super) enum MixTap {
-    Requested(MixTapWriter),
+    Requested(OutputGroup),
     Installed(NodeID),
 }
 

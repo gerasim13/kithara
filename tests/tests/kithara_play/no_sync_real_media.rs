@@ -24,7 +24,7 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc, SeekOutcome, SelectTransition,
     },
-    warp::{StretchControls, StretchKind},
+    warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
@@ -893,7 +893,7 @@ async fn prepare_deck(
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
-            .timestretch(Arc::clone(&controls))
+            .warp(WarpConfig::builder().stretch(Arc::clone(&controls)).build())
             .build(),
     );
     let events = player.subscribe();

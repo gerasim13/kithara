@@ -14,7 +14,7 @@ use kithara::{
     worker::{RayonConfig, Worker, WorkerConfig},
 };
 use kithara_app::{
-    config::{AppConfig, AppDrm},
+    config::{AppBroadcastConfig, AppConfig, AppDrm},
     deck::{Deck, DeckId, DeckSet},
     document::Config,
     gui::{self, GuiFrontend},
@@ -128,6 +128,16 @@ fn main() -> AppResult {
             .worker(base_worker.clone())
             .build(),
     );
+    #[cfg(feature = "broadcast")]
+    let broadcast = {
+        let mut broadcast = AppBroadcastConfig::builder(base_worker.clone(), pools.clone())
+            .cancel(shutdown.child())
+            .build();
+        broadcast.apply(document.broadcast());
+        broadcast
+    };
+    #[cfg(not(feature = "broadcast"))]
+    let broadcast = AppBroadcastConfig::default();
     let mut net = NetOptions::builder().build();
     net.apply(document.net());
     if args.insecure {
@@ -159,7 +169,8 @@ fn main() -> AppResult {
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)
-        .base_worker(base_worker)
+        .base_worker(base_worker.clone())
+        .broadcast(broadcast)
         .store(store)
         .queue(document.queue())
         .player(document.player())
@@ -194,7 +205,7 @@ fn main() -> AppResult {
     let mut deck_set = DeckSet::new(host, decks);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config, args.host)?;
-    frontend.attach_broadcast(shutdown.clone());
+    frontend.attach_broadcast();
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

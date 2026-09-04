@@ -24,7 +24,7 @@ tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
 # Put the session mix on air over live HLS. Off by default; with it off the
 # bar's phase machine compiles against a packager that has no stream values.
-broadcast = ["kithara/broadcast", "dep:ringbuf"]
+broadcast = ["kithara/broadcast"]
 gui = ["dep:iced", "kithara/ui-iced"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
@@ -51,7 +51,7 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["file", "hls", "queue", "resample-rubato", "worker"] }
+kithara = { workspace = true, default-features = false, features = ["analysis", "file", "hls", "queue", "resample-rubato", "worker"] }
 kithara-assets = { workspace = true }
 kithara-macros = { workspace = true }
 kithara-record = { workspace = true }
@@ -95,7 +95,6 @@ url = { workspace = true }
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "client-reqwest", "tls-rustls"] }
-ringbuf = { workspace = true, optional = true }
 
 # HE-AAC v1/v2 through libfdk. Its vendored `FDK_archdef.h` has no branch for
 # MSVC on ARM64 and stops at `fatal error C1021: invalid preprocessor command`,
@@ -105,7 +104,6 @@ kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
-ringbuf = { workspace = true, optional = true }
 
 [build-dependencies]
 serde_yaml_ng = { workspace = true }

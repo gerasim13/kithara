@@ -12,12 +12,12 @@ use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
 struct Consts;
 
 impl Consts {
-    /// PCM ring depth, ~100 ms per chunk. wasm needs a deeper ring because
-    /// its worker is scheduled coarsely.
+    /// Output ring depth. wasm needs a deeper ring because its worker is
+    /// scheduled coarsely.
     #[cfg(not(target_arch = "wasm32"))]
-    const PCM_BUFFER_CHUNKS: usize = 10;
+    const AUDIO_BUFFER_CHUNKS: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const PCM_BUFFER_CHUNKS: usize = 32;
+    const AUDIO_BUFFER_CHUNKS: usize = 32;
     /// Chunks buffered before preload readiness is signalled.
     const PRELOAD_CHUNKS: usize = 3;
 }
@@ -88,10 +88,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[patch(skip)]
     pub consumer_wake_mode: ConsumerWakeMode,
-    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
-    /// Default: 10 on native, 32 on wasm32.
+    /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
+    /// wasm32.
     #[field(get, copy)]
-    #[builder(default = Consts::PCM_BUFFER_CHUNKS)]
+    #[builder(default = Consts::AUDIO_BUFFER_CHUNKS)]
     pub audio_buffer_chunks: usize,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]

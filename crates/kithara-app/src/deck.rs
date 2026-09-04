@@ -8,6 +8,7 @@ use kithara::{
         effects::eq::generate_log_spaced_bands,
     },
     queue::QueueConfig,
+    warp::WarpConfig,
 };
 
 use crate::{
@@ -102,7 +103,11 @@ impl Deck {
             .cancel(cancel.clone())
             .eq_layout(generate_log_spaced_bands(config.eq_bands))
             .sample_rate(host.requested_sample_rate())
-            .timestretch(Arc::clone(&timestretch))
+            .warp(
+                WarpConfig::builder()
+                    .stretch(Arc::clone(&timestretch))
+                    .build(),
+            )
             .worker(config.worker.clone())
             .build();
         player_config.apply(config.player.clone());
@@ -326,7 +331,11 @@ mod tests {
             PlayerConfig::builder()
                 .cancel(cancel.clone())
                 .sample_rate(host.requested_sample_rate())
-                .timestretch(Arc::clone(&timestretch))
+                .warp(
+                    WarpConfig::builder()
+                        .stretch(Arc::clone(&timestretch))
+                        .build(),
+                )
                 .worker(worker.clone())
                 .build(),
         );

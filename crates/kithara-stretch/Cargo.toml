@@ -19,6 +19,7 @@ stretch-signalsmith = ["dep:signalsmith-stretch"]
 stretch-bungee = ["dep:bungee-sys"]
 
 [dependencies]
+kithara-macros = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 
@@ -27,6 +28,7 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
+serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 

@@ -11,7 +11,7 @@ use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use kithara_warp::StretchControls;
+use kithara_warp::WarpConfig;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
@@ -113,9 +113,11 @@ where
     pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub(crate) hls_base_url: Option<Url>,
-    /// Live time-stretch controls shared with the resident Warp chain.
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) stretch: Arc<StretchControls>,
+    /// Resident Warp resources and live temporal controls. Not a document
+    /// key: a player-managed resource has this overwritten with the player's
+    /// own `warp`, which is where a document's `player.warp:` section lands.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
@@ -148,7 +150,7 @@ where
             headers: self.headers.clone(),
             hint: self.hint.clone(),
             hls_base_url: self.hls_base_url.clone(),
-            stretch: Arc::clone(&self.stretch),
+            warp: self.warp.clone(),
             worker: self.worker.clone(),
         }
     }
@@ -389,7 +391,7 @@ mod tests {
     #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.stretch.speed() - 1.0).abs() < f32::EPSILON);
+        assert!((config.warp.stretch().speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

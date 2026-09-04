@@ -9,7 +9,7 @@ use kithara::{
     drm::KeyProcessorRegistry,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
-    platform::{CancelToken, sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc},
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
@@ -19,10 +19,21 @@ use kithara::{
 use kithara_macros::Patch;
 use url::Url;
 
+#[cfg(feature = "broadcast")]
+use crate::pools::AppPools;
 use crate::{
     pools::{AppStore, AppWorker},
     theme::Palette,
 };
+
+#[cfg(feature = "broadcast")]
+/// Feature-selected live broadcast configuration.
+pub type AppBroadcastConfig = kithara::broadcast::BroadcastConfig<AppPools>;
+#[cfg(not(feature = "broadcast"))]
+/// Empty broadcast configuration for builds without the service.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct AppBroadcastConfig;
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -138,13 +149,12 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub player: PlayerConfigPatch,
-    /// Media duration the broadcast mix tap may run ahead of the packager by.
-    /// The app allocates that ring, so it owns its depth: a longer lead rides
-    /// out a longer packager stall and pays for it in the memory those
-    /// interleaved samples occupy.
-    #[builder(default = Duration::from_secs(2))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
-    pub broadcast_tap_lead: Duration,
+    /// Complete live-broadcast construction config for this app session. The
+    /// document's `broadcast:` section is applied to it in `main`, where the
+    /// worker and pools it is built from exist; nothing here carries a second
+    /// spelling of those knobs.
+    #[patch(skip)]
+    pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]
@@ -192,7 +202,7 @@ impl fmt::Debug for AppConfig {
                 &self.should_accept_invalid_certs,
             )
             .field("player", &self.player)
-            .field("broadcast_tap_lead", &self.broadcast_tap_lead)
+            .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
             .field("sample_rate", &self.sample_rate)

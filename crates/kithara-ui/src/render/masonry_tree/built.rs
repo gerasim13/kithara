@@ -77,6 +77,15 @@ pub(crate) struct PopoverRegistration {
     pub(crate) anchor: WidgetId,
     /// The layer the surface is drawn in.
     pub(crate) layer: WidgetId,
+    /// The engine-driven controls the open surface answers for: the anchor it
+    /// opens from, and everything the surface itself holds.
+    ///
+    /// An engine answers the pointer against its own box and cannot see what
+    /// stands above it, while the document lays out siblings the open surface
+    /// hangs across. So the surface names the controls it covers the room for.
+    /// The anchor is one of them because a surface is closed by the control
+    /// that opened it, and a surface wide enough covers that control too.
+    pub(crate) controls: Vec<WidgetId>,
 }
 
 /// The window layer one tree mounted, and what a root needs to keep it in step
@@ -195,11 +204,16 @@ impl<Action> MasonryNode<Action> {
         flag: &Binding,
         state: Rc<PopoverState>,
         dismiss: Rc<dyn Fn() -> HostAction>,
+        held: Vec<WidgetId>,
     ) {
+        let mut controls: Vec<WidgetId> =
+            self.engines.iter().map(|engine| engine.owner()).collect();
+        controls.extend(held);
         self.popovers.push(PopoverRegistration {
             layer,
             state,
             dismiss,
+            controls,
             anchor: self.widget.id(),
             flag: flag.clone(),
         });

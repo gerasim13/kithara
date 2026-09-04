@@ -94,7 +94,7 @@ impl Github {
             &Method::GET,
             &format!(
                 "/repos/{}/git/ref/heads/{}",
-                self.config.github_repo, self.config.branch
+                self.config.github_repo, self.config.github_branch
             ),
             None,
         )?;
@@ -110,7 +110,7 @@ impl Github {
         let pulls = response
             .as_array()
             .context("GitHub commit pulls response was not an array")?;
-        Ok(merged_pull_number(pulls, sha, &self.config.branch))
+        Ok(merged_pull_number(pulls, sha, &self.config.github_branch))
     }
 
     pub(super) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
@@ -122,7 +122,7 @@ impl Github {
                 &Method::GET,
                 &format!(
                     "/repos/{}/pulls?state=open&base={}&per_page={PAGE_SIZE}&page={page}",
-                    self.config.github_repo, self.config.branch
+                    self.config.github_repo, self.config.github_branch
                 ),
                 None,
             )?;
@@ -134,7 +134,7 @@ impl Github {
                     .pointer("/base/ref")
                     .and_then(Value::as_str)
                     .context("GitHub pull response has no base branch")?;
-                if branch != self.config.branch {
+                if branch != self.config.github_branch {
                     continue;
                 }
                 result.push(pull_request(pull)?);
@@ -196,7 +196,7 @@ impl Gitlab {
     pub(super) fn head(&self) -> Result<String> {
         let response = self.request(
             &Method::GET,
-            &format!("repository/branches/{}", self.config.branch),
+            &format!("repository/branches/{}", self.config.gitlab_branch),
             None,
         )?;
         string_field(&response, &["commit", "id"], "GitLab branch SHA")

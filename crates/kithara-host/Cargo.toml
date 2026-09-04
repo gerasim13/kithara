@@ -20,7 +20,7 @@ default = [
 ]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
-offline = ["dep:kithara-output", "dep:kithara-signal", "dep:kithara-worker"]
+offline = ["dep:kithara-worker"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 client-reqwest = ["kithara-play/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq"]
@@ -41,10 +41,10 @@ probe = ["kithara-play/probe"]
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true }
-kithara-output = { workspace = true, optional = true }
+kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
-kithara-signal = { workspace = true, optional = true }
+kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }

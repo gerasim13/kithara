@@ -265,7 +265,7 @@ where
         let wake_stream = shared_stream.clone();
         let preload_gate = Arc::new(super::PreloadGate::default());
         let (port, ring) = prepare_pcm_ring(
-            audio_buffer_chunks,
+            audio_buffer_chunks.max(preload_chunks.get()),
             &emit,
             &epoch,
             block_on_underrun,
@@ -342,6 +342,8 @@ fn current_runtime_handle() -> Result<RuntimeHandle, DecodeError> {
     })
 }
 
+/// The output ring is never shallower than the preload gate wants: a ring that
+/// cannot hold the chunks preload waits for never signals readiness.
 fn prepare_pcm_ring(
     audio_buffer_chunks: usize,
     emit: &Arc<kithara_events::DeferredBus<Event>>,

@@ -29,7 +29,7 @@ use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    cochlea::synchronization_failures,
+    cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
@@ -37,7 +37,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{
     asset::Asset,
     assets::{
-        rhythm_fmp4_init_deck_a_120bpm_48k, rhythm_fmp4_media_deck_a_120bpm_48k,
+        by_name, rhythm_fmp4_init_deck_a_120bpm_48k, rhythm_fmp4_media_deck_a_120bpm_48k,
         rhythm_mp3_deck_a_120bpm_48k, rhythm_mp3_deck_b_120bpm_48k, rhythm_wav_deck_a_120bpm_48k,
         rhythm_wav_deck_b_120bpm_48k, rhythm_wav_deck_c_120bpm_48k, rhythm_wav_deck_d_120bpm_48k,
         signal_mp3_sweep_up_60s,
@@ -85,6 +85,7 @@ impl OperationOrder {
 #[derive(Clone, Copy, Debug)]
 enum TempoRide {
     Down,
+    Hold(f64),
     Triangle,
     Up,
 }
@@ -93,14 +94,23 @@ impl TempoRide {
     const fn points(self) -> &'static [f64] {
         match self {
             Self::Down => &[116.0, 112.0, 108.0],
+            Self::Hold(_) => &[],
             Self::Triangle => &[116.0, 112.0, 116.0, 120.0],
             Self::Up => &[122.0, 125.0, 127.0],
+        }
+    }
+
+    const fn start_bpm(self) -> f64 {
+        match self {
+            Self::Hold(bpm) => bpm,
+            Self::Down | Self::Triangle | Self::Up => START_BPM,
         }
     }
 
     const fn final_bpm(self) -> f64 {
         match self {
             Self::Down => 108.0,
+            Self::Hold(bpm) => bpm,
             Self::Triangle => 120.0,
             Self::Up => 127.0,
         }
@@ -145,6 +155,23 @@ impl SyncCase {
         self.ride = ride;
         self.updates_hz = updates_hz;
         self
+    }
+
+    const fn hold(mut self, bpm: f64) -> Self {
+        self.ride = TempoRide::Hold(bpm);
+        self
+    }
+
+    pub(super) const fn decks(self) -> usize {
+        self.decks
+    }
+
+    pub(super) const fn id(self) -> &'static str {
+        self.id
+    }
+
+    const fn start_bpm(self) -> f64 {
+        self.ride.start_bpm()
     }
 
     pub(super) const fn final_bpm(self) -> f64 {
@@ -207,15 +234,75 @@ pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
 )
 .ride(TempoRide::Up, 120);
 
+pub(super) const AMBIENT_TRIP_HOP_SYNC: SyncCase = SyncCase::running(
+    "ambient-dub-62-to-trip-hop-74",
+    2,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.hold(74.0);
+pub(super) const DOWNTEMPO_HOUSE_SYNC: SyncCase = SyncCase::running(
+    "downtempo-96-to-house-124",
+    2,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(124.0);
+pub(super) const TECHNO_BREAKBEAT_SYNC: SyncCase = SyncCase::running(
+    "techno-132-to-breakbeat-140",
+    2,
+    48_000,
+    OperationOrder::SeekPlaySync,
+)
+.hold(132.0);
+pub(super) const CROSS_STYLE_SYNC: SyncCase = SyncCase::running(
+    "cross-style-four-deck-124",
+    4,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.hold(124.0);
+
+const AMBIENT_TRIP_HOP: &[&str] = &[
+    "rhythm_wav_ambient_dub_62_aligned",
+    "rhythm_wav_trip_hop_74_aligned",
+];
+const DOWNTEMPO_HOUSE: &[&str] = &[
+    "rhythm_wav_downtempo_96_aligned",
+    "rhythm_wav_house_124_aligned",
+];
+const TECHNO_BREAKBEAT: &[&str] = &[
+    "rhythm_wav_techno_132_aligned",
+    "rhythm_wav_breakbeat_140_aligned",
+];
+const CROSS_STYLE: &[&str] = &[
+    "rhythm_wav_ambient_dub_62_aligned",
+    "rhythm_wav_downtempo_96_aligned",
+    "rhythm_wav_house_124_aligned",
+    "rhythm_wav_breakbeat_140_aligned",
+];
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
     Synthetic,
+    Rhythm(&'static [&'static str]),
     HlsSame(HlsProtection),
     Library,
     Mp3Same,
     Mp3Distinct,
     HlsMp3(HlsProtection),
     Sweep,
+}
+
+pub(super) const AMBIENT_TRIP_HOP_PROVIDER: Provider = Provider::Rhythm(AMBIENT_TRIP_HOP);
+pub(super) const DOWNTEMPO_HOUSE_PROVIDER: Provider = Provider::Rhythm(DOWNTEMPO_HOUSE);
+pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_BREAKBEAT);
+pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
+
+impl Provider {
+    const fn has_score_markers(self) -> bool {
+        matches!(self, Self::Rhythm(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -387,7 +474,7 @@ impl ProductHarness {
             deck.select(id, Transition::None)
                 .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
         }
-        harness.set_tempo(case, START_BPM, true);
+        harness.set_tempo(case, case.start_bpm(), true);
         let _ = harness.render(case, harness.block_frames).await;
         if !case.paused {
             harness.start_staggered(case).await;
@@ -475,7 +562,7 @@ impl ProductHarness {
 
     async fn start_staggered(&mut self, case: SyncCase) {
         let stagger_frames =
-            (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0 / START_BPM).round() as usize;
+            (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0 / case.start_bpm()).round() as usize;
         for index in 0..self.decks.len() {
             self.decks[index].play();
             if index + 1 < self.decks.len() {
@@ -486,7 +573,7 @@ impl ProductHarness {
     }
 
     async fn seek_staggered(&mut self, case: SyncCase) {
-        let stagger_seconds = 3.0 / 8.0 * 60.0 / START_BPM;
+        let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
             deck.seek(5.25 + index as f64 * stagger_seconds)
                 .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
@@ -586,7 +673,7 @@ impl ProductHarness {
 
     pub(super) async fn ride_tempo(&mut self, case: SyncCase) {
         let steps_per_leg = (case.updates_hz / 2).max(1);
-        let mut start = START_BPM;
+        let mut start = case.start_bpm();
         let mut rendered = 0_u64;
         let mut update = 0_u64;
         for &target in case.ride.points() {
@@ -759,6 +846,16 @@ async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) ->
             ],
             decks,
         ),
+        Provider::Rhythm(assets) => assets
+            .iter()
+            .cycle()
+            .take(decks)
+            .map(|name| {
+                asset_path(
+                    by_name(name).unwrap_or_else(|| panic!("missing rhythm fixture `{name}`")),
+                )
+            })
+            .collect(),
         Provider::Library => cycle_paths_from_strings(&library_paths(), decks),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
         Provider::Sweep => cycle_paths(&[signal_mp3_sweep_up_60s()], decks),
@@ -902,13 +999,24 @@ async fn run(case: SyncCase, provider: Provider) {
         request_failures.extend(harness.failures);
     }
     let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let mut failures = synchronization_failures(
-        &format!("{} {provider:?}", case.id),
-        &track_slices,
-        CHANNELS,
-        case.sample_rate,
-        case.ride.final_bpm(),
-    );
+    let label = format!("{} {provider:?}", case.id);
+    let mut failures = if provider.has_score_markers() {
+        marked_synchronization_failures(
+            &label,
+            &track_slices,
+            CHANNELS,
+            case.sample_rate,
+            case.ride.final_bpm(),
+        )
+    } else {
+        synchronization_failures(
+            &label,
+            &track_slices,
+            CHANNELS,
+            case.sample_rate,
+            case.ride.final_bpm(),
+        )
+    };
     failures.extend(request_failures);
     assert!(
         failures.is_empty(),
@@ -955,19 +1063,23 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] provider: Provid
     timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
-#[case::play_sync_seek(PLAY_SYNC_SEEK)]
-#[case::play_seek_sync(PLAY_SEEK_SYNC)]
-#[case::seek_play_sync(SEEK_PLAY_SYNC)]
-#[case::seek_sync_play(SEEK_SYNC_PLAY)]
-#[case::sync_play_seek(SYNC_PLAY_SEEK)]
-#[case::sync_seek_play(SYNC_SEEK_PLAY)]
-#[case::sequential_sync(SEQUENTIAL_SYNC)]
-#[case::paused_sync_then_play(PAUSED_SYNC)]
-#[case::four_deck_sequential_sync(FOUR_DECK_SYNC)]
-#[case::tempo_up_120hz(TEMPO_UP_120)]
-#[case::tempo_down_30hz(TEMPO_DOWN_30)]
-async fn synthetic_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
-    run(case, Provider::Synthetic).await;
+#[case::play_sync_seek(PLAY_SYNC_SEEK, Provider::Synthetic)]
+#[case::play_seek_sync(PLAY_SEEK_SYNC, Provider::Synthetic)]
+#[case::seek_play_sync(SEEK_PLAY_SYNC, Provider::Synthetic)]
+#[case::seek_sync_play(SEEK_SYNC_PLAY, Provider::Synthetic)]
+#[case::sync_play_seek(SYNC_PLAY_SEEK, Provider::Synthetic)]
+#[case::sync_seek_play(SYNC_SEEK_PLAY, Provider::Synthetic)]
+#[case::sequential_sync(SEQUENTIAL_SYNC, Provider::Synthetic)]
+#[case::paused_sync_then_play(PAUSED_SYNC, Provider::Synthetic)]
+#[case::four_deck_sequential_sync(FOUR_DECK_SYNC, Provider::Synthetic)]
+#[case::tempo_up_120hz(TEMPO_UP_120, Provider::Synthetic)]
+#[case::tempo_down_30hz(TEMPO_DOWN_30, Provider::Synthetic)]
+#[case::ambient_trip_hop(AMBIENT_TRIP_HOP_SYNC, AMBIENT_TRIP_HOP_PROVIDER)]
+#[case::downtempo_house(DOWNTEMPO_HOUSE_SYNC, DOWNTEMPO_HOUSE_PROVIDER)]
+#[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, TECHNO_BREAKBEAT_PROVIDER)]
+#[case::cross_style_four_deck(CROSS_STYLE_SYNC, CROSS_STYLE_PROVIDER)]
+async fn wav_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase, #[case] provider: Provider) {
+    run(case, provider).await;
 }
 
 #[kithara::test(

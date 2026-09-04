@@ -697,7 +697,8 @@ where
             self.skin,
         ))
         .erased();
-        output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss));
+        let held = engines.iter().map(|engine| engine.owner()).collect();
+        output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss), held);
         output.append_layers(layers);
         output.append_popovers(popovers);
         output.append_blocks(blocks);

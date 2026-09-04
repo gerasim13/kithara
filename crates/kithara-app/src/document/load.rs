@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "broadcast")]
+use kithara::broadcast::BroadcastConfigPatch;
 #[cfg(feature = "gui")]
 use kithara::bufpool::PoolError;
 #[cfg(feature = "gui")]
@@ -290,6 +292,15 @@ impl Config {
     #[must_use]
     pub fn queue(&self) -> QueueConfigPatch {
         self.document.queue.clone()
+    }
+
+    /// Knobs the document sets on this session's live broadcast. Applied at
+    /// the construction site in `main`, where the worker and pools a
+    /// `BroadcastConfig` is built from exist.
+    #[cfg(feature = "broadcast")]
+    #[must_use]
+    pub fn broadcast(&self) -> BroadcastConfigPatch {
+        self.document.broadcast.clone()
     }
 
     /// The compute pool the document names, when it names one. `None` leaves

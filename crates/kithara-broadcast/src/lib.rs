@@ -1,18 +1,19 @@
-//! Live HLS packaging and origin service for AAC-LC PCM feeds.
+//! Live HLS packaging and origin service for AAC-LC master PCM.
 
 mod adts;
 mod config;
 mod error;
-mod feed;
 mod id3;
 mod segment;
+#[cfg(not(target_arch = "wasm32"))]
 mod server;
+#[cfg(not(target_arch = "wasm32"))]
 mod service;
 mod window;
 
 pub use config::{BroadcastConfig, BroadcastConfigPatch};
 pub use error::{BroadcastError, BroadcastResult};
-pub use feed::{FeedChunk, LivePcmFeed, RingFeed};
 pub use segment::{Segment, Segmenter};
-pub use service::{Broadcast, BroadcastHandle, BroadcastStatus};
+#[cfg(not(target_arch = "wasm32"))]
+pub use service::{Broadcast, BroadcastHandle, BroadcastOutput, BroadcastStatus};
 pub use window::{LiveWindow, PlaylistSnapshot};

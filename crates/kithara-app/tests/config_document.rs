@@ -71,21 +71,48 @@ fn the_app_section_reaches_the_config_patch() {
     let dir = tempdir();
     let path = write(
         &dir,
-        &format!("{NEUTRAL_DRM}app:\n  eq_bands: 5\n  broadcast_tap_lead: 750ms\n"),
+        &format!("{NEUTRAL_DRM}app:\n  eq_bands: 5\n  waveform_max_buckets: 1000\n"),
     );
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
     let app = config.app();
     assert_eq!(app.eq_bands, Some(5));
+    assert_eq!(app.waveform_max_buckets, Some(1000));
     assert_eq!(
-        app.broadcast_tap_lead,
-        Some(std::time::Duration::from_millis(750))
-    );
-    assert_eq!(
-        app.waveform_max_buckets, None,
+        app.analysis_chunk_seconds, None,
         "a knob the document never names stays unset, so the built value stands"
     );
+}
+
+/// The stretch backends' preparation geometry is the deepest nesting a
+/// document reaches: `player:` carries a `warp:` section, which carries a
+/// `backends:` section, which carries one per compiled engine. Only a build
+/// that compiles a backend has the key at all.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test(native, flash(false))]
+fn the_document_reaches_the_stretch_backend_geometry() {
+    const WARP_BACKENDS: &str = concat!(
+        "player:\n  warp:\n    backends:\n",
+        "      signalsmith:\n        block_frames: 512\n        interval_frames: 16\n",
+        "      bungee:\n        log2_synthesis_hop_adjust: -2\n",
+    );
+
+    let dir = tempdir();
+    let path = write(&dir, &format!("{NEUTRAL_DRM}{WARP_BACKENDS}"));
+
+    let config = Config::load(Some(&path), None).expect("the overlay loads");
+
+    let backends = config.player().warp.backends;
+    assert_eq!(
+        backends.signalsmith.block_frames,
+        std::num::NonZeroUsize::new(512)
+    );
+    assert_eq!(
+        backends.signalsmith.interval_frames,
+        std::num::NonZeroUsize::new(16)
+    );
+    assert_eq!(backends.bungee.log2_synthesis_hop_adjust, Some(-2));
 }
 
 #[kithara::test(native, flash(false))]

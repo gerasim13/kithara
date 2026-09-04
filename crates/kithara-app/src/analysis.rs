@@ -250,11 +250,9 @@ impl AnalysisController {
         self.pump(queue, state, config);
     }
 
-    /// End a pass whose rate axis the engine has moved off, and put its track
-    /// back at the front of the queue so the next pump opens a fresh pass on
-    /// the new axis. Letting the old pass follow the device would leave one
-    /// snapshot series whose frames mean two different things.
-    fn retire_stale_axis(&mut self, queue: &AppQueueControl) {
+    /// End a pass on a stale rate axis and schedule a fresh pass without
+    /// overriding a newer queue decision.
+    fn retire_stale_axis(&mut self, queue: &AppQueueControl, state: &Mutex<UiState>) {
         let Some(Activity::Running(run)) = &self.activity else {
             return;
         };
@@ -271,8 +269,13 @@ impl AnalysisController {
             "analysis: the host rate moved; the pass restarts on the new axis"
         );
         self.runner.clear();
-        self.pending.retain(|pending| *pending != track_id);
-        self.pending.push_front(track_id);
+        if !self.pending.contains(&track_id) {
+            if current_track_id(state) == Some(track_id) {
+                self.pending.push_front(track_id);
+            } else {
+                self.pending.push_back(track_id);
+            }
+        }
     }
 
     /// Publish and best-effort checkpoint a newer intermediate revision.
@@ -313,7 +316,7 @@ impl AnalysisController {
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
-        self.retire_stale_axis(queue);
+        self.retire_stale_axis(queue, state);
         if self.activity.is_some() {
             return;
         }
@@ -325,90 +328,96 @@ impl AnalysisController {
         }
 
         while let Some(track_id) = self.pending.pop_front() {
-            // Track gone from the queue since it was enqueued: skip.
-            let Some(source) = queue.track_source(track_id) else {
-                continue;
-            };
-
-            let Some(cfg) = resource_config_from_source(source, config) else {
-                continue;
-            };
-            let target = match AnalysisTarget::for_config(&cfg) {
-                Ok(target) => Some(target),
-                Err(error) => {
-                    Self::reject_target(state, track_id, &error);
-                    continue;
-                }
-            };
-            let is_current = current_track_id(state) == Some(track_id);
-            let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
-                warn!("analysis: the engine reports no sample rate; pass not opened");
-                continue;
-            };
-
-            let mut served = false;
-            let mut resume = None;
-            let decode = match plan_analysis(target.as_ref(), &mut self.cache, rate) {
-                Plan::Serve { progress, refill } => {
-                    if is_current {
-                        state.lock().set_analysis(Some(progress.analysis().clone()));
-                        served = true;
-                    }
-                    if refill && progress.is_resumable() {
-                        resume = Some(*progress);
-                    }
-                    refill
-                }
-                Plan::Decode => true,
-            };
-            if !decode {
-                continue;
+            if let Some(run) = self.open_run(track_id, queue, state, config) {
+                self.activity = Some(Activity::Running(run));
+                return;
             }
-
-            // An unkeyable source cannot be cached, so a background decode
-            // would be thrown away; decode it only for display.
-            if !is_current && target.is_none() {
-                continue;
-            }
-
-            // A refill keeps what it just served on screen: the pass produces
-            // the missing artifact, not a blank deck.
-            if is_current && !served {
-                state.lock().set_analysis(None);
-            }
-
-            // The handle waits where this track's load will find it. A track
-            // already loaded keeps it waiting until it loads again, so a pass
-            // opened mid-play warms nothing this time round.
-            let queue = queue.clone();
-            let rx = if let Some(progress) = resume {
-                match self.runner.resume(cfg, progress, move |producer| {
-                    queue.attach_observer(track_id, producer);
-                }) {
-                    Ok(rx) => rx,
-                    Err(error) => {
-                        warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
-                        continue;
-                    }
-                }
-            } else {
-                let token = target.as_ref().map_or_else(
-                    || format!("track:{}", u64::from(track_id)).into(),
-                    |target| token_for(target.key()),
-                );
-                self.runner.analyze(cfg, token, rate, move |producer| {
-                    queue.attach_observer(track_id, producer);
-                })
-            };
-            self.activity = Some(Activity::Running(Run {
-                target,
-                axis: rate,
-                rx,
-                shown_revision: None,
-                track_id,
-            }));
-            return;
         }
+    }
+
+    fn open_run(
+        &mut self,
+        track_id: TrackId,
+        queue: &AppQueueControl,
+        state: &Mutex<UiState>,
+        config: &AppConfig,
+    ) -> Option<Run> {
+        let source = queue.track_source(track_id)?;
+        let cfg = resource_config_from_source(source, config)?;
+        let target = match AnalysisTarget::for_config(&cfg) {
+            Ok(target) => Some(target),
+            Err(error) => {
+                Self::reject_target(state, track_id, &error);
+                return None;
+            }
+        };
+        let is_current = current_track_id(state) == Some(track_id);
+        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+            warn!("analysis: the engine reports no sample rate; pass not opened");
+            return None;
+        };
+
+        let mut served = false;
+        let mut resume = None;
+        let decode = match plan_analysis(target.as_ref(), &mut self.cache, rate) {
+            Plan::Serve { progress, refill } => {
+                if is_current {
+                    state.lock().set_analysis(Some(progress.analysis().clone()));
+                    served = true;
+                }
+                if refill && progress.is_resumable() {
+                    resume = Some(*progress);
+                }
+                refill
+            }
+            Plan::Decode => true,
+        };
+        if !decode {
+            return None;
+        }
+
+        // An unkeyable source cannot be cached, so a background decode
+        // would be thrown away; decode it only for display.
+        if !is_current && target.is_none() {
+            return None;
+        }
+
+        // A refill keeps what it just served on screen: the pass produces
+        // the missing artifact, not a blank deck.
+        if is_current && !served {
+            state.lock().set_analysis(None);
+        }
+
+        // The handle waits where this track's load will find it. A track
+        // already loaded keeps it waiting until it loads again, so a pass
+        // opened mid-play warms nothing this time round.
+        let queue = queue.clone();
+        let rx = if let Some(progress) = resume {
+            match self.runner.resume(cfg, progress, move |producer| {
+                queue.attach_observer(track_id, producer);
+            }) {
+                Ok(rx) => rx,
+                Err(error) => {
+                    warn!(%error, ?track_id, "analysis: cached checkpoint rejected");
+                    return None;
+                }
+            }
+        } else {
+            let token = target.as_ref().map_or_else(
+                || format!("track:{}", u64::from(track_id)).into(),
+                |target| token_for(target.key()),
+            );
+            self.runner.analyze(cfg, token, rate, move |producer| {
+                queue.attach_observer(track_id, producer);
+            })
+        };
+        Some(Run {
+            target,
+            axis: rate,
+            rx,
+            shown_revision: None,
+            track_id,
+        })
     }
 
     fn reject_target(state: &Mutex<UiState>, track_id: TrackId, error: &DecodeError) {
@@ -540,6 +549,7 @@ mod tests {
 
     use super::{
         Activity, AnalysisController, Plan, Run, handle_event, pending_order, plan_analysis,
+        resource_config_from_source,
     };
     use crate::{
         pools::{
@@ -736,29 +746,52 @@ mod tests {
         ));
     }
 
-    #[kithara::test(native, flash(false))]
-    fn plan_refills_a_hit_that_lost_an_artifact() {
-        let a = target("root_refill");
-        let stored = TrackAnalysisCache::new(
-            AnalysisFingerprint::new(None, Some("wave:v1")),
-            test_pools(),
-            chunk_seconds(),
+    #[kithara::test(native, tokio)]
+    async fn pump_serves_an_incomplete_hit_while_refilling_it() {
+        let track_id = TrackId::from(1);
+        let (_host, queue) = queue();
+        queue
+            .append_with_id(track_id, "file:///tmp/track-1.mp3".to_owned())
+            .expect("append test track");
+        let state = state_with_current(&[track_id], 0);
+        let cancel = CancelToken::root();
+        let config = app_config(&cancel);
+        let mut controller = AnalysisController::new(&cancel, &config, None);
+        let fingerprint = controller.runner.fingerprint().clone();
+        assert!(
+            fingerprint.beat().is_some(),
+            "fixture needs an active artifact to omit"
         );
-        let mut stored = stored;
-        stored.put(a.clone(), progress(analysis()));
+        let rate = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
+        let source = queue.track_source(track_id).expect("track has a source");
+        let resource = resource_config_from_source(source, &config).expect("source is cacheable");
+        let target = AnalysisTarget::for_config(&resource).expect("source has a cache target");
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 1_000));
+        let cached = TrackAnalysis::builder()
+            .token("cached-track".into())
+            .revision(7)
+            .source_sample_rate(rate)
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(fingerprint)
+            .waveform(one_bucket_wave())
+            .build();
+        controller.cache.put(target, progress(cached));
+        controller.pending.push_back(track_id);
 
-        let mut current = TrackAnalysisCache::new(
-            AnalysisFingerprint::new(None, Some("wave:v2")),
-            test_pools(),
-            chunk_seconds(),
-        );
+        controller.pump(&queue, &state, &config);
+
+        assert_eq!(shown_revision(&state), Some(7), "the cache hit is shown");
         assert!(
             matches!(
-                plan_analysis(Some(&a), &mut current, sample_rate()),
-                Plan::Decode | Plan::Serve { refill: true, .. }
+                controller.activity.as_ref(),
+                Some(Activity::Running(Run { track_id: running, .. })) if *running == track_id
             ),
-            "a hit missing an expected artifact must still reach the decoder"
+            "the missing artifact is refilled for the same track"
         );
+        cancel.cancel();
     }
 
     #[kithara::test(native, tokio)]
@@ -834,10 +867,12 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     fn a_stale_axis_waits_for_its_final_checkpoint_before_reopening() {
         let (_host, queue) = queue();
-        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+        let track_id = TrackId::from(1);
+        let state = state_with_current(&[track_id], 0);
+        let (mut controller, _tx) = controller_with_run(track_id, target("root_a"), None);
 
         // The fixture run is pinned to 44.1 kHz.
         let engine = queue.sample_rate();
@@ -848,7 +883,7 @@ mod tests {
             run.axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         }
 
-        controller.retire_stale_axis(&queue);
+        controller.retire_stale_axis(&queue, &state);
 
         assert!(
             matches!(controller.activity, Some(Activity::Running(_))),
@@ -861,16 +896,18 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     fn a_pass_on_the_engine_axis_is_left_alone() {
         let (_host, queue) = queue();
-        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+        let track_id = TrackId::from(1);
+        let state = state_with_current(&[track_id], 0);
+        let (mut controller, _tx) = controller_with_run(track_id, target("root_a"), None);
         let Some(Activity::Running(run)) = controller.activity.as_mut() else {
             panic!("fixture run is active");
         };
         run.axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
 
-        controller.retire_stale_axis(&queue);
+        controller.retire_stale_axis(&queue, &state);
 
         assert!(
             matches!(controller.activity, Some(Activity::Running(_))),
@@ -878,7 +915,7 @@ mod tests {
         );
     }
 
-    fn assert_axis_event_restarts(event: Event) {
+    async fn assert_axis_event_restarts(event: Event) {
         let track_id = TrackId::from(1);
         let (_host, queue) = queue();
         queue
@@ -887,7 +924,7 @@ mod tests {
         let state = state_with_current(&[track_id], 0);
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let (mut controller, _tx) = controller_with_run(track_id, target("stale_axis"), None);
+        let (mut controller, tx) = controller_with_run(track_id, target("stale_axis"), None);
         let engine_axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
         let stale_axis = NonZeroU32::new(if engine_axis.get() == 44_100 {
             48_000
@@ -911,19 +948,91 @@ mod tests {
             Some(&track_id),
             "the event loop queues a reopen but does not cross the commit barrier"
         );
+
+        drop(tx);
+        controller.drive(&queue, &state, &config).await;
+        let Some(Activity::Running(reopened)) = controller.activity.as_ref() else {
+            panic!("the pass reopens after the old run closes");
+        };
+        assert_eq!(reopened.track_id, track_id);
+        assert_eq!(
+            reopened.axis, engine_axis,
+            "the replacement pass uses the engine's current axis"
+        );
         cancel.cancel();
     }
 
     #[kithara::test(native, tokio)]
-    fn engine_start_and_route_change_restart_a_stale_axis() {
-        assert_axis_event_restarts(EngineEvent::Started.into());
+    async fn engine_start_and_route_change_restart_a_stale_axis() {
+        assert_axis_event_restarts(EngineEvent::Started.into()).await;
         assert_axis_event_restarts(
             SessionEvent::RouteChanged {
                 reason: RouteChangeReason::Unknown,
                 previous_route: RouteDescription::default(),
             }
             .into(),
+        )
+        .await;
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_stale_axis_does_not_move_a_preempted_track_ahead_of_the_current_one() {
+        let track_a = TrackId::from(1);
+        let track_b = TrackId::from(2);
+        let (_host, queue) = queue();
+        queue
+            .append_with_id(track_a, "file:///tmp/track-a.mp3".to_owned())
+            .expect("append first track");
+        queue
+            .append_with_id(track_b, "file:///tmp/track-b.mp3".to_owned())
+            .expect("append second track");
+        let state = state_with_current(&[track_a, track_b], 0);
+        let cancel = CancelToken::root();
+        let config = app_config(&cancel);
+        let (mut controller, tx) =
+            controller_with_run(track_a, target("stale_preempted_axis"), None);
+        let engine_axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
+        let Some(Activity::Running(run)) = controller.activity.as_mut() else {
+            panic!("fixture run is active");
+        };
+        run.axis = engine_axis;
+
+        state.lock().current_track_index = Some(1);
+        controller.on_track_changed(&queue, &state, &config);
+        assert_eq!(controller.pending.front(), Some(&track_b));
+        controller.on_tracks_changed(&queue, &state, &config);
+        assert_eq!(controller.pending.front(), Some(&track_b));
+
+        let Some(Activity::Running(run)) = controller.activity.as_mut() else {
+            panic!("preempted run remains active until its channel closes");
+        };
+        run.axis = NonZeroU32::new(if engine_axis.get() == 44_100 {
+            48_000
+        } else {
+            44_100
+        })
+        .expect("fixture rate is non-zero");
+        handle_event(
+            &mut controller,
+            &EngineEvent::Started.into(),
+            &queue,
+            &state,
+            &config,
         );
+
+        assert_eq!(
+            controller.pending.front(),
+            Some(&track_b),
+            "the current track stays ahead of the already-preempted run"
+        );
+
+        drop(tx);
+        controller.drive(&queue, &state, &config).await;
+        assert!(matches!(
+            controller.activity.as_ref(),
+            Some(Activity::Running(Run { track_id, .. })) if *track_id == track_b
+        ));
+        cancel.cancel();
     }
 
     #[kithara::test(native, flash(false))]

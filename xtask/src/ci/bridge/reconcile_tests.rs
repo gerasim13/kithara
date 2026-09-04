@@ -376,7 +376,10 @@ fn a_merged_github_head_is_only_fast_forwarded() {
     fast_forward_github_import(
         github_sha,
         gitlab_sha,
-        "main",
+        Branches {
+            github: "main",
+            gitlab: "develop",
+        },
         {
             let actions = Rc::clone(&actions);
             move |_| {
@@ -409,7 +412,7 @@ fn a_merged_github_head_is_only_fast_forwarded() {
         [
             ImportAction::CheckProvenance,
             ImportAction::RefreshHeads,
-            ImportAction::Push(format!("{github_sha}:main")),
+            ImportAction::Push(format!("{github_sha}:develop")),
         ]
     );
 }
@@ -422,7 +425,10 @@ fn changed_heads_stop_the_import_before_the_push() {
     let error = fast_forward_github_import(
         github_sha,
         gitlab_sha,
-        "main",
+        Branches {
+            github: "main",
+            gitlab: "develop",
+        },
         |_| Ok(Some(427)),
         || {
             Ok((
@@ -446,7 +452,10 @@ fn a_direct_github_update_opens_an_incident_without_a_push() {
     let error = fast_forward_github_import(
         github_sha,
         "89abcdef0123456789abcdef0123456789abcdef",
-        "main",
+        Branches {
+            github: "main",
+            gitlab: "develop",
+        },
         |_| Ok(None),
         || panic!("an untrusted head must not refresh for promotion"),
         {
@@ -541,7 +550,7 @@ fn a_quarantine_ref_judged_against_the_current_base_is_kept() {
 
 #[test]
 fn a_branch_that_is_not_a_verification_run_is_never_swept() {
-    let refs = ["main".to_owned(), "laba/419-connectivity".to_owned()];
+    let refs = ["develop".to_owned(), "laba/419-connectivity".to_owned()];
 
     assert_eq!(
         superseded_quarantine_refs(&refs, CURRENT_BASE),
@@ -565,7 +574,7 @@ fn the_older_quarantine_naming_scheme_is_swept_by_the_same_rule() {
 fn a_sweep_drops_every_branch_a_moved_base_left_behind() {
     let stale = quarantine_ref(PULL_HEAD, OLDER_BASE, 1);
     let live = quarantine_ref(PULL_HEAD, CURRENT_BASE, 2);
-    let listed = vec![stale.clone(), live, "main".to_owned()];
+    let listed = vec![stale.clone(), live, "develop".to_owned()];
     let deleted = RefCell::new(Vec::new());
 
     sweep_quarantine_refs(
