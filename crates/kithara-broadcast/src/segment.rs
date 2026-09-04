@@ -13,6 +13,8 @@ pub struct Segment {
     pub discontinuity: bool,
     pub duration_ts: u32,
     pub seq: u64,
+    /// Media ticks per second for this segment's duration and timestamp.
+    pub timescale: u32,
 }
 
 /// Frames access units into ADTS and rotates segments on the media clock.
@@ -35,7 +37,7 @@ impl Segmenter {
     /// # Errors
     ///
     /// Returns an error for invalid configuration or unsupported ADTS audio.
-    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+    pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
 
         Ok(Self {
@@ -65,6 +67,7 @@ impl Segmenter {
             bytes: bytes.freeze(),
             duration_ts: self.duration_ts,
             discontinuity: self.discontinuity,
+            timescale: self.timescale,
         };
         self.next_seq += 1;
         self.stream_ts += u64::from(self.duration_ts);
@@ -85,6 +88,22 @@ impl Segmenter {
         let closed = self.close();
         self.discontinuity = true;
         closed
+    }
+
+    pub(crate) fn reconfigure<S>(
+        &mut self,
+        config: &BroadcastConfig<S>,
+    ) -> BroadcastResult<Option<Segment>> {
+        config.validate()?;
+        let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
+        let target_ts = config.target_ticks()?;
+        let closed = self.close();
+        self.packer = packer;
+        self.timescale = config.sample_rate;
+        self.target_ts = target_ts;
+        self.stream_ts = 0;
+        self.discontinuity = true;
+        Ok(closed)
     }
 
     /// Append an access unit and close the segment once it reaches the target.
@@ -111,9 +130,11 @@ impl Segmenter {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_encode::EncodedAccessUnit;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};
     use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
@@ -127,8 +148,12 @@ mod tests {
         const UNIT_DURATION: u32 = 1_024;
     }
 
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
+    }
+
     fn segmenter() -> Segmenter {
-        Segmenter::new(&BroadcastConfig::builder().build()).expect("segmenter")
+        Segmenter::new(&config()).expect("segmenter")
     }
 
     fn frame_bytes(units: usize) -> usize {
@@ -305,13 +330,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_target_shorter_than_one_tick_is_rejected() {
-        assert!(
-            Segmenter::new(
-                &BroadcastConfig::builder()
-                    .segment_target(Duration::ZERO)
-                    .build()
-            )
-            .is_err()
-        );
+        let mut config = config();
+        config.segment_target = Duration::ZERO;
+
+        assert!(Segmenter::new(&config).is_err());
     }
 }

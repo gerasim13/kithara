@@ -1,8 +1,11 @@
-use kithara_integration_tests::{cochlea::synchronization_failures, kithara};
+use kithara_integration_tests::{
+    cochlea::{marked_synchronization_failures, synchronization_failures},
+    kithara,
+};
 use kithara_test_fixtures::{
     asset::Asset,
     assets::{
-        rhythm_wav_deck_a_120bpm_48k, rhythm_wav_deck_b_120bpm_48k,
+        by_name, rhythm_wav_deck_a_120bpm_48k, rhythm_wav_deck_b_120bpm_48k,
         rhythm_wav_deck_b_missing_beat_120bpm_48k, rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k,
         rhythm_wav_deck_b_one_frame_late_120bpm_48k, rhythm_wav_deck_c_120bpm_48k,
         rhythm_wav_deck_d_120bpm_48k,
@@ -20,6 +23,70 @@ fn samples(asset: Asset) -> Vec<f32> {
         .chunks_exact(size_of::<i16>())
         .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX))
         .collect()
+}
+
+fn rhythm(style: &str, control: &str) -> Vec<f32> {
+    let name = format!("rhythm_wav_{style}_{control}");
+    samples(by_name(&name).unwrap_or_else(|| panic!("missing `{name}`")))
+}
+
+#[kithara::test(native, flash(false))]
+#[case::ambient_dub("ambient_dub_62", 62.0)]
+#[case::trip_hop("trip_hop_74", 74.0)]
+#[case::downtempo("downtempo_96", 96.0)]
+#[case::house("house_124", 124.0)]
+#[case::techno("techno_132", 132.0)]
+#[case::breakbeat("breakbeat_140", 140.0)]
+fn rich_rhythmic_oracle_covers_style_tempo_and_negative_controls(
+    #[case] style: &str,
+    #[case] bpm: f64,
+) {
+    let aligned = rhythm(style, "aligned");
+    let one_frame_late = rhythm(style, "one_frame_late");
+    let one_beat_bar_late = rhythm(style, "one_beat_bar_late");
+    let missing_beat = rhythm(style, "missing_beat");
+
+    assert!(
+        marked_synchronization_failures(style, &[aligned.as_slice()], CHANNELS, SAMPLE_RATE, bpm)
+            .is_empty(),
+        "{style}: aligned fixture must match its declared {bpm} BPM",
+    );
+    assert_eq!(
+        marked_synchronization_failures(
+            style,
+            &[aligned.as_slice(), one_frame_late.as_slice()],
+            CHANNELS,
+            SAMPLE_RATE,
+            bpm,
+        ),
+        [format!("{style}: beat phase spread is 1 frame")],
+    );
+    assert_eq!(
+        marked_synchronization_failures(
+            style,
+            &[aligned.as_slice(), one_beat_bar_late.as_slice()],
+            CHANNELS,
+            SAMPLE_RATE,
+            bpm,
+        ),
+        [format!("{style}: bar phase spread is 1 beat")],
+    );
+    let missing = marked_synchronization_failures(
+        style,
+        &[aligned.as_slice(), missing_beat.as_slice()],
+        CHANNELS,
+        SAMPLE_RATE,
+        bpm,
+    );
+    assert_eq!(
+        missing.len(),
+        1,
+        "{style}: unexpected failures: {missing:?}"
+    );
+    assert!(
+        missing[0].contains("track 1 is missing a rhythmic event"),
+        "{style}: missing-beat control failed for the wrong reason: {missing:?}",
+    );
 }
 
 #[kithara::test(native, flash(false))]

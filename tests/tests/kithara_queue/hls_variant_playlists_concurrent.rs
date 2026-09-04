@@ -263,11 +263,13 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
         Ok(request_ids) => request_ids,
         Err(error) => {
             tick_handle.abort();
+            let _ = tick_handle.await;
             panic!("{error}");
         }
     };
     let probes = recorder.snapshot();
     tick_handle.abort();
+    let _ = tick_handle.await;
 
     let process_dump = format_process_probes(&probes);
     let max_batch = max_playlist_batch_size(&probes, &variant_request_ids);

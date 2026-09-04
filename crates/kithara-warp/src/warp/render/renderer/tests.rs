@@ -7,7 +7,7 @@ use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    PresentationFrontier, RenderContext, RenderPublisher, SessionEpoch, SessionFrame,
+    PresentationFrontier, RenderContext, SessionEpoch, SessionFrame, Warp, WarpConfig,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -96,12 +96,8 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(
-        controls,
-        RenderPublisher::default().reader(),
-        spec(),
-        pools(),
-    )
+    let config = WarpConfig::builder().stretch(controls).build();
+    Warp::new((), &config).renderer(spec(), pools())
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
@@ -121,13 +117,12 @@ fn flush_serviced(fx: &mut WarpRenderer) -> Option<AudioChunk> {
 #[kithara::test]
 fn render_commits_the_context_captured_for_the_operation() {
     let pools = pools();
-    let publisher = RenderPublisher::default();
-    let mut renderer = WarpRenderer::new(
-        StretchControls::new(1.0),
-        publisher.reader(),
-        spec(),
-        pools.clone(),
-    );
+    let config = WarpConfig::builder()
+        .stretch(StretchControls::new(1.0))
+        .build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
+    let mut renderer = warp.renderer(spec(), pools.clone());
     let context = RenderContext::new(
         SessionFrame::new(1_000)..SessionFrame::new(1_001),
         spec().sample_rate,
@@ -148,7 +143,8 @@ fn render_commits_the_context_captured_for_the_operation() {
 
     let output = render_serviced(&mut renderer, input).expect("unity render succeeds");
     let snapshot = renderer
-        .render_snapshot()
+        .committed
+        .as_ref()
         .expect("successful render commits a snapshot");
 
     assert_eq!(output.frames(), 1);

@@ -22,6 +22,9 @@ pub enum BroadcastError {
     #[error("broadcast PCM capacity overflow")]
     CapacityOverflow,
 
+    #[error("broadcast format queue of {capacity} generations overflowed")]
+    GenerationQueueOverflow { capacity: usize },
+
     #[error("the composition-owned sample pool rejected broadcast scratch")]
     Pool(#[from] PoolError),
 

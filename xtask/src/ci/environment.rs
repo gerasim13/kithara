@@ -251,13 +251,6 @@ impl CiEnvironment {
         raise_open_file_limit()?;
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
-        let target = project_root.join("target");
-        // Claimed before anything is reclaimed, including by this job itself:
-        // the directory this job is about to build into is the one it must not
-        // lose. Its bytes still answer to the ceiling, because
-        // `candidate_entries` charges what it keeps, so the claim costs the host
-        // nothing it could otherwise have freed.
-        let target_lease = lease::hold(&target);
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -276,11 +269,15 @@ impl CiEnvironment {
         fs::create_dir_all(&shared_root)
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
-        ensure_room_for_a_job(config, &shared_root)?;
-
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-        let cache_root = shared_root.join(trust.as_str()).join(platform);
+        let target_scope = format!("{}-{platform}", trust.as_str());
+        let cache_root = shared_root.join(trust.as_str()).join(&platform);
+        let (target, target_lease) =
+            prepare_build_target(&project_root, &shared_root, &target_scope)?;
+
+        ensure_room_for_a_job(config, &shared_root)?;
+
         let sccache =
             PreparedSccache::for_environment(&shared_root, &cache_root, config, cache_group)?;
         let lease = cache_lease(&cache_root)?;
@@ -493,6 +490,45 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
+fn build_target_dir(
+    project_root: &Path,
+    shared_root: &Path,
+    target_scope: &str,
+    target_is_linux: bool,
+    gitlab: bool,
+    concurrent_id: Option<&str>,
+) -> Result<PathBuf> {
+    if target_is_linux && gitlab {
+        let slot = disposable_slot(concurrent_id)?;
+        return Ok(shared_root
+            .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+            .join(format!("{target_scope}-slot-{slot}")));
+    }
+    Ok(project_root.join("target"))
+}
+
+fn prepare_build_target(
+    project_root: &Path,
+    shared_root: &Path,
+    target_scope: &str,
+) -> Result<(PathBuf, Option<lease::Lease>)> {
+    let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
+    let target = build_target_dir(
+        project_root,
+        shared_root,
+        target_scope,
+        cfg!(target_os = "linux"),
+        is_gitlab(),
+        concurrent_id.as_deref(),
+    )?;
+    fs::create_dir_all(&target)
+        .with_context(|| format!("creating CI build cache {}", target.display()))?;
+    // Claimed before anything is reclaimed, including by this job itself. Its
+    // bytes still answer to the ceiling; the claim only prevents a live delete.
+    let lease = lease::hold(&target);
+    Ok((target, lease))
+}
+
 /// Refuse a job only once there is nothing left to reclaim.
 ///
 /// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
@@ -509,7 +545,7 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
         return Ok(());
     }
     let workspaces = gitlab_workspaces(config.host.build_root());
-    let reclaimed_from = reclaim_build_caches(&workspaces, free, required)?;
+    let reclaimed_from = reclaim_build_caches(&workspaces, shared_root, free, required)?;
     let free = free_bytes(shared_root)?;
     if free < required {
         bail!("{}", refusal(free, required, &workspaces, reclaimed_from));
@@ -565,8 +601,14 @@ fn refusal(free: u64, required: u64, workspaces: &Path, reclaimed_from: usize) -
 ///
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
-fn reclaim_build_caches(workspaces: &Path, free: u64, required: u64) -> Result<usize> {
-    let targets = build_cache::persistent_target_dirs(workspaces)?;
+fn reclaim_build_caches(
+    workspaces: &Path,
+    cache_root: &Path,
+    free: u64,
+    required: u64,
+) -> Result<usize> {
+    let mut targets = build_cache::persistent_target_dirs(workspaces)?;
+    targets.extend(build_cache::cached_target_dirs(cache_root)?);
     if targets.is_empty() {
         warn!(
             free_bytes = free,
@@ -649,6 +691,10 @@ mod tests {
         const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
         const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
         const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
+    }
+
+    fn reclaim(root: &Path) -> usize {
+        reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
     }
 
     #[test]
@@ -916,7 +962,7 @@ mod tests {
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
+        reclaim(root.path());
 
         assert!(
             !target.join("artifact").exists(),
@@ -942,7 +988,7 @@ mod tests {
 
         let held = lease::hold(&checkout.join("target")).expect("the running job claims its build");
 
-        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
+        reclaim(root.path());
 
         assert!(
             target.join("artifact").exists(),
@@ -950,7 +996,7 @@ mod tests {
         );
         drop(held);
 
-        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
+        reclaim(root.path());
 
         assert!(
             !target.join("artifact").exists(),
@@ -986,9 +1032,41 @@ mod tests {
     fn a_workspace_root_that_does_not_exist_has_nothing_to_reclaim() {
         let root = tempfile::tempdir().unwrap();
 
-        let reclaimed_from =
-            reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
+        let reclaimed_from = reclaim(root.path());
 
         assert_eq!(reclaimed_from, 0);
+    }
+
+    #[test]
+    fn linux_gitlab_targets_live_in_the_persistent_runner_slot() {
+        let target = build_target_dir(
+            Path::new("/builds/disrupt/kithara"),
+            Path::new("/cache"),
+            "review-linux-aarch64",
+            true,
+            true,
+            Some("1"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            target,
+            Path::new("/cache/target-slots/review-linux-aarch64-slot-1")
+        );
+    }
+
+    #[test]
+    fn shell_targets_stay_with_the_checkout() {
+        let target = build_target_dir(
+            Path::new("/builds/disrupt/kithara"),
+            Path::new("/cache"),
+            "review-macos-aarch64",
+            false,
+            true,
+            Some("1"),
+        )
+        .unwrap();
+
+        assert_eq!(target, Path::new("/builds/disrupt/kithara/target"));
     }
 }

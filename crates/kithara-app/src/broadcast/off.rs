@@ -1,10 +1,5 @@
-use kithara::{platform::CancelToken, worker::Worker};
-
 use super::state::{BroadcastResult, Packager};
-use crate::{
-    config::AppBroadcastConfig,
-    pools::{AppHost, Pools},
-};
+use crate::{config::AppBroadcastConfig, pools::AppHost};
 
 pub(crate) struct Backend;
 
@@ -22,13 +17,7 @@ impl Packager for Backend {
         match *live {}
     }
 
-    fn start(
-        _host: &AppHost,
-        _worker: &Worker,
-        _pools: &Pools,
-        _shutdown: &CancelToken,
-        _config: &AppBroadcastConfig,
-    ) -> BroadcastResult<Option<Stream>> {
+    fn start(_host: &AppHost, _config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
         Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
     }
 

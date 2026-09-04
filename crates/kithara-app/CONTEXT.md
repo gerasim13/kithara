@@ -23,7 +23,7 @@ path or an AssetStore.
 
 ## Broadcast service
 
-The crate owns only the service wiring and configured `BroadcastConfig`; packaging, the bounded intake, and the origin belong to `kithara-broadcast`. A request
+The crate owns only the service wiring; `main` builds the complete `BroadcastConfig` with the app's shared worker, pools, and cancellation parent. Packaging, the bounded intake, and the origin belong to `kithara-broadcast`. A request
 stays `Requested` until the Host exposes its measured output rate, which replaces only the configured sample
 rate before `BroadcastOutput` is installed in the single Host `OutputGroup`. App-root cancellation ends the origin and encoder; stopping the
 running phase releases the output group before the encoder drains.

@@ -8,6 +8,7 @@ use kithara_platform::{
     },
     time::Duration,
 };
+use kithara_signal::AudioSpec;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -50,6 +51,8 @@ impl From<MixTapWriter> for (HeapProd<f32>, Arc<AtomicU64>) {
 }
 
 impl LiveOutput for MixTapWriter {
+    fn reconfigure(&mut self, _spec: AudioSpec) {}
+
     fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
         let stereo = 2;
         let writable = frames

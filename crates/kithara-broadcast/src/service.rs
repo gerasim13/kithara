@@ -1,4 +1,6 @@
-use kithara_bufpool::{HasPool, PoolRegion};
+use std::num::NonZeroU32;
+
+use kithara_bufpool::HasPool;
 use kithara_output::LiveOutput;
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
@@ -9,8 +11,9 @@ use kithara_platform::{
     },
     time::Instant,
 };
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
-use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake, Worker};
+use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -30,6 +33,12 @@ struct Consts;
 impl Consts {
     const CHANNELS: u16 = 2;
     const STEREO: usize = 2;
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FormatChange {
+    pub(super) frame: u64,
+    pub(super) spec: AudioSpec,
 }
 
 /// Current public state of a broadcast.
@@ -52,6 +61,7 @@ pub(super) struct Control {
     accepting: AtomicBool,
     dropped: AtomicU64,
     finish_requested: AtomicBool,
+    generation_overflowed: AtomicBool,
     writing: AtomicBool,
 }
 
@@ -81,7 +91,10 @@ pub(super) struct Counters {
 /// RT endpoint installed in the Host master-output group.
 pub struct BroadcastOutput {
     control: Arc<Control>,
+    formats: HeapProd<FormatChange>,
     pcm: HeapProd<f32>,
+    spec: AudioSpec,
+    written_frames: u64,
     wake: Wake,
 }
 
@@ -98,6 +111,25 @@ impl BroadcastOutput {
 }
 
 impl LiveOutput for BroadcastOutput {
+    fn reconfigure(&mut self, spec: AudioSpec) {
+        if spec == self.spec || !self.control.accepting.load(Ordering::Acquire) {
+            return;
+        }
+        let change = FormatChange {
+            frame: self.written_frames,
+            spec,
+        };
+        if self.formats.try_push(change).is_err() {
+            self.control
+                .generation_overflowed
+                .store(true, Ordering::Release);
+            self.control.finish();
+        } else {
+            self.spec = spec;
+        }
+        self.wake.defer();
+    }
+
     fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
         if frames == 0 || !self.control.accepting.load(Ordering::Acquire) {
             return;
@@ -123,6 +155,10 @@ impl LiveOutput for BroadcastOutput {
         if dropped > 0 {
             self.report_drop(dropped);
         }
+        let pushed_frames = pushed / Consts::STEREO;
+        self.written_frames = self
+            .written_frames
+            .saturating_add(u64::try_from(pushed_frames).unwrap_or(u64::MAX));
         self.control.writing.store(false, Ordering::Release);
         self.wake.defer();
     }
@@ -139,7 +175,7 @@ impl Drop for BroadcastOutput {
 pub struct Broadcast;
 
 impl Broadcast {
-    /// Start one bounded packager task on `worker` and bind the origin before
+    /// Start one configured bounded packager and bind the origin before
     /// returning its output and handle.
     ///
     /// # Errors
@@ -147,10 +183,7 @@ impl Broadcast {
     /// Returns an error when configuration, encoding, binding, or worker
     /// admission fails.
     pub fn start<S>(
-        worker: &Worker,
-        pools: &PoolRegion<S>,
-        config: &BroadcastConfig,
-        parent: Option<CancelToken>,
+        config: BroadcastConfig<S>,
     ) -> BroadcastResult<(BroadcastOutput, BroadcastHandle)>
     where
         S: HasPool<f32> + Send + Sync + 'static,
@@ -171,25 +204,20 @@ impl Broadcast {
             .get()
             .checked_mul(Consts::STEREO)
             .ok_or(BroadcastError::CapacityOverflow)?;
-        let scratch = pools.get_with_len::<f32>(tick_samples)?;
+        let scratch = config.pools.get_with_len::<f32>(tick_samples)?;
         let (pcm_tx, pcm_rx) = HeapRb::new(buffer_samples).split();
+        let (format_tx, format_rx) = HeapRb::new(config.generation_capacity.get()).split();
         let control = Arc::new(Control {
             accepting: AtomicBool::new(true),
             ..Control::default()
         });
         let (completed_tx, completed_rx) = mpsc::channel();
-        let task = BroadcastTask::new(config, pcm_rx, Arc::clone(&control), scratch, completed_tx)?;
-        let origin = task.origin();
-        let counters = task.counters();
-        let scope = CancelScope::new(parent);
-        let addr = match server::start(config.bind, Arc::clone(&origin), scope.token()) {
-            Ok(addr) => addr,
-            Err(error) => {
-                scope.cancel();
-                return Err(error);
-            }
-        };
-        let dispatcher = worker.dispatcher(
+        let scope = CancelScope::new(config.cancel.clone());
+        let bind = config.bind;
+        let channels = config.channels;
+        let sample_rate = config.sample_rate;
+        let stop_timeout = config.stop_timeout;
+        let dispatcher = config.worker.dispatcher(
             DispatcherConfig::builder()
                 .name("kithara-broadcast")
                 .cancel(CancelGroup::from(scope.token()))
@@ -202,12 +230,27 @@ impl Broadcast {
                 .build(),
         );
         let wake = dispatcher.wake_handle();
-        let task = match dispatcher.register(
-            TaskConfig::new()
-                .with_max_compute_tasks(config.max_compute_tasks)
-                .with_priority(config.priority),
-            move |_| task,
-        ) {
+        let task_config = TaskConfig::new()
+            .with_max_compute_tasks(config.max_compute_tasks)
+            .with_priority(config.priority);
+        let task = BroadcastTask::new(
+            config,
+            pcm_rx,
+            format_rx,
+            Arc::clone(&control),
+            scratch,
+            completed_tx,
+        )?;
+        let origin = task.origin();
+        let counters = task.counters();
+        let addr = match server::start(bind, Arc::clone(&origin), scope.token()) {
+            Ok(addr) => addr,
+            Err(error) => {
+                scope.cancel();
+                return Err(error);
+            }
+        };
+        let task = match dispatcher.register(task_config, move |_| task) {
             Ok(task) => task,
             Err(error) => {
                 scope.cancel();
@@ -216,7 +259,15 @@ impl Broadcast {
         };
         let output = BroadcastOutput {
             control: Arc::clone(&control),
+            formats: format_tx,
             pcm: pcm_tx,
+            spec: AudioSpec::new(
+                channels,
+                NonZeroU32::new(sample_rate).ok_or(BroadcastError::InvalidConfig {
+                    field: "sample_rate",
+                })?,
+            ),
+            written_frames: 0,
             wake: wake.clone(),
         };
         let handle = BroadcastHandle {
@@ -226,7 +277,7 @@ impl Broadcast {
             dispatcher,
             origin,
             scope,
-            stop_timeout: config.stop_timeout,
+            stop_timeout,
             task,
             url: Arc::from(format!("http://{addr}/master.m3u8")),
             wake,
@@ -311,7 +362,7 @@ impl Drop for BroadcastHandle {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::testing::pools;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_output::LiveOutput;
     use kithara_platform::time::Duration;
     use kithara_stream::{AudioCodec, ContainerFormat};
@@ -328,8 +379,8 @@ mod tests {
         const TARGET: Duration = Duration::from_millis(500);
     }
 
-    fn config() -> BroadcastConfig {
-        BroadcastConfig::builder()
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
             .segment_target(Consts::TARGET)
             .build()
     }
@@ -338,24 +389,19 @@ mod tests {
         Arc::clone(&handle.origin.snapshot.load().playlist)
     }
 
-    fn start() -> (Worker, BroadcastOutput, BroadcastHandle) {
-        let worker = Worker::new(WorkerConfig::new());
-        let pools = pools();
-        let (output, handle) = Broadcast::start(&worker, &pools, &config(), None).expect("on air");
-        (worker, output, handle)
+    fn start() -> (BroadcastOutput, BroadcastHandle) {
+        Broadcast::start(config()).expect("on air")
     }
 
     #[kithara::test(native, flash(false))]
     fn an_unsupported_profile_fails_without_fallback() {
-        let worker = Worker::new(WorkerConfig::new());
-        let pools = pools();
-        let config = BroadcastConfig::builder()
+        let config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
             .codec(AudioCodec::Pcm)
             .container(ContainerFormat::Wav)
             .build();
 
         assert!(matches!(
-            Broadcast::start(&worker, &pools, &config, None),
+            Broadcast::start(config),
             Err(BroadcastError::UnsupportedProfile {
                 codec: AudioCodec::Pcm,
                 container: ContainerFormat::Wav,
@@ -371,7 +417,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn live_output_is_the_public_pcm_intake() {
-        let (_worker, mut output, handle) = start();
+        let (mut output, handle) = start();
 
         write_second(&mut output);
         handle.stop();
@@ -382,7 +428,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn dropping_the_output_finishes_the_stream() {
-        let (_worker, mut output, handle) = start();
+        let (mut output, handle) = start();
         write_second(&mut output);
 
         drop(output);
@@ -394,7 +440,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_intake_gap_marks_the_next_segment_discontinuous() {
-        let (_worker, mut output, handle) = start();
+        let (mut output, handle) = start();
         write_second(&mut output);
         output.write_stereo(Consts::SAMPLE_RATE, &[], &[]);
         write_second(&mut output);
@@ -410,7 +456,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn stopping_twice_is_the_same_as_stopping_once() {
-        let (_worker, mut output, handle) = start();
+        let (mut output, handle) = start();
         write_second(&mut output);
 
         handle.stop();

@@ -3,8 +3,10 @@
 /// Runner rendering and per-job cache partitioning share this value. Raising it
 /// buys wall-clock and costs disk: every admitted job carries its own checkout
 /// and `target`, and those are what the volume runs out of. The compiler cache
-/// follows on its own — the host's budget is divided between the slots.
-pub(crate) const HOST_JOB_CONCURRENCY: usize = 3;
+/// follows on its own — the host's budget is divided between the slots. Two
+/// jobs keep the required parallelism while leaving four Cargo workers to each
+/// on this ten-core host; three measured slower and evicted a third test tree.
+pub(crate) const HOST_JOB_CONCURRENCY: usize = 2;
 
 /// Cores the CI host has.
 ///

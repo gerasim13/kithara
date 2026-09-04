@@ -477,7 +477,7 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .timestretch(Arc::clone(&stretch))
+            .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
             .build(),
         SAMPLE_RATE,
     );

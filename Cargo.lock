@@ -995,7 +995,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
- "generic-array",
+ "generic-array 0.14.7",
 ]
 
 [[package]]
@@ -1529,6 +1529,45 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cochlea-render"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de95a9b868a7cbc96d1027e07c6b6ba45a47b581c8207aca592f28c28dedbb7"
+dependencies = [
+ "cochlea-score",
+ "cochlea-synth",
+ "fundsp",
+ "hound",
+ "libm",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cochlea-score"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7a364bb5990f56a8d8665c886aff213ecc43ddcaefe32cee5922be9ba07eac4"
+dependencies = [
+ "fenestra-anim",
+ "libm",
+ "ron",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cochlea-synth"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7001c48ceaa44e7f9d266a1597a3d3d495b9dbe6fbc9a0b8ee98cfeb76e21d6c"
+dependencies = [
+ "cochlea-score",
+ "fundsp",
+ "libm",
 ]
 
 [[package]]
@@ -2075,7 +2114,7 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
- "generic-array",
+ "generic-array 0.14.7",
  "typenum",
 ]
 
@@ -2509,6 +2548,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "ebur128"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2727,6 +2772,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24516d2611506d5cb1833555adc75f6baf9fe2706b9c13e6fc33a6b22c51ca83"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "fenestra-anim"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25607f15e8843055e5ca6825a99b98c03a5a532f2aabbe8b108b2249c65c31d"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3166,6 +3220,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "fundsp"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6969e5c9d5c5c704723f547237494fde9b1addf16f718f65cd786b3b6e320a4f"
+dependencies = [
+ "dyn-clone",
+ "funutd",
+ "hashbrown 0.16.1",
+ "libm",
+ "microfft",
+ "num-complex",
+ "numeric-array",
+ "once_cell",
+ "resampler",
+ "thingbuf",
+ "tinyvec",
+ "wide",
+]
+
+[[package]]
+name = "funutd"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30f658de1fbeca3b70faf090e33d1ecf32b0efd1805bede4a8fd6ef562b7ab83"
+dependencies = [
+ "dyn-clone",
+ "glam 0.28.0",
+ "hashbrown 0.14.5",
+ "libm",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3303,6 +3389,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic-array"
+version = "1.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "337d46834ee672ab3e48caca2cb0c78cc174fb12b3a68d0d88f99a0519a5e36e"
+dependencies = [
+ "rustversion",
+ "typenum",
+]
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3395,6 +3491,15 @@ name = "glam"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
+
+[[package]]
+name = "glam"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "779ae4bf7e8421cf91c0b3b64e7e8b40b862fba4d393f59150042de7c4965a94"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "glam"
@@ -3578,6 +3683,10 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash",
+ "allocator-api2",
+]
 
 [[package]]
 name = "hashbrown"
@@ -4715,6 +4824,7 @@ dependencies = [
  "kithara-encode",
  "kithara-output",
  "kithara-platform",
+ "kithara-signal",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-worker",
@@ -4898,6 +5008,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -5235,6 +5346,7 @@ dependencies = [
  "kithara-encode",
  "kithara-output",
  "kithara-platform",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-worker",
  "ringbuf 0.5.0",
@@ -5361,6 +5473,8 @@ dependencies = [
  "aes",
  "bytes",
  "cbc",
+ "cochlea-render",
+ "cochlea-score",
  "delegate",
  "futures-lite",
  "hex",
@@ -6034,6 +6148,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "microfft"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2b6673eb0cc536241d6734c2ca45abfdbf90e9e7791c66a36a7ba3c315b76cf"
+dependencies = [
+ "cfg-if",
+ "num-complex",
+ "static_assertions",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6432,6 +6557,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "numeric-array"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a6096447d657bfba01c49d38338b6c8e68e0e34d595360345375b798a4a765"
+dependencies = [
+ "generic-array 1.4.5",
+ "num-traits",
 ]
 
 [[package]]
@@ -7952,6 +8087,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resampler"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80f5ab61459422b1a350caae1aadef48ebae234b12e80248e9ba9557018ef060"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "resvg"
 version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8432,6 +8576,15 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -9450,6 +9603,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 dependencies = [
  "smawk",
+]
+
+[[package]]
+name = "thingbuf"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "662b54ef6f7b4e71f683dadc787bbb2d8e8ef2f91b682ebed3164a5a7abca905"
+dependencies = [
+ "pin-project",
 ]
 
 [[package]]
@@ -11424,6 +11586,16 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "web-sys",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cf05ca94c9fba0c51316899caa1d1e74a064fc310a5efa7375e614343d415be"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]

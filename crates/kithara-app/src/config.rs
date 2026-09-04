@@ -13,6 +13,8 @@ use kithara::{
 };
 use url::Url;
 
+#[cfg(feature = "broadcast")]
+use crate::pools::AppPools;
 use crate::{
     baked,
     pools::{AppStore, AppWorker},
@@ -21,7 +23,7 @@ use crate::{
 
 #[cfg(feature = "broadcast")]
 /// Feature-selected live broadcast configuration.
-pub type AppBroadcastConfig = kithara::broadcast::BroadcastConfig;
+pub type AppBroadcastConfig = kithara::broadcast::BroadcastConfig<AppPools>;
 #[cfg(not(feature = "broadcast"))]
 /// Empty broadcast configuration for builds without the service.
 #[derive(Clone, Debug, Default)]
@@ -114,9 +116,8 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Live broadcast format, retention, and bounded worker resources.
-    #[builder(default)]
-    pub broadcast: AppBroadcastConfig,
+    /// Complete live-broadcast construction config for this app session.
+    pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]

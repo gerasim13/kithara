@@ -21,8 +21,7 @@ use crate::{RenderPublisher, StretchControls};
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct Warp<S> {
-    #[field(get, deref = false)]
-    stretch: Arc<StretchControls>,
+    config: WarpConfig,
     publisher: Option<RenderPublisher>,
     #[cfg(feature = "render")]
     reader: RenderReader,
@@ -39,11 +38,17 @@ impl<S> Warp<S> {
         let reader = publisher.reader();
         Self {
             source,
-            stretch: Arc::clone(config.stretch()),
+            config: config.clone(),
             publisher: Some(publisher),
             #[cfg(feature = "render")]
             reader,
         }
+    }
+
+    /// Live temporal controls shared with the resident Warp lane.
+    #[must_use]
+    pub fn stretch(&self) -> &Arc<StretchControls> {
+        self.config.stretch()
     }
 
     /// Takes the sole callback-side publisher paired with this resident Warp.
@@ -59,7 +64,7 @@ impl<S> Warp<S> {
     where
         P: HasPool<f32>,
     {
-        WarpRenderer::new(Arc::clone(&self.stretch), self.reader.clone(), spec, pools)
+        WarpRenderer::new(&self.config, self.reader.clone(), spec, pools)
     }
 }
 

@@ -35,7 +35,12 @@ pub struct CiReportArgs {
 }
 
 pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
-    print!("{}", render(&args.artifacts, &ctx.config.ci_report)?);
+    let report = render(&args.artifacts, &ctx.config.ci_report)?;
+    let target = ctx.root.join("target");
+    fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
+    let output = target.join("consolidated-quality-report.md");
+    fs::write(&output, &report).with_context(|| format!("write {}", output.display()))?;
+    print!("{report}");
     Ok(())
 }
 
@@ -87,13 +92,20 @@ fn assessment(artifacts: &Path) -> Result<String> {
 }
 
 fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
-    let Some(report) = find(artifacts, &|path| {
+    let (report, flattened) = if let Some(report) = find(artifacts, &|path| {
         named(path, Consts::SIMILARITY_REPORT) && under(path, Consts::SIMILARITY_ARTIFACT)
-    })?
-    else {
-        return Ok(missing("Duplication", "similarity-report"));
+    })? {
+        (report, false)
+    } else {
+        let Some(report) = find(artifacts, &|path| named(path, Consts::SIMILARITY_REPORT))? else {
+            return Ok(missing("Duplication", "similarity-report"));
+        };
+        (report, true)
     };
     let text = read(&report)?;
+    if flattened && !text.starts_with("# Behavioral similarity") {
+        return Ok(missing("Duplication", "similarity-report"));
+    }
     let mut out = String::from("\n## Duplication\n\n");
     for line in text.lines().take(rows) {
         out.push_str(line);
@@ -115,7 +127,11 @@ fn health(artifacts: &Path) -> Result<String> {
     let summary = text
         .split_once(Consts::STAGE_DETAILS)
         .map_or(text.as_str(), |(before, _)| before);
-    Ok(format!("{}\n", summary.trim_end()))
+    let (title, body) = summary.split_once('\n').unwrap_or((summary, ""));
+    if !title.starts_with("# ") || !title.ends_with(" health report") {
+        anyhow::bail!("{} has an unexpected title {title:?}", report.display());
+    }
+    Ok(format!("\n## Workspace health\n\n{}\n", body.trim()))
 }
 
 fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
@@ -216,12 +232,17 @@ fn named(path: &Path, name: &str) -> bool {
     path.file_name().is_some_and(|found| found == name)
 }
 
-/// Whether the artifact this file came from is the one named. The similarity
-/// report sits under a revision directory the workflow never states, so its
-/// own file name and its parent are both the wrong things to match on.
+/// Whether the artifact this file came from is the one named. Downloads keep
+/// the run id and attempt suffix added by the uploader.
 fn under(path: &Path, name: &str) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == name)
+    path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|found| {
+            found == name
+                || found
+                    .strip_prefix(name)
+                    .is_some_and(|suffix| suffix.starts_with('-'))
+        })
+    })
 }
 
 fn parent_named(path: &Path, name: &str) -> bool {
@@ -260,12 +281,32 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::common::project::ProjectConfig;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create artifact directory");
         }
         fs::write(path, contents).expect("write artifact");
+    }
+
+    #[test]
+    fn run_writes_the_consolidated_report_with_numeric_crap_metrics() {
+        let temp = tempdir().expect("tempdir");
+        let artifacts = temp.path().join("artifacts");
+        write(
+            &artifacts.join("coverage-risk/cargo-crap/report.md"),
+            "## 3 function(s) exceed CRAP threshold 30\n\n| | CRAP | CC | Cov % | Function | Location |\n|---|---:|---:|---:|---|---|\n| high | 35.48 | 28 | 78.79 | prepare_planned_variant_reader | prepare.rs:22 |\n",
+        );
+        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
+
+        run(&CiReportArgs { artifacts }, &ctx).expect("write consolidated report");
+
+        let report = fs::read_to_string(temp.path().join("target/consolidated-quality-report.md"))
+            .expect("read consolidated report");
+        assert!(report.contains("## Coverage risk (CRAP)"), "{report}");
+        assert!(report.contains("| | CRAP | CC | Cov % |"), "{report}");
+        assert!(report.contains("| high | 35.48 | 28 | 78.79 |"), "{report}");
     }
 
     #[test]
@@ -286,12 +327,26 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         write(
             &temp.path().join("health-report/health-report.md"),
-            "# health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
+            "# musicbox health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
         );
 
         let report = health(temp.path()).expect("health section");
 
+        assert!(report.contains("## Workspace health"));
         assert!(report.contains("| 1 | orphans | FAIL |"));
+    }
+
+    #[test]
+    fn health_section_rejects_an_unexpected_title() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("health-report/health-report.md"),
+            "# unrelated report\n",
+        );
+
+        let error = health(temp.path()).expect_err("unexpected title");
+
+        assert!(error.to_string().contains("unexpected title"), "{error:#}");
     }
 
     #[test]
@@ -432,13 +487,26 @@ mod tests {
     fn duplication_section_reads_the_report_under_its_revision() {
         let temp = tempdir().expect("tempdir");
         write(
-            &temp.path().join("similarity-report/abc1234/report.md"),
+            &temp.path().join("similarity-report-42-1/abc1234/report.md"),
             "# duplication\n\n| pair | score |\n",
         );
 
         let report = duplication(temp.path(), 10).expect("duplication section");
 
         assert!(report.contains("| pair | score |"), "{report}");
+    }
+
+    #[test]
+    fn duplication_section_reads_a_flattened_single_artifact() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("abc1234/report.md"),
+            "# Behavioral similarity\n\n- Candidates: 42\n",
+        );
+
+        let report = duplication(temp.path(), 10).expect("duplication section");
+
+        assert!(report.contains("Candidates: 42"), "{report}");
     }
 
     #[test]

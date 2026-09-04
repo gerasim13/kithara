@@ -1,9 +1,12 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use bon::Builder;
+use kithara_bufpool::PoolRegion;
 use kithara_encode::EncodeConfig;
 use kithara_platform::time::Duration;
-use kithara_worker::Priority;
+use kithara_worker::{Priority, Worker};
+
+use crate::PartSinkFactory;
 
 struct Defaults;
 
@@ -14,6 +17,10 @@ impl Defaults {
     };
     const DISPATCHER_CAPACITY: NonZeroUsize = NonZeroUsize::MIN;
     const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    const GENERATION_CAPACITY: NonZeroUsize = match NonZeroUsize::new(8) {
         Some(value) => value,
         None => unreachable!(),
     };
@@ -37,6 +44,10 @@ impl RecordingConfig {
     pub const fn encode(&self) -> &EncodeConfig {
         &self.encode
     }
+
+    pub(crate) fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.encode.sample_rate = sample_rate;
+    }
 }
 
 fn default_encode_config() -> EncodeConfig {
@@ -49,7 +60,19 @@ fn default_encode_config() -> EncodeConfig {
 /// Bounded live-recorder and worker scheduling configuration.
 #[derive(Builder)]
 #[non_exhaustive]
-pub struct LiveRecordingConfig {
+pub struct LiveRecordingConfig<F, S>
+where
+    F: PartSinkFactory,
+{
+    /// Shared worker used to schedule the recorder task.
+    #[builder(start_fn)]
+    pub(crate) worker: Worker,
+    /// Typed pool facade used for bounded recorder scratch.
+    #[builder(start_fn)]
+    pub(crate) pools: PoolRegion<S>,
+    /// Factory opening each transactional recording part.
+    #[builder(start_fn)]
+    pub(crate) factory: F,
     /// Encoding and container profile for every independently playable part.
     #[builder(default = RecordingConfig::builder().build())]
     pub(crate) recording: RecordingConfig,
@@ -59,6 +82,9 @@ pub struct LiveRecordingConfig {
     /// Maximum stereo PCM frames encoded during one worker tick.
     #[builder(default = Defaults::TICK_FRAMES)]
     pub(crate) tick_frames: NonZeroUsize,
+    /// Maximum queued master-format generations waiting for the worker.
+    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    pub(crate) generation_capacity: NonZeroUsize,
     /// Optional exact frame count at which each part rotates automatically.
     pub(crate) rotation_frames: Option<NonZeroU64>,
     /// Maximum tasks admitted to the recorder dispatcher.

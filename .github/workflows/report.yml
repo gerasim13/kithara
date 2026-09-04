@@ -38,6 +38,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           REPOSITORY: ${{ github.repository }}
@@ -70,11 +71,11 @@ jobs:
           # report`) and archive it, so this collector carries the numbers
           # rather than re-deriving them. A run that selected no quality lane
           # leaves no such artifact, and that is a normal state, not a failure.
-          if gh run download "$RUN_ID" --repo "$REPOSITORY" --name quality-report --dir quality \
-              && [[ -f quality/quality-report.md ]]; then
+          if gh run download "$RUN_ID" --repo "$REPOSITORY" --name quality-report-${RUN_ID}-${RUN_ATTEMPT} --dir quality \
+              && [[ -f quality/consolidated-quality-report.md ]]; then
             {
               echo
-              cat quality/quality-report.md
+              cat quality/consolidated-quality-report.md
             } >> target/dispatch-report.md
           fi
 

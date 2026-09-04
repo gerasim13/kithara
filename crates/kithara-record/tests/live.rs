@@ -16,6 +16,7 @@ use kithara_record::{
     LiveRecorder, LiveRecordingConfig, LiveRecordingError, LiveRecordingHandle,
     LiveRecordingReport, PartSinkFactory, RecordingConfig, RecordingSink,
 };
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 use kithara_worker::{Worker, WorkerConfig};
 
@@ -100,23 +101,19 @@ fn wait_result(handle: &LiveRecordingHandle) -> Result<LiveRecordingReport, Live
 #[kithara::test(native, flash(false))]
 fn manual_cut_and_rotation_publish_exact_independent_parts() {
     let parts = Parts::default();
-    let config = LiveRecordingConfig::builder()
-        .recording(RecordingConfig::builder().build())
-        .buffer_frames(NonZeroUsize::new(32).expect("test buffer frames"))
-        .tick_frames(NonZeroUsize::new(8).expect("test tick frames"))
-        .rotation_frames(NonZeroU64::new(4).expect("test rotation frames"))
-        .build();
-    let worker = Worker::new(WorkerConfig::new());
-    let pools = pools();
-    let (mut output, handle) = LiveRecorder::start(
-        &worker,
-        &pools,
-        config,
+    let config = LiveRecordingConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        pools(),
         TestFactory {
             parts: parts.clone(),
         },
     )
-    .expect("start live recorder");
+    .recording(RecordingConfig::builder().build())
+    .buffer_frames(NonZeroUsize::new(32).expect("test buffer frames"))
+    .tick_frames(NonZeroUsize::new(8).expect("test tick frames"))
+    .rotation_frames(NonZeroU64::new(4).expect("test rotation frames"))
+    .build();
+    let (mut output, handle) = LiveRecorder::start(config).expect("start live recorder");
 
     write(&mut output, &[(1.0, 101.0), (2.0, 102.0), (3.0, 103.0)]);
     handle.cut();
@@ -202,22 +199,18 @@ fn wait_true(value: &AtomicBool, message: &str) {
 #[kithara::test(native, flash(false))]
 fn bounded_overflow_aborts_the_open_part() {
     let lifecycle = lifecycle();
-    let config = LiveRecordingConfig::builder()
-        .buffer_frames(NonZeroUsize::MIN)
-        .tick_frames(NonZeroUsize::MIN)
-        .build();
-    let worker = Worker::new(WorkerConfig::new());
-    let pools = pools();
-    let (mut output, handle) = LiveRecorder::start(
-        &worker,
-        &pools,
-        config,
+    let config = LiveRecordingConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        pools(),
         LifecycleFactory {
             lifecycle: lifecycle.clone(),
             fail_write: false,
         },
     )
-    .expect("start live recorder");
+    .buffer_frames(NonZeroUsize::MIN)
+    .tick_frames(NonZeroUsize::MIN)
+    .build();
+    let (mut output, handle) = LiveRecorder::start(config).expect("start live recorder");
 
     write(&mut output, &[(1.0, -1.0)]);
     wait_true(&lifecycle.opened, "recorder did not open its first part");
@@ -237,6 +230,8 @@ fn bounded_overflow_aborts_the_open_part() {
 struct FrameProbe(Arc<AtomicUsize>);
 
 impl LiveOutput for FrameProbe {
+    fn reconfigure(&mut self, _spec: AudioSpec) {}
+
     fn write_stereo(&mut self, frames: usize, _left: &[f32], _right: &[f32]) {
         self.0.fetch_add(frames, Ordering::Relaxed);
     }
@@ -245,33 +240,29 @@ impl LiveOutput for FrameProbe {
 #[kithara::test(native, flash(false))]
 fn sink_failure_does_not_stop_a_sibling_output() {
     let lifecycle = lifecycle();
-    let config = LiveRecordingConfig::builder()
-        .recording(
-            RecordingConfig::builder()
-                .encode(
-                    EncodeConfig::builder()
-                        .sample_rate(48_000)
-                        .channels(2)
-                        .packet_frames(1)
-                        .build(),
-                )
-                .build(),
-        )
-        .buffer_frames(NonZeroUsize::new(8).expect("test buffer frames"))
-        .tick_frames(NonZeroUsize::MIN)
-        .build();
-    let worker = Worker::new(WorkerConfig::new());
-    let pools = pools();
-    let (output, handle) = LiveRecorder::start(
-        &worker,
-        &pools,
-        config,
+    let config = LiveRecordingConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        pools(),
         LifecycleFactory {
             lifecycle: lifecycle.clone(),
             fail_write: true,
         },
     )
-    .expect("start live recorder");
+    .recording(
+        RecordingConfig::builder()
+            .encode(
+                EncodeConfig::builder()
+                    .sample_rate(48_000)
+                    .channels(2)
+                    .packet_frames(1)
+                    .build(),
+            )
+            .build(),
+    )
+    .buffer_frames(NonZeroUsize::new(8).expect("test buffer frames"))
+    .tick_frames(NonZeroUsize::MIN)
+    .build();
+    let (output, handle) = LiveRecorder::start(config).expect("start live recorder");
     let sibling_frames = Arc::new(AtomicUsize::new(0));
     let mut outputs = OutputGroup::new();
     outputs.push(output);

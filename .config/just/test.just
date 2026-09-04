@@ -19,8 +19,8 @@ all:
 # why they do not go through `just test run`. `just platform wasm` keeps the
 # artifacts (check, build, size-check); the tests belong here.
 #
-# Both suites run the wasm Host unit tests. SUITE `all` also runs the integration
-# browser suite; `webcodecs` adds only kithara-decode's browser target.
+# Both suites run the wasm Host tests and FFI wire contract. SUITE `all` also
+# runs the integration browser suite; `webcodecs` adds kithara-decode's target.
 
 # Run the Rust tests that need a browser (SUITE: all | webcodecs).
 [positional-arguments]
@@ -71,6 +71,13 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
       --features backend-web-audio,wasm-bindgen,symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-ffi --test web-observer --no-default-features \
+      --features wasm
     if [[ "$suite" == "all" ]]; then
       # The integration browser tests live in `suite_heavy`. Building the whole
       # crate for wasm compiles every native suite too, and those reach for

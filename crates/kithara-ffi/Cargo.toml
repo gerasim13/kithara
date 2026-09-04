@@ -154,5 +154,13 @@ futures = { workspace = true }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[[test]]
+name = "web-observer"
+path = "src/web/observer/tests.rs"
+required-features = ["wasm"]
+
 [lints]
 workspace = true

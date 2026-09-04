@@ -1,12 +1,10 @@
 use kithara::{
-    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle},
+    broadcast::{Broadcast, BroadcastHandle},
     output::OutputGroup,
-    platform::CancelToken,
-    worker::Worker,
 };
 
 use super::state::{BroadcastResult, Packager};
-use crate::pools::{AppHost, Pools};
+use crate::{config::AppBroadcastConfig, pools::AppHost};
 
 pub(crate) struct Backend;
 
@@ -38,7 +36,7 @@ impl BroadcastHost for AppHost {
 }
 
 impl Packager for Backend {
-    type Config = BroadcastConfig;
+    type Config = AppBroadcastConfig;
     type Live = Stream;
 
     const IS_AVAILABLE: bool = true;
@@ -47,17 +45,11 @@ impl Packager for Backend {
         live.handle.status().is_live
     }
 
-    fn start(
-        host: &AppHost,
-        worker: &Worker,
-        pools: &Pools,
-        shutdown: &CancelToken,
-        config: &BroadcastConfig,
-    ) -> BroadcastResult<Option<Stream>> {
+    fn start(host: &AppHost, config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
         let Some(config) = measured_config(host, config)? else {
             return Ok(None);
         };
-        start(host, worker, pools, shutdown, &config).map(Some)
+        start(host, config).map(Some)
     }
 
     fn release(host: &AppHost) -> BroadcastResult<()> {
@@ -73,14 +65,8 @@ impl Packager for Backend {
     }
 }
 
-fn start<H: BroadcastHost>(
-    host: &H,
-    worker: &Worker,
-    pools: &Pools,
-    shutdown: &CancelToken,
-    config: &BroadcastConfig,
-) -> BroadcastResult<Stream> {
-    let (output, handle) = Broadcast::start(worker, pools, config, Some(shutdown.child()))?;
+fn start<H: BroadcastHost>(host: &H, config: AppBroadcastConfig) -> BroadcastResult<Stream> {
+    let (output, handle) = Broadcast::start(config)?;
     let mut outputs = OutputGroup::new();
     outputs.push(output);
     host.enable_outputs(outputs)?;
@@ -93,8 +79,8 @@ fn release<H: BroadcastHost>(host: &H) -> BroadcastResult<()> {
 
 fn measured_config<H: BroadcastHost>(
     host: &H,
-    config: &BroadcastConfig,
-) -> BroadcastResult<Option<BroadcastConfig>> {
+    config: &AppBroadcastConfig,
+) -> BroadcastResult<Option<AppBroadcastConfig>> {
     Ok(host
         .measured_sample_rate()?
         .map(|sample_rate| config.with_sample_rate(sample_rate)))
@@ -104,6 +90,7 @@ fn measured_config<H: BroadcastHost>(
 mod tests {
     use kithara::{
         platform::{
+            CancelToken,
             sync::{
                 Mutex,
                 atomic::{AtomicU32, Ordering},
@@ -111,7 +98,7 @@ mod tests {
             thread,
             time::Duration,
         },
-        worker::WorkerConfig,
+        worker::{Worker, WorkerConfig},
     };
 
     use super::*;
@@ -148,23 +135,36 @@ mod tests {
         }
     }
 
-    fn on_air(sample_rate: u32) -> (Worker, Stream, SampleRateSession, CancelToken) {
+    fn config(shutdown: &CancelToken) -> AppBroadcastConfig {
+        AppBroadcastConfig::builder(
+            Worker::new(WorkerConfig::new()),
+            pools::build().expect("test pools"),
+        )
+        .cancel(shutdown.child())
+        .build()
+    }
+
+    fn on_air(sample_rate: u32) -> (Stream, SampleRateSession, CancelToken) {
         let session = SampleRateSession::new(sample_rate);
         let shutdown = CancelToken::root();
-        let worker = Worker::new(WorkerConfig::new());
-        let pools = pools::build().expect("test pools");
-        let config = measured_config(&session, &BroadcastConfig::default())
+        let config = measured_config(&session, &config(&shutdown))
             .expect("sample-rate query")
             .expect("a measured rate yields a config");
-        let stream =
-            start(&session, &worker, &pools, &shutdown, &config).expect("the packager starts");
-        (worker, stream, session, shutdown)
+        let stream = start(&session, config).expect("the packager starts");
+        (stream, session, shutdown)
     }
 
     #[kithara::test(native, flash(false))]
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let session = SampleRateSession::new(0);
-        let configured = BroadcastConfig::builder().bit_rate(192_000).build();
+        let shutdown = CancelToken::root();
+        let configured = AppBroadcastConfig::builder(
+            Worker::new(WorkerConfig::new()),
+            pools::build().expect("test pools"),
+        )
+        .cancel(shutdown.child())
+        .bit_rate(192_000)
+        .build();
 
         assert!(measured_config(&session, &configured).unwrap().is_none());
         assert!(
@@ -183,7 +183,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn starting_takes_the_output_group_and_stopping_gives_it_back() {
-        let (_worker, stream, session, shutdown) = on_air(48_000);
+        let (stream, session, shutdown) = on_air(48_000);
         assert!(
             session.outputs.lock().is_some(),
             "the running stream holds the session's output group"
@@ -201,7 +201,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_dropped_output_group_ends_the_stream() {
-        let (_worker, stream, session, shutdown) = on_air(48_000);
+        let (stream, session, shutdown) = on_air(48_000);
         session.outputs.lock().take();
 
         for _ in 0..1_000 {

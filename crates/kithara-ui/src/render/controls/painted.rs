@@ -2389,7 +2389,7 @@ mod lengths {
         );
     }
 
-    /// A button with no share is as wide as the skin or its own word says.
+    /// A button with no share is as wide as the skin says.
     #[kithara::test]
     fn a_fixed_button_takes_the_width_its_skin_names() {
         let skin = builtin::skin();
@@ -2404,14 +2404,16 @@ mod lengths {
         );
     }
 
+    /// A button the skin names neither a width nor a share for takes the box
+    /// the row hands it - which is the box its document declared. Measuring its
+    /// own word instead paints it narrower than that box on the one host that
+    /// lets a control ask for a width of its own.
     #[kithara::test]
-    fn a_default_button_is_as_wide_as_its_word() {
-        let skin = builtin::skin();
-
-        assert!(matches!(
-            paint(ButtonStyle::Default, skin).length().0,
-            Length::Fixed(width) if width > 0.0
-        ));
+    fn a_default_button_fills_the_box_it_is_given() {
+        assert_eq!(
+            paint(ButtonStyle::Default, builtin::skin()).length().0,
+            Length::Fill
+        );
     }
 
     /// A tab is the one control whose width is neither fixed nor a share: it is
@@ -2459,6 +2461,7 @@ mod lengths {
         fn what_a_parent_is_told_matches_what_the_painter_asks_for() {
             let skin = builtin::skin();
             for style in [
+                ButtonStyle::Default,
                 ButtonStyle::MicroPrimary,
                 ButtonStyle::Transport,
                 ButtonStyle::TransportPrimary,
@@ -2470,16 +2473,6 @@ mod lengths {
                     "the two hosts must weigh a {style:?} button the same"
                 );
             }
-        }
-
-        /// The one width a parent cannot be told, because the button only knows it
-        /// once it holds the word it is going to draw.
-        #[kithara::test]
-        fn a_measured_width_is_not_something_a_parent_can_be_told() {
-            assert_eq!(
-                declared_width(ButtonStyle::Default, builtin::skin()),
-                solve::Length::Shrink
-            );
         }
 
         /// The retained host is told a tab's length before it holds a painter, so

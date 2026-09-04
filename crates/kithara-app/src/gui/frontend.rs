@@ -152,18 +152,12 @@ impl GuiFrontend {
     }
 
     /// Gives the bar's REC cell a session to put on air.
-    pub fn attach_broadcast(
-        &mut self,
-        shutdown: kithara::platform::CancelToken,
-        worker: kithara::worker::Worker,
-    ) {
-        let pools = self.config.worker.pools().clone();
-        self.broadcast = Some(crate::broadcast::Broadcaster::new(
-            shutdown,
-            worker,
-            pools,
-            self.config.broadcast.clone(),
-        ));
+    pub fn attach_broadcast(&mut self) {
+        self.broadcast = self
+            .config
+            .broadcast
+            .clone()
+            .map(crate::broadcast::Broadcaster::new);
     }
 
     /// Runs the GUI event loop until the application exits.

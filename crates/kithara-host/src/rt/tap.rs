@@ -11,6 +11,7 @@ use firewheel::{
 };
 use kithara_output::{LiveOutput, OutputGroup};
 use kithara_platform::sync::Mutex;
+use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 
 pub(crate) struct TapNode {
@@ -52,7 +53,10 @@ struct TapProcessor {
 }
 
 impl TapProcessor {
-    fn new(outputs: Option<OutputGroup>, sample_rate: NonZeroU32) -> Self {
+    fn new(mut outputs: Option<OutputGroup>, sample_rate: NonZeroU32) -> Self {
+        if let Some(outputs) = outputs.as_mut() {
+            outputs.reconfigure(AudioSpec::new(2, sample_rate));
+        }
         Self {
             outputs,
             sample_rate,
@@ -61,7 +65,9 @@ impl TapProcessor {
 
     fn adopt_rate(&mut self, sample_rate: NonZeroU32) {
         if sample_rate != self.sample_rate {
-            self.outputs = None;
+            if let Some(outputs) = self.outputs.as_mut() {
+                outputs.reconfigure(AudioSpec::new(2, sample_rate));
+            }
             self.sample_rate = sample_rate;
         }
     }
@@ -95,7 +101,11 @@ impl AudioNodeProcessor for TapProcessor {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::{Arc, atomic::AtomicU64};
+    use kithara_platform::sync::{
+        Arc,
+        atomic::AtomicU64,
+        mpsc::{self, Sender},
+    };
     use ringbuf::{
         HeapRb,
         traits::{Observer, Split},
@@ -104,12 +114,36 @@ mod tests {
     use super::*;
     use crate::bridge::MixTapWriter;
 
+    struct RateOutput(Sender<AudioSpec>);
+
+    impl LiveOutput for RateOutput {
+        fn reconfigure(&mut self, spec: AudioSpec) {
+            let _ = self.0.send(spec);
+        }
+
+        fn write_stereo(&mut self, _frames: usize, _left: &[f32], _right: &[f32]) {}
+    }
+
     fn rate(hz: u32) -> NonZeroU32 {
         NonZeroU32::new(hz).expect("test rate is non-zero")
     }
 
     #[kithara::test]
-    fn a_changed_device_rate_ends_the_feed() {
+    fn a_new_route_receives_the_current_device_rate() {
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let mut outputs = OutputGroup::new();
+        outputs.push(RateOutput(observed_tx));
+
+        let _processor = TapProcessor::new(Some(outputs), rate(48_000));
+
+        assert_eq!(
+            observed_rx.recv().expect("initial route format"),
+            AudioSpec::new(2, rate(48_000))
+        );
+    }
+
+    #[kithara::test]
+    fn a_changed_device_rate_keeps_the_feed() {
         const CAPACITY: usize = 64;
 
         let (pcm, cons) = HeapRb::<f32>::new(CAPACITY).split();
@@ -123,8 +157,8 @@ mod tests {
 
         processor.adopt_rate(rate(48_000));
         assert!(
-            !cons.write_is_held(),
-            "a rate change must end the feed rather than relabel the samples"
+            cons.write_is_held(),
+            "a rate change reconfigures the feed instead of ending it"
         );
     }
 }

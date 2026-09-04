@@ -15,7 +15,7 @@ use kithara::{
 };
 use kithara_app::{
     baked,
-    config::AppConfig,
+    config::{AppBroadcastConfig, AppConfig},
     deck::{Deck, DeckId, DeckSet},
     gui::{self, GuiFrontend},
     pools::{self, AppHost, AppStore, AppWorker},
@@ -90,6 +90,12 @@ fn main() -> AppResult {
             .worker(base_worker.clone())
             .build(),
     );
+    #[cfg(feature = "broadcast")]
+    let broadcast = AppBroadcastConfig::builder(base_worker.clone(), pools.clone())
+        .cancel(shutdown.child())
+        .build();
+    #[cfg(not(feature = "broadcast"))]
+    let broadcast = AppBroadcastConfig::default();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
@@ -109,6 +115,7 @@ fn main() -> AppResult {
         .shutdown(shutdown.clone())
         .worker(worker)
         .base_worker(base_worker.clone())
+        .broadcast(broadcast)
         .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
@@ -123,7 +130,7 @@ fn main() -> AppResult {
     let mut deck_set = DeckSet::new(host, decks);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config, args.host)?;
-    frontend.attach_broadcast(shutdown.clone(), base_worker);
+    frontend.attach_broadcast();
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

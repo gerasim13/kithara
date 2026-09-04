@@ -14,6 +14,7 @@ kithara-bufpool = { workspace = true }
 kithara-encode = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
 kithara-worker = { workspace = true }
 
 bon = { workspace = true }
