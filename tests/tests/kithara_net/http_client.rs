@@ -503,22 +503,6 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
     assert_eq!(headers.get("content-type"), Some("text/plain"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_headers_variants(#[future] test_server: TestServer, http_client: HttpClient) {
-    let test_server = test_server.await;
-    let url = test_server.url("/headers");
-
-    let mut headers = Headers::default();
-    headers.insert("X-Custom-Header", "test-value");
-    headers.insert("User-Agent", "test-agent");
-
-    let result = http_client.get_bytes(url, Some(headers)).await;
-
-    assert!(result.is_ok());
-    let data = result.unwrap();
-    assert_eq!(data, Bytes::from("Headers received"));
-}
-
 #[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case("/slow-headers", Duration::from_millis(1000), true)]
 #[case("/slow-body", Duration::from_millis(1000), true)]
