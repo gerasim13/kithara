@@ -866,7 +866,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     fn a_stale_axis_waits_for_its_final_checkpoint_before_reopening() {
         let (_host, queue) = queue();
         let track_id = TrackId::from(1);
@@ -895,7 +895,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, tokio, flash(false))]
     fn a_pass_on_the_engine_axis_is_left_alone() {
         let (_host, queue) = queue();
         let track_id = TrackId::from(1);
