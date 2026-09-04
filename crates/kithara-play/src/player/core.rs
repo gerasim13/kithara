@@ -5,7 +5,7 @@ use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::StretchControls;
+use kithara_warp::WarpConfig;
 use tracing::debug;
 
 use self::lifecycle::{CloseAdmission, PlayerLifecycle};
@@ -32,7 +32,7 @@ pub(crate) struct PlayerCore<S> {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) timestretch: Arc<StretchControls>,
+    pub(crate) warp: WarpConfig,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
@@ -247,7 +247,7 @@ mod tests {
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::StretchControls;
+    use kithara_warp::{StretchControls, WarpConfig};
 
     use super::*;
     use crate::{
@@ -581,7 +581,11 @@ mod tests {
             .eq_layout(generate_log_spaced_bands(5))
             .gapless_mode(GaplessMode::MediaOnly)
             .max_slots(2)
-            .timestretch(StretchControls::new(1.0))
+            .warp(
+                WarpConfig::builder()
+                    .stretch(StretchControls::new(1.0))
+                    .build(),
+            )
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -628,7 +632,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.timestretch.speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -675,7 +679,7 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -687,11 +691,11 @@ mod tests {
                 .session(testing::test_session())
                 .build(),
         );
-        let ptr_before = Arc::as_ptr(&player.core.timestretch);
+        let ptr_before = Arc::as_ptr(player.core.warp.stretch());
         player.play();
         player.pause();
         player.play();
-        let ptr_after = Arc::as_ptr(&player.core.timestretch);
+        let ptr_after = Arc::as_ptr(player.core.warp.stretch());
         assert_eq!(
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"

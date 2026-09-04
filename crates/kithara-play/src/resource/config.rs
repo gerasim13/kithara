@@ -10,7 +10,7 @@ use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use kithara_warp::StretchControls;
+use kithara_warp::WarpConfig;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
@@ -45,6 +45,9 @@ where
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
     pub(crate) preload_chunks: NonZeroUsize,
+    /// Optional output-ring depth in producer chunks.
+    /// When omitted, the audio pipeline keeps its platform default.
+    pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -69,9 +72,9 @@ where
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Live time-stretch controls shared with the resident Warp chain.
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) stretch: Arc<StretchControls>,
+    /// Resident Warp resources and live temporal controls.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
@@ -116,6 +119,7 @@ where
             decoder: self.decoder.clone(),
             keys: self.keys.clone(),
             preload_chunks: self.preload_chunks,
+            audio_buffer_chunks: self.audio_buffer_chunks,
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
             discriminator: self.discriminator.clone(),
@@ -126,7 +130,7 @@ where
             hls_base_url: self.hls_base_url.clone(),
             host_sample_rate: self.host_sample_rate,
             look_ahead_bytes: self.look_ahead_bytes,
-            stretch: Arc::clone(&self.stretch),
+            warp: self.warp.clone(),
             worker: self.worker.clone(),
             consumer_wake_mode: self.consumer_wake_mode,
             block_on_underrun: self.block_on_underrun,
@@ -373,7 +377,7 @@ mod tests {
     #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.stretch.speed() - 1.0).abs() < f32::EPSILON);
+        assert!((config.warp.stretch().speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

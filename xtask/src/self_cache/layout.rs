@@ -76,7 +76,8 @@ pub(super) fn cache_dir(root: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn target_dir(root: &Path) -> PathBuf {
-    root.join("target/xtask-self-cache")
+    env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target/xtask-self-cache"), PathBuf::from)
 }
 
 pub(super) fn locator(root: &Path) -> PathBuf {

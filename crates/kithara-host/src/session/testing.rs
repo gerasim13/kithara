@@ -5,6 +5,7 @@ use kithara_audio::ConsumerWakeMode;
 #[cfg(test)]
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
@@ -18,7 +19,8 @@ use kithara_warp::{
 };
 
 use super::{
-    dispatch::run_cmd,
+    dispatch::{restart_stream, run_cmd},
+    graph::tap,
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
@@ -37,6 +39,10 @@ pub trait HostProbe {
     /// # Errors
     /// Returns an error when the Host rejects the output-policy update.
     fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
+
+    /// # Errors
+    /// Returns an error when the deterministic Host route cannot restart.
+    fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
 }
 
 impl<S> HostProbe for Host<S> {
@@ -47,6 +53,7 @@ impl<S> HostProbe for Host<S> {
             fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
             #[call(set_ducking_mode)]
             fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
+            fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
         }
     }
 }
@@ -100,6 +107,22 @@ where
 
     pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.state.ctx.as_mut()
+    }
+
+    /// Install the real post-limiter output node in a deterministic graph.
+    ///
+    /// # Errors
+    /// Returns an error when an output is already active or graph installation fails.
+    pub fn enable_outputs(&mut self, outputs: OutputGroup) -> Result<(), PlayError> {
+        tap::enable(&mut self.state, outputs).map_err(Into::into)
+    }
+
+    /// Restart the deterministic graph at a different output rate.
+    ///
+    /// # Errors
+    /// Returns an error when the existing Host route cannot restart.
+    pub fn restart_stream(&mut self, sample_rate: u32) -> Result<(), PlayError> {
+        restart_stream(&mut self.state, sample_rate).map_err(Into::into)
     }
 }
 

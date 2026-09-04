@@ -1,7 +1,5 @@
 use std::error::Error;
 
-use kithara::platform::{CancelToken, time::Duration};
-
 use crate::pools::AppHost;
 
 #[cfg(test)]
@@ -23,6 +21,7 @@ pub(crate) type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 /// What the bar needs from a packager. `Live` has no values where the
 /// `broadcast` feature is off, which makes the running phase unconstructable.
 pub(crate) trait Packager: 'static {
+    type Config: Clone + Send + 'static;
     type Live: Send + 'static;
 
     /// Whether this build carries a packager at all. The UI reads it instead
@@ -32,13 +31,9 @@ pub(crate) trait Packager: 'static {
     fn is_live(live: &Self::Live) -> bool;
 
     /// `Ok(None)`: no device rate measured yet, so the request stands.
-    fn start(
-        host: &AppHost,
-        shutdown: &CancelToken,
-        tap_lead: Duration,
-    ) -> BroadcastResult<Option<Self::Live>>;
+    fn start(host: &AppHost, config: &Self::Config) -> BroadcastResult<Option<Self::Live>>;
 
-    /// Releases the host mix tap before the packager drains.
+    /// Releases the Host output group before the packager drains.
     fn release(host: &AppHost) -> BroadcastResult<()>;
 
     /// Drains the stream and shuts it down. Blocking.
@@ -52,14 +47,16 @@ mod tests {
     use kithara::host::HostConfig;
 
     use super::{
-        AppHost, CancelToken, Duration, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
-        ready::Ready, unmeasured::Unmeasured,
+        AppHost, Packager, Phase, absent::Absent, broadcaster::Broadcaster, ready::Ready,
+        unmeasured::Unmeasured,
     };
 
-    /// The phase machine only carries the lead to its packager, so the
-    /// value is arbitrary here; the sizing it drives is pinned in `live.rs`.
-    fn broadcaster<P: Packager>() -> Broadcaster<P> {
-        Broadcaster::new(CancelToken::root(), Duration::from_secs(2))
+    fn broadcaster<P>() -> Broadcaster<P>
+    where
+        P: Packager,
+        P::Config: Default,
+    {
+        Broadcaster::new(P::Config::default())
     }
 
     fn host() -> AppHost {

@@ -39,7 +39,11 @@ impl StreamCore {
     where
         S: HasPool<f32>,
     {
-        let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
+        let native = NativeStretcher::new(
+            config.sample_rate(),
+            config.channels(),
+            *config.backends().bungee(),
+        )?;
         let max_input_frames = native.max_input_frames()?;
         let source_latency_frames = max_input_frames / 2;
         Ok(Self {
@@ -105,7 +109,6 @@ mod tests {
     impl Fixture {
         const CHANNELS: usize = 2;
         const CONTEXT_FRAMES: usize = 8192;
-        const LATENCY_PROBE_BLOCKS: usize = 4;
         const SAMPLE_RATE: u32 = 48_000;
     }
 
@@ -200,7 +203,7 @@ mod tests {
             StreamCore::new(&config, Fixture::CONTEXT_FRAMES).expect("the fixture core prepares");
         let probe = ElasticRequest::new(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES)
             .expect("the latency probe request is valid");
-        for _ in 0..Fixture::LATENCY_PROBE_BLOCKS {
+        for _ in 0..StreamCore::PIPELINE_GRAINS {
             core.probe_silence(probe)
                 .expect("the latency probe renders");
         }

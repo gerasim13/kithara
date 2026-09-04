@@ -1,15 +1,22 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
 use kithara_test_macros as kithara;
+use tracing::warn;
 
-use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls};
+use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig};
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Clone, Copy)]
+pub(super) struct PreparedQuantum {
+    pub(super) frames: usize,
+    pub(super) speed: f32,
+}
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
 /// Unity speed without a region plan is a byte-identical passthrough.
@@ -33,6 +40,10 @@ pub struct WarpRenderer<S> {
     pub(super) region: Option<ActiveRegion>,
     pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
+    /// Maximum output frames between samples of live temporal controls.
+    pub(super) render_quantum_frames: Option<NonZeroUsize>,
+    /// Source span and live speed selected by the scheduler for the next render.
+    pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
@@ -80,11 +91,12 @@ where
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
-        controls: Arc<StretchControls>,
+        config: &WarpConfig,
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
     ) -> Self {
+        let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
         let target = Self::prepare_target(current_kind, spec, &pools, None, None);
@@ -97,6 +109,8 @@ where
             controls,
             pools,
             spec,
+            render_quantum_frames: config.render_quantum_frames(),
+            prepared_quantum: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -114,6 +128,48 @@ where
             plan,
             region: None,
         }
+    }
+
+    /// Select the next source span that fits the configured output quantum.
+    pub fn prepare_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+    ) -> Option<FrameCount> {
+        self.sync_plan();
+        let speed = self.controls.speed();
+        match self.source_frames_for_quantum(meta, remaining, speed) {
+            Ok(frames) => {
+                self.prepared_quantum = Some(PreparedQuantum { frames, speed });
+                Some(FrameCount::new(frames))
+            }
+            Err(error) => {
+                self.prepared_quantum = None;
+                warn!(%error, "time-stretch source quantum sizing failed");
+                None
+            }
+        }
+    }
+
+    /// Shrink a prepared source span at true EOF without sampling controls again.
+    pub fn prepare_terminal_quantum(
+        &mut self,
+        _meta: AudioChunkInfo,
+        frames: usize,
+    ) -> Option<FrameCount> {
+        let mut prepared = self.prepared_quantum.take()?;
+        if frames == 0 || frames > prepared.frames {
+            return None;
+        }
+        prepared.frames = frames;
+        self.prepared_quantum = Some(prepared);
+        Some(FrameCount::new(frames))
+    }
+
+    /// Whether this target has elastic DSP and needs worker staging.
+    #[must_use]
+    pub const fn requires_staging(&self) -> bool {
+        true
     }
 
     /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
@@ -153,6 +209,7 @@ where
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
+        self.prepared_quantum = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
         self.active = false;
@@ -193,6 +250,7 @@ where
         if !same {
             self.plan = want;
             self.region = None;
+            self.prepared_quantum = None;
         }
     }
 
@@ -210,14 +268,12 @@ where
     }
 
     /// Whether a live active-to-unity transition still owns queued samples.
-    #[doc(hidden)]
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
         self.pending_unity_meta.is_some()
     }
 
     /// Whether the renderer can accept another source chunk without dropping it.
-    #[doc(hidden)]
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
@@ -290,15 +346,7 @@ where
         self.committed = Some(committed);
     }
 
-    /// Last context and frontier committed by a successful worker render.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
-        self.committed.as_ref()
-    }
-
     /// Exact decoded-source boundary represented by the latest emitted samples.
-    #[doc(hidden)]
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end

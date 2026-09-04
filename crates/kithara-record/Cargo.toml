@@ -10,14 +10,20 @@ keywords = ["audio", "recording", "encoding"]
 categories = ["multimedia::audio"]
 
 [dependencies]
+kithara-bufpool = { workspace = true }
 kithara-encode = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
+kithara-worker = { workspace = true }
 
 bon = { workspace = true }
+ringbuf = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
 
 [lints]
 workspace = true

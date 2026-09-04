@@ -511,7 +511,7 @@ impl WindowLayerProgram for DragProgram {
     }
 }
 
-pub(super) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
+pub(crate) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
     match shape {
         CursorShape::None => CursorIcon::Default,
         CursorShape::Grab => CursorIcon::Grab,

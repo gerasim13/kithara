@@ -39,6 +39,17 @@ mod native {
     }
 
     #[kithara::test]
+    fn audio_config_keeps_the_native_ring_and_preload_defaults() {
+        let config = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
+            file_config(),
+        )
+        .build();
+
+        assert_eq!(config.audio_buffer_chunks(), 10);
+        assert_eq!(config.preload_chunks().get(), 3);
+    }
+
+    #[kithara::test]
     fn audio_config_observer_is_optional_and_configurable() {
         let default = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
             file_config(),
