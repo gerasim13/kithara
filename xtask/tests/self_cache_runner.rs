@@ -22,13 +22,6 @@ use tempfile::TempDir;
 
 struct Fixture {
     _temp: TempDir,
-    /// Where the fake Cargo publishes the built xtask.
-    ///
-    /// `self_cache::layout::target_dir` names `CARGO_TARGET_DIR` when the
-    /// environment carries one, so every command this fixture spawns decides
-    /// that variable itself. An inherited one would move the target directory
-    /// away from this path and the private-directory guard would reject a
-    /// build that is in fact correct.
     bootstrap_artifact: PathBuf,
     bootstrap_cargo: PathBuf,
     cargo_log: PathBuf,
@@ -36,6 +29,13 @@ struct Fixture {
     git_log: PathBuf,
     justfile: PathBuf,
     root: PathBuf,
+    /// The build directory this fixture hands to every command it spawns.
+    ///
+    /// `_xtask-bootstrap` exports `CARGO_TARGET_DIR` for the self-cache build
+    /// and `layout::target_dir` reads it back. The commands spawned here stand
+    /// in for that recipe, so they name this directory instead of inheriting
+    /// the one the surrounding lane is building into.
+    target: PathBuf,
 }
 
 impl Fixture {
@@ -91,7 +91,10 @@ printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG"
 exit 97
 "#,
         )?;
-        let bootstrap_artifact = root.join("target/xtask-self-cache/debug/xtask");
+        let target = fs::canonicalize(&root)
+            .context("resolve fixture root")?
+            .join("target/xtask-self-cache");
+        let bootstrap_artifact = target.join("debug/xtask");
         fs::create_dir_all(
             bootstrap_artifact
                 .parent()
@@ -122,6 +125,7 @@ exit 98
             git_log,
             justfile,
             root,
+            target,
         })
     }
 
@@ -129,7 +133,7 @@ exit 98
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
-            .env_remove("CARGO_TARGET_DIR")
+            .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
@@ -156,7 +160,7 @@ exit 98
         command
             .args(args)
             .current_dir(&self.root)
-            .env_remove("CARGO_TARGET_DIR")
+            .env("CARGO_TARGET_DIR", &self.target)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -173,7 +177,7 @@ exit 98
     }
 
     fn cached_from(&self, root: &Path, args: &[&str]) -> Result<Output> {
-        self.cached_in(root, args, None)
+        self.cached_in(root, args, Some(&self.target))
     }
 
     fn cached_in(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Output> {
@@ -233,7 +237,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
-            .env_remove("CARGO_TARGET_DIR")
+            .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
@@ -717,14 +721,12 @@ fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()
 
     assert!(!refresh.status.success());
     assert_eq!(fs::read(locator)?, before);
-    let cargo = fs::read_to_string(&fixture.cargo_log)?;
     let canonical_root = fs::canonicalize(&fixture.root)?;
     assert_eq!(
-        cargo,
-        format!(
-            "run --locked --quiet --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}/target/xtask-self-cache\n",
-            canonical_root.display(),
-            canonical_root.display()
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(
+            &canonical_root,
+            &canonical_root.join("target/xtask-self-cache")
         )
     );
     assert!(!fixture.git_log.exists());
@@ -735,21 +737,36 @@ fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()
 fn a_named_cargo_target_directory_carries_the_refresh_build() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    let target = fs::canonicalize(&fixture.root)?.join("../shared-target");
-    fs::create_dir_all(&target)?;
-    let target = fs::canonicalize(&target)?;
+    let elsewhere = fixture.root.join("../shared-target");
+    fs::create_dir_all(&elsewhere)?;
+    let elsewhere = fs::canonicalize(&elsewhere)?;
 
     let refresh = fixture.cached_in(
         &fixture.root,
         &["self-cache", "refresh", "--force"],
-        Some(&target),
+        Some(&elsewhere),
     )?;
 
     assert!(!refresh.status.success());
-    let cargo = fs::read_to_string(&fixture.cargo_log)?;
-    assert!(
-        cargo.ends_with(&format!("target={}\n", target.display())),
-        "the refresh build must inherit the named target directory, got: {cargo}"
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(&fs::canonicalize(&fixture.root)?, &elsewhere)
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+
+    let refresh = fixture.cached_in(&fixture.root, &["self-cache", "refresh", "--force"], None)?;
+
+    assert!(!refresh.status.success());
+    let root = fs::canonicalize(&fixture.root)?;
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(&root, &root.join("target/xtask-self-cache"))
     );
     Ok(())
 }
@@ -806,7 +823,7 @@ wait "$descendant"
     command
         .args(["self-cache", "refresh", "--force"])
         .current_dir(&fixture.root)
-        .env_remove("CARGO_TARGET_DIR")
+        .env("CARGO_TARGET_DIR", &fixture.target)
         .env("CARGO", env!("CARGO"))
         .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
@@ -854,6 +871,14 @@ handler = "command-guard"
         ),
     )?;
     Ok(())
+}
+
+fn cargo_build_log(root: &Path, target: &Path) -> String {
+    format!(
+        "run --locked --quiet --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}\n",
+        root.display(),
+        target.display()
+    )
 }
 
 fn write_executable(path: &Path, body: &str) -> Result<()> {
