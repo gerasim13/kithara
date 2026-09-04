@@ -20,7 +20,14 @@ fn main() {
     println!("cargo:rustc-env=BUILD_TIMESTAMP={}", ts.trim());
 
     // Rebuild when git HEAD changes or any source file changes
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--git-path", "HEAD"])
+        .output()
+        && output.status.success()
+        && let Ok(path) = String::from_utf8(output.stdout)
+    {
+        println!("cargo:rerun-if-changed={}", path.trim());
+    }
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=build.rs");
 }
