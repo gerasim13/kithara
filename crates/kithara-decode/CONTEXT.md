@@ -113,6 +113,21 @@ from. Both are pinned in the two combinations production uses —
 `sized_mp3_seek_reports_landed_byte_without_a_length_handle`, which attaches no
 handle so only Apple's mapping can answer.
 
+## What ends a segmented stream
+
+`ByteMap::segment_at_index` answers about the layout as published so far, so
+`None` means "this index is outside the current layout" - which covers both a
+segment past the last one and a segment the layout has not described yet. Only
+`ByteMap::len` states that the extent is final; over HLS it is published solely
+when the variant's total is non-zero and every segment size is known.
+
+`Fmp4SegmentDemuxer` therefore ends the stream only when the layout has stated
+its extent, and parks on `PendingReason::Retry` otherwise. Reading an
+undescribed index as the end is not a slow path, it is a wrong answer: the
+incoming generation of an ABR up-switch reports EOF before it has staged a
+single frame, the transition is discarded with `abort_intent`, and the player
+never switches. `an_undescribed_segment_is_not_the_end_of_the_stream` pins it.
+
 ## Read-ahead strand
 
 Over an HLS `Stream`, `next_frame` can be interrupted at a not-yet-downloaded

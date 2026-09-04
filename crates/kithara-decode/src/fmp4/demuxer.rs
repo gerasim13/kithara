@@ -1,6 +1,6 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, ByteMap, ReaderInput};
+use kithara_stream::{AudioCodec, ByteMap, PendingReason, ReaderInput};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -54,12 +54,26 @@ impl<S> Fmp4SegmentDemuxer<S>
 where
     S: HasPool<u8>,
 {
+    /// Take a cursor for the next segment, or say why there is none.
+    ///
+    /// [`ByteMap::segment_at_index`] answers about the layout as published so
+    /// far, so `None` covers both "past the last segment" and "this one is not
+    /// described yet". Reading the second as end-of-stream is how a variant
+    /// holding six of its seven segments reported EOF on its first chunk,
+    /// which failed the incoming generation of an ABR up-switch and discarded
+    /// the transition for good. [`ByteMap::len`] is the layout's own statement
+    /// that its extent is final, and it is the only thing that may turn an
+    /// undescribed index into an end.
     fn ensure_cursor(&mut self) -> EnsureCursor {
         if self.cursor.is_some() {
             return EnsureCursor::Ready;
         }
         let Some(desc) = self.segments.segment_at_index(self.next_segment_index) else {
-            return EnsureCursor::Eof;
+            return if self.segments.len().is_some() {
+                EnsureCursor::Eof
+            } else {
+                EnsureCursor::Pending
+            };
         };
         self.next_segment_index = desc.segment_index.saturating_add(1);
         self.cursor = Some(SegmentCursor {
@@ -147,6 +161,9 @@ where
 
 enum EnsureCursor {
     Ready,
+    /// The layout has not described this index yet and has not published a
+    /// final extent, so the segment after it is still owed.
+    Pending,
     Eof,
 }
 
@@ -163,6 +180,7 @@ where
         loop {
             match self.ensure_cursor() {
                 EnsureCursor::Ready => {}
+                EnsureCursor::Pending => return Ok(DemuxOutcome::Pending(PendingReason::Retry)),
                 EnsureCursor::Eof => return Ok(DemuxOutcome::Eof),
             }
 
