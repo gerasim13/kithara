@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{
-    audio_artifact::{AudioArtifactRecording, AudioArtifactSet, audio_artifact_path},
+    audio_artifact::{AudioArtifactSet, audio_artifact_path},
+    cochlea::{CochleaReport, mix_loudness_failures},
     kithara,
 };
 
@@ -15,63 +16,43 @@ use super::sync_product_matrix::{
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
+const LOUDNESS_TOLERANCE_LU: f64 = 0.5;
 const RIDE_STEPS: usize = 32;
 
-async fn capture_solo(
-    artifacts: &AudioArtifactSet,
-    label: &str,
-    case: SyncCase,
-    provider: Provider,
-    audible_deck: usize,
-) -> (PathBuf, Vec<String>) {
-    let mut recording = artifacts
-        .recording(label, Some(CAPTURE_FRAMES as u64))
-        .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
-    let mut harness = ProductHarness::new(case, provider, audible_deck).await;
-    capture_frames(&mut harness, case, CAPTURE_FRAMES, &mut recording).await;
-    let reader = AudioArtifactSet::finish(recording)
-        .unwrap_or_else(|error| panic!("finish {label} recording: {error}"));
-    let path = audio_artifact_path(&reader)
-        .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"));
-    (path, harness.failures)
+struct Capture {
+    pcm: Vec<f32>,
+    failures: Vec<String>,
 }
 
-async fn capture_mix(
-    artifacts: &AudioArtifactSet,
-    label: &str,
-    case: SyncCase,
-    provider: Provider,
-    target_bpm: Option<f64>,
-) -> (PathBuf, Vec<String>) {
-    let mut recording = artifacts
-        .recording(label, Some(CAPTURE_FRAMES as u64))
-        .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
+async fn render_solo(case: SyncCase, provider: Provider, audible_deck: usize) -> Capture {
+    let mut harness = ProductHarness::new(case, provider, audible_deck).await;
+    let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
+    Capture {
+        pcm,
+        failures: harness.failures,
+    }
+}
+
+async fn render_mix(case: SyncCase, provider: Provider, target_bpm: Option<f64>) -> Capture {
     let mut harness = ProductHarness::new(case, provider, 0).await;
-    let volume = 1.0 / harness.decks.len() as f32;
     for deck in &harness.decks {
         deck.set_muted(false);
-        deck.set_volume(volume);
     }
     harness.request_sync(case).await;
 
-    if let Some(target_bpm) = target_bpm {
-        capture_ride(&mut harness, case, target_bpm, &mut recording).await;
+    let pcm = if let Some(target_bpm) = target_bpm {
+        render_ride(&mut harness, case, target_bpm).await
     } else {
-        capture_frames(&mut harness, case, CAPTURE_FRAMES, &mut recording).await;
+        render_frames(&mut harness, case, CAPTURE_FRAMES).await
+    };
+    Capture {
+        pcm,
+        failures: harness.failures,
     }
-    let reader = AudioArtifactSet::finish(recording)
-        .unwrap_or_else(|error| panic!("finish {label} recording: {error}"));
-    let path = audio_artifact_path(&reader)
-        .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"));
-    (path, harness.failures)
 }
 
-async fn capture_frames(
-    harness: &mut ProductHarness,
-    case: SyncCase,
-    frames: usize,
-    recording: &mut AudioArtifactRecording,
-) {
+async fn render_frames(harness: &mut ProductHarness, case: SyncCase, frames: usize) -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(frames * usize::from(CHANNELS));
     let mut rendered = 0;
     while rendered < frames {
         let block_frames = (frames - rendered).min(BLOCK_FRAMES);
@@ -81,27 +62,70 @@ async fn capture_frames(
             block_frames * usize::from(CHANNELS),
             "offline renderer must return the requested complete block",
         );
-        recording
-            .push(&block)
-            .unwrap_or_else(|error| panic!("record listening block: {error}"));
+        pcm.extend_from_slice(&block);
         rendered += block_frames;
     }
+    pcm
 }
 
-async fn capture_ride(
-    harness: &mut ProductHarness,
-    case: SyncCase,
-    target_bpm: f64,
-    recording: &mut AudioArtifactRecording,
-) {
+async fn render_ride(harness: &mut ProductHarness, case: SyncCase, target_bpm: f64) -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
     let mut rendered = 0;
     for step in 1..=RIDE_STEPS {
         let progress = step as f64 / RIDE_STEPS as f64;
         harness.set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false);
         let deadline = CAPTURE_FRAMES * step / RIDE_STEPS;
-        capture_frames(harness, case, deadline - rendered, recording).await;
+        pcm.extend(render_frames(harness, case, deadline - rendered).await);
         rendered = deadline;
     }
+    pcm
+}
+
+fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> PathBuf {
+    let frames = pcm.len() / usize::from(CHANNELS);
+    let mut recording = artifacts
+        .recording(label, Some(frames as u64))
+        .unwrap_or_else(|error| panic!("open {label} recording: {error}"));
+    recording
+        .push(pcm)
+        .unwrap_or_else(|error| panic!("record {label}: {error}"));
+    let reader = AudioArtifactSet::finish(recording)
+        .unwrap_or_else(|error| panic!("finish {label} recording: {error}"));
+    audio_artifact_path(&reader)
+        .unwrap_or_else(|error| panic!("resolve {label} artifact path: {error}"))
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(60))
+)]
+async fn sync_listening_mix_is_not_quieter_than_a_solo_deck() {
+    let case = DOWNTEMPO_HOUSE_SYNC;
+    let provider = DOWNTEMPO_HOUSE_PROVIDER;
+    let mut decks = Vec::with_capacity(case.decks());
+    for deck in 0..case.decks() {
+        let capture = render_solo(case, provider, deck).await;
+        decks.push(CochleaReport::measure(
+            &capture.pcm,
+            CHANNELS,
+            case.sample_rate,
+        ));
+    }
+    let mix = render_mix(case, provider, None).await;
+    let mix = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
+    let mut failures = mix_loudness_failures(case.id(), &mix, &decks, LOUDNESS_TOLERANCE_LU);
+    if mix.clipped_samples > 0 || mix.true_peak_over_0dbtp {
+        failures.push(format!("{}: mix clips: {mix:?}", case.id()));
+    }
+    assert!(
+        failures.is_empty(),
+        "sync listening loudness failed:\n{}\ndecks={decks:?}\nmix={mix:?}",
+        failures.join("\n"),
+    );
 }
 
 #[kithara::test(
@@ -152,16 +176,34 @@ async fn record_sync_listening_wavs(
             panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder")
         });
     let mut paths = Vec::with_capacity(case.decks() + 1);
+    let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
         let label = format!("deck-{}", deck + 1);
-        let (path, deck_failures) = capture_solo(&artifacts, &label, case, provider, deck).await;
+        let capture = render_solo(case, provider, deck).await;
+        let path = write_capture(&artifacts, &label, &capture.pcm);
+        deck_reports.push(CochleaReport::measure(
+            &capture.pcm,
+            CHANNELS,
+            case.sample_rate,
+        ));
         paths.push((label, path));
-        failures.extend(deck_failures);
+        failures.extend(capture.failures);
     }
-    let (mix, mix_failures) = capture_mix(&artifacts, "mix", case, provider, target_bpm).await;
-    paths.push(("mix".to_owned(), mix));
-    failures.extend(mix_failures);
+    let mix = render_mix(case, provider, target_bpm).await;
+    let mix_path = write_capture(&artifacts, "mix", &mix.pcm);
+    let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
+    paths.push(("mix".to_owned(), mix_path));
+    failures.extend(mix.failures);
+    failures.extend(mix_loudness_failures(
+        case.id(),
+        &mix_report,
+        &deck_reports,
+        LOUDNESS_TOLERANCE_LU,
+    ));
+    if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
+        failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
+    }
 
     let manifest = serde_json::json!({
         "case": case.id(),
@@ -170,6 +212,10 @@ async fn record_sync_listening_wavs(
         "channels": CHANNELS,
         "capture_frames": CAPTURE_FRAMES,
         "failures": failures,
+        "cochlea": {
+            "decks": deck_reports,
+            "mix": mix_report,
+        },
         "artifacts": paths.iter().map(|(label, path)| {
             serde_json::json!({ "label": label, "path": path })
         }).collect::<Vec<_>>(),

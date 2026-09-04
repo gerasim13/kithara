@@ -2399,7 +2399,7 @@ hard_invariant = true
 
 [[quality.assessment.deep_stages]]
 name = "wasm-tests"
-command = ["just", "platform", "wasm", "test"]
+command = ["just", "test", "wasm"]
 tools = ["wasm-tests"]
 hard_invariant = true
 

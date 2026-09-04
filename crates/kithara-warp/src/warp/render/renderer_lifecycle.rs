@@ -304,12 +304,12 @@ where
         self.emit(Some(samples), held_source_frames)
     }
 
-    #[doc(hidden)]
+    /// Prepare deferred renderer state for the current source format.
     pub fn prepare(&mut self, spec: AudioSpec) {
         self.service_target(spec);
     }
 
-    #[doc(hidden)]
+    /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         let snapshot = self.context.load();
         if let Some(scratch) = self.scratch.as_mut() {
@@ -347,9 +347,29 @@ where
         output
     }
 
-    #[doc(hidden)]
+    /// Render one complete decoded source chunk.
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
+        self.prepared_quantum = None;
+        self.render_at(chunk, self.controls.speed(), snapshot)
+    }
+
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let prepared = self.prepared_quantum.take()?;
+        if chunk.frames() != prepared.frames {
+            return None;
+        }
+        let snapshot = self.context.load();
+        self.render_at(chunk, prepared.speed, snapshot)
+    }
+
+    fn render_at(
+        &mut self,
+        chunk: AudioChunk,
+        speed: f32,
+        snapshot: Option<crate::RenderSnapshot>,
+    ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -365,7 +385,6 @@ where
             return None;
         }
 
-        let speed = self.controls.speed();
         let output = if self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
@@ -377,7 +396,7 @@ where
         output
     }
 
-    #[doc(hidden)]
+    /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();
