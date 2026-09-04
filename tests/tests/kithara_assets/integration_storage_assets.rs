@@ -111,36 +111,15 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("persist-atomic-1", "media/atomic_a.bin", b"atomic data")]
-#[case("persist-atomic-empty", "media/atomic_empty.bin", b"")]
-fn atomic_resource_persistence(
+#[case::atomic("persist-atomic-1", "media/atomic_a.bin", b"atomic data", false)]
+#[case::atomic_empty("persist-atomic-empty", "media/atomic_empty.bin", b"", false)]
+#[case::stream_1("persist-stream-1", "media/stream1.bin", b"stream payload", true)]
+#[case::stream_2("persist-stream-2", "media/stream2.bin", b"more stream data", true)]
+fn resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
-    temp_dir: kithara_integration_tests::TestTempDir,
-) {
-    let scope = asset_scope_with_root(&temp_dir, asset_root);
-    let key = scope.key(&resource(rel_path)).unwrap();
-
-    {
-        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
-        writer.write_at(0, payload).unwrap();
-        writer.commit(Some(payload.len() as u64)).unwrap();
-    }
-
-    let res = scope.store().open_resource(&key, None).unwrap();
-    let mut buf = pools().get::<u8>();
-    res.read_into(&mut buf).unwrap();
-    assert_eq!(&*buf, payload);
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("persist-stream-1", "media/stream1.bin", b"stream payload")]
-#[case("persist-stream-2", "media/stream2.bin", b"more stream data")]
-fn streaming_resource_persistence(
-    #[case] asset_root: &str,
-    #[case] rel_path: &str,
-    #[case] payload: &[u8],
+    #[case] streaming: bool,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let scope = asset_scope_with_root(&temp_dir, asset_root);
@@ -150,11 +129,19 @@ fn streaming_resource_persistence(
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, payload).unwrap();
         let res = writer.commit(Some(payload.len() as u64)).unwrap();
-        res.wait_range(0..payload.len() as u64).unwrap();
+        if streaming {
+            res.wait_range(0..payload.len() as u64).unwrap();
+        }
     }
 
     let res = scope.store().open_resource(&key, None).unwrap();
-    let data = read_bytes(&res, 0, payload.len());
+    let data = if streaming {
+        read_bytes(&res, 0, payload.len())
+    } else {
+        let mut buf = pools().get::<u8>();
+        res.read_into(&mut buf).unwrap();
+        buf.to_vec()
+    };
     assert_eq!(&data, payload);
 }
 
