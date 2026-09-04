@@ -198,7 +198,11 @@ impl CrossfadeFlavor {
             Self::Eq => builder.eq_layout(generate_log_spaced_bands(10)).build(),
             Self::EqStretch => builder
                 .eq_layout(generate_log_spaced_bands(10))
-                .timestretch(StretchControls::new(1.0))
+                .warp(
+                    WarpConfig::builder()
+                        .stretch(StretchControls::new(1.0))
+                        .build(),
+                )
                 .build(),
         }
     }
