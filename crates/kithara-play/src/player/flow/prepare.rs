@@ -226,6 +226,22 @@ mod tests {
     }
 
     #[kithara::test]
+    fn prepare_config_without_a_session_keeps_default_resampling_work() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .build(),
+        );
+
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("resources may be prepared before host insertion");
+
+        assert!(prepared.decoder.resampler().is_none());
+    }
+
+    #[kithara::test]
     fn prepare_config_preserves_explicit_resampling_work() {
         let explicit = DecoderResamplerSettings::builder()
             .backend(PlaybackResamplerBackend::default())

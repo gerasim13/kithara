@@ -343,8 +343,17 @@ mod handle {
             to self.dispatcher()? {
                 pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
                 pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-                pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
             }
+        }
+
+        pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+            let dispatcher = self
+                .0
+                .binding
+                .lock()
+                .as_ref()
+                .map(|binding| Arc::clone(&binding.dispatcher));
+            dispatcher.map_or(Ok(None), |dispatcher| dispatcher.stream_shape())
         }
 
         #[must_use]
