@@ -22,7 +22,7 @@ use crate::{
         Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
         Viewport, WheelSurface, Widget,
         document::{
-            Band, Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
+            Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
             Module as DocumentModule, PlacedMount, Popover as DocumentPopover, SplitMount,
         },
         placed, window_layers,
@@ -263,12 +263,16 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         Viewport::new(child, width, height, self.skin).into()
     }
 
-    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
         let element = container(
             Flex::column(
                 children
                     .into_iter()
-                    .map(|child| (child, None, Band::ALWAYS)),
+                    .map(|child| (child.output, child.minimum, child.band)),
             )
             .spacing(self.skin.layout.grid_gap)
             .width(Length::Fill),

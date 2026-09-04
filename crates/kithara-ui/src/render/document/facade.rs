@@ -561,7 +561,15 @@ where
             host.scroll(*id, child, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Slot { children, .. } => {
-            let mounted = expanded_children(children, address, branch, snapshot, ctx, host);
+            let mounted = expanded_group_children(
+                children,
+                Axis::Vertical,
+                address,
+                branch,
+                snapshot,
+                ctx,
+                host,
+            );
             host.slot(mounted, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Stage { children, .. } => {
@@ -627,36 +635,6 @@ where
         anchor,
         &mut |host| expanded(node.content, &content, branch, ctx, host),
     )
-}
-
-fn expanded_children<H>(
-    children: &[ExpandedNode],
-    address: &Address<'_>,
-    branch: Branch,
-    snapshot: &dyn Snapshot,
-    ctx: Ctx<'_, '_>,
-    host: &mut H,
-) -> Vec<H::Output>
-where
-    H: Host,
-{
-    children
-        .iter()
-        .enumerate()
-        .filter(|(_, child)| !is_hidden(*child, snapshot))
-        .map(|(index, child)| {
-            expanded(
-                child,
-                &address.child(index),
-                Branch {
-                    round: FrameCorners::EMPTY,
-                    ..branch
-                },
-                ctx,
-                host,
-            )
-        })
-        .collect()
 }
 
 fn mount_group<H>(

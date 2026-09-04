@@ -182,6 +182,27 @@ where
         Some(state)
     }
 
+    /// One flow's children, split into the layout each asks for and the node
+    /// it is, with the state of every block among them collected on the way.
+    fn flow(
+        &self,
+        children: Vec<GroupMount<MasonryNode<Action>>>,
+        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+    ) -> (Vec<ChildLayout>, Vec<MasonryNode<Action>>) {
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
+        for child in children {
+            let block = self.block(child.block, blocks);
+            layouts.push(
+                ChildLayout::natural(child.output.declared(), child.minimum)
+                    .within(child.band)
+                    .blocked(block),
+            );
+            nodes.push(child.output);
+        }
+        (layouts, nodes)
+    }
+
     /// A leaf drawing content this toolkit does not own.
     ///
     /// The dressing is taken here rather than at paint because the leaf
@@ -575,18 +596,8 @@ where
 
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = group.size().unwrap_or(SizeSpec::FILL);
-        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
-        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
         let mut blocks = Vec::new();
-        for child in children {
-            let block = self.block(child.block, &mut blocks);
-            layouts.push(
-                ChildLayout::natural(child.output.declared(), child.minimum)
-                    .within(child.band)
-                    .blocked(block),
-            );
-            nodes.push(child.output);
-        }
+        let (layouts, nodes) = self.flow(children, &mut blocks);
         let alpha = group.background_alpha().unwrap_or(1.0);
         let face = |background: Option<ColorRole>, frame_color: ColorRole| Face {
             background: background.map(|role| {
@@ -791,16 +802,18 @@ where
         )
     }
 
-    fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+    fn slot(
+        &mut self,
+        children: Vec<GroupMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
         let declared = size.map_or(
             solve::Size::new(solve::Length::Fill, solve::Length::Shrink),
             declared,
         );
-        let layouts = children
-            .iter()
-            .map(|child| ChildLayout::natural(child.declared(), None))
-            .collect();
-        MasonryNode::document(
+        let mut blocks = Vec::new();
+        let (layouts, nodes) = self.flow(children, &mut blocks);
+        let mut output = MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
                     Axis::Vertical,
@@ -814,11 +827,13 @@ where
                 .align_main(solve::Alignment::Center),
             ),
             declared,
-            children,
+            nodes,
             true,
             None,
             None,
-        )
+        );
+        output.hides(blocks);
+        output
     }
 
     fn split(
