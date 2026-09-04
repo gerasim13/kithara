@@ -22,6 +22,13 @@ use tempfile::TempDir;
 
 struct Fixture {
     _temp: TempDir,
+    /// Where the fake Cargo publishes the built xtask.
+    ///
+    /// `self_cache::layout::target_dir` names `CARGO_TARGET_DIR` when the
+    /// environment carries one, so every command this fixture spawns decides
+    /// that variable itself. An inherited one would move the target directory
+    /// away from this path and the private-directory guard would reject a
+    /// build that is in fact correct.
     bootstrap_artifact: PathBuf,
     bootstrap_cargo: PathBuf,
     cargo_log: PathBuf,
@@ -122,6 +129,7 @@ exit 98
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
+            .env_remove("CARGO_TARGET_DIR")
             .env("CARGO", env!("CARGO"))
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
@@ -148,6 +156,7 @@ exit 98
         command
             .args(args)
             .current_dir(&self.root)
+            .env_remove("CARGO_TARGET_DIR")
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -164,8 +173,13 @@ exit 98
     }
 
     fn cached_from(&self, root: &Path, args: &[&str]) -> Result<Output> {
+        self.cached_in(root, args, None)
+    }
+
+    fn cached_in(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Output> {
         let fake_cargo = self.fake_bin.join("cargo");
-        Command::new(self.active_binary()?)
+        let mut command = Command::new(self.active_binary()?);
+        command
             .args(args)
             .current_dir(root)
             .env("CARGO", env!("CARGO"))
@@ -173,9 +187,12 @@ exit 98
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
-            .stdin(Stdio::null())
-            .output()
-            .context("run cached xtask")
+            .stdin(Stdio::null());
+        match target {
+            Some(target) => command.env("CARGO_TARGET_DIR", target),
+            None => command.env_remove("CARGO_TARGET_DIR"),
+        };
+        command.output().context("run cached xtask")
     }
 
     fn transport(&self, root: &Path) -> Result<Output> {
@@ -216,6 +233,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env_remove("CARGO_TARGET_DIR")
             .env("CARGO", env!("CARGO"))
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
@@ -714,6 +732,29 @@ fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()
 }
 
 #[test]
+fn a_named_cargo_target_directory_carries_the_refresh_build() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let target = fs::canonicalize(&fixture.root)?.join("../shared-target");
+    fs::create_dir_all(&target)?;
+    let target = fs::canonicalize(&target)?;
+
+    let refresh = fixture.cached_in(
+        &fixture.root,
+        &["self-cache", "refresh", "--force"],
+        Some(&target),
+    )?;
+
+    assert!(!refresh.status.success());
+    let cargo = fs::read_to_string(&fixture.cargo_log)?;
+    assert!(
+        cargo.ends_with(&format!("target={}\n", target.display())),
+        "the refresh build must inherit the named target directory, got: {cargo}"
+    );
+    Ok(())
+}
+
+#[test]
 fn concurrent_cold_bootstraps_publish_one_generation() -> Result<()> {
     let fixture = Arc::new(Fixture::new()?);
     let barrier = Arc::new(Barrier::new(9));
@@ -765,6 +806,7 @@ wait "$descendant"
     command
         .args(["self-cache", "refresh", "--force"])
         .current_dir(&fixture.root)
+        .env_remove("CARGO_TARGET_DIR")
         .env("CARGO", env!("CARGO"))
         .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
