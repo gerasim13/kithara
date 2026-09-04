@@ -9,6 +9,9 @@ description = "Domain-free prioritized worker dispatch for Kithara."
 keywords = ["concurrency", "scheduler", "worker"]
 categories = ["concurrency"]
 
+[package.metadata.cargo-machete]
+ignored = ["hotpath"]
+
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = ["dep:tracing", "kithara-test-utils/probe"]
