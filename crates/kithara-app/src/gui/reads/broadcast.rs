@@ -1,21 +1,21 @@
-use kithara_ui::render::{Node, ReadValue, Scope};
+use kithara::ui::render::{Node, ReadValue, Scope};
 
 use super::value::Value;
 
 /// What the bar cell reads about the live stream.
 #[derive(Clone, Copy)]
 pub(super) struct BroadcastNode<'a> {
-    on_air: bool,
     url: &'a str,
     available: bool,
+    on_air: bool,
 }
 
 impl<'a> BroadcastNode<'a> {
     pub(super) const fn new(on_air: bool, url: &'a str, available: bool) -> Self {
         Self {
-            on_air,
             url,
             available,
+            on_air,
         }
     }
 }

@@ -1,11 +1,13 @@
-use kithara::audio::effects::eq::GainDb;
-use kithara_ui::render::{
-    ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+use kithara::{
+    play::effects::eq::GainDb,
+    ui::render::{
+        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+    },
 };
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckLayout, ViewCache},
+    cache::{DeckLayout, ViewCache, WindowEdge},
     scope::{MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
@@ -23,9 +25,20 @@ use crate::{
 /// come from the app documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
-        UiEvent::Control { path, action } => control(state, &path, &action),
+        UiEvent::Control { path, action } => {
+            // What the document turns for itself is answered here, before the
+            // application is told the press happened at all.
+            if matches!(action, ControlAction::Activate) {
+                state.ui.press(&path);
+            }
+            control(state, &path, &action)
+        }
         UiEvent::ToggleModule(module) => {
             state.ui.cache.toggle_module(module);
+            None
+        }
+        UiEvent::LibraryQuery(query) => {
+            state.ui.cache.library.query = query;
             None
         }
         UiEvent::Window(command) => Some(Message::Window(command)),
@@ -194,9 +207,6 @@ fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) ->
         return None;
     }
     match control {
-        "burger" => cache.menu.toggle(),
-        // The popover publishes its dismissal on its own path.
-        "pop" | "header-close" => cache.menu.close(),
         "layouts-head" => cache.menu.toggle_layouts(),
         "modules-head" => cache.menu.toggle_modules(),
         "full-screen" => return Some(Message::Window(WindowCommand::ToggleFullScreen)),
@@ -222,6 +232,18 @@ fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
         ))),
+        ("master", ControlAction::SetScalar(gain)) => {
+            Some(Message::Mix(MixMsg::Master(gain.clamp(0.0, 1.0).as_())))
+        }
+        ("window/min" | "window/max", ControlAction::SetScalar(at)) => {
+            let edge = if control.ends_with("min") {
+                WindowEdge::Min
+            } else {
+                WindowEdge::Max
+            };
+            state.ui.cache.stage.set_edge(edge, at.as_());
+            None
+        }
         _ => strip_control(state, control, action),
     }
 }
@@ -249,6 +271,10 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
             state.ui.cache.close_eq_menus();
             Some(Message::SetEqMode(EqMode::FourBand))
         }
+        ("mute", ControlAction::Activate) => {
+            let muted = state.session.mix().strips.get(index)?.muted;
+            Some(Message::Mix(MixMsg::Muted(deck_id(state, index)?, !muted)))
+        }
         ("volume", _) => volume_control(state, index, action),
         (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
             deck_id(state, index)?,
@@ -258,19 +284,28 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
     }
 }
 
-/// The library hands a row to whichever deck the pointer released it over.
-/// Neither side knows the other: the list reports the drag it started, the
-/// deck reports the pointer crossing it, and the host joins them here.
+/// The list reports the drag, the deck reports the pointer crossing it, and the
+/// host joins them here. A row is a position in its group, resolved back to a
+/// catalog entry through the scope the rows were drawn from.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
-        ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
+        ("browser" | "context", ControlAction::SelectIndex(row)) => {
+            let picked = state.ui.cache.library.groups().nth(*row)?;
+            state.ui.cache.library.scope = picked;
+            None
+        }
+        ("tracks", ControlAction::SelectIndex(row)) => {
+            let index = state.ui.cache.library.catalog_index(&state.catalog, *row)?;
+            Some(Message::SelectCatalogTrack(index))
+        }
         ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
             state.ui.cache.drag = Some(*row);
             None
         }
         ("tracks", ControlAction::Drag(DragPhase::Drop)) => {
             let (row, deck) = state.ui.cache.take_drop()?;
-            Some(Message::LoadOntoDeck(row, deck_id(state, deck)?))
+            let index = state.ui.cache.library.catalog_index(&state.catalog, row)?;
+            Some(Message::LoadOntoDeck(index, deck_id(state, deck)?))
         }
         _ => None,
     }
@@ -330,28 +365,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_burger_opens_the_menu_and_both_dismissals_close_it() {
-        let mut cache = ViewCache::default();
-        assert!(!cache.menu.is_open());
-
-        press_menu(&mut cache, "burger");
-        assert!(cache.menu.is_open());
-        press_menu(&mut cache, "burger");
-        assert!(!cache.menu.is_open(), "the burger is also the way out");
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "pop");
-        assert!(
-            !cache.menu.is_open(),
-            "a press outside the surface dismisses"
-        );
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "header-close");
-        assert!(!cache.menu.is_open());
-    }
-
-    #[kithara::test]
     fn the_layouts_group_applies_the_deck_layout_its_row_names() {
         let mut cache = ViewCache::default();
         assert!(!cache.menu.are_layouts_open());
@@ -360,7 +373,7 @@ mod tests {
         assert!(cache.menu.are_layouts_open());
 
         assert!(matches!(
-            press_menu(&mut cache, "layout-1"),
+            press_menu(&mut cache, "layout-1/apply"),
             Some(Message::PauseHiddenDecks)
         ));
         assert_eq!(cache.layout(), DeckLayout::Single);
@@ -369,7 +382,7 @@ mod tests {
             "applying a layout leaves the menu where it was"
         );
 
-        press_menu(&mut cache, "layout-2");
+        press_menu(&mut cache, "layout-2/apply");
         assert_eq!(cache.layout(), DeckLayout::Dual);
 
         press_menu(&mut cache, "layouts-head");

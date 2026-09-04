@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
+
 //! The user-simulation scenarios that drive real production tracks: HE-AAC v2
 //! behind AES-128 with per-segment key signing, reached over the live CDN with
 //! credentials baked at build time. Reproduces by script what the user
@@ -8,27 +9,29 @@
 //! Compiled only into `suite_network`, which needs the `network` feature.
 //! Everything here is on the public internet: the scenario that reached the
 //! corporate slicer moved out with the rest of what CI cannot serve.
-
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
 use kithara_integration_tests::{
     TestTempDir, kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     user_sim::{actions::Action, scenarios},
 };
 
@@ -45,11 +48,11 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// Build a prod-DRM track via the same `kithara-app` source resolver
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
-fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
+fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
     crate::kithara_queue::app_track_source(
         url,
         &ctx.config,
-        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        crate::kithara_queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,
@@ -62,25 +65,29 @@ struct ProdCtx {
 }
 
 fn build_prod_ctx() -> ProdCtx {
+    let pools = app_pools().expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools)
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker)
         .store(store)
         .build();
     ProdCtx {
@@ -89,17 +96,27 @@ fn build_prod_ctx() -> ProdCtx {
     }
 }
 
+fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
+    let session = HostConfig::offline(prod.config.worker.pools().clone())
+        .maybe_pacing(pacing)
+        .build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(session.sample_rate())
+            .worker(prod.config.worker.clone())
+            .build(),
+    );
+    OfflineQueue::new(
+        session,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue")
+}
+
 async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let q_for_tick = Arc::clone(&queue);
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let q_for_tick = queue.control();
     let tick = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -108,7 +125,9 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
             }
         }
     });
-    let track_id = queue.append(prod_drm_spec(url, &prod));
+    let track_id = queue
+        .append(prod_drm_spec(url, &prod))
+        .expect("append production DRM track");
 
     // Use the same harness assertions but skip the per-track-cache
     // bootstrap by driving the queue directly here — production
@@ -138,7 +157,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let _ = tick.await;
 }
 
-async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
+async fn apply_action_to_queue(queue: &QueueControl<AppPools>, action: &Action) {
     use kithara::play::SeekOutcome;
     let label = action.label();
     let duration = queue.duration_seconds().unwrap_or(0.0);
@@ -350,15 +369,8 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let q_for_tick = Arc::clone(&queue);
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let q_for_tick = queue.control();
     let tick = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -368,8 +380,12 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
         }
     });
 
-    let track0 = queue.append(prod_drm_spec(PROD_DRM_TRACK, &prod));
-    let track1 = queue.append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod));
+    let track0 = queue
+        .append(prod_drm_spec(PROD_DRM_TRACK, &prod))
+        .expect("append production DRM track 0");
+    let track1 = queue
+        .append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod))
+        .expect("append production DRM track 1");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
     wait_for_loaded(&queue, track0, Duration::from_secs(60))
@@ -414,15 +430,8 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let q_for_tick = Arc::clone(&queue);
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let q_for_tick = queue.control();
     let tick = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -431,7 +440,9 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
             }
         }
     });
-    let track_id = queue.append(prod_drm_spec(url, &prod));
+    let track_id = queue
+        .append(prod_drm_spec(url, &prod))
+        .expect("append no-warmup production DRM track");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
     wait_for_loaded(&queue, track_id, Duration::from_secs(60))
@@ -542,14 +553,6 @@ const PROD_DRM_PLAYLIST: &[&str] = &[
     "https://cdn-hls-slicer.zvuk.com/drm/track/133269928_2/master.m3u8",
 ];
 
-/// Default sample rate of `OfflineSession::new_manual()` — must
-/// match `tests/src/offline/backend.rs::DEFAULT_SAMPLE_RATE`. Used
-/// to convert "10 s of audio" into the frame count we need to render.
-const OFFLINE_SAMPLE_RATE: usize = 44_100;
-const STEREO_CHANNELS: usize = 2;
-const TEN_SECONDS_FRAMES: usize = OFFLINE_SAMPLE_RATE * 10;
-/// Per-`render()` request size. Matches the engine's typical block.
-const RENDER_BLOCK_FRAMES: usize = 1024;
 /// Amplitude above which a sample counts as content. Shared by the
 /// render loop and [`assert_audio_live`] so both agree on what "the
 /// engine is producing audio" means.
@@ -581,15 +584,17 @@ const RENDER_POLL: Duration = Duration::from_millis(20);
 /// window, and only silence lasting [`ENGINE_PROGRESS_BUDGET`] is the
 /// stall this scenario hunts.
 async fn render_audio_frames(
-    session: &OfflineSession,
-    queue: &Queue,
+    queue: &OfflineQueue<AppPools>,
     target_frames: usize,
     label: &str,
 ) -> Vec<f32> {
-    let mut pcm = Vec::with_capacity(target_frames * STEREO_CHANNELS);
+    let channels = usize::from(queue.host().spec().channels);
+    let block_frames = usize::try_from(queue.host().max_block_frames().get())
+        .expect("offline render block fits usize");
+    let mut pcm = Vec::with_capacity(target_frames * channels);
     let mut silent_since = None;
-    while pcm.len() / STEREO_CHANNELS < target_frames {
-        let block = session.render(RENDER_BLOCK_FRAMES);
+    while pcm.len() / channels < target_frames {
+        let block = queue.render(block_frames);
         let _ = queue.tick();
         if block.iter().any(|s| s.abs() > SILENCE_FLOOR) {
             silent_since = None;
@@ -601,7 +606,7 @@ async fn render_audio_frames(
             since.elapsed() < ENGINE_PROGRESS_BUDGET,
             "{label}: no audio for {ENGINE_PROGRESS_BUDGET:?} — the audio worker stalled, or \
              no stream was ever started (captured {captured} of {target_frames} frames)",
-            captured = pcm.len() / STEREO_CHANNELS
+            captured = pcm.len() / channels
         );
         sleep(RENDER_POLL).await;
     }
@@ -613,15 +618,16 @@ async fn render_audio_frames(
 /// than by an iteration count: a render block costs microseconds here
 /// (see [`render_audio_frames`]), so counting blocks bounds nothing.
 async fn wait_for_handover(
-    session: &OfflineSession,
-    queue: &Queue,
+    queue: &OfflineQueue<AppPools>,
     track_id: kithara::events::TrackId,
     label: &str,
 ) {
+    let block_frames = usize::try_from(queue.host().max_block_frames().get())
+        .expect("offline render block fits usize");
     let started = kithara::platform::time::Instant::now();
     loop {
         let _ = queue.tick();
-        let _ = session.render(RENDER_BLOCK_FRAMES);
+        let _ = queue.render(block_frames);
         if queue.current().map(|e| e.id) == Some(track_id)
             && queue.duration_seconds().is_some_and(|d| d > 0.0)
         {
@@ -697,22 +703,22 @@ fn assert_audio_live(samples: &[f32], label: &str) {
 /// silence (the timeline commits the seek-landed position before any
 /// chunk is decoded). Reading PCM is the ground truth.
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
-    use kithara::play::{SeekOutcome, SessionDispatcher};
+    use kithara::play::SeekOutcome;
 
     let prod = build_prod_ctx();
-    let session = Arc::new(OfflineSession::new_manual());
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let queue = prod_queue(&prod, None);
+    let ten_seconds_frames = usize::try_from(queue.host().spec().sample_rate.get())
+        .expect("offline sample rate fits usize")
+        .checked_mul(10)
+        .expect("ten-second render frame count fits usize");
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {
-        track_ids.push(queue.append(prod_drm_spec(url, &prod)));
+        track_ids.push(
+            queue
+                .append(prod_drm_spec(url, &prod))
+                .expect("append multi-track production DRM track"),
+        );
     }
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
@@ -729,11 +735,10 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .select(track_id, Transition::None)
                 .unwrap_or_else(|e| panic!("{ctx} select Err: {e}"));
 
-            wait_for_handover(&session, &queue, track_id, &ctx).await;
+            wait_for_handover(&queue, track_id, &ctx).await;
 
             let phase1 = format!("{ctx} phase1 (post-select)");
-            let pcm_phase1 =
-                render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES, &phase1).await;
+            let pcm_phase1 = render_audio_frames(&queue, ten_seconds_frames, &phase1).await;
             assert_audio_live(&pcm_phase1, &phase1);
 
             let duration = queue
@@ -750,8 +755,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             );
 
             let phase2 = format!("{ctx} phase2 (post-near-end-seek)");
-            let pcm_phase2 =
-                render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES, &phase2).await;
+            let pcm_phase2 = render_audio_frames(&queue, ten_seconds_frames, &phase2).await;
             assert_audio_live(&pcm_phase2, &phase2);
         }
     }

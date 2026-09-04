@@ -1,22 +1,24 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    resampler::NoResamplerBackend,
+    signal::AudioChunk,
 };
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+
+use kithara_test_fixtures::assets::signal_wav_sine440_1s;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
         Some("wav"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .unwrap();
 
@@ -58,16 +60,12 @@ fn test_progressive_file_timeline_monotonic() {
 
 #[kithara::test]
 fn test_progressive_file_seek_resets_frame_offset() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
         Some("wav"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .unwrap();
 
@@ -77,7 +75,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
     decoder.seek(Duration::from_millis(500)).unwrap();
 
-    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     let expected_frame = num_traits::cast::<f64, u64>(0.5 * 44100.0).unwrap_or(u64::MAX);
 
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
@@ -92,16 +90,19 @@ fn test_progressive_file_seek_resets_frame_offset() {
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
     use kithara::{
+        assets::{AssetStore, StorageBackend},
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
         platform::{CancelToken, sync::Arc, time::Duration, tokio},
+        resampler::NoResamplerBackend,
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{
-        TestTempDir, create_wav_exact_bytes,
+        TestTempDir,
+        bufpool_ext::{TestPools, pools},
         hls_server::{HlsTestServer, HlsTestServerConfig},
-        signal_pcm::signal,
     };
+    use kithara_test_fixtures::signal::{self, Wave};
 
     use crate::common::test_defaults::SawWav;
 
@@ -115,11 +116,11 @@ mod hls_timeline {
         const SEGMENT_COUNT: usize = 10;
         const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-        let wav_data = create_wav_exact_bytes(
-            signal::Sawtooth,
+        let wav_data = signal::wav_of_size(
             SawWav::DEFAULT.sample_rate,
             SawWav::DEFAULT.channels,
             TOTAL_BYTES,
+            Wave::Sawtooth,
         );
 
         let segment_duration = SawWav::DEFAULT.segment_size as f64
@@ -137,22 +138,29 @@ mod hls_timeline {
         let url = server.url("/master.m3u8");
         let temp_dir = TestTempDir::new();
         let cancel = CancelToken::never();
+        let pools = pools();
 
         let hls_config = HlsConfig::for_url(url)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .store(
+                AssetStore::builder(pools.clone())
+                    .backend(StorageBackend::Disk {
+                        root: temp_dir.path().to_path_buf(),
+                    })
+                    .build(),
+            )
+            .pools(pools.clone())
             .cancel(cancel)
             .initial_abr_mode(AbrMode::manual(0))
             .build();
 
-        let stream = Stream::<Hls>::new(hls_config).await.unwrap();
+        let stream = Stream::<Hls<TestPools>>::new(hls_config).await.unwrap();
 
         let wav_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
             .maybe_container(Some(ContainerFormat::Wav))
             .build();
-        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        let decoder_config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .pools(pools)
             .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();

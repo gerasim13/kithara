@@ -33,6 +33,17 @@ They cover known flash-ON facade false positives and inert control surfaces. The
 OFF lane keeps full lint coverage. Unfulfilled expectations should be removed
 when the corresponding flash wrappers consume the code.
 
+## Shared Configuration
+
+- Workspace config owns policy: `rustfmt.toml`, `clippy.toml`, `deny.toml`,
+  `.config/tomlfmt.toml`, `.config/typos.toml`, and `sgconfig.yml`. Change lint
+  policy there instead of creating per-crate drift.
+- Treat rustc warnings (`unused-imports`, `dead_code`, `deprecated`, unfulfilled
+  `#[expect]`, `unreachable_pub`) exactly like Clippy findings: fix the cause in
+  the code you touch rather than letting warnings accumulate.
+- The pre-commit hook expects clean formatting, linting, and tests. If they fail
+  after your change, assume your change caused it until proven otherwise.
+
 ## Failing Lints
 
 - Treat rustc, Clippy, ast-grep, xtask, formatter, and dependency-audit findings

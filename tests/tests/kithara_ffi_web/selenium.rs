@@ -9,6 +9,7 @@ use std::{
 };
 
 use kithara::platform::time::{self, Duration, Instant};
+use kithara_test_fixtures::SignalAsset;
 use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,6 +23,8 @@ use tracing::warn;
 
 struct Consts;
 impl Consts {
+    /// Generated MPEG clip the playlist loads as its local file track.
+    const MP3: SignalAsset = SignalAsset::MP3_SINE880_48K_162S;
     const CHECK_INTERVAL: Duration = Duration::from_millis(250);
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
     const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
@@ -194,7 +197,7 @@ impl Endpoints {
     }
 
     fn mp3_url(&self) -> String {
-        format!("{}/assets/track.mp3", self.test_server_base_url())
+        format!("{}{}", self.test_server_base_url(), Consts::MP3.path())
     }
 
     fn drm_url(&self) -> String {
@@ -657,7 +660,7 @@ impl WasmPlayerSelenium {
         self.add_track(&self.endpoints.hls_url()).await?;
         self.add_track(&self.endpoints.drm_url()).await?;
 
-        let mp3 = self.find_track_index("track.mp3").await?;
+        let mp3 = self.find_track_index(Consts::MP3.name()).await?;
         let hls = self.find_track_index("hls/master.m3u8").await?;
         let drm = self.find_track_index("drm/master.m3u8").await?;
 

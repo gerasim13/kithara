@@ -3,7 +3,7 @@ use std::{
     ops::ControlFlow,
 };
 
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{
     DecodeResult, GaplessInfo,
@@ -20,21 +20,29 @@ use crate::{
 /// Returns the wrapping [`crate::DecodeError`] only if reading the source
 /// itself fails. Malformed MP4 data is treated as "no gapless info" rather
 /// than propagated, so callers can fall back to other probes.
-pub fn probe_mp4_gapless<R: Read + Seek + Send + Sync>(
+pub fn probe_mp4_gapless<R, S>(
     reader: &mut R,
-    byte_pool: &BytePool,
-) -> DecodeResult<Option<GaplessInfo>> {
-    probe_mp4_gapless_dyn(reader, byte_pool)
+    pools: &PoolRegion<S>,
+) -> DecodeResult<Option<GaplessInfo>>
+where
+    R: Read + Seek + Send + Sync,
+    S: HasPool<u8>,
+{
+    probe_mp4_gapless_dyn(reader, pools)
 }
 
-pub(crate) fn probe_mp4_gapless_dyn(
+pub(crate) fn probe_mp4_gapless_dyn<S>(
     reader: &mut dyn DecoderInput,
-    byte_pool: &BytePool,
-) -> DecodeResult<Option<GaplessInfo>> {
+    pools: &PoolRegion<S>,
+) -> DecodeResult<Option<GaplessInfo>>
+where
+    S: HasPool<u8>,
+{
     let mut probe = GaplessProbe::default();
-    match scan_mp4(reader, &mut probe, byte_pool) {
+    match scan_mp4(reader, &mut probe, pools) {
         Ok(()) => Ok(probe.into()),
         Err(crate::mp4::Mp4MetadataError::Io(error)) => Err(error.into()),
+        Err(crate::mp4::Mp4MetadataError::Pool(error)) => Err(error.into()),
         Err(crate::mp4::Mp4MetadataError::InvalidData(_)) => Ok(None),
     }
 }
@@ -161,11 +169,10 @@ fn scale_frames(value: u64, numerator: u32, denominator: u32) -> Option<u64> {
 mod tests {
     use std::io::Cursor;
 
-    use kithara_bufpool::BytePool;
     use kithara_test_utils::kithara;
 
     use super::probe_mp4_gapless;
-    use crate::GaplessInfo;
+    use crate::{GaplessInfo, test_pools::pools};
 
     fn atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let size = u32::try_from(payload.len() + 8).unwrap_or(u32::MAX);
@@ -285,7 +292,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -308,7 +315,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 0x840,
                 trailing_frames: 0x48,
@@ -332,7 +339,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -346,7 +353,7 @@ mod tests {
         moov.extend_from_slice(&mvhd(1_000));
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             None
         );
     }
@@ -366,7 +373,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             None
         );
     }

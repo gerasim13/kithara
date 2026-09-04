@@ -2,6 +2,7 @@
     schema: "kithara.module",
     version: 1,
     id: "app-menu-module-cell",
+    chrome: Plain,
     parameters: ["module", "label"],
     root: Pressable(
         id: "cell",

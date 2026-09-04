@@ -2,7 +2,8 @@ use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
 use kithara_assets::AssetStore;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_bufpool::HasPool;
+use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -18,19 +19,19 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
-/// Holds queue-level defaults plus an optional externally-owned
-/// [`PlayerImpl`] instance. Matches the project-wide pattern where
-/// config structs such as [`ResourceConfig`](kithara_play::ResourceConfig)
-/// accept optional built dependencies rather than re-taking their construction
-/// parameters.
+/// Holds queue-level defaults plus the owned [`PlayerImpl`] instance whose
+/// item list the queue coordinates.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct QueueConfig {
+pub struct QueueConfig<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
@@ -41,11 +42,11 @@ pub struct QueueConfig {
     /// `None` on the production app path.
     pub cancel: Option<CancelToken>,
 
-    /// Externally-owned player. `None` means Queue builds a default.
-    pub player: Option<Arc<PlayerImpl>>,
+    /// Player owned and decorated by this queue.
+    pub player: PlayerImpl<S>,
 
     /// Shared store used for bare URI track sources.
-    pub store: Option<AssetStore>,
+    pub store: Option<AssetStore<S>>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
@@ -63,7 +64,10 @@ pub struct QueueConfig {
     pub max_history_size: usize,
 }
 
-impl fmt::Debug for QueueConfig {
+impl<S> fmt::Debug for QueueConfig<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueueConfig")
             .field("max_concurrent_loads", &self.max_concurrent_loads)
@@ -74,23 +78,29 @@ impl fmt::Debug for QueueConfig {
     }
 }
 
-impl Default for QueueConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        queue::{TEST_SAMPLE_RATE, test_session},
+        test_pools::pools,
+    };
 
     #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
-        let cfg = QueueConfig::default();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(TEST_SAMPLE_RATE)
+                .worker(worker)
+                .session(test_session())
+                .build(),
+        );
+        let cfg = QueueConfig::builder().player(player).build();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(cfg.player.is_none());
         assert!(cfg.store.is_none());
         assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
     }

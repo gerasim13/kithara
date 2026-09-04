@@ -3,19 +3,21 @@ use std::sync::OnceLock;
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
     // every test body, and naming it here shadows nothing but a warning.
     platform::time::Duration,
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SAW_PERIOD, TestServerHelper, auto,
-    fixture_protocol::{DataMode, InitMode},
-    phase_distance, phase_from_f32,
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
+    fixture_protocol::DataMode,
 };
+use kithara_test_fixtures::signal;
 use tracing::{info, warn};
 use url::Url;
 
@@ -90,11 +92,12 @@ async fn init() {
         .segments_per_variant(48)
         .segment_size(200_000)
         .segment_duration_secs(200_000.0 / bytes_per_second)
+        // `SawWav` is a whole WAV file cut into segments, so segment 0 already
+        // carries the 44-byte header. An `EXT-X-MAP` header on top of it is a
+        // second copy: the reader parses the init one and the segment's own
+        // lands in the data chunk, where 44 bytes read back as 11 frames of
+        // noise. The two are alternative fixture shapes, not layers.
         .data_mode(DataMode::SawWav {
-            sample_rate: 44_100,
-            channels: 2,
-        })
-        .init_mode(InitMode::WavHeader {
             sample_rate: 44_100,
             channels: 2,
         });
@@ -115,22 +118,24 @@ async fn init() {
     info!("WASM test environment initialized");
 }
 
-/// Create an `Audio<Stream<Hls>>` pipeline in ephemeral mode.
-async fn create_pipeline() -> Audio<Stream<Hls>> {
+/// Create a registered HLS audio pipeline in ephemeral mode.
+async fn create_pipeline() -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     create_pipeline_with_url(fixture_url()).await
 }
 
-async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
+async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
@@ -138,19 +143,18 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker.open(config).await.unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
+async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -219,9 +223,9 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
             if inspected >= inspect_frames {
                 break;
             }
-            let phase = phase_from_f32(buf[f * channels]);
+            let phase = signal::phase::units(buf[f * channels]);
             if let Some(prev) = prev_phase {
-                let expected = (prev + 1) % SAW_PERIOD;
+                let expected = (prev + 1) % signal::SAW_PERIOD;
                 if phase != expected {
                     discontinuities += 1;
                     if phase < prev {
@@ -260,14 +264,17 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
 /// On wasm32 main thread, `Atomics.wait` is forbidden. The audio pipeline
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
-async fn read_with_yield(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> Option<usize> {
+async fn read_with_yield(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
 }
 
 /// Read with configurable retry limit. `None` is the end of the stream;
 /// `Some(0)` is a reader that stayed pending for the whole budget.
 async fn read_with_yield_limit(
-    audio: &mut Audio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {
@@ -353,8 +360,8 @@ async fn stress_read_samples_integrity() {
         }
 
         if let Some(prev_phase) = prev_last_phase {
-            let first_phase = phase_from_f32(buf[0]);
-            let expected = (prev_phase + 1) % SAW_PERIOD;
+            let first_phase = signal::phase::units(buf[0]);
+            let expected = (prev_phase + 1) % signal::SAW_PERIOD;
             if first_phase != expected {
                 continuity_errors += 1;
                 if continuity_errors <= 3 {
@@ -368,9 +375,9 @@ async fn stress_read_samples_integrity() {
 
         if frames >= 2 {
             for f in 1..frames {
-                let prev = phase_from_f32(buf[(f - 1) * channels]);
-                let curr = phase_from_f32(buf[f * channels]);
-                let expected = (prev + 1) % SAW_PERIOD;
+                let prev = signal::phase::units(buf[(f - 1) * channels]);
+                let curr = signal::phase::units(buf[f * channels]);
+                let expected = (prev + 1) % signal::SAW_PERIOD;
                 if curr != expected {
                     continuity_errors += 1;
                     if continuity_errors <= 3 {
@@ -388,7 +395,7 @@ async fn stress_read_samples_integrity() {
         }
 
         if frames > 0 {
-            prev_last_phase = Some(phase_from_f32(buf[(frames - 1) * channels]));
+            prev_last_phase = Some(signal::phase::units(buf[(frames - 1) * channels]));
         }
     }
 
@@ -479,9 +486,9 @@ async fn stress_seek_and_read() {
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr = phase_from_f32(buf[f * channels]);
-                    if curr != (prev + 1) % SAW_PERIOD {
+                    let prev = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr = signal::phase::units(buf[f * channels]);
+                    if curr != (prev + 1) % signal::SAW_PERIOD {
                         continuity_errors += 1;
                     }
                 }
@@ -489,9 +496,9 @@ async fn stress_seek_and_read() {
 
             if !position_checked && frames > 0 {
                 let expected_frame = (pos_secs * spec.sample_rate.get() as f64).round() as usize;
-                let expected_phase = expected_frame % SAW_PERIOD;
-                let actual_phase = phase_from_f32(buf[0]);
-                let dist = phase_distance(actual_phase, expected_phase);
+                let expected_phase = expected_frame % signal::SAW_PERIOD;
+                let actual_phase = signal::phase::units(buf[0]);
+                let dist = signal::phase::distance(actual_phase, expected_phase);
                 if dist > 1200 {
                     position_errors += 1;
                     warn!(
@@ -618,9 +625,9 @@ async fn stress_rapid_seeks_must_not_stall() {
         let frames = n / channels;
         if frames > 0 {
             let expected_frame = (pos_secs * sample_rate as f64).round() as usize;
-            let expected_phase = expected_frame % SAW_PERIOD;
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, expected_phase);
+            let expected_phase = expected_frame % signal::SAW_PERIOD;
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, expected_phase);
             if dist > 1200 {
                 position_mismatches += 1;
                 if position_mismatches <= 5 {
@@ -775,8 +782,8 @@ async fn stress_seek_to_zero_after_pressure() {
         }
 
         if !position_checked && frames > 0 {
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, 0);
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, 0);
             info!(
                 actual_phase,
                 dist, sample_rate, "Phase after seek-to-0 (expected ≈ 0)"
@@ -790,24 +797,24 @@ async fn stress_seek_to_zero_after_pressure() {
         }
 
         if let Some(prev_phase) = prev_last_phase {
-            let first_phase = phase_from_f32(buf[0]);
-            if first_phase != (prev_phase + 1) % SAW_PERIOD {
+            let first_phase = signal::phase::units(buf[0]);
+            if first_phase != (prev_phase + 1) % signal::SAW_PERIOD {
                 continuity_errors += 1;
             }
         }
 
         if frames >= 2 {
             for f in 1..frames {
-                let prev = phase_from_f32(buf[(f - 1) * channels]);
-                let curr = phase_from_f32(buf[f * channels]);
-                if curr != (prev + 1) % SAW_PERIOD {
+                let prev = signal::phase::units(buf[(f - 1) * channels]);
+                let curr = signal::phase::units(buf[f * channels]);
+                if curr != (prev + 1) % signal::SAW_PERIOD {
                     continuity_errors += 1;
                 }
             }
         }
 
         if frames > 0 {
-            prev_last_phase = Some(phase_from_f32(buf[(frames - 1) * channels]));
+            prev_last_phase = Some(signal::phase::units(buf[(frames - 1) * channels]));
         }
 
         if chunks_from_zero >= target_chunks {
@@ -892,9 +899,9 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         .expect("seek near start must succeed");
 
     let expected_frame = (near_start_secs * spec.sample_rate.get() as f64).round() as usize;
-    let expected_phase = expected_frame % SAW_PERIOD;
+    let expected_phase = expected_frame % signal::SAW_PERIOD;
     let seg1_start_frames = 200_000 / (channels * 2);
-    let seg1_start_phase = seg1_start_frames % SAW_PERIOD;
+    let seg1_start_phase = seg1_start_frames % signal::SAW_PERIOD;
 
     let mut checked = false;
     for _ in 0..200 {
@@ -909,9 +916,9 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
             continue;
         }
 
-        let actual_phase = phase_from_f32(buf[0]);
-        let dist_expected = phase_distance(actual_phase, expected_phase);
-        let dist_seg1 = phase_distance(actual_phase, seg1_start_phase);
+        let actual_phase = signal::phase::units(buf[0]);
+        let dist_expected = signal::phase::distance(actual_phase, expected_phase);
+        let dist_seg1 = signal::phase::distance(actual_phase, seg1_start_phase);
 
         info!(
             near_start_secs,
@@ -953,7 +960,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
     let mut audio = create_pipeline().await;
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];

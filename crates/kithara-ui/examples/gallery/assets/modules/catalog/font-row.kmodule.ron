@@ -1,0 +1,15 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-font-row",
+    parameters: ["family", "weight", "name", "file"],
+    root: Row(
+        gap: Some(24.0),
+        size: (w: Fill, h: Fixed(24.0)),
+        children: [
+            Text(id: "specimen", style: TrackTitle, font: "$family", weight: "$weight", label: "Kithara 0123456789", size: (w: Fill, h: Fill)),
+            Text(id: "name", style: MicroLabel, label: "$name", size: (w: Fixed(200.0), h: Fill)),
+            Text(id: "file", style: Mono, label: "$file", size: (w: Fixed(230.0), h: Fill)),
+        ],
+    ),
+)

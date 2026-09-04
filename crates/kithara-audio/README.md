@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,16 +8,56 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-audio.svg)](https://crates.io/crates/kithara-audio)
 [![docs.rs](https://docs.rs/kithara-audio/badge.svg)](https://docs.rs/kithara-audio)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
 # kithara-audio
 
-Audio pipeline with decoding, effects, resampling, optional time-stretch, and
-source-signal analysis. `Audio<S>` is the PCM reader surface; an
-`AudioWorkerHandle` runs decode/effects work on a shared OS thread and hands
-processed chunks to the caller through lock-free rings.
+Decoded-audio source pipeline with decoder lifecycle, decoder-owned sample-rate
+conversion, and source readiness. `Audio<S>` is the audio reader surface.
+`Audio::prepare` returns the concrete `AudioSource` and
+worker-neutral `PreparedAudioLane`; `kithara-play` owns `PlayWorker`, the
+per-track node, final output admission, playback effects, and engine-load
+measurement, while `kithara-warp` owns the resident Warp renderer.
+
+## Usage
+
+```rust
+use kithara_audio::{
+    AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
+};
+use kithara_decode::GaplessMode;
+use kithara_play::{PlayWorker, PlayWorkerConfig};
+
+let decoder_config = AudioDecoderConfig::builder()
+    .gapless_mode(GaplessMode::CodecPriming)
+    .resampler(
+        DecoderResamplerSettings::builder()
+            .quality(ResamplerQuality::High)
+            .build(),
+    )
+    .build();
+let audio_config = AudioConfig::for_stream(hls_config)
+    .host_sample_rate(sample_rate)
+    .decoder(decoder_config)
+    .build();
+
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+let mut audio = worker.open(audio_config).await?;
+```
+
+## Key Types
+
+- `Audio<S>` — main audio reader; the consumer reads frames from it and requests
+  seeks.
+- `AudioConfig<T>` — `bon` builder for stream config, decode backend,
+  decoder-owned resampling, gapless mode, source readiness, and events.
+- `AudioSource` — worker-independent per-track decoded-audio source contract.
+- `PreparedAudio` / `PreparedAudioLane` — reader plus the still-concrete producer
+  seam consumed by `kithara-play`.
+- `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
+  threaded into the decoder-owned resampler plan.
 
 ## Features
 
@@ -25,11 +65,11 @@ processed chunks to the caller through lock-free rings.
 
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 
-<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>stretch-signalsmith</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>resample-rubato</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
 
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
 
-<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Native <code>signalsmith-stretch</code> key-lock backend through <code>kithara-stretch</code></td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Rubato sample-rate conversion via <code>kithara-resampler/resample-rubato</code>; <code>resample-glide</code> selects the scalar backend instead</td></tr>
 
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to network-reaching deps</td></tr>
 
@@ -40,10 +80,6 @@ processed chunks to the caller through lock-free rings.
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> via <code>kithara-decode/android</code></td></tr>
 
 <tr><td><code>fdk-aac</code></td><td>no</td><td>Enable libfdk-aac HE-AAC v1/v2 decode in the software path</td></tr>
-
-<tr><td><code>beat-nn</code></td><td>no</td><td>Enable NN beat/downbeat analysis through <code>kithara-beat</code></td></tr>
-
-<tr><td><code>stretch-bungee</code></td><td>no</td><td>Native <code>bungee-rs</code> key-lock backend through <code>kithara-stretch</code></td></tr>
 
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to network-reaching deps</td></tr>
 
@@ -59,58 +95,18 @@ processed chunks to the caller through lock-free rings.
 
 </table>
 
-## Key Types
-
-- `Audio<S>` — main PCM reader; the consumer reads frames from it and requests
-  seeks.
-- `AudioConfig<T>` — `bon` builder for stream config, decode backend,
-  resampling, gapless mode, stretch controls, worker handle, and engine load.
-- `AudioWorkerHandle` / `AudioWorkerSource` — shared worker thread handle and
-  per-track source contract.
-- `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
-  threaded into the decoder-owned resampler plan.
-- `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode when a
-  `kithara-stretch` backend is compiled.
-- `AnalyzerBuilder` / `AnalysisWorker` / `TrackAnalysis` — source-signal
-  waveform and optional beat analysis.
-- `Waveform` / `BeatGrid` — analysis artifacts; public blob I/O uses
-  `Vec::<u8>::from(&artifact)` and `Artifact::try_from(&[u8])`.
-- `EngineLoad` / `EngineLoadSnapshot` — live decode/effects cost meter.
-
-## Usage
-
-```rust
-use kithara_audio::{
-    Audio, AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
-};
-use kithara_decode::GaplessMode;
-use kithara_hls::{Hls, HlsConfig};
-use kithara_stream::Stream;
-
-let decoder_config = AudioDecoderConfig::builder()
-    .gapless_mode(GaplessMode::CodecPriming)
-    .resampler(
-        DecoderResamplerSettings::builder()
-            .quality(ResamplerQuality::High)
-            .build(),
-    )
-    .build();
-let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-    .host_sample_rate(sample_rate)
-    .decoder(decoder_config)
-    .build();
-
-let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;
-```
-
-## Orientation
+## Integration
 
 `kithara-audio` sits between `kithara-decode` and playback consumers. The
 downloader lives in `kithara-stream`; audio consumes stream/storage contracts
-without reconstructing protocol policy. Time-stretch DSP backends live in
-`kithara-stretch` and are re-exported only when a stretch feature is compiled.
-Analysis runs on decoded source PCM, not post-EQ, post-stretch, or post-resample
-output.
+without reconstructing protocol policy. `kithara-signal` owns `AudioSpec`,
+`AudioChunkInfo`, `AudioChunk`, and pure sample/time math, while
+`kithara-bufpool` owns their pooled sample storage. This crate owns the runtime
+`AudioReader` and `AudioSource` protocols around those values. `kithara-play` composes the prepared
+source with `kithara-warp` and `kithara-stretch`; none of those playback
+transforms are owned here. `kithara-analysis` consumes this crate's decoded
+source and observer protocols; analysis itself is not owned here.
 
-See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, analysis,
-blob, and time-stretch contracts.
+See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, and
+prepared-source contracts. Source analysis contracts are in
+[`kithara-analysis`](../kithara-analysis/CONTEXT.md).

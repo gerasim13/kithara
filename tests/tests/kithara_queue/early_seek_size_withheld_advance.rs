@@ -12,25 +12,31 @@
 //! [`PackagedTestServer`] withhold gate controls the seek-target segment's
 //! **body** (GET parked); segment-aware fMP4 deliberately does not use startup
 //! HEAD size probes. The audio graph is pulled one block at a time via the
-//! manual [`OfflineSession`] and the queue is ticked synchronously between
+//! product offline Host and the queue is ticked synchronously between
 //! blocks.
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
+use std::num::NonZeroU32;
 
 use kithara::{
-    assets::AssetStore,
-    bufpool::Region,
+    assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
-    queue::{Queue, QueueConfig, Transition},
+    platform::{CancelToken, time::Duration},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        ResourceSrc,
+    },
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
+    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineHostHarness,
 };
+
+use crate::bufpool_ext::{Pools, TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -68,50 +74,62 @@ struct GateMode {
 }
 
 struct Harness {
-    player: Arc<PlayerImpl>,
-    session: Arc<OfflineSession>,
+    player: Option<PlayerImpl<TestPools>>,
+    worker: PlayWorker<TestPools>,
+    host: OfflineHostHarness<TestPools>,
 }
 
 impl Harness {
-    fn new() -> Self {
-        let session = Arc::new(OfflineSession::new_manual());
-        let region = Region::default();
+    fn new(pools: Pools) -> Self {
+        let session = HostConfig::offline(pools.clone())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .build();
+        let host = OfflineHostHarness::new(session).expect("create product offline Host");
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
-            .sample_rate(SAMPLE_RATE)
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .worker(worker.clone())
             .build();
-        let player = Arc::new(PlayerImpl::new(config));
-        Self { player, session }
+        let player = Some(PlayerImpl::new(config));
+        Self {
+            player,
+            worker,
+            host,
+        }
+    }
+
+    fn player(&self) -> &PlayerImpl<TestPools> {
+        self.player.as_ref().expect("harness player is available")
+    }
+
+    fn take_player(&mut self) -> PlayerImpl<TestPools> {
+        self.player.take().expect("harness player was transferred")
     }
 
     fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
+        self.host.render(frames)
     }
 }
 
 async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
-    store: &AssetStore,
-    player: &PlayerImpl,
+    store: &AssetStore<TestPools>,
+    worker: &PlayWorker<TestPools>,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader.clone())
-    .store(store.clone())
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(DecoderBackend::Symphonia)
-            .build(),
-    )
-    .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(DecoderBackend::Symphonia)
+                    .build(),
+            )
+            .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+            .worker(worker.clone())
+            .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
 
@@ -185,27 +203,40 @@ async fn run_case(mode: GateMode) {
 
     let master = server.url("/master.m3u8");
     let temp = TestTempDir::new();
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
-    let harness = Harness::new();
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .should_autoplay(false)
-            .player(Arc::clone(&harness.player))
-            .build(),
-    );
-    let mut rx = harness.player.subscribe();
+    let mut harness = Harness::new(pools);
+    let mut rx = harness.player().subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store, &harness.player).await;
+    let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let target_src = target.src().clone();
+    let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
+    let player = harness.take_player();
+    let queue = harness
+        .host
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .should_autoplay(false)
+                .player(player)
+                .build(),
+        ))
+        .expect("insert queue into product offline Host");
     let id0 = queue.insert_loaded_for_test(target);
-    let next = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let _id1 = queue.insert_loaded_for_test(next);
 
     queue.select(id0, Transition::None).expect("select track 0");
@@ -239,10 +270,12 @@ async fn run_case(mode: GateMode) {
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let kithara::events::Event::Player(pe) = ev {
                 match pe {
-                    PlayerEvent::ItemDidFail { ref src, .. } if *src == target_src => {
+                    PlayerEvent::ItemDidFail { ref item } if item.track().src == target_src => {
                         trigger = Trigger::DidFail;
                     }
-                    PlayerEvent::ItemDidPlayToEnd { ref src, .. } if *src == target_src => {
+                    PlayerEvent::ItemDidPlayToEnd { ref item }
+                        if item.track().src == target_src =>
+                    {
                         trigger = Trigger::DidPlayToEnd;
                     }
                     _ => {}

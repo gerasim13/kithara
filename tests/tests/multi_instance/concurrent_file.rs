@@ -1,28 +1,43 @@
 use std::path::Path;
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     reads::{ReadLimit, read_for_concurrency_check},
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
-async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
+async fn create_file_audio(
+    url: url::Url,
+    cache_dir: &Path,
+) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
+    let pools = pools();
     let file_config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(("mp3").to_string())
         .build();
-    Audio::<Stream<File>>::new(config)
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    worker
+        .open(config)
         .await
         .expect("create Audio<Stream<File>>")
 }
@@ -49,7 +64,11 @@ async fn run_concurrent_file(n: usize) {
     let mut temps = Vec::new();
     for i in 0..n {
         let temp = TestTempDir::new();
-        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
+        let audio = create_file_audio(
+            server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
+            temp.path(),
+        )
+        .await;
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;

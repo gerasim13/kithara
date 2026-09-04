@@ -29,7 +29,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::TestHttpServer;
+use kithara_integration_tests::{
+    TestHttpServer,
+    bufpool_ext::{TestPools, pools},
+};
 
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";
 
@@ -89,7 +92,7 @@ async fn serve_range(State(state): State<CountState>, headers: HeaderMap) -> Res
         .expect("valid range response")
 }
 
-fn read_to_end(mut stream: Stream<File>) -> io::Result<Vec<u8>> {
+fn read_to_end(mut stream: Stream<File<TestPools>>) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = [0u8; 16];
     loop {
@@ -122,15 +125,17 @@ async fn follower_joins_active_download_without_second_get() {
         });
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
+    let pools = pools();
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
 
     let waveform_cfg = FileConfig::for_src(url.clone().into())
         .store(store.clone())
+        .pools(pools.clone())
         .build();
-    let waveform = Stream::<File>::new(waveform_cfg)
+    let waveform = Stream::<File<TestPools>>::new(waveform_cfg)
         .await
         .expect("waveform stream");
     arrived_rx
@@ -140,9 +145,10 @@ async fn follower_joins_active_download_without_second_get() {
 
     let player_cfg = FileConfig::for_src(url.into())
         .store(store)
+        .pools(pools)
         .look_ahead_bytes(16)
         .build();
-    let player = Stream::<File>::new(player_cfg)
+    let player = Stream::<File<TestPools>>::new(player_cfg)
         .await
         .expect("player stream");
 
@@ -192,14 +198,18 @@ async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
             released,
         });
     let server = TestHttpServer::new(app).await;
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
         .store(store)
+        .pools(pools)
         .look_ahead_bytes(0)
         .build();
-    let stream = Stream::<File>::new(config).await.expect("bounded stream");
+    let stream = Stream::<File<TestPools>>::new(config)
+        .await
+        .expect("bounded stream");
 
     let bytes = spawn_blocking(move || read_to_end(stream))
         .await

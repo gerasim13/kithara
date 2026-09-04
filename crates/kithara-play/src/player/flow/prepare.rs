@@ -1,17 +1,26 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::AudioDecoderConfig;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::resource::ResourceConfig;
 
-struct ConfigPrep<'a> {
-    player: &'a PlayerImpl,
+struct ConfigPrep<'a, S> {
+    player: &'a PlayerRuntime<S>,
 }
 
-impl ConfigPrep<'_> {
-    fn prepare(&self, config: ResourceConfig) -> ResourceConfig {
+impl<S> ConfigPrep<'_, S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn prepare<B>(&self, config: ResourceConfig<S, B>) -> ResourceConfig<S, B>
+    where
+        B: Clone + Default,
+    {
         let bus = config
             .bus
             .or_else(|| Some(self.player.core.engine.bus().scoped()));
@@ -19,7 +28,7 @@ impl ConfigPrep<'_> {
             .cancel
             .or_else(|| self.player.core.engine.cancel_token())
             .map(|parent| parent.child());
-        let stretch = Some(Arc::clone(&self.player.core.timestretch));
+        let stretch = Arc::clone(&self.player.core.timestretch);
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let decoder = AudioDecoderConfig::builder()
@@ -30,9 +39,9 @@ impl ConfigPrep<'_> {
         ResourceConfig {
             bus,
             cancel,
-            pcm_pool: self.player.core.engine.pcm_pool().clone(),
-            worker: Some(self.player.core.engine.worker().clone()),
+            worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
+            block_on_underrun: self.player.core.block_on_underrun,
             host_sample_rate,
             decoder,
             stretch,
@@ -42,17 +51,23 @@ impl ConfigPrep<'_> {
     }
 }
 
-impl PlayerImpl {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Apply shared worker, host sample rate, ABR, and bus to a resource
     /// config so the resource integrates with this player's engine.
     ///
     /// Call this before [`Resource::new`](crate::resource::Resource::new) to
-    /// ensure the resource shares the player's decode thread and resampler is
+    /// ensure the resource shares the player's playback worker and resampler is
     /// pre-initialised with the correct ratio. Callers that want a shared HTTP
     /// pool / tokio runtime must build their own downloader and attach it via
     /// [`ResourceConfig::with_downloader`] before passing the config in.
     #[must_use]
-    pub fn prepare_config(&self, config: ResourceConfig) -> ResourceConfig {
+    pub fn prepare_config<B>(&self, config: ResourceConfig<S, B>) -> ResourceConfig<S, B>
+    where
+        B: Clone + Default,
+    {
         ConfigPrep { player: self }.prepare(config)
     }
 }
@@ -61,21 +76,22 @@ impl PlayerImpl {
 mod tests {
     use kithara_assets::AssetStore;
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayError,
+        PlayError, PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
+        resource::ResourceSrc,
         session::{Cmd, Reply, SessionDispatcher, testing},
+        test_pools::{TestPools, pools},
     };
 
-    struct ImmediateSession(Arc<dyn SessionDispatcher>);
+    struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
 
-    impl SessionDispatcher for ImmediateSession {
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+    impl SessionDispatcher<TestPools> for ImmediateSession {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             self.0.exec(cmd)
         }
 
@@ -84,31 +100,66 @@ mod tests {
         }
     }
 
-    fn resource_config(source: &str) -> ResourceConfig {
-        let src = ResourceConfig::parse_src(source).expect("valid test source");
+    fn resource_config(source: &str) -> ResourceConfig<TestPools> {
+        let pools = pools();
+        let src = ResourceSrc::parse(source).expect("valid test source");
         ResourceConfig::for_src(src)
-            .store(AssetStore::builder().build())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .store(AssetStore::builder(pools).build())
             .build()
+    }
+
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]
     fn prepare_config_propagates_session_consumer_wake_mode_to_audio() {
-        let session: Arc<dyn SessionDispatcher> =
+        let session: Arc<dyn SessionDispatcher<TestPools>> =
             Arc::new(ImmediateSession(testing::test_session()));
-        let player = PlayerImpl::new(PlayerConfig::test_builder().session(session).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(session)
+                .build(),
+        );
 
         let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
         assert_eq!(
             prepared.consumer_wake_mode,
             ConsumerWakeMode::ImmediateOffRt
         );
-        let audio = prepared.build_file_config();
+        let audio = prepared.build_file_config(player.worker(), None);
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
 
         let prepared = player.prepare_config(resource_config("https://example.com/live.m3u8"));
-        let audio = prepared.build_hls_config().expect("valid HLS config");
+        let audio = prepared
+            .build_hls_config(player.worker(), None)
+            .expect("valid HLS config");
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
+    }
+
+    #[kithara::test]
+    fn prepare_config_overwrites_a_builder_declared_wake_mode() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
+
+        let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
+        let config = ResourceConfig::<TestPools>::for_src(src)
+            .store(AssetStore::builder(pools()).build())
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+            .build();
+
+        let prepared = player.prepare_config(config);
+        assert_eq!(
+            prepared.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred,
+            "a player-managed resource cannot smuggle an off-RT capability past the session policy"
+        );
     }
 }

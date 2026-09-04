@@ -59,8 +59,8 @@ pub(crate) mod tokio_dep_quarantine;
 pub(crate) mod trait_impl_count;
 
 struct ParsedSource {
-    source: String,
     syntax: Option<syn::File>,
+    source: String,
 }
 
 enum FileSnapshot {
@@ -79,16 +79,45 @@ struct ParsedFiles<'a> {
 impl<'a> ParsedFiles<'a> {
     fn new(workspace_root: &'a Path, scope: &'a Scope) -> Self {
         Self {
-            files: OnceCell::new(),
             scope,
             workspace_root,
+            files: OnceCell::new(),
             #[cfg(test)]
             parse_count: Cell::new(0),
         }
     }
 
+    fn all(&self) -> Result<&BTreeMap<PathBuf, FileSnapshot>> {
+        if let Some(files) = self.files.get() {
+            return Ok(files);
+        }
+        let paths = workspace_rs_files_scoped(self.workspace_root, self.scope)?;
+        Ok(self.files.get_or_init(|| {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let snapshot = match fs::read_to_string(&path) {
+                        Ok(source) => {
+                            #[cfg(test)]
+                            self.parse_count.set(self.parse_count.get() + 1);
+                            let syntax = syn::parse_file(&source).ok();
+                            FileSnapshot::Loaded(ParsedSource { syntax, source })
+                        }
+                        Err(error) => FileSnapshot::Unreadable(error),
+                    };
+                    (path, snapshot)
+                })
+                .collect()
+        }))
+    }
+
     fn get(&self, path: &Path) -> Result<Option<&FileSnapshot>> {
         Ok(self.all()?.get(path))
+    }
+
+    #[cfg(test)]
+    fn parse_count(&self) -> usize {
+        self.parse_count.get()
     }
 
     fn parsed_file(&self, path: &Path) -> Result<Option<&syn::File>> {
@@ -119,35 +148,6 @@ impl<'a> ParsedFiles<'a> {
             None => Ok(None),
         }
     }
-
-    fn all(&self) -> Result<&BTreeMap<PathBuf, FileSnapshot>> {
-        if let Some(files) = self.files.get() {
-            return Ok(files);
-        }
-        let paths = workspace_rs_files_scoped(self.workspace_root, self.scope)?;
-        Ok(self.files.get_or_init(|| {
-            paths
-                .into_iter()
-                .map(|path| {
-                    let snapshot = match fs::read_to_string(&path) {
-                        Ok(source) => {
-                            #[cfg(test)]
-                            self.parse_count.set(self.parse_count.get() + 1);
-                            let syntax = syn::parse_file(&source).ok();
-                            FileSnapshot::Loaded(ParsedSource { source, syntax })
-                        }
-                        Err(error) => FileSnapshot::Unreadable(error),
-                    };
-                    (path, snapshot)
-                })
-                .collect()
-        }))
-    }
-
-    #[cfg(test)]
-    fn parse_count(&self) -> usize {
-        self.parse_count.get()
-    }
 }
 
 pub(crate) struct Context<'a> {
@@ -174,16 +174,12 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn parsed_file(&self, path: &Path) -> Result<Option<&syn::File>> {
-        self.parsed_files.parsed_file(path)
-    }
-
-    fn parsed_source(&self, path: &Path) -> Result<Option<(&str, &syn::File)>> {
-        self.parsed_files.parsed_source(path)
-    }
-
-    fn source_file(&self, path: &Path) -> Result<Option<(&str, Option<&syn::File>)>> {
-        self.parsed_files.source_file(path)
+    delegate::delegate! {
+        to self.parsed_files {
+            fn parsed_file(&self, path: &Path) -> Result<Option<&syn::File>>;
+            fn parsed_source(&self, path: &Path) -> Result<Option<(&str, &syn::File)>>;
+            fn source_file(&self, path: &Path) -> Result<Option<(&str, Option<&syn::File>)>>;
+        }
     }
 }
 

@@ -1,7 +1,8 @@
-use kithara_decode::{DecoderBackend, PcmSpec};
+use kithara_decode::DecoderBackend;
 use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, FrameDomain,
 };
+use kithara_signal::AudioSpec;
 use kithara_stream::MediaInfo;
 
 use super::DecoderGeneration;
@@ -75,7 +76,7 @@ pub(crate) fn enqueue_generation_installed(
 
 fn decoder_resampler_event(
     media_info: Option<&MediaInfo>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     output_rate: u32,
     backend: &'static str,
     recreates_on_route: bool,
@@ -97,7 +98,7 @@ fn decoder_resampler_event(
 
 fn playback_resampler_event(
     media_info: Option<&MediaInfo>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     host_sample_rate: u32,
     backend: &'static str,
 ) -> Option<AudioEvent> {

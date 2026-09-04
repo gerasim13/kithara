@@ -38,19 +38,20 @@
 //!      pinned at 0, the buffer-too-low gate bars every normal up-switch, so
 //!      the ONLY decision that can move off variant 0 is `EscapeStalled` —
 //!      `current_variant != 0` therefore pins the fix specifically.
-
 use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    audio::{AudioConfig, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule,
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
+    fixture_protocol::DelayRule,
 };
 
 struct Consts;
@@ -97,18 +98,19 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -116,9 +118,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     // Clone the live ABR handle to read `current_variant` after the drain —
     // the `Arc<AbrState>` it holds outlives `audio` (dropped inside the
@@ -138,7 +138,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => break,

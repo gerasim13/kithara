@@ -6,23 +6,132 @@ const MERGE_REQUEST_KIND: &str = "merge-request";
 const VERDICT_REPORT_DIR: &str = ".ci-artifacts/junit/";
 
 struct GitlabConfig {
-    common: Value,
-    apple: Value,
+    documents: Vec<Value>,
 }
 
 impl GitlabConfig {
     fn load(root: &Path) -> Self {
+        let mut paths: Vec<_> = fs::read_dir(root.join(".gitlab/ci"))
+            .expect("the pipeline directory is readable")
+            .map(|entry| entry.expect("a pipeline entry is readable").path())
+            .collect();
+        paths.sort();
         Self {
-            common: yaml(root.join(".gitlab/ci/common.yml")),
-            apple: yaml(root.join(".gitlab/ci/apple.yml")),
+            documents: paths.into_iter().map(yaml).collect(),
         }
     }
 
     fn definition(&self, name: &str) -> &Mapping {
-        [&self.apple, &self.common]
-            .into_iter()
+        self.documents
+            .iter()
             .find_map(|document| document.as_mapping()?.get(name)?.as_mapping())
             .unwrap_or_else(|| panic!("GitLab configuration has no `{name}` definition"))
+    }
+
+    /// Every top-level name the pipeline files declare. Job names are unique
+    /// across the directory, so which file a name came from says nothing.
+    fn job_names(&self) -> impl Iterator<Item = &str> {
+        self.documents
+            .iter()
+            .flat_map(|document| mapping(document, "a GitLab pipeline file").keys())
+            .filter_map(Value::as_str)
+    }
+
+    /// Every job that runs a declared lane, as (job name, lane name). The
+    /// Windows host carries no `just`, so it reaches xtask through cargo;
+    /// both spellings name the same lane, and the lane name is the first
+    /// word after the subcommand.
+    fn lane_jobs(&self) -> Vec<(String, String)> {
+        const INVOCATIONS: [&str; 2] = ["just ci run ", "cargo run --locked -p xtask -- ci run "];
+
+        let mut jobs = Vec::new();
+        for document in &self.documents {
+            for (name, job) in mapping(document, "a GitLab pipeline file") {
+                let (Some(name), Some(job)) = (name.as_str(), job.as_mapping()) else {
+                    continue;
+                };
+                let Some(script) = job.get("script").and_then(Value::as_sequence) else {
+                    continue;
+                };
+                for line in script.iter().filter_map(Value::as_str) {
+                    let line = line.trim();
+                    let Some(lane) = INVOCATIONS
+                        .iter()
+                        .find_map(|invocation| line.strip_prefix(invocation))
+                    else {
+                        continue;
+                    };
+                    let lane = lane
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_else(|| panic!("`{name}` runs a lane with no name"));
+                    jobs.push((name.to_owned(), lane.to_owned()));
+                }
+            }
+        }
+        jobs
+    }
+
+    /// The pipeline kinds a job's rules admit, following `extends` and
+    /// `!reference` to wherever the rules actually live.
+    fn admitted_kinds(&self, job: &str) -> BTreeSet<String> {
+        match self.rules_owner(job) {
+            None => BTreeSet::new(),
+            Some(owner) => self.admitted_kinds_inner(&owner, &mut Vec::new()),
+        }
+    }
+
+    fn admitted_kinds_inner(&self, owner: &str, stack: &mut Vec<String>) -> BTreeSet<String> {
+        assert!(
+            !stack.iter().any(|seen| seen == owner),
+            "GitLab rule cycle through `{owner}`"
+        );
+        stack.push(owner.to_owned());
+
+        let mut kinds = BTreeSet::new();
+        let rules = self
+            .definition(owner)
+            .get("rules")
+            .unwrap_or_else(|| panic!("`{owner}` owns no rules"))
+            .as_sequence()
+            .unwrap_or_else(|| panic!("`{owner}` rules are not a sequence"));
+        for rule in rules {
+            match rule {
+                // A rule that guards on anything other than the pipeline kind -
+                // a platform filter, the release-lane switch - admits no kind of
+                // its own. It only ever refuses one the referenced sets admit.
+                Value::Mapping(rule) => {
+                    let Some(kind) = rule
+                        .get("if")
+                        .and_then(Value::as_str)
+                        .and_then(declared_kind)
+                    else {
+                        continue;
+                    };
+                    if rule.get("when").and_then(Value::as_str) == Some("never") {
+                        continue;
+                    }
+                    kinds.insert(kind.to_owned());
+                }
+                Value::Tagged(reference) => {
+                    assert!(reference.tag == "reference", "unknown GitLab YAML tag");
+                    let target = reference
+                        .value
+                        .as_sequence()
+                        .expect("GitLab reference target is a sequence");
+                    assert_eq!(target.len(), 2, "GitLab reference has two components");
+                    assert_eq!(target[1].as_str(), Some("rules"));
+                    let target = target[0]
+                        .as_str()
+                        .expect("GitLab reference owner is a string");
+                    kinds.extend(self.admitted_kinds_inner(target, stack));
+                }
+                _ => panic!("`{owner}` has an invalid rule"),
+            }
+        }
+
+        stack.pop();
+        kinds
     }
 
     fn extends(&self, name: &str) -> Vec<&str> {
@@ -175,12 +284,40 @@ fn mapping<'a>(value: &'a Value, context: &str) -> &'a Mapping {
 fn pipeline_kind<'a>(condition: &'a Value, owner: &str) -> &'a str {
     condition
         .as_str()
-        .and_then(|condition| {
-            condition
-                .strip_prefix("$KITHARA_PIPELINE_KIND == \"")
-                .and_then(|condition| condition.strip_suffix('"'))
-        })
+        .and_then(declared_kind)
         .unwrap_or_else(|| panic!("`{owner}` has an unknown rule condition"))
+}
+
+/// The pipeline kind a rule condition names, when it names one at all.
+fn declared_kind(condition: &str) -> Option<&str> {
+    condition
+        .strip_prefix("$KITHARA_PIPELINE_KIND == \"")?
+        .strip_suffix('"')
+}
+
+/// The lane catalog both CI providers read.
+fn lane_catalog(root: &Path) -> toml::Table {
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("CI lanes are a table")
+        .clone()
+}
+
+fn declared_kinds(lane: &toml::Value) -> BTreeSet<String> {
+    lane.get("kinds")
+        .and_then(toml::Value::as_array)
+        .map(|kinds| {
+            kinds
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn assert_active_review_job(config: &GitlabConfig, job: &str, expected_owner: &str, judged: bool) {
@@ -494,9 +631,8 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:test-flash-off",
         "apple:xcframework",
     ]);
-    let actual_jobs: BTreeSet<&str> = mapping(&config.apple, "the Apple pipeline")
-        .keys()
-        .filter_map(Value::as_str)
+    let actual_jobs: BTreeSet<&str> = config
+        .job_names()
         .filter(|name| name.starts_with("apple:"))
         .collect();
     assert_eq!(actual_jobs, expected_jobs);
@@ -529,4 +665,59 @@ fn safari_stays_out_of_merge_requests_and_runs_nightly() {
         .decision_for_kind(".rules-nightly", "nightly")
         .expect("Safari runs nightly");
     assert_automatic_when(nightly.when.as_deref(), "apple:safari");
+}
+
+// Membership is declared once, in the catalog. A GitLab job that admits a kind
+// its lane does not name is the two drifting apart, and the drift shows up as a
+// lane running on a pipeline nobody chose.
+//
+// A lane the catalog does not declare is one `xtask ci run` matches ahead of the
+// config - the release and Apple-suite lanes that carry their own arguments, and
+// the verdict. Those have no `kinds` to compare against; a name that is neither
+// declared nor matched fails the job the moment it runs.
+#[test]
+fn every_gitlab_lane_job_runs_the_kinds_its_lane_declares() {
+    let root = workspace_root();
+    let config = GitlabConfig::load(root);
+    let lanes = lane_catalog(root);
+
+    let mut checked = 0;
+    for (job, lane_name) in config.lane_jobs() {
+        let Some(lane) = lanes.get(&lane_name) else {
+            continue;
+        };
+        let admitted = config.admitted_kinds(&job);
+        let declared = declared_kinds(lane);
+        assert_eq!(
+            admitted, declared,
+            "job `{job}` admits {admitted:?} but lane `{lane_name}` declares {declared:?}"
+        );
+        checked += 1;
+    }
+
+    assert!(checked > 0, "no GitLab job runs a declared lane");
+}
+
+// The other direction. A lane that names the pipelines it belongs to and that no
+// job runs is a lane declared into a schedule it never reaches - the failure the
+// broadcast lane sat in for months, invisible because nothing compared the two.
+// Lanes with no GitLab kinds are GitHub's, and `kinds_github` speaks for them.
+#[test]
+fn every_lane_that_names_a_gitlab_pipeline_has_a_job_that_runs_it() {
+    let root = workspace_root();
+    let scheduled: BTreeSet<String> = GitlabConfig::load(root)
+        .lane_jobs()
+        .into_iter()
+        .map(|(_, lane)| lane)
+        .collect();
+
+    for (name, lane) in lane_catalog(root) {
+        if declared_kinds(&lane).is_empty() {
+            continue;
+        }
+        assert!(
+            scheduled.contains(&name),
+            "lane `{name}` names GitLab pipelines but no job runs it"
+        );
+    }
 }

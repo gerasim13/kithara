@@ -1,25 +1,30 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
-use kithara_abr::AbrMode;
-use kithara_assets::{AssetStore, StorageBackend};
-use kithara_bufpool::Region;
-use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_hls::KeyOptions;
-use kithara_platform::{
-    sync::{Arc, mpsc},
-    thread::{assert_not_main_thread, keep_worker_alive},
-    time::{Duration, sleep},
-    tokio::task::spawn as task_spawn,
+use kithara::{
+    abr::AbrMode,
+    assets::StorageBackend,
+    drm::{KeyRequest, KeyRequestFactory},
+    hls::KeyOptions,
+    host::wasm,
+    platform::{
+        sync::{Arc, mpsc},
+        thread::{assert_not_main_thread, keep_worker_alive},
+        time::{Duration, sleep},
+        tokio::task::spawn as task_spawn,
+    },
+    play::{
+        PlayError, ResourceSrc,
+        policy::{DomainKeyPolicy, DomainKeyRule},
+    },
+    queue::{QueueConfig, TrackId},
 };
-use kithara_play::{
-    ResourceConfig,
-    policy::{DomainKeyPolicy, DomainKeyRule},
-    wasm,
-};
-use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
+    pools::{
+        FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
+        FfiWorker, Pools,
+    },
     web::{commands::WorkerCmd, key_processor_bridge},
 };
 
@@ -37,25 +42,23 @@ impl Consts {
 /// the `key_options` + `player_headers` fields on
 /// [`NativeInner`](crate::native::inner::NativeInner). Held in a
 /// `RefCell` shared across the worker's command loop: setters mutate it,
-/// and each track build snapshots it into a [`ResourceConfig`].
+/// and each track build snapshots it into a [`FfiResourceConfig`].
 struct BuildState {
-    store: AssetStore,
+    store: FfiStore,
     headers: HashMap<String, String>,
     keys: KeyOptions,
-    region: Region,
+    pools: Pools,
 }
 
-impl Default for BuildState {
-    fn default() -> Self {
-        let region = Region::default();
-        let store = AssetStore::builder()
+impl BuildState {
+    fn new(pools: Pools) -> Self {
+        let store = FfiStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)
-            .pool(region.byte_pool())
             .build();
         Self {
-            region,
+            pools,
             store,
             headers: HashMap::new(),
             keys: KeyOptions::default(),
@@ -71,55 +74,71 @@ macro_rules! clog {
 
 /// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
-/// Creates and owns the [`Queue`] (mirroring
-/// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
-/// spawns a periodic `tick` loop, then drives the command channel.
+/// Inserts and owns one [`FfiQueue`] member in the canonical Host (mirroring
+/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), spawns
+/// a periodic `tick` loop, then drives the command channel.
 pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
-    session_tx: mpsc::Sender<kithara_play::CmdMsg>,
+    host_sender: wasm::HostSender<FfiPools>,
+    pools: Pools,
 ) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
-    // Without this the Worker's spawn closure returns immediately (it only
-    // spawns async tasks) and `wasm_safe_thread` `close()`s the Worker, killing
-    // the command + tick loops. Keeps the Worker's event loop pumping for the
-    // page's lifetime so the spawned futures keep running.
+    // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
+    // the Worker, killing the command + tick loops.
     keep_worker_alive();
 
     task_spawn(async move {
-        let session = wasm::remote_session(session_tx);
-        let state = BuildState::default();
-        let player = Arc::new(kithara_play::PlayerImpl::new(
-            kithara_play::PlayerConfig::builder()
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
-                .session(session.dispatcher())
+        let mut host = wasm::remote_host(host_sender);
+        let state = BuildState::new(pools);
+        let worker =
+            FfiWorker::new(kithara::play::PlayWorkerConfig::builder(state.pools.clone()).build());
+        let queue_store = state.store.clone();
+        let player = kithara::play::PlayerImpl::new(
+            kithara::play::PlayerConfig::builder()
+                .sample_rate(host.requested_sample_rate())
+                .worker(worker)
                 .build(),
-        ));
-        let queue = Rc::new(Queue::new(
+        );
+        let queue = FfiQueue::new(
             QueueConfig::builder()
                 .player(player)
-                .store(state.store.clone())
+                .store(queue_store)
                 .build(),
-        ));
+        );
+        let owner = match host.insert(queue) {
+            Ok(owner) => owner,
+            Err(error) => {
+                clog!("[WORKER] host rejected queue insertion: {error}");
+                return;
+            }
+        };
+        let queue = owner.control().clone();
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
         let build_state = Rc::new(RefCell::new(state));
-        spawn_tick_loop(Rc::clone(&queue));
+        spawn_tick_loop(queue.clone());
         crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
             dispatch_cmd(cmd, &queue, &build_state);
         }
+
+        match host.remove(&owner) {
+            Ok(()) | Err(PlayError::SessionGone { .. }) => {}
+            Err(error) => {
+                clog!("[WORKER] host queue removal failed; resident retained: {error}");
+            }
+        }
     });
 }
 
-/// Spawn the periodic `Queue::tick` loop. `tick` is synchronous; the
+/// Spawn the periodic `FfiQueue::tick` loop. `tick` is synchronous; the
 /// loop awaits a `setTimeout`-backed `sleep` between ticks so it yields
 /// to the worker's task executor without busy-spinning.
-fn spawn_tick_loop(queue: Rc<Queue>) {
+fn spawn_tick_loop(queue: FfiQueueControl) {
     /// Tick cadence for the queue's internal `tick()` loop, in
     /// milliseconds. Drives auto-advance / crossfade arming and drains
     /// engine events. Wall clock; not tied to the audio-thread process
@@ -128,6 +147,9 @@ fn spawn_tick_loop(queue: Rc<Queue>) {
 
     task_spawn(async move {
         loop {
+            if queue.is_closed() {
+                break;
+            }
             if let Err(err) = queue.tick() {
                 clog!("[WORKER] queue tick error: {err}");
             }
@@ -136,7 +158,7 @@ fn spawn_tick_loop(queue: Rc<Queue>) {
     });
 }
 
-fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<BuildState>>) {
+fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCell<BuildState>>) {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -161,7 +183,9 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         }
         WorkerCmd::Append { id, url } => {
             let source = build_source(&build_state.borrow(), url);
-            queue.append_with_id(id, source);
+            if let Err(error) = queue.append_with_id(id, source) {
+                clog!("[WORKER] append rejected for {id:?}: {error}");
+            }
         }
         WorkerCmd::Insert {
             id,
@@ -256,7 +280,7 @@ fn effective_cap(wifi_bps: f64, cellular_bps: f64) -> Option<u64> {
     Some(num_traits::cast(cap.trunc()).unwrap_or(u64::MAX))
 }
 
-fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
+fn apply_abr_mode(queue: &FfiQueueControl, variant_index: Option<u32>) {
     let Some(handle) = queue.current_abr_handle() else {
         return;
     };
@@ -268,17 +292,17 @@ fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
     }
 }
 
-fn apply_peak_bitrate(queue: &Rc<Queue>, wifi_bps: f64, cellular_bps: f64) {
+fn apply_peak_bitrate(queue: &FfiQueueControl, wifi_bps: f64, cellular_bps: f64) {
     if let Some(handle) = queue.current_abr_handle() {
         handle.set_max_bandwidth_bps(effective_cap(wifi_bps, cellular_bps));
     }
 }
 
 struct SetupHlsAesArgs {
-    salt: String,
-    domains: Vec<String>,
     headers: Option<HashMap<String, String>>,
     query_params: Option<HashMap<String, String>>,
+    salt: String,
+    domains: Vec<String>,
 }
 
 /// Fold a DRM rule into the worker's [`BuildState`]. Builds the
@@ -325,44 +349,42 @@ fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
     state.keys = KeyOptions::builder().key_registry(registry).build();
 }
 
-/// Build a [`TrackSource`] for `url`, snapshotting the player-wide DRM keys
+/// Build an [`FfiTrackSource`] for `url`, snapshotting the player-wide DRM keys
 /// and headers from `state` (mirrors native `build_source_for_item`). Falls
-/// back to a bare [`TrackSource::Uri`] when no keys or headers are set so
+/// back to a bare [`FfiTrackSource::Uri`] when no keys or headers are set so
 /// the common non-DRM path stays allocation-light.
-fn build_source(state: &BuildState, url: String) -> TrackSource {
+fn build_source(state: &BuildState, url: String) -> FfiTrackSource {
     if state.keys.key_registry.is_none() && state.headers.is_empty() {
-        return TrackSource::Uri(url);
+        return FfiTrackSource::Uri(url);
     }
-    match ResourceConfig::parse_src(&url) {
+    match ResourceSrc::parse(&url) {
         Ok(src) => {
             let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
-            let config = ResourceConfig::for_src(src)
+            let config = FfiResourceConfig::for_src(src)
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
                 .store(state.store.clone())
                 .build();
-            TrackSource::Config(Box::new(config))
+            FfiTrackSource::Config(Box::new(config))
         }
         Err(err) => {
             clog!("[WORKER] build_source: invalid url {url}: {err}; using raw URI");
-            TrackSource::Uri(url)
+            FfiTrackSource::Uri(url)
         }
     }
 }
 
 struct ReplaceTrackArgs {
-    index: u32,
-    id: TrackId,
     url: String,
+    id: TrackId,
+    index: u32,
 }
 
 /// Mirror of [`NativeInner::replace_item`](crate::native::inner::NativeInner::replace_item):
 /// insert the new track after the predecessor of `index`, then drop the
 /// old track at `index`.
 fn replace_track(
-    queue: &Rc<Queue>,
+    queue: &FfiQueueControl,
     state: &BuildState,
     args: ReplaceTrackArgs,
 ) -> Result<(), String> {
@@ -382,7 +404,7 @@ fn replace_track(
     queue
         .insert_with_id(id, build_source(state, url), after)
         .map_err(|e| e.to_string())?;
-    let _ = queue.remove(old_id);
+    queue.remove(old_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 

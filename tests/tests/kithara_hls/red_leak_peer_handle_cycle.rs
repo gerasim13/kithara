@@ -16,6 +16,7 @@ use kithara::{
     },
     stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
 };
+use kithara_integration_tests::bufpool_ext::pools;
 
 /// Peer that stashes its own `PeerHandle` clone after registration —
 /// mirroring `HlsPeer` + `SegmentLoader` in production.
@@ -75,9 +76,13 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(cancel.clone())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .cancel(cancel.clone())
+        .build(),
     );
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
@@ -114,9 +119,13 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(cancel.clone())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .cancel(cancel.clone())
+        .build(),
     );
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());

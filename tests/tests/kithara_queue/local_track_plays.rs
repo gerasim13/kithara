@@ -5,27 +5,30 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineSession, offline_gain_window},
+    offline::{OfflineQueue, offline_gain_window},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 #[derive(Clone, Copy, Debug)]
 enum LocalSource {
@@ -45,7 +48,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url {
     match kind {
-        LocalSource::Mp3 => helper.asset("track.mp3"),
+        LocalSource::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
         LocalSource::HlsAac => {
             let builder = HlsFixtureBuilder::new()
                 .variant_count(1)
@@ -134,7 +137,7 @@ async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> R
 /// the first sample aligned with the current head.
 async fn sample_positions_via_progress(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     count: usize,
     deadline: Duration,
 ) -> Result<Vec<f64>, String> {
@@ -177,26 +180,35 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -206,8 +218,12 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
@@ -276,20 +292,16 @@ async fn local_track_plays_end_to_end(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .downloader(downloader.clone())
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .initial_abr_mode(abr)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .initial_abr_mode(abr)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     // Subscribe before the actions that drive loading / playback so no
@@ -298,7 +310,7 @@ async fn local_track_plays_end_to_end(
     // so audio sink-truth events arrive here too.
     let mut rx = queue.subscribe();
 
-    let track_id = queue.append(source);
+    let track_id = queue.append(source).expect("append local track");
 
     wait_for_loader_done_event(&mut rx, &queue, track_id, Duration::from_secs(30))
         .await
@@ -378,7 +390,13 @@ async fn local_track_plays_end_to_end(
             .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
     };
     let gain = end_pos - start_pos;
-    let gain_window = offline_gain_window(2.0);
+    let pacing = queue.host().pacing().expect("paced offline queue");
+    let gain_window = offline_gain_window(
+        2.0,
+        queue.host().spec().sample_rate,
+        queue.host().max_block_frames(),
+        pacing,
+    );
     assert!(
         gain_window.contains(&gain),
         "position gain out of offline-realtime window [{label}]: got \
@@ -416,7 +434,7 @@ where
     .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
-fn playlist_snapshot(queue: &Queue, ids: &[TrackId]) -> String {
+fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {
     let current = queue.current().map(|entry| (entry.id, entry.status));
     let statuses: Vec<String> = ids
         .iter()
@@ -491,21 +509,20 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ids: Vec<TrackId> = urls
         .iter()
         .map(|u| {
-            let cfg = ResourceConfig::for_src(
-                ResourceConfig::parse_src(u.as_str()).expect("valid fixture URL"),
-            )
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .downloader(downloader.clone())
-            .store(store.clone())
-            .decoder(
-                kithara::audio::AudioDecoderConfig::builder()
-                    .backend(backend)
-                    .build(),
-            )
-            .initial_abr_mode(AbrMode::Auto(None))
-            .build();
-            queue.append(TrackSource::Config(Box::new(cfg)))
+            let cfg =
+                ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
+                    .downloader(downloader.clone())
+                    .store(store.clone())
+                    .decoder(
+                        kithara::audio::AudioDecoderConfig::builder()
+                            .backend(backend)
+                            .build(),
+                    )
+                    .initial_abr_mode(AbrMode::Auto(None))
+                    .build();
+            queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("append crossfade fixture track")
         })
         .collect();
 
@@ -561,7 +578,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
-    queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+    queue
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+        .expect("advance local-track crossfade");
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

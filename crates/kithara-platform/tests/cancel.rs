@@ -3,7 +3,6 @@
 //! `CancelGroup` is not yet exported from the crate root (its root re-export
 //! switches off the legacy in 3.3), so its tests live in `src/common/cancel/
 //! group.rs` `#[cfg(test)]`.
-
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,

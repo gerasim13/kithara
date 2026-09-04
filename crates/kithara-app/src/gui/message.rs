@@ -1,5 +1,7 @@
-use kithara_platform::time::Duration;
-use kithara_ui::render::{UiEvent, WindowCommand};
+use kithara::{
+    platform::time::Duration,
+    ui::render::{UiEvent, WindowCommand},
+};
 
 use crate::deck::{DeckId, EqMode};
 

@@ -10,10 +10,15 @@
 //!   `kithara_test_utils::rtsan::permit` guard so probes stay active but
 //!   `RTSan`-transparent under `--cfg rtsan`).
 //! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
+//! - [`asset`] — `#[kithara::asset]` (registers one build-time audio asset
+//!   per `#[case::name(...)]`; for `kithara-test-fixtures/src/defs/` only).
 
+mod asset;
 mod fixture;
 mod flash;
 mod hang_watchdog;
+mod measure;
+mod measure_block;
 mod mock;
 mod no_block;
 mod probe;
@@ -21,6 +26,17 @@ mod rtsan;
 mod test;
 
 use proc_macro::TokenStream;
+
+/// `#[kithara::asset(ext = "…", content_type = "…")]` — registers one
+/// build-time generated audio asset per `#[case::name(...)]`.
+///
+/// The attribute is for `kithara-test-fixtures/src/defs/` only: the emitted
+/// registration names `crate::registry::AssetDef`, which exists in that
+/// crate's build script.
+#[proc_macro_attribute]
+pub fn asset(attr: TokenStream, item: TokenStream) -> TokenStream {
+    asset::expand(attr, item)
+}
 
 /// `#[kithara::test]` — unified sync/async/native/wasm test attribute.
 /// See [`test`] for argument syntax.
@@ -34,6 +50,20 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn hang_watchdog(attr: TokenStream, item: TokenStream) -> TokenStream {
     hang_watchdog::expand(attr, item)
+}
+
+/// `#[kithara::measure]` - permanent hotpath measurement gated by the caller's
+/// `perf` feature.
+#[proc_macro_attribute]
+pub fn measure(attr: TokenStream, item: TokenStream) -> TokenStream {
+    measure::expand(attr, item)
+}
+
+/// `kithara::measure_block!(label, expression)` - permanent block measurement
+/// gated by the caller's `perf` feature.
+#[proc_macro]
+pub fn measure_block(input: TokenStream) -> TokenStream {
+    measure_block::expand(input)
 }
 
 /// `#[kithara::fixture]` — rstest-fixture replacement.

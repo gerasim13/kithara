@@ -45,10 +45,6 @@ impl<B> AudioDecoderConfig<B>
 where
     B: Default + ResamplerBackend,
 {
-    fn effective_resampler(&self) -> DecoderResamplerSettings<B> {
-        self.resampler.clone().unwrap_or_default()
-    }
-
     pub(crate) fn build_resampler_config(
         &self,
         target_sample_rate: Option<NonZeroU32>,
@@ -63,6 +59,10 @@ where
                 .options(resampler.options)
                 .build(),
         )
+    }
+
+    fn effective_resampler(&self) -> DecoderResamplerSettings<B> {
+        self.resampler.clone().unwrap_or_default()
     }
 
     #[must_use]

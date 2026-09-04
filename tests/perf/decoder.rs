@@ -4,21 +4,20 @@ use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::{BytePool, PcmPool},
-    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{Decoder, DecoderConfig, DecoderFactory},
     platform::time::Instant,
+    resampler::NoResamplerBackend,
+    signal::AudioChunk,
 };
-use kithara_integration_tests::create_test_wav;
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_fixtures::signal;
 
-fn decoder_config() -> DecoderConfig {
-    DecoderConfig::builder()
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .build()
+fn decoder_config() -> DecoderConfig<NoResamplerBackend, TestPools> {
+    DecoderConfig::builder().pools(pools()).build()
 }
 
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
-    let wav_data = create_test_wav(frames, 44100, 2);
+    let wav_data = signal::wav(44100, 2, frames, signal::TONE);
     let cursor = Cursor::new(wav_data);
     DecoderFactory::create_with_probe(cursor, Some("wav"), decoder_config()).unwrap()
 }
@@ -28,7 +27,7 @@ fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
     decoder
         .next_chunk()
         .ok()
-        .and_then(|o| PcmChunk::try_from(o).ok())
+        .and_then(|o| AudioChunk::try_from(o).ok())
         .map(|_| ())
 }
 
@@ -44,7 +43,7 @@ fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
     decoder
         .next_chunk()
         .ok()
-        .and_then(|o| PcmChunk::try_from(o).ok())
+        .and_then(|o| AudioChunk::try_from(o).ok())
         .map(|chunk| chunk.samples.len())
 }
 
@@ -77,7 +76,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             println!("{:=<60}\n", "");
         }
         PerfScenario::ProbeLatency => {
-            let wav_data = create_test_wav(44100, 44100, 2);
+            let wav_data = signal::wav(44100, 2, 44100, signal::TONE);
             for _ in 0..10 {
                 decoder_probe_single(&wav_data);
             }
@@ -106,7 +105,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             let mut total_samples = 0;
             hotpath::measure_block!("decode_all_chunks", {
                 while let Ok(outcome) = decoder.next_chunk() {
-                    let Ok(chunk) = PcmChunk::try_from(outcome) else {
+                    let Ok(chunk) = AudioChunk::try_from(outcome) else {
                         break;
                     };
                     total_samples += chunk.samples.len();

@@ -1,17 +1,8 @@
 use std::{future::Future, panic::Location};
 
 pub use crate::backend::tokio::task::{JoinError, JoinHandle};
-// Under `flash` (native) [`spawn`] wraps the future in the quiescence
-// poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
-// flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual
-// clock advance). Like the stateful sync primitives it keys on
-// `flash_ambient` (consulted per call — a yield has no cross-thread signal
-// partner): in a flash(false) test / production it is a plain scheduler
-// yield, so the flash build stays behavior-transparent (an engine-backed
-// yield could never be granted there — the surrounding task keeps its
-// `active_async` slot across the yield while its other primitives are real).
-// Off the sim path the real `tokio` spawn/yield are used unchanged. See
-// `crate::flash`.
+// WHY: Under `flash` (native) [`spawn`] wraps the future in the quiescence poll-wrapper and `yield_now` participates in quiescence
+// UNDER AMBIENT (a flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual clock advance).
 pub use crate::flash::yield_now;
 use crate::{
     backend::tokio::{backend, runtime::Handle, task as native_task},
@@ -88,23 +79,18 @@ where
     R: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    // Reserve the `active` slot BEFORE the pool queues the closure (covering
-    // the queue wait). The slot's Drop returns the reservation if the pool
-    // never runs the closure. Deliberately NOT unified with the `spawn_named`
-    // bracket: a pool closure owns no named-thread count and must restore the
-    // reused thread's previous dedicated flag.
+    // WHY: Reserve the `active` slot BEFORE the pool queues the closure (covering the queue wait). The slot's Drop returns the
+    // reservation if the pool never runs the closure.
     let slot = ambient.then(credit::DedicatedSlot::reserve);
     native_task::spawn_blocking(move || {
-        // Held for the closure's lifetime (must outlive `f()`); restores the
-        // pool thread's previous ambient on exit.
+        // WHY: Held for the closure's lifetime (must outlive `f()`); restores the pool thread's previous ambient on exit.
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
         if let Some(slot) = slot {
             let _pacer = slot.claim_pooled();
             f()
         } else {
-            // Non-ambient: invisible to the engine; the RAII settle only keeps
-            // the exit unwind-safe and consistent with the ambient arm.
+            // WHY: Non-ambient: invisible to the engine; the RAII settle only keeps the exit unwind-safe and consistent with the ambient arm.
             let _exit = credit::Participant::unreserved();
             f()
         }
@@ -121,23 +107,18 @@ where
     R: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    // Reserve the `active` slot BEFORE the pool queues the closure (covering
-    // the queue wait). The slot's Drop returns the reservation if the pool
-    // never runs the closure. Deliberately NOT unified with the `spawn_named`
-    // bracket: a pool closure owns no named-thread count and must restore the
-    // reused thread's previous dedicated flag.
+    // WHY: Reserve the `active` slot BEFORE the pool queues the closure (covering the queue wait). The slot's Drop returns the
+    // reservation if the pool never runs the closure.
     let slot = ambient.then(credit::DedicatedSlot::reserve);
     handle.spawn_blocking(move || {
-        // Held for the closure's lifetime (must outlive `f()`); restores the
-        // pool thread's previous ambient on exit.
+        // WHY: Held for the closure's lifetime (must outlive `f()`); restores the pool thread's previous ambient on exit.
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
         if let Some(slot) = slot {
             let _pacer = slot.claim_pooled();
             f()
         } else {
-            // Non-ambient: invisible to the engine; the RAII settle only keeps
-            // the exit unwind-safe and consistent with the ambient arm.
+            // WHY: Non-ambient: invisible to the engine; the RAII settle only keeps the exit unwind-safe and consistent with the ambient arm.
             let _exit = credit::Participant::unreserved();
             f()
         }

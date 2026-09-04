@@ -1,9 +1,11 @@
 use std::fmt;
 
-use kithara_assets::{AssetLayout, AssetLayoutRegistry};
-use kithara_platform::sync::{Arc, Mutex};
+use kithara::{
+    assets::{AssetLayout, AssetLayoutRegistry},
+    platform::sync::{Arc, Mutex},
+};
 
-use crate::{layout::FfiAssetLayout, native::layout::ForeignLayout};
+use crate::{layout::FfiAssetLayout, native::layout::ForeignLayout, pools::FfiPools};
 
 /// Playback protocol whose default asset layout can be replaced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,8 +44,12 @@ impl FfiAssetLayoutRegistry {
         let replaced = {
             let mut layouts = self.inner.lock();
             match target {
-                FfiAssetLayoutTarget::File => layouts.register::<kithara::file::File>(layout),
-                FfiAssetLayoutTarget::Hls => layouts.register::<kithara::hls::Hls>(layout),
+                FfiAssetLayoutTarget::File => {
+                    layouts.register::<kithara::file::File<FfiPools>>(layout)
+                }
+                FfiAssetLayoutTarget::Hls => {
+                    layouts.register::<kithara::hls::Hls<FfiPools>>(layout)
+                }
             }
         };
         drop(replaced);
@@ -72,20 +78,10 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    use unimock::Unimock;
+
     use super::*;
     use crate::layout::{FfiAssetResource, FfiAssetSource};
-
-    struct FixedLayout;
-
-    impl FfiAssetLayout for FixedLayout {
-        fn path(&self, _resource: FfiAssetResource) -> String {
-            "resource".to_string()
-        }
-
-        fn root(&self, _source: FfiAssetSource) -> String {
-            "root".to_string()
-        }
-    }
 
     struct ReentrantLayout {
         dropped: Arc<AtomicBool>,
@@ -105,7 +101,7 @@ mod tests {
     impl Drop for ReentrantLayout {
         fn drop(&mut self) {
             if let Some(registry) = self.registry.upgrade() {
-                registry.register(FfiAssetLayoutTarget::Hls, Arc::new(FixedLayout));
+                registry.register(FfiAssetLayoutTarget::Hls, Arc::new(Unimock::new(())));
             }
             self.dropped.store(true, Ordering::Release);
         }
@@ -123,7 +119,7 @@ mod tests {
             }),
         );
 
-        registry.register(FfiAssetLayoutTarget::File, Arc::new(FixedLayout));
+        registry.register(FfiAssetLayoutTarget::File, Arc::new(Unimock::new(())));
 
         assert!(dropped.load(Ordering::Acquire));
     }

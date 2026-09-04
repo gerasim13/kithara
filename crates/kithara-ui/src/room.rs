@@ -4,7 +4,9 @@ use crate::{
     expand::ExpandedNode,
     ids::{NodeId, SourceUri},
     module::MeasureAxis,
-    size::{Cells, SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled},
+    size::{
+        Cells, NOTHING, SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled,
+    },
     skin::SkinDoc,
     validate::NodePath,
 };
@@ -81,9 +83,22 @@ fn walk(
             )?;
             walk_children(children, path, skin, origin)
         }
-        ExpandedNode::Optional { child, .. }
+        ExpandedNode::Object { child, .. }
+        | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Scroll { child, .. } => walk(child, path, skin, origin),
+        ExpandedNode::Stage { size, children, .. } => {
+            check_box(
+                *size,
+                children
+                    .first()
+                    .map_or(NOTHING, |first| min_size(first, skin)),
+                path,
+                origin,
+            )?;
+            walk_children(children, path, skin, origin)
+        }
         ExpandedNode::Reveal { child, .. } => walk(child, &path.push("Reveal"), skin, origin),
         ExpandedNode::Popover {
             anchor, content, ..
@@ -119,11 +134,11 @@ fn check_steps<N>(
         let needs = axis_min(min(branch), axis);
         if needs > *from {
             return Err(UiDocError::AdaptiveStepRoom {
+                needs,
                 origin: origin.clone(),
                 path: path.push(format!("steps[{index}]")).render(),
                 axis: axis.name(),
                 from: *from,
-                needs,
             });
         }
     }
@@ -146,11 +161,11 @@ pub(crate) fn check_box(
         let needs = axis_min(composed, axis);
         if needs > room {
             return Err(UiDocError::DeclaredRoom {
+                needs,
+                room,
                 origin: origin.clone(),
                 path: path.render(),
                 axis: axis.name(),
-                needs,
-                room,
             });
         }
     }
@@ -186,11 +201,11 @@ fn check_rooms(
     for (room, needs) in rooms.iter().copied() {
         if needs > room {
             return Err(UiDocError::RevealRoom {
+                needs,
+                room,
                 origin: origin.clone(),
                 path: path.render(),
                 axis: axis.name(),
-                needs,
-                room,
             });
         }
     }

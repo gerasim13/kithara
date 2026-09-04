@@ -288,7 +288,7 @@ fn unit(
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
     )?;
-    for entry in Container::ENVIRONMENT {
+    for entry in Container::environment() {
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
@@ -462,7 +462,7 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        for entry in Container::ENVIRONMENT {
+        for entry in Container::environment() {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
     }

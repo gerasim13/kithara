@@ -26,10 +26,10 @@ pub struct NavigationState {
     #[field(get, copy, set = set_repeat)]
     repeat_mode: RepeatMode,
     history: VecDeque<usize>,
-    /// Entries [`Self::history`] keeps; the oldest is dropped past it.
-    history_limit: usize,
     #[field(get = is_shuffle_enabled, set = set_shuffle)]
     shuffle_enabled: bool,
+    /// Entries [`Self::history`] keeps; the oldest is dropped past it.
+    history_limit: usize,
 }
 
 impl NavigationState {
@@ -39,10 +39,10 @@ impl NavigationState {
     #[must_use]
     pub fn new(history_limit: usize) -> Self {
         Self {
+            history_limit,
             current_index: None,
             repeat_mode: RepeatMode::Off,
             history: VecDeque::new(),
-            history_limit,
             shuffle_enabled: false,
         }
     }

@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -5,7 +6,10 @@ use tracing::debug;
 use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Index of the first non-`Loaded` segment — interpreted as the
     /// "download head" by the ABR controller. Returns `num_segments()`
     /// when every segment is `Loaded`. Scans linearly; cheap because it
@@ -67,19 +71,17 @@ impl HlsVariant {
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
-    pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
+    pub(crate) fn rebuild(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
-            // Nothing to re-plan, but the rebuild still claims plan
-            // ownership: a fetch the triggering rearm cancelled in flight
-            // must settle into a foreign plan, not resurrect a prefix
-            // behind the target (see `PlanGuard::supersede`).
+            // WHY: Nothing to re-plan, but the rebuild still claims plan ownership: a fetch the triggering rearm cancelled in flight must settle
+            // into a foreign plan, not resurrect a prefix behind the target (see `PlanGuard::supersede`).
             self.flow.queue.lock().supersede();
             return;
         }
         self.rebuild_queue(from_seg, None);
     }
 
-    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx, target: Duration) -> Option<u32> {
+    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx<S>, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
         let fetch_start = self.seek_readahead_start_segment(seg);
         if let Some(byte) = self.segment_byte_offset(fetch_start) {
@@ -91,30 +93,6 @@ impl HlsVariant {
             self.rebuild_queue(fetch_start, None);
         }
         Some(seg)
-    }
-
-    /// Put a fetch that failed recoverably back on the plan.
-    ///
-    /// Freeing the slot is only half of it: dispatch popped the entry when it
-    /// sent the fetch, so a slot returned to `Missing` describes work nobody
-    /// holds. The peer then wakes to an empty plan and asks for nothing, and
-    /// the segment is never fetched again — playback stops at that gap even
-    /// once the network is back. In plan order, not at the front: dispatch
-    /// bounds read the queue head, and a retired look-ahead entry parked
-    /// there would wall off every nearer segment behind it. Only work from
-    /// the current plan revision may return, and only when absent, so a seek
-    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
-    /// replacement plan already contains.
-    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
-        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
-        if !requeued {
-            debug!(
-                variant = self.variant,
-                ?planned,
-                "requeue refused: plan superseded or entry already queued"
-            );
-        }
-        requeued
     }
 
     #[kithara::probe]
@@ -148,9 +126,33 @@ impl HlsVariant {
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
-    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
+    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         let from_seg = self.seek_readahead_start_segment(from_seg);
         self.set_segment_aware_seek_tail(from_seg);
         self.rebuild_queue(from_seg, (from_seg > 0).then_some(0));
+    }
+
+    /// Put a fetch that failed recoverably back on the plan.
+    ///
+    /// Freeing the slot is only half of it: dispatch popped the entry when it
+    /// sent the fetch, so a slot returned to `Missing` describes work nobody
+    /// holds. The peer then wakes to an empty plan and asks for nothing, and
+    /// the segment is never fetched again — playback stops at that gap even
+    /// once the network is back. In plan order, not at the front: dispatch
+    /// bounds read the queue head, and a retired look-ahead entry parked
+    /// there would wall off every nearer segment behind it. Only work from
+    /// the current plan revision may return, and only when absent, so a seek
+    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
+    /// replacement plan already contains.
+    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
+        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
+        if !requeued {
+            debug!(
+                variant = self.variant,
+                ?planned,
+                "requeue refused: plan superseded or entry already queued"
+            );
+        }
+        requeued
     }
 }

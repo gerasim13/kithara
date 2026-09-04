@@ -7,35 +7,24 @@ use super::{
 use crate::pipeline::decode::{core::ActiveDecode, generation::DecoderGeneration};
 
 impl ActiveDecode {
-    pub(crate) fn transition_holds_output(&self) -> bool {
-        if self.active.is_finished() || !self.blender.is_steady() {
-            return false;
+    pub(crate) fn commit_prepared_promotion(
+        &mut self,
+        mut prepared: PreparedPromotion,
+    ) -> DecoderGeneration {
+        if shares_default_profile(
+            self.active.gapless_profile(),
+            prepared.generation.gapless_profile(),
+        ) {
+            prepared
+                .generation
+                .align_timeline_gap(self.active.timeline_gap());
         }
-        let Some(IncomingDecode::Priming {
-            frontier,
-            generation,
-            ..
-        }) = self.incoming.as_ref()
-        else {
-            return false;
-        };
-        if *frontier == OutgoingFrontier::Awaiting {
-            return false;
+        let incoming_profile = prepared.generation.blender_profile();
+        match prepared.join {
+            PromotionJoin::HardCut => self.blender.replace_active(incoming_profile),
+            PromotionJoin::Blend { .. } => self.blender.commit_join(),
         }
-        let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
-        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
-        !matches!(
-            promotion_readiness(
-                &self.active,
-                &self.blender,
-                generation,
-                *frontier,
-                outgoing_origin,
-                incoming_origin,
-            ),
-            PromotionReadiness::AwaitingOutgoingFrontier
-        )
+        std::mem::replace(&mut self.active, prepared.generation)
     }
 
     pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {
@@ -91,9 +80,8 @@ impl ActiveDecode {
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
         };
-        // A finished incoming may trim to empty: the end-of-track hard cut
-        // proves there is nothing past the cut, and an empty tail is exactly
-        // consistent with that proof.
+        // WHY: A finished incoming may trim to empty: the end-of-track hard cut proves there is nothing past the cut, and an empty tail is
+        // exactly consistent with that proof.
         let trimmed = trim_staged_head(&mut generation, span.overlap);
         assert!(
             trimmed || generation.is_finished(),
@@ -116,8 +104,8 @@ impl ActiveDecode {
         }
         Some(PreparedPromotion {
             generation,
-            join: span.join,
             transition,
+            join: span.join,
         })
     }
 
@@ -127,26 +115,6 @@ impl ActiveDecode {
             generation: prepared.generation,
             frontier: OutgoingFrontier::Awaiting,
         });
-    }
-
-    pub(crate) fn commit_prepared_promotion(
-        &mut self,
-        mut prepared: PreparedPromotion,
-    ) -> DecoderGeneration {
-        if shares_default_profile(
-            self.active.gapless_profile(),
-            prepared.generation.gapless_profile(),
-        ) {
-            prepared
-                .generation
-                .align_timeline_gap(self.active.timeline_gap());
-        }
-        let incoming_profile = prepared.generation.blender_profile();
-        match prepared.join {
-            PromotionJoin::HardCut => self.blender.replace_active(incoming_profile),
-            PromotionJoin::Blend { .. } => self.blender.commit_join(),
-        }
-        std::mem::replace(&mut self.active, prepared.generation)
     }
 
     pub(crate) fn take_failed_incoming(
@@ -163,5 +131,36 @@ impl ActiveDecode {
                 None
             }
         }
+    }
+
+    pub(crate) fn transition_holds_output(&self) -> bool {
+        if self.active.is_finished() || !self.blender.is_steady() {
+            return false;
+        }
+        let Some(IncomingDecode::Priming {
+            frontier,
+            generation,
+            ..
+        }) = self.incoming.as_ref()
+        else {
+            return false;
+        };
+        if *frontier == OutgoingFrontier::Awaiting {
+            return false;
+        }
+        let gapless_mode = self.gapless_mode();
+        let outgoing_origin = self.active.timeline_origin(gapless_mode);
+        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+        !matches!(
+            promotion_readiness(
+                &self.active,
+                &self.blender,
+                generation,
+                *frontier,
+                outgoing_origin,
+                incoming_origin,
+            ),
+            PromotionReadiness::AwaitingOutgoingFrontier
+        )
     }
 }

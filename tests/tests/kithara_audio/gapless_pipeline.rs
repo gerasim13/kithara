@@ -4,7 +4,8 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    decode::{DecoderTrackInfo, GaplessInfo, PcmSpec},
+    decode::{DecoderTrackInfo, GaplessInfo},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::decode_mock::scripted_inner_decoder_with_track_info_loose;
 
@@ -16,7 +17,7 @@ fn scripted_decoder_exposes_gapless_track_info() {
     let mut track_info = DecoderTrackInfo::default();
     track_info.gapless = Some(gapless);
 
-    let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
         spec,
         Vec::new(),

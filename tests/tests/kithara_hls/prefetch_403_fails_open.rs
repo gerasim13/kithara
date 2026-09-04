@@ -3,12 +3,14 @@
 use std::error::Error;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{
     PackagedTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
 };
@@ -31,21 +33,32 @@ async fn prefetch_403_returns_err_quickly(
     .await;
 
     let url = server.url("/master-encrypted.m3u8");
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(CancelToken::never())
         .build();
 
     let started = kithara::platform::time::Instant::now();
-    let result =
-        kithara::platform::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
-            .await
-            .map_err(|_| "Stream::<Hls>::new did not return within 1s — silent hang regression")?;
+    let result = kithara::platform::time::timeout(
+        Duration::from_secs(1),
+        Stream::<Hls<TestPools>>::new(config),
+    )
+    .await
+    .map_err(
+        |_| "Stream::<Hls<TestPools>>::new did not return within 1s - silent hang regression",
+    )?;
     let elapsed = started.elapsed();
 
     let err = match result {
         Ok(_) => panic!(
-            "Stream::<Hls>::new must fail when key server returns 403; got Ok in {elapsed:?}"
+            "Stream::<Hls<TestPools>>::new must fail when key server returns 403; got Ok in {elapsed:?}"
         ),
         Err(e) => e,
     };

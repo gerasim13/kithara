@@ -2,324 +2,174 @@
 
 <img src="../logo.svg" alt="kithara" width="300">
 
-</div>
-
-<div align="center">
-
-[![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2015.6%2B%20%7C%20macOS%2013%2B-blue.svg)]()
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
 
 </div>
 
 # Kithara for Apple
 
-Swift package for iOS and macOS providing Kithara audio engine bindings. AVPlayer-style API with queue-based playback, volume/mute control, seek, and adaptive bitrate support.
-
-Built on top of the Rust core via UniFFI-generated bindings and distributed as a Swift package with a pre-built XCFramework.
+Swift package for iOS and macOS: an AVPlayer-style API over the Kithara audio
+engine with queue playback, volume and mute, seek, and adaptive bitrate. The
+Rust core is exposed through UniFFI and ships as a pre-built XCFramework.
 
 ## Installation
 
-Add Kithara as a Swift Package Manager dependency:
+The package manifest is the repository root `Package.swift`, not this
+directory; it declares the minimum platforms and three products: `Kithara` (the
+Swift API), `KitharaFFI` (generated UniFFI bindings, not for direct use), and
+`KitharaRx` (an optional RxSwift bridge over the Combine publishers). They sit
+on the `KitharaFFIInternal` binary target, the XCFramework holding the Rust
+core. Depend on `https://github.com/zvuk/kithara` at a tag from the
+[Releases page](https://github.com/zvuk/kithara/releases), or add the unpacked
+`Kithara.xcframework.zip` from the release assets to the app target by hand.
 
-**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → pick the latest tag from the [Releases page](https://github.com/zvuk/kithara/releases).
+**Binary selection trap.** `KITHARA_LOCAL_DEV` only *overrides* the choice;
+with it unset the manifest uses a local `apple/KitharaFFIInternal.xcframework`
+whenever that path exists, and the pinned release download otherwise. A stale
+locally built framework therefore silently wins over the tagged binary — set
+the variable to `0` to force the release download, or delete the local one.
 
-**Package.swift**:
-
-```swift
-// swift-tools-version: 6.0
-import PackageDescription
-
-let package = Package(
-    name: "MyApp",
-    platforms: [.iOS("15.6"), .macOS(.v13)],
-    dependencies: [
-        // Replace X.Y.Z with the latest tag from https://github.com/zvuk/kithara/releases
-        .package(url: "https://github.com/zvuk/kithara", from: "X.Y.Z"),
-    ],
-    targets: [
-        .executableTarget(
-            name: "MyApp",
-            dependencies: [
-                .product(name: "Kithara", package: "Kithara"),
-            ]
-        ),
-    ]
-)
-```
-
-For manual integration, download `Kithara.xcframework.zip` from the release
-assets and add the unpacked `Kithara.xcframework` to the app target.
-
-## Development
-
-For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
+## Build
 
 ```bash
-just platform apple xcframework                    # build XCFramework (release)
-just platform apple xcframework --profile debug    # build XCFramework (debug)
-KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
+just platform apple xcframework                    # release
+just platform apple xcframework --profile debug
+just platform apple demo                           # build and launch the demo
+just platform apple xcode                          # generate and open the demo project
+just platform apple ios                            # xcodebuild the iOS demo scheme
+just platform apple test                           # iOS unit tests
+just platform apple integration-regressions [name]
+just platform apple doc                            # DocC for Kithara and KitharaRx
 ```
 
-## Quick Start
+The XCFramework lands at `apple/KitharaFFIInternal.xcframework`. Release
+carries `macos-arm64_x86_64`, `ios-arm64`, and the fat
+`ios-arm64_x86_64-simulator`; **debug carries only `ios-arm64-simulator`**, so a
+generic simulator destination asks for architectures the debug framework never
+claimed and the link fails with a missing-symbol error for x86_64. Pin
+`ARCHS=arm64` against a debug build.
+
+Traps:
+
+- `test` and `integration-regressions` need `KITHARA_TEST_SERVER_URL` pointing
+  at a running hermetic test server, and resolve an iOS simulator themselves;
+  KITHARA_IOS_DESTINATION overrides that choice with an xcodebuild destination.
+- Explicit modules build the SDK's own PCMs into a shared module cache, and on
+  a cold cache Xcode fails that step for the demo scheme with a redefinition of
+  module `SwiftShims`. A warm cache hides it, so it reads as intermittent; the
+  recipe disables explicit modules. Tool versions are pinned in
+  `.config/ci-pins.toml`.
+
+## Usage
+
+### Playback and queue
 
 ```swift
 import Kithara
 
 let player = KitharaPlayer()
-let item = KitharaPlayerItem(url: "https://example.com/track.mp3")
+try player.insert(KitharaPlayerItem(url: "https://example.com/a.mp3"))
+try player.insert(second, after: first)
+player.remove(first); player.removeAllItems()
 
-try player.insert(item)
-player.play()
-```
-
-## Usage
-
-### Playback Control
-
-```swift
-player.play()
-player.pause()
-player.stop()                         // pause + clear queue
+player.play(); player.pause()
+player.stop()                    // pause + clear queue
 player.advanceToNextItem()
-player.volume = 0.5
-player.isMuted = true
-player.playingRate = 1.5              // target playback speed
-```
+player.volume = 0.5; player.isMuted = true
+player.playingRate = 1.5         // target playback speed
+player.seek(to: 30.0, tolerance: nil, completionHandler: MySeekCallback())
 
-### Runtime DRM (HLS-AES)
-
-```swift
-player.setupHlsAes { encryptedKey, salt in
-    // The player generates `salt` and attaches it to every outgoing
-    // request under `X-Encrypted-Key`. Build the cipher from the
-    // same salt to match the server's encryption.
-    let cipher = Cipher(key: cipherKey + salt)
-    return cipher.decrypt(encryptedKey)
+final class MySeekCallback: SeekCallback, @unchecked Sendable {
+    func onComplete(finished: Bool) { print("Seek finished: \(finished)") }
 }
 ```
 
-### Network defaults
+### Network and runtime DRM (HLS-AES)
 
 ```swift
 player.setupNetwork(authToken: "<token>")
 player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
+
+player.setupHlsAes { encryptedKey, salt in
+    // The player generates `salt` and attaches it to every outgoing request
+    // under `X-Encrypted-Key`. Build the cipher from the same salt so it
+    // matches the server's encryption.
+    Cipher(key: cipherKey + salt).decrypt(encryptedKey)
+}
+```
+
+### Events
+
+```swift
+player.eventPublisher
+    .receive(on: DispatchQueue.main)
+    .sink { event in if case let .error(message) = event { print(message) } }
+    .store(in: &cancellables)
+
+item.eventPublisher.sink { /* same shape, per item */ }.store(in: &cancellables)
+
+// Explicit preload is optional; insert can auto-load with player config.
+Task { print("Playable: \(await item.load().isPlayable)") }
+```
+
+### Per-item options
+
+```swift
+let item = KitharaPlayerItem(url: hlsURL,
+    preferredPeakBitrate: 256_000, preferredPeakBitrateForExpensiveNetworks: 0)
 ```
 
 ### Cache location and layout
-
-`AssetStore` owns the outer cache directory and an immutable snapshot of its
-protocol layouts. The Rust registry owns registrations immediately, and the
-same store can be shared by multiple players:
 
 ```swift
 let layouts = AssetLayoutRegistry()
 layouts.register(MyFileAssetLayout(), for: .file)
 layouts.register(MyHlsAssetLayout(), for: .hls)
 
-let store = AssetStore(
-    root: appSupportDirectory.path,
-    layouts: layouts
-)
-
-let player = KitharaPlayer(
-    config: .init(store: store)
-)
+let store = AssetStore(root: appSupportDirectory.path, layouts: layouts)
+let player = KitharaPlayer(config: .init(store: store))
 ```
 
-`MyFileAssetLayout` and `MyHlsAssetLayout` implement `AssetLayout`. Their
-`root(source:)` and `path(resource:)` callbacks are retained by Rust. A store
-captures its registry snapshot when it is created, so later registrations
-affect only later stores. An empty registry uses Kithara's defaults. Invalid
-callback output is rejected rather than rewritten or replaced with a default
-path; see the protocol documentation for the portable component rules.
+Ownership: `AssetStore` owns the outer cache directory and an immutable
+snapshot of its layouts, so later registrations reach only later stores and one
+store serves any number of players; the Rust registry takes a registration
+immediately. An empty registry uses Kithara's defaults. `MyFileAssetLayout` and
+`MyHlsAssetLayout` implement `AssetLayout`; their `root(source:)` and
+`path(resource:)` callbacks are retained by Rust, choose paths below the outer
+directory, and are rejected on invalid output rather than rewritten or
+defaulted — the protocol documentation owns the portable component rules.
 
-When remote media URLs use query parameters as content identity, create the
-built-in domain-aware layout and register it for each applicable protocol:
+When remote URLs carry content identity in query parameters, register the
+built-in domain-aware layout — through the same ordinary registration used for
+application layouts — for each applicable protocol:
 
 ```swift
-let layouts = AssetLayoutRegistry()
 let queryIdentity = AssetLayouts.queryIdentity(rules: [
     CacheIdentityRule(
         domains: ["media.example", "*.cdn.example"],
         queryParameters: ["content_ref", "edition"]
     ),
-    CacheIdentityRule(
-        domains: ["*"],
-        queryParameters: ["fallback_content_key"]
-    ),
+    CacheIdentityRule(domains: ["*"], queryParameters: ["fallback_content_key"]),
 ])
 layouts.register(queryIdentity, for: .file)
 layouts.register(queryIdentity, for: .hls)
 ```
 
-Rules are evaluated in order. Exact hosts, `*.domain` subdomains, and `*` are
-supported. Only listed parameters affect the cache root; unlisted signed URL
-parameters such as expiry timestamps are ignored. The raw query is never stored
-in a cache path. The same ordinary registration method is used for Rust-owned
-built-in layouts and application-provided layouts.
+Rules are evaluated in order; domains are exact hosts, `*.domain` for
+subdomains, or `*`. Only the listed parameters affect the cache root, so signed
+URL parameters such as expiry timestamps are ignored, and the raw query is
+never stored in a cache path.
 
-### Seek
+## Demo and Playground
 
-```swift
-player.seek(to: 30.0, tolerance: nil, completionHandler: MySeekCallback())
-
-final class MySeekCallback: SeekCallback, @unchecked Sendable {
-    func onComplete(finished: Bool) {
-        print("Seek finished: \(finished)")
-    }
-}
-```
-
-### Migration from earlier API
-
-| Old | New |
-|-----|-----|
-| `player.defaultRate` | `player.playingRate` |
-| `player.seek(to:callback:)` | `player.seek(to:tolerance:completionHandler:)` |
-| `player.setPreferredPeakBitrate(...)` | `player.updatePeakBitrate(wifi:cellular:)` |
-| `KeyProcessor.processKey(_ key:)` | `KeyProcessor.processKey(_ key:salt:)` |
-| content `KitharaPlayerItem.id` | `KitharaPlayerItem.audioId`; `id` is now the unique queue-item identity |
-| `ItemEvent.bufferedDurationChanged(seconds:)` | `ItemEvent.loadedRangesChanged(ranges:)` |
-| `currentTime: TimeInterval?` | `currentTime: TimeInterval` (`0` when no item is loaded) |
-
-### Queue Management
-
-```swift
-let first = KitharaPlayerItem(url: "https://example.com/a.mp3")
-let second = KitharaPlayerItem(url: "https://example.com/b.mp3")
-
-try player.insert(first)
-try player.insert(second, after: first)
-player.remove(first)
-player.removeAllItems()
-```
-
-### Events (Combine)
-
-```swift
-player.eventPublisher
-    .receive(on: DispatchQueue.main)
-    .sink { event in
-        switch event {
-        case let .timeChanged(seconds):
-            print("Position: \(seconds)s")
-        case let .rateChanged(rate):
-            print("Rate: \(rate)")
-        case let .statusChanged(status):
-            print("Status: \(status)")
-        case let .durationChanged(seconds):
-            print("Duration: \(seconds)s")
-        case let .error(message):
-            print("Error: \(message)")
-        case let .currentItemChanged(itemId):
-            print("Now playing: \(itemId ?? "none")")
-        default:
-            break
-        }
-    }
-    .store(in: &cancellables)
-```
-
-### Item Events
-
-```swift
-let item = KitharaPlayerItem(url: url)
-
-item.eventPublisher
-    .sink { event in
-        if case let .error(message) = event {
-            print("Load failed: \(message)")
-        }
-    }
-    .store(in: &cancellables)
-
-// Explicit preload is optional. Insert can auto-load with player config.
-Task {
-    let result = await item.load()
-    print("Playable: \(result.isPlayable)")
-}
-```
-
-### ABR Bitrate Hints
-
-```swift
-let item = KitharaPlayerItem(
-    url: "https://example.com/stream.m3u8",
-    preferredPeakBitrate: 256_000,
-    preferredPeakBitrateForExpensiveNetworks: 0
-)
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│  Kithara (Swift API)                    │
-│  KitharaPlayer, KitharaPlayerItem       │
-├─────────────────────────────────────────┤
-│  KitharaFFI (UniFFI-generated bindings) │
-├─────────────────────────────────────────┤
-│  KitharaFFIInternal.xcframework         │
-│  (Rust core: kithara-play, kithara-ffi) │
-└─────────────────────────────────────────┘
-```
-
-| Layer | Description |
-|-------|-------------|
-| **Kithara** | Swifty public API with Combine publishers and AVPlayer-style semantics |
-| **KitharaFFI** | Auto-generated UniFFI bindings — not intended for direct use |
-| **KitharaFFIInternal** | Pre-built static library (XCFramework) from the Rust crate |
-
-## Interactive Playground
-
-There is also an interactive Swift playground at [`Examples/KitharaDemo/KitharaPlayground.playground`](Examples/KitharaDemo/KitharaPlayground.playground).
-It is useful for quickly trying core APIs (`load`, `insert`, `play`, `pause`, `seek`, `volume`, `mute`, and playback rate) without running the full demo app.
-
-Open `apple/Package.swift` in Xcode, then open the playground from the Project navigator and run it.
-For local Rust changes, build a local XCFramework first:
-
-```bash
-just platform apple xcframework --profile debug
-cd apple
-KITHARA_LOCAL_DEV=1 open Package.swift
-```
-
-## Demo App
-
-An iOS/macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). It plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
-
-```bash
-just platform apple demo
-just platform apple demo
-```
-
-To open the generated Xcode project instead of launching a simulator:
-
-```bash
-just platform apple xcode
-```
-
-Features: URL input with Cmd+V, play/pause with auto-reload after track ends, seek slider, volume with mute, rate selector (0.5x–2.0x), status badge, and error display.
-
-## Building the XCFramework
-
-The XCFramework bundles the Rust core for all supported Apple platforms:
-
-```bash
-just platform apple xcframework                       # release (optimized)
-just platform apple xcframework --profile debug       # debug (faster builds)
-# Equivalent direct xtask invocations:
-just platform apple xcframework
-just platform apple xcframework --profile debug
-```
-
-Output: `apple/KitharaFFIInternal.xcframework` with slices for:
-
-- `macos-arm64_x86_64`
-- `ios-arm64`
-- `ios-arm64_x86_64-simulator`
+[`Examples/KitharaDemo`](Examples/KitharaDemo) plays any URL (MP3, AAC, FLAC,
+HLS) with transport, seek, volume, and rate; launch it with
+`just platform apple demo`. The
+[playground](Examples/KitharaDemo/KitharaPlayground.playground) exercises the
+core API without the app — build a debug XCFramework, then run
+`KITHARA_LOCAL_DEV=1 open Package.swift` from the repository root.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](../LICENSE-APACHE) or [MIT license](../LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](../LICENSE-APACHE) or
+[MIT license](../LICENSE-MIT) at your option.

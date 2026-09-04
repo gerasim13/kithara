@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -10,7 +11,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
@@ -87,13 +90,21 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancelToken::never();
+    let pools = pools();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
-    let stream = Stream::<File>::new(config).await.unwrap();
+    let stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     let saw_terminal = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
     assert!(
@@ -132,13 +143,21 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancelToken::never();
+    let pools = pools();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
-    let stream = Stream::<File>::new(config).await.unwrap();
+    let stream = Stream::<File<TestPools>>::new(config).await.unwrap();
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
 
     let baseline = handle.request_count();

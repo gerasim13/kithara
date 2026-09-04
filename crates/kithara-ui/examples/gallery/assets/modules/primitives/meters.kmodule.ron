@@ -14,17 +14,17 @@
                     VuStereo(
                         id: "stereo",
                         size: (w: Fixed(64.0), h: Fixed(22.0)),
-                        read: Model(id: "mock.levels"),
+                        read: Model(id: "demo.levels"),
                     ),
                     VuVertical(
                         id: "vertical-120",
                         size: (w: Fixed(18.0), h: Fixed(120.0)),
-                        read: Model(id: "mock.levels"),
+                        read: Model(id: "demo.levels"),
                     ),
                     VuVertical(
                         id: "vertical-64",
                         size: (w: Fixed(16.0), h: Fixed(64.0)),
-                        read: Model(id: "mock.levels"),
+                        read: Model(id: "demo.levels"),
                     ),
                 ],
             ),

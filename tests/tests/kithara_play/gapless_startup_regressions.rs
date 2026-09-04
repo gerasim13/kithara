@@ -4,8 +4,9 @@ use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
+    events::TrackId,
     platform::time::{Duration, Instant},
-    play::{Resource, ResourceConfig},
+    play::{Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -17,9 +18,12 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use crate::gapless_common::{
-    AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
-    GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+use crate::{
+    bufpool_ext::TestPools,
+    gapless_common::{
+        AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
+        GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+    },
 };
 
 const BLOCK_FRAMES: usize = 512;
@@ -48,7 +52,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     let resource =
         create_delayed_gapless_hls_resource(harness.player(), &server, temp_dir.path()).await;
 
-    harness.player().insert(resource, None, None);
+    harness.with_player(|player| player.insert(resource, TrackId::allocate(), None));
 
     let started_at = Instant::now();
     harness.player().play();
@@ -88,7 +92,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
 ) -> Resource {
@@ -122,14 +126,14 @@ async fn create_delayed_gapless_hls_resource(
         .expect("create delayed gapless HLS fixture");
 
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare delayed gapless HLS resource config");
 
     Resource::new(config)
         .await

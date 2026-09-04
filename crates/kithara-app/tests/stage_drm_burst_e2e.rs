@@ -1,5 +1,6 @@
+use ::kithara::net::{Headers, HttpClient, NetOptions, RangeSpec};
 use futures::future::join_all;
-use kithara_net::{Headers, HttpClient, NetOptions, RangeSpec};
+use kithara_app::pools;
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -14,7 +15,8 @@ fn drm_headers(auth: &str) -> Headers {
 fn stage_client() -> HttpClient {
     HttpClient::new(
         NetOptions::builder().is_insecure(true).build(),
-        kithara_platform::CancelToken::never(),
+        pools::build().expect("valid app pool policy"),
+        ::kithara::platform::CancelToken::never(),
     )
 }
 

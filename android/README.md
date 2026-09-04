@@ -2,71 +2,59 @@
 
 <img src="../logo.svg" alt="kithara" width="300">
 
-</div>
-
-<div align="center">
-
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.0-purple.svg)](https://kotlinlang.org)
-[![Platforms](https://img.shields.io/badge/Android-API%2026%2B-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
 
 </div>
 
 # Kithara for Android
 
-Android library providing Kithara audio engine bindings. Queue-based playback API with seek, adaptive bitrate support, and reactive state via Kotlin `StateFlow`.
+Kotlin bindings for the Kithara audio engine: queue-based playback with seek,
+adaptive bitrate, and reactive state through `StateFlow`. The Rust core is
+exposed through UniFFI and ships as a Gradle module carrying JNI slices for
+`arm64-v8a` and `x86_64`.
 
-Built on top of the Rust core via UniFFI-generated bindings, distributed as a Gradle module with JNI libraries for `arm64-v8a` and `x86_64`.
-
-## Installation
-
-Clone the repository and open the `android/` directory as a Gradle project in Android Studio.
-
-To use Kithara as an AAR in your own project, build the release artifact (see [Building the AAR](#building-the-aar)) and add it as a file dependency alongside its transitive dependencies (`jna`, `kotlinx-coroutines-core`, `rustls-platform-verifier`).
-
-Before the first Android Studio sync, build the JNI libraries and Kotlin UniFFI bindings (see [Development](#development)).
-
-## Development
-
-**Prerequisites:**
-
-- Rust toolchain via [rustup](https://rustup.rs)
-- `cargo-ndk`: `cargo install cargo-ndk`
-- Android NDK installed and `ANDROID_NDK_HOME` set
-- Rust targets for Android:
+## Build
 
 ```bash
-rustup target add aarch64-linux-android x86_64-linux-android
-```
-
-**Build JNI libraries and generate Kotlin UniFFI bindings:**
-
-```bash
-just platform android                     # debug (default)
-just platform android build              # equivalent
+just platform android                          # JNI libraries + Kotlin bindings, debug
 just platform android build --profile release
+just platform android aar                      # release AARs
+just platform android run                      # boot an emulator, install and launch the demo
+just platform android test                     # instrumented tests on an emulator
 ```
 
-Output:
+The recipe checks `cargo-ndk`, `rustup`, and the installed Rust targets itself
+and prints the exact command for whatever is missing. The NDK comes from
+`ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`, or `NDK_HOME`, else the newest version
+installed under the Android SDK. Toolchain versions are pinned in
+`.config/ci-pins.toml`.
 
-- `android/lib/build/generated/jniLibs/` — native `.so` libraries per ABI
-- `android/lib/build/generated/uniffi/kotlin/` — generated Kotlin bindings
+Generated output lands in `android/lib/build/generated/`: `jniLibs/` per ABI and
+`uniffi/kotlin/`. The AAR export writes `android/lib/build/outputs/aar/` —
+`kithara.aar` plus `rust-tls.aar`, the rustls platform verifier, which must be
+distributed alongside it. A file-dependency integration also needs `jna` and
+`kotlinx-coroutines-core`.
 
-The Android SDK target graph excludes `kithara-workspace-hack`; host feature
-unification must not leak into NDK builds. The build must not modify
-`Cargo.lock` or the generated workspace-hack manifest.
+Traps:
 
-Run the build once before opening the project in Android Studio.
+- The Android target graph excludes `kithara-workspace-hack`; host feature
+  unification must not leak into NDK builds, and the build must leave
+  `Cargo.lock` and the generated workspace-hack manifest untouched.
+- Gradle *configuration* — not just the build — shells out to `cargo metadata`
+  from `settings.gradle.kts` and `lib/build.gradle.kts` to locate the rustls
+  verifier AAR, so a sync fails without a reachable cargo. It looks at `CARGO`,
+  then `~/.cargo/bin/cargo`, then `PATH`; Android Studio does not always
+  inherit a shell `PATH`.
+- The generated Kotlin is a source directory of the `lib` module. The IDE
+  cannot resolve it until it exists, so run the build once before the first
+  sync.
 
 ## Quick Start
-
-Initialize the engine in your `Application` class, then create and play items:
 
 ```kotlin
 // Application.onCreate:
 Kithara.initialize(applicationContext)
 
-// In any coroutine scope:
 val player = KitharaPlayer()
 val item = KitharaPlayerItem("https://example.com/track.mp3")
 
@@ -78,20 +66,51 @@ lifecycleScope.launch {
 
 ## Usage
 
-### Playback Control
+### Playback and queue
 
 ```kotlin
 player.play()
 player.pause()
-player.playingRate = 1.5f   // target playback speed
+player.playingRate = 1.5f            // target playback speed
+
+player.insert(second, after = first)
+player.remove(first)
+player.removeAllItems()
+
+try {
+    player.seek(30.0)
+} catch (e: KitharaError) { /* seek failed */ }
 ```
 
-### Cache Location and Layout
+### State
+
+```kotlin
+lifecycleScope.launch {
+    player.state.collect { println("${it.status} ${it.currentTime}s / ${it.duration}s rate ${it.rate}") }
+}
+lifecycleScope.launch { player.currentItemChanges.collect { /* item switched */ } }
+lifecycleScope.launch { item.state.collect { it.error?.let(::println) } }
+
+// Explicit preload is optional; insert can auto-load with player config.
+lifecycleScope.launch { item.load() }
+```
+
+### Per-item options
+
+```kotlin
+val item = KitharaPlayerItem(
+    url = "https://example.com/stream.m3u8",
+    preferredPeakBitrate = 256_000.0,
+    preferredPeakBitrateForExpensiveNetworks = 128_000.0,
+    additionalHeaders = mapOf("Authorization" to "Bearer <token>"),
+)
+```
+
+### Cache location and layout
 
 `Kithara.initialize` creates one process-wide `AssetStore` rooted at
-`<application cacheDir>/kithara`. Every default-configured player shares that
-native store. To use a different root or custom path layouts, create another
-store and pass it through the player's `store` field:
+`<application cacheDir>/kithara`, shared by every default-configured player. A
+different root or custom path layout means constructing another store:
 
 ```kotlin
 val layouts = AssetLayoutRegistry().apply {
@@ -102,27 +121,22 @@ val store = AssetStore(
     root = application.filesDir.resolve("kithara-cache").absolutePath,
     layouts = layouts,
 )
-
-val player = KitharaPlayer(
-    config = KitharaPlayer.Config(
-        store = store,
-    )
-)
+val player = KitharaPlayer(config = KitharaPlayer.Config(store = store))
 ```
 
-`AssetLayoutRegistry` is a native Rust registry; `register` immediately routes
-the layout into Rust, and Kotlin does not keep a second registry. The store
-captures a registry snapshot when it is created and can then be shared by any
-number of players. `MyFileAssetLayout` and `MyHlsAssetLayout` implement
-`AssetLayout`; their `root(source)` and `path(resource)` callbacks control paths
-below the outer cache directory. An empty registry uses Kithara's defaults.
-Invalid callback output is rejected rather than rewritten or replaced with a
-default path; see the `AssetLayout` API contract for the portable component
-rules.
+Ownership: `AssetLayoutRegistry` is the native Rust registry, so `register`
+routes the layout into Rust immediately and Kotlin keeps no second copy. A store
+captures a registry snapshot at construction — later registrations reach only
+later stores — and one store can then be shared by any number of players. An
+empty registry uses Kithara's defaults. `MyFileAssetLayout` and
+`MyHlsAssetLayout` implement `AssetLayout`; their `root(source)` and
+`path(resource)` callbacks choose paths below the outer cache directory, and
+invalid callback output is rejected rather than rewritten or replaced with a
+default. The `AssetLayout` API contract owns the portable component rules.
 
-For signed media URLs whose path is shared by several tracks or variants,
-create the built-in query-identity layout and register the same layout for each
-protocol that uses those URLs:
+For signed media URLs whose path is shared by several tracks or variants, use
+the built-in query-identity layout, registered once per protocol that serves
+those URLs:
 
 ```kotlin
 val queryIdentity = AssetLayouts.queryIdentity(
@@ -133,148 +147,32 @@ val queryIdentity = AssetLayouts.queryIdentity(
         ),
     ),
 )
-val layouts = AssetLayoutRegistry().apply {
-    register(queryIdentity, AssetLayoutTarget.File)
-    register(queryIdentity, AssetLayoutTarget.Hls)
-}
 ```
 
-Rules are checked in order. Domain patterns support exact hosts,
-`*.example.com` for subdomains only, and `*` for every host. Only the configured
-parameter names contribute to cache identity; rotating signatures, expiry
-timestamps, and other unlisted parameters do not split the cache. Selected
-values are hashed into safe cache components and are never written as raw query
-text.
-
-### Seek
-
-```kotlin
-try {
-    player.seek(30.0)
-} catch (e: KitharaError) {
-    // handle seek failure
-}
-```
-
-### Queue Management
-
-```kotlin
-val first = KitharaPlayerItem("https://example.com/a.mp3")
-val second = KitharaPlayerItem("https://example.com/b.mp3")
-
-lifecycleScope.launch {
-    player.insert(first)
-    player.insert(second, after = first)
-    player.remove(first)
-    player.removeAllItems()
-}
-```
-
-### Player State (StateFlow)
-
-```kotlin
-lifecycleScope.launch {
-    player.state.collect { state ->
-        println("Status: ${state.status}")
-        println("Position: ${state.currentTime}s")
-        println("Duration: ${state.duration}s")
-        println("Rate: ${state.rate}")
-        state.error?.let { println("Error: $it") }
-    }
-}
-
-// Current item changes
-lifecycleScope.launch {
-    player.currentItemChanges.collect {
-        println("Current item changed")
-    }
-}
-```
-
-### Item State (StateFlow)
-
-```kotlin
-val item = KitharaPlayerItem("https://example.com/track.mp3")
-
-lifecycleScope.launch {
-    item.state.collect { state ->
-        println("Item status: ${state.status}")
-        state.error?.let { println("Load failed: $it") }
-    }
-}
-
-lifecycleScope.launch {
-    // Explicit preload is optional. Insert can auto-load with player config.
-    item.load()
-}
-```
-
-### ABR Bitrate Hints
-
-```kotlin
-val item = KitharaPlayerItem(
-    url = "https://example.com/stream.m3u8",
-    preferredPeakBitrate = 256_000.0,
-    preferredPeakBitrateForExpensiveNetworks = 128_000.0,
-)
-```
-
-### Additional HTTP Headers
-
-```kotlin
-val item = KitharaPlayerItem(
-    url = "https://example.com/protected.mp3",
-    additionalHeaders = mapOf("Authorization" to "Bearer <token>"),
-)
-```
+Rules are checked in order. Domain patterns are exact hosts, `*.example.com`
+for subdomains only, or `*` for every host. Only the named parameters
+contribute to cache identity, so rotating signatures and expiry timestamps do
+not split the cache; selected values are hashed into safe path components and
+the raw query is never written to disk.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────┐
-│  com.kithara (Kotlin API)               │
-│  KitharaPlayer, KitharaPlayerItem       │
-├─────────────────────────────────────────┤
-│  com.kithara.ffi (UniFFI-generated)     │
-├─────────────────────────────────────────┤
-│  libkithara_ffi.so                      │
-│  (Rust core: kithara-play, kithara-ffi) │
-└─────────────────────────────────────────┘
-```
+| Layer | Contract |
+|-------|----------|
+| `com.kithara` | Public Kotlin API, `StateFlow`-based reactive state |
+| `com.kithara.ffi` | Generated UniFFI bindings — not for direct use |
+| `libkithara_ffi.so` | Rust core (kithara-play, kithara-ffi) |
 
-| Layer | Description |
-|-------|-------------|
-| **com.kithara** | Public Kotlin API with `StateFlow`-based reactive state |
-| **com.kithara.ffi** | Auto-generated UniFFI bindings — not intended for direct use |
-| **libkithara_ffi.so** | Native shared library built from the Rust crate |
-
-The release AAR uses the Android `MediaCodec` backend for AAC family / MP3 / FLAC over `MediaExtractor`.
+The release AAR decodes the AAC family, MP3, and FLAC through the Android
+`MediaCodec` backend over `MediaExtractor`.
 
 ## Demo App
 
-A minimal Android demo player is included in [`example`](example). Plays audio from a URL or a local file picked from device storage, with play/pause, stop controls, and reactive status display.
-
-Open the `android/` directory as a Gradle project in Android Studio and run the `:example` configuration, or build and install via the command line:
-
-```bash
-cd android
-./gradlew :example:installDebug
-```
-
-## Building the AAR
-
-Builds the Rust core for all supported ABIs and packages it into a release AAR:
-
-```bash
-just platform android aar
-just platform android aar
-```
-
-Outputs in `android/lib/build/outputs/aar/`:
-
-- `kithara.aar` — main library (JNI slices for `arm64-v8a` and `x86_64`)
-- `rust-tls.aar` — rustls platform-verifier; must be distributed alongside `kithara.aar`
+[`example`](example) is a minimal player: URL or local file, play/pause/stop,
+reactive status. `just platform android run` boots an emulator, installs it, and
+launches it.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](../LICENSE-APACHE) or [MIT license](../LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](../LICENSE-APACHE) or
+[MIT license](../LICENSE-MIT) at your option.

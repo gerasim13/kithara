@@ -59,7 +59,13 @@ pub(super) struct BridgeConfig {
     pub(super) gitlab_project_path: String,
     pub(super) gitlab_username: String,
     pub(super) gitlab_token_file: PathBuf,
-    pub(super) branch: String,
+    /// The default branch on each side, named separately.
+    ///
+    /// One key served both while the two repositories agreed on the name. They
+    /// no longer do: GitLab calls its default branch `develop` and GitHub calls
+    /// its own `main`, and a single value cannot be right for both.
+    pub(super) github_branch: String,
+    pub(super) gitlab_branch: String,
     pub(super) state_dir: PathBuf,
     /// GitHub logins whose pull requests may change the CI control paths
     /// directly.
@@ -109,8 +115,13 @@ impl BridgeConfig {
         {
             bail!("gitlab_url must be an HTTPS origin without credentials or query");
         }
-        if !simple_branch(&self.branch) {
-            bail!("branch must be one simple branch name");
+        for (label, branch) in [
+            ("github_branch", &self.github_branch),
+            ("gitlab_branch", &self.gitlab_branch),
+        ] {
+            if !simple_branch(branch) {
+                bail!("{label} must be one simple branch name");
+            }
         }
         if self.gitlab_username.is_empty()
             || !self

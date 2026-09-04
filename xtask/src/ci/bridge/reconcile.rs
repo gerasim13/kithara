@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs4::FileExt;
+use kithara_devtools::lock::FileLock;
 use tracing::{info, warn};
 
 use super::{
@@ -13,7 +13,8 @@ use super::{
     git::{GitRepo, Judged},
     ledger::{Ledger, LedgerEntry},
     model::{
-        Direction, PipelineObservation, PullRequest, VerificationState, direction_for, validate_sha,
+        Branches, Direction, PipelineObservation, PullRequest, VerificationState, direction_for,
+        validate_sha,
     },
 };
 
@@ -25,22 +26,22 @@ pub(super) struct Bridge {
 }
 
 struct ReconcileLock {
-    _file: File,
+    _lock: FileLock,
 }
 
 impl ReconcileLock {
     fn acquire(state_dir: &Path) -> Result<Self> {
         let file = open_reconcile_lock(state_dir)?;
-        FileExt::lock(&file)
+        let lock = FileLock::exclusive(file)
             .with_context(|| format!("locking bridge state {}", state_dir.display()))?;
-        Ok(Self { _file: file })
+        Ok(Self { _lock: lock })
     }
 
     #[cfg(test)]
     fn try_acquire(state_dir: &Path) -> Result<Option<Self>> {
         let file = open_reconcile_lock(state_dir)?;
-        match FileExt::try_lock(&file) {
-            Ok(()) => Ok(Some(Self { _file: file })),
+        match FileLock::try_exclusive(file) {
+            Ok(lock) => Ok(Some(Self { _lock: lock })),
             Err(fs4::TryLockError::WouldBlock) => Ok(None),
             Err(fs4::TryLockError::Error(error)) => {
                 Err(error).with_context(|| format!("locking bridge state {}", state_dir.display()))
@@ -109,7 +110,7 @@ impl Bridge {
                      other. Synchronization stopped."
                 );
                 self.gitlab
-                    .ensure_issue("GitHub and GitLab main branches diverged", &detail)?;
+                    .ensure_issue("GitHub and GitLab default branches diverged", &detail)?;
                 bail!("GitHub and GitLab histories diverged");
             }
         }
@@ -132,7 +133,10 @@ impl Bridge {
         fast_forward_github_import(
             github_sha,
             gitlab_base_sha,
-            &self.config.branch,
+            Branches {
+                github: &self.config.github_branch,
+                gitlab: &self.config.gitlab_branch,
+            },
             |sha| self.github.merged_pull_request(sha),
             || {
                 self.repo.fetch(&self.github, &self.gitlab)?;
@@ -140,7 +144,7 @@ impl Bridge {
             },
             |detail| {
                 self.gitlab
-                    .ensure_issue("Untrusted direct GitHub main update", detail)
+                    .ensure_issue("Untrusted direct GitHub default-branch update", detail)
             },
             |sha, branch| self.repo.push_gitlab(&self.gitlab, sha, branch),
         )
@@ -460,16 +464,17 @@ fn observe_verification(
 fn fast_forward_github_import(
     github_sha: &str,
     gitlab_base_sha: &str,
-    branch: &str,
+    branches: Branches<'_>,
     merged_pull_request: impl FnOnce(&str) -> Result<Option<u64>>,
     refresh_heads: impl FnOnce() -> Result<(String, String)>,
     report_untrusted: impl FnOnce(&str) -> Result<()>,
     push_gitlab: impl FnOnce(&str, &str) -> Result<()>,
 ) -> Result<()> {
     let Some(pull_number) = merged_pull_request(github_sha)? else {
+        let github_branch = branches.github;
         let detail = format!(
             "GitHub head {github_sha} is not associated with a merged pull request targeting \
-             {branch}"
+             {github_branch}"
         );
         report_untrusted(&detail)?;
         bail!("{detail}");
@@ -483,7 +488,7 @@ fn fast_forward_github_import(
         );
     }
 
-    push_gitlab(github_sha, branch)
+    push_gitlab(github_sha, branches.gitlab)
 }
 
 fn require_sha(owner: &str, sha: &str) -> Result<()> {

@@ -5,18 +5,23 @@ use kithara::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
     platform::time::Duration,
+    resampler::NoResamplerBackend,
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 use crate::gapless_common::{
     AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
     GAPLESS_SAMPLE_RATE,
 };
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths() {
@@ -26,10 +31,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let direct = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("create direct AAC fMP4 decoder");
     let direct_gapless = direct
@@ -48,9 +50,8 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        TestDecoderConfig::builder()
+            .pools(pools())
             .hint("m4a")
             .build(),
     )
@@ -61,9 +62,8 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let preferred = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        TestDecoderConfig::builder()
+            .pools(pools())
             .backend(DecoderBackend::default())
             .build(),
     )
@@ -172,7 +172,7 @@ async fn generated_aac_elst_fixture(
 
 fn create_decoder_from_media_info(
     fixture: &GaplessFixture,
-    config: DecoderConfig,
+    config: TestDecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_from_media_info(
         Cursor::new(fixture.bytes.clone()),
@@ -184,7 +184,7 @@ fn create_decoder_from_media_info(
 fn create_decoder_with_probe(
     bytes: Vec<u8>,
     hint: &'static str,
-    config: DecoderConfig,
+    config: TestDecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), config)
 }
@@ -239,24 +239,17 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
-#[case::mp3(SignalFormat::Mp3, "mp3", 48_000)]
-#[case::flac(SignalFormat::Flac, "flac", 48_000)]
+#[case::mp3(SignalAsset::MP3_SINE1K_48K_1S, 48_000)]
+#[case::flac(SignalAsset::FLAC_SINE1K_48K_1S, 48_000)]
 async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
-    #[case] format: SignalFormat,
-    #[case] hint: &'static str,
+    #[case] asset: SignalAsset,
     #[case] expected_frames: usize,
 ) {
     let server = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: GAPLESS_SAMPLE_RATE,
-        channels: GAPLESS_CHANNELS,
-        length: SignalSpecLength::Frames(expected_frames),
-        format,
-        bit_rate: None,
-    };
+    let hint = asset.ext();
 
     let bytes = Client::new()
-        .get(server.sine(&spec, 1_000.0).await)
+        .get(server.signal(asset))
         .send()
         .await
         .expect("fetch encoded signal")
@@ -271,10 +264,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes.clone(),
             hint,
-            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .build(),
+            TestDecoderConfig::builder().pools(pools()).build(),
         )
         .expect("create default decoder"),
     )
@@ -283,9 +273,8 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes,
             hint,
-            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+            TestDecoderConfig::builder()
+                .pools(pools())
                 .backend(DecoderBackend::default())
                 .build(),
         )

@@ -1,27 +1,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::num::NonZeroU32;
 
 use kithara::{
-    audio::ConsumerWakeMode,
-    bufpool::{BytePool, PcmPool},
-    decode::PcmSpec,
-    platform::{
-        sync::Arc,
-        time::{self, Duration},
-    },
-    play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SelectTransition, SessionDispatcher,
-        apply_mix,
-    },
+    events::TrackId,
+    host::{HostConfig, HostOwned},
+    platform::time::{self, Duration},
+    play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflineSession, resource_from_reader},
+    offline::{OfflineHostHarness, resource_from_reader},
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -31,91 +24,50 @@ const MEASURE_BLOCKS: usize = 15;
 const TOL: f32 = 2.0e-3;
 const CEILING: f32 = 0.98;
 
-struct CountingSession {
-    inner: OfflineSession,
-    batches: AtomicUsize,
-    last_batch_len: AtomicUsize,
-}
-
-impl CountingSession {
-    fn new() -> Self {
-        Self {
-            inner: OfflineSession::new_manual(),
-            batches: AtomicUsize::new(0),
-            last_batch_len: AtomicUsize::new(0),
-        }
-    }
-
-    fn batches(&self) -> usize {
-        self.batches.load(Ordering::SeqCst)
-    }
-
-    fn last_batch_len(&self) -> usize {
-        self.last_batch_len.load(Ordering::SeqCst)
-    }
-
-    fn render(&self, frames: usize) -> Vec<f32> {
-        self.inner.render(frames)
-    }
-}
-
-impl SessionDispatcher for CountingSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        if let Cmd::SetPlayerMasterVolumes { levels } = &cmd {
-            self.batches.fetch_add(1, Ordering::SeqCst);
-            self.last_batch_len.store(levels.len(), Ordering::SeqCst);
-        }
-        self.inner.exec(cmd)
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        self.inner.consumer_wake_mode()
-    }
-}
-
-#[kithara::test(native, flash(false))]
-fn counting_session_preserves_inner_consumer_wake_mode() {
-    let session = CountingSession::new();
-
-    assert_eq!(
-        session.consumer_wake_mode(),
-        ConsumerWakeMode::ImmediateOffRt
-    );
-}
-
 struct MixHarness {
-    session: Arc<CountingSession>,
-    players: Vec<Arc<PlayerImpl>>,
+    host: OfflineHostHarness<TestPools>,
+    players: Vec<HostOwned<PlayerImpl<TestPools>>>,
 }
 
 impl MixHarness {
     // Players are built but not started, so a mix applied before `play` takes the
     // never-started path and each node is created at its level, unramped.
     fn new(count: usize) -> Self {
-        let session = Arc::new(CountingSession::new());
+        let pools = pools();
+        let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
+        let host = OfflineHostHarness::new(
+            HostConfig::offline(pools.clone())
+                .sample_rate(sample_rate)
+                .build(),
+        )
+        .expect("create product offline Host");
         let players = (0..count)
             .map(|_| {
                 let config = PlayerConfig::builder()
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
-                    .sample_rate(SAMPLE_RATE)
+                    .worker(PlayWorker::new(
+                        PlayWorkerConfig::builder(pools.clone()).build(),
+                    ))
+                    .sample_rate(sample_rate)
                     .crossfade_duration(0.0)
-                    .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                     .build();
-                Arc::new(PlayerImpl::new(config))
+                host.insert(PlayerImpl::new(config))
+                    .expect("insert player into product offline Host")
             })
             .collect();
-        Self { session, players }
+        Self { host, players }
     }
 
     fn play(&self, values: &[f32]) {
-        let spec = PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
         for (player, &value) in self.players.iter().zip(values) {
-            player.insert(
-                resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),
-                None,
-                None,
-            );
+            player.reserve_slots(1);
+            player
+                .replace_item(
+                    0,
+                    resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),
+                    TrackId::allocate(),
+                )
+                .expect("replace player item");
             player
                 .select_item_with_crossfade(
                     0,
@@ -129,13 +81,12 @@ impl MixHarness {
     }
 
     fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
-        let inputs: Vec<(&PlayerImpl, f32)> = self
-            .players
-            .iter()
-            .zip(levels)
-            .map(|(player, &level)| (player.as_ref(), level))
-            .collect();
-        apply_mix(inputs)
+        self.host.apply_mix(
+            self.players
+                .iter()
+                .zip(levels)
+                .map(|(player, &level)| player.level(level)),
+        )
     }
 
     // Paced at the block's real audio duration, or the render outruns the decode
@@ -144,7 +95,7 @@ impl MixHarness {
         for player in &self.players {
             player.process_notifications();
         }
-        let block = self.session.render(BLOCK_FRAMES);
+        let block = self.host.render(BLOCK_FRAMES);
         let budget = Duration::from_secs_f64(BLOCK_FRAMES as f64 / f64::from(SAMPLE_RATE));
         time::sleep(budget).await;
         block
@@ -290,30 +241,6 @@ async fn rejected_mix_changes_no_rendered_gain() {
         expected,
         "rejected mix changed a gain",
     );
-}
-
-#[kithara::test]
-fn mix_update_costs_one_session_command_per_batch() {
-    for count in [2_usize, 4] {
-        let values: Vec<f32> = (0..count).map(|i| 0.1 * (i as f32 + 1.0)).collect();
-        let levels: Vec<f32> = vec![0.5; count];
-        let harness = MixHarness::new(count);
-        harness.play(&values);
-
-        let before = harness.session.batches();
-        harness.apply(&levels).expect("apply mix");
-
-        assert_eq!(
-            harness.session.batches() - before,
-            1,
-            "{count} players must cost one session command, not {count}"
-        );
-        assert_eq!(
-            harness.session.last_batch_len(),
-            count,
-            "the single command must carry every player's level"
-        );
-    }
 }
 
 #[kithara::test]

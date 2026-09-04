@@ -119,9 +119,8 @@ impl Downloader {
         let soft_timeout = config.soft_timeout;
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
-        // Composed/standalone seam: `Some` parent → child of it; `None` → own
-        // root. The loop, peer scopes, and the shared ABR controller derive
-        // from this token.
+        // WHY: Composed/standalone seam: `Some` parent -> child of it; `None` -> own root. The loop, peer scopes, and the shared ABR
+        // controller derive from this token.
         let cancel = CancelScope::new(config.cancel).token();
         let mut abr_settings = config.abr_settings;
         abr_settings.cancel = Some(cancel.clone());
@@ -259,15 +258,9 @@ impl Downloader {
         this: Self,
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
-        // Run the download loop on a dedicated Web Worker (mirrors the
-        // pre-`unified-Downloader` `Backend` model). The decoder blocks the
-        // engine worker in `wait_range` (`Atomics.wait`); a `spawn_local`
-        // loop on that same worker would never be polled, so its fetches
+        // WHY: Run the download loop on a dedicated Web Worker (mirrors the pre-`unified-Downloader` `Backend` model). The decoder blocks
+        // the engine worker in `wait_range` (`Atomics.wait`); a `spawn_local` loop on that same worker would never be polled, so its fetches
         // would never complete the bytes the blocking read waits for.
-        // Storage is shared linear memory and its condvar notify crosses
-        // workers via `Atomics.notify`, so the engine worker's blocked read
-        // is woken once this worker commits bytes. `keep_worker_alive` keeps
-        // the worker's event loop pumping for the page's lifetime.
         spawn(move || {
             keep_worker_alive();
             drop(task::spawn(async move {

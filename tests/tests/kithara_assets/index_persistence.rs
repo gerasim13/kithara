@@ -13,7 +13,10 @@ use kithara::{
     },
     platform::time::Duration,
 };
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    kithara, temp_dir,
+};
 use rkyv::option::ArchivedOption;
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
@@ -102,8 +105,11 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
     }
 }
 
-fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetScope {
-    AssetStore::builder()
+fn build_scope(
+    temp_dir: &kithara_integration_tests::TestTempDir,
+    asset_root: &str,
+) -> AssetScope<TestPools> {
+    AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

@@ -15,13 +15,14 @@ mod mode;
 mod mono;
 #[cfg(feature = "resample-rubato")]
 pub mod rubato;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 
 pub use backend::{NoResamplerBackend, ResamplerBackend};
 pub use capabilities::ResamplerCapabilities;
 pub use config::{
-    Decode, RatioGlide, Resample, ResamplerConfig, ResamplerOptions, ResamplerQuality,
-    ResamplerSettings, Unit,
+    RatioGlide, ResamplerConfig, ResamplerOptions, ResamplerQuality, ResamplerSettings,
 };
 pub use error::{ResamplerBuildError, ResamplerError};
 pub use factory::create_resampler;

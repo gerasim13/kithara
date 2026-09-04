@@ -94,11 +94,11 @@ pub fn install() -> Recorder {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Recorder {
+    _lease: Arc<CaptureLease>,
     #[field(get, copy)]
     start_at: Instant,
     log: SharedLog,
     install_id: u64,
-    _lease: Arc<CaptureLease>,
 }
 
 impl Recorder {

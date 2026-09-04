@@ -15,11 +15,43 @@ use kithara::{
     platform::{time::Duration, tokio::runtime::Builder},
     storage::WaitOutcome,
     stream::{
-        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+        Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 use libfuzzer_sys::fuzz_target;
+
+/// Always-ready byte-space probe sharing the fuzz source's cursor and length.
+struct ReadyProbe {
+    len: u64,
+    position: Arc<AtomicU64>,
+}
+
+impl SourceProbe for ReadyProbe {
+    fn phase(&self) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(self.len)
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        None
+    }
+}
 
 #[derive(Debug)]
 enum WaitStep {
@@ -171,6 +203,13 @@ impl Source for ScriptSource {
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
         SourcePhase::Ready
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(ReadyProbe {
+            len: self.data.len() as u64,
+            position: Arc::clone(&self.position),
+        })
     }
 
     fn len(&self) -> Option<u64> {

@@ -136,6 +136,12 @@ impl OpenedVariantReader {
         Self { reader, plan }
     }
 
+    /// Split the move-only bundle for decoder construction.
+    #[must_use]
+    pub fn split(self) -> (VariantReaderPlan, OpenedReader) {
+        (self.plan, self.reader)
+    }
+
     delegate::delegate! {
         to self.plan {
             /// Content time where the incoming decoder must land.
@@ -148,12 +154,6 @@ impl OpenedVariantReader {
             #[must_use]
             pub fn transition(&self) -> VariantTransition;
         }
-    }
-
-    /// Split the move-only bundle for decoder construction.
-    #[must_use]
-    pub fn split(self) -> (VariantReaderPlan, OpenedReader) {
-        (self.plan, self.reader)
     }
 }
 

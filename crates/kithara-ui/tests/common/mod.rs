@@ -123,7 +123,7 @@ pub(crate) fn player_registry() -> TestRegistry {
     registry.insert(
         EndpointCategory::Model,
         "library.visible_tracks",
-        EndpointDesc::new(ValueKind::TrackList),
+        EndpointDesc::new(ValueKind::Table),
     );
     insert_stream_endpoints(&mut registry);
     insert_bar_endpoints(&mut registry);
@@ -164,7 +164,6 @@ fn insert_bar_endpoints(registry: &mut TestRegistry) {
 
 fn insert_menu_endpoints(registry: &mut TestRegistry) {
     for (id, kind) in [
-        ("ui.menu.open", ValueKind::Bool),
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
         ("ui.prefs.autogain", ValueKind::Bool),
@@ -196,8 +195,6 @@ fn insert_menu_endpoints(registry: &mut TestRegistry) {
         );
     }
     for id in [
-        "ui.menu.toggle",
-        "ui.menu.close",
         "ui.window.open",
         "ui.window.toggle_full_screen",
         "ui.prefs.toggle_wave_follow",
@@ -231,7 +228,6 @@ fn insert_menu_endpoints(registry: &mut TestRegistry) {
 
 fn insert_clock_endpoints(registry: &mut TestRegistry) {
     for (id, kind) in [
-        ("clock.open", ValueKind::Bool),
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
         ("clock.warning", ValueKind::Text),
@@ -272,8 +268,6 @@ fn insert_clock_endpoints(registry: &mut TestRegistry) {
         );
     }
     for id in [
-        "clock.toggle",
-        "clock.close",
         "clock.nudge_up",
         "clock.nudge_down",
         "clock.family.step",

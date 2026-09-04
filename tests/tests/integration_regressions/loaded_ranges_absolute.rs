@@ -1,7 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -9,18 +11,20 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio,
+    bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 /// `PlaybackView::buffered` is the surface a progress bar reads: once the whole
 /// body is cached it must say so, not report only what the decoder has produced
@@ -49,7 +53,7 @@ const MIN_BUFFERED_FRACTION_PERCENT: u64 = 80;
 /// duration alone can hand back a live duration next to an unwritten window.
 /// The gate is independent of what the trap asserts.
 async fn wait_for_playing_settled_duration(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
 ) -> Result<kithara::queue::PlaybackView, String> {
     time::timeout(deadline, async {
@@ -74,7 +78,7 @@ async fn wait_for_playing_settled_duration(
     })
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -90,43 +94,63 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
     });
     let url = handle.child_url("progressive.mp3");
-    let body_len = EmbeddedAudio::TEST_MP3_BYTES.len() as u64;
+    let body_len = signal_mp3_track_sine440_187s().bytes().len() as u64;
 
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .downloader(downloader)
-    .look_ahead_bytes(LOOK_AHEAD_BYTES)
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-    .build();
+    .expect("create product offline queue");
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader)
+        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .store(store)
+        .build();
 
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let ticker = spawn_ticker(queue.control());
     let mut rx = queue.subscribe();
     // Separate subscriber: the warm-up below drains `rx`, and the body can
     // finish transferring before the pause — the completion must not be eaten
     // by the wait that precedes it.
     let mut transfer_rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append progressive track");
     queue
         .select(id, Transition::None)
         .expect("select progressive track");

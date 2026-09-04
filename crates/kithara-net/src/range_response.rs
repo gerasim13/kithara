@@ -14,9 +14,9 @@ impl HttpStatus {
 }
 
 struct ContentRange {
+    total: Option<u64>,
     end: u64,
     start: u64,
-    total: Option<u64>,
 }
 
 pub(crate) fn accepts_response_status(status: u16, accept_partial: bool) -> bool {
@@ -124,9 +124,9 @@ fn parse_content_range(raw: &str) -> Option<ContentRange> {
         total => Some(total.parse().ok()?),
     };
     Some(ContentRange {
+        total,
         end: end.trim().parse().ok()?,
         start: start.trim().parse().ok()?,
-        total,
     })
 }
 

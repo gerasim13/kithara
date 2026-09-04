@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use portable_atomic::{AtomicF64, AtomicU32};
+use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
 
@@ -15,6 +15,8 @@ pub struct PlaybackSnapshot {
     /// Whether playback is active.
     #[field(get = is_playing)]
     pub(crate) playing: bool,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: f32,
     /// Cached span in seconds: how much of the source is on disk. Independent
     /// of `frontier` — bytes land ahead of the decoder, and the decoder can run
     /// ahead of what the download side has reported.
@@ -49,6 +51,8 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: AtomicF32,
     metrics: RtMetrics,
 }
 
@@ -63,6 +67,23 @@ impl PlaybackShared {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
+    }
+
+    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
+    /// not guarantee about each other.
+    #[must_use]
+    pub fn snapshot(&self) -> PlaybackSnapshot {
+        let position = self.position.load(Ordering::Relaxed);
+        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
+        PlaybackSnapshot {
+            position,
+            frontier,
+            cached: self.cached.load(Ordering::Relaxed),
+            duration: self.duration.load(Ordering::Relaxed),
+            rate: self.rate.load(Ordering::Relaxed),
+            sample_rate: self.sample_rate.load(Ordering::Relaxed),
+            playing: self.playing.load(Ordering::Relaxed),
+        }
     }
 
     /// Withdraw an epoch whose `PlayerCmd::Seek` never reached the processor.
@@ -85,22 +106,6 @@ impl PlaybackShared {
             )
             .ok();
     }
-
-    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
-    /// not guarantee about each other.
-    #[must_use]
-    pub fn snapshot(&self) -> PlaybackSnapshot {
-        let position = self.position.load(Ordering::Relaxed);
-        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
-        PlaybackSnapshot {
-            position,
-            frontier,
-            cached: self.cached.load(Ordering::Relaxed),
-            duration: self.duration.load(Ordering::Relaxed),
-            sample_rate: self.sample_rate.load(Ordering::Relaxed),
-            playing: self.playing.load(Ordering::Relaxed),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -118,6 +123,7 @@ mod tests {
         assert_eq!(playback.seek_epoch.load(Ordering::Relaxed), 0);
         assert_eq!(playback.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
+        assert_eq!(playback.rate.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
     }
 
@@ -153,6 +159,7 @@ mod tests {
         playback.position.store(12.0, Ordering::Relaxed);
         playback.frontier.store(20.0, Ordering::Relaxed);
         playback.duration.store(180.0, Ordering::Relaxed);
+        playback.rate.store(1.25, Ordering::Relaxed);
         playback.sample_rate.store(48_000, Ordering::Relaxed);
 
         let snap = playback.snapshot();
@@ -160,6 +167,7 @@ mod tests {
         assert!((snap.position - 12.0).abs() < f64::EPSILON);
         assert!((snap.frontier - 20.0).abs() < f64::EPSILON);
         assert!((snap.duration - 180.0).abs() < f64::EPSILON);
+        assert!((snap.rate - 1.25).abs() < f32::EPSILON);
         assert_eq!(snap.sample_rate, 48_000);
     }
 

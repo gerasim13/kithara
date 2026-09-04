@@ -3,6 +3,7 @@
 use std::{fmt, task::Waker};
 
 use dashmap::mapref::entry::Entry;
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{PendingResourceSession, SessionPhase, WriterClaim, WriterHandle};
@@ -13,17 +14,23 @@ use crate::{
 
 /// RAII attachment for one consumer.
 #[non_exhaustive]
-pub struct ResourceLease {
+pub struct ResourceLease<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(in crate::index) entry: Arc<DemandEntry>,
-    pub(in crate::index) session: Arc<PendingResourceSession>,
-    pub(in crate::index) _store: AssetStore,
+    pub(in crate::index) session: Arc<PendingResourceSession<S>>,
+    pub(in crate::index) _store: AssetStore<S>,
 }
 
-impl ResourceLease {
+impl<S> ResourceLease<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(in crate::index) const fn new(
         entry: Arc<DemandEntry>,
-        session: Arc<PendingResourceSession>,
-        store: AssetStore,
+        session: Arc<PendingResourceSession<S>>,
+        store: AssetStore<S>,
     ) -> Self {
         Self {
             entry,
@@ -42,7 +49,7 @@ impl ResourceLease {
         }
     }
 
-    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle {
+    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle<S> {
         WriterHandle::new(claim, &self.session)
     }
 
@@ -63,7 +70,7 @@ impl ResourceLease {
 
     /// Take the writer role when no current writer exists.
     #[must_use]
-    pub fn try_take_writer(&self) -> Option<WriterHandle> {
+    pub fn try_take_writer(&self) -> Option<WriterHandle<S>> {
         let Entry::Occupied(occupied) = self.session.inner.slots.entry(self.session.key.clone())
         else {
             return None;
@@ -116,7 +123,10 @@ impl ResourceLease {
     }
 }
 
-impl Drop for ResourceLease {
+impl<S> Drop for ResourceLease<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         let entry = self.session.inner.slots.entry(self.session.key.clone());
         let exact = matches!(
@@ -185,7 +195,10 @@ impl Drop for ResourceLease {
     }
 }
 
-impl fmt::Debug for ResourceLease {
+impl<S> fmt::Debug for ResourceLease<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResourceLease")
             .field("key", &self.session.key)
@@ -196,14 +209,20 @@ impl fmt::Debug for ResourceLease {
 /// One consumer's attachment to an active pending resource acquisition.
 #[derive(Debug)]
 #[doc(hidden)]
-pub struct ResourceAttachment {
-    pub(in crate::index) reader: AssetReader,
-    pub(in crate::index) lease: ResourceLease,
-    pub(in crate::index) writer: Option<WriterHandle>,
+pub struct ResourceAttachment<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(in crate::index) reader: AssetReader<S>,
+    pub(in crate::index) lease: ResourceLease<S>,
+    pub(in crate::index) writer: Option<WriterHandle<S>>,
 }
 
-impl From<ResourceAttachment> for (AssetReader, ResourceLease, Option<WriterHandle>) {
-    fn from(attachment: ResourceAttachment) -> Self {
+impl<S> From<ResourceAttachment<S>> for (AssetReader<S>, ResourceLease<S>, Option<WriterHandle<S>>)
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn from(attachment: ResourceAttachment<S>) -> Self {
         (attachment.reader, attachment.lease, attachment.writer)
     }
 }

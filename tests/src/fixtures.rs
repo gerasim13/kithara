@@ -6,7 +6,7 @@ use kithara::{self, platform::CancelToken};
 ///
 /// On native: wraps `tempfile::TempDir` (real filesystem).
 /// On WASM: provides a dummy path — callers that need real FS should
-/// use `AssetStore::builder().backend(StorageBackend::Memory)` instead.
+/// use `AssetStore::builder(pools()).backend(StorageBackend::Memory)` instead.
 pub struct TestTempDir {
     #[cfg(not(target_arch = "wasm32"))]
     inner: tempfile::TempDir,
@@ -26,6 +26,19 @@ impl TestTempDir {
         {
             Self {}
         }
+    }
+
+    /// Write `bytes` into this directory under `name` and return the path.
+    ///
+    /// Generated bodies live in the fixture store or inside the binary; a test
+    /// that opens a file by path needs them on a real filesystem first.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.path().join(name);
+        std::fs::write(&path, bytes)
+            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        path
     }
 
     /// Get the path of the temporary directory.

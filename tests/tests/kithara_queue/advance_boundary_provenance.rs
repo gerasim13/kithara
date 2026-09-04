@@ -3,28 +3,31 @@
 use std::path::Path;
 
 use kithara::{
-    audio::generate_log_spaced_bands,
-    events::{AbrEvent, AdvanceReason, Event, EventReceiver},
+    events::{AbrEvent, AdvanceReason, AudioEvent, Event, EventReceiver},
     hls::AbrMode,
     platform::{
         sync::Arc,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerImpl, Resource, ResourceConfig, StretchControls, apply_mix},
-    queue::{Queue, QueueConfig, Transition},
+    play::{
+        Resource, ResourceConfig, ResourceSrc, StretchControls,
+        effects::eq::generate_log_spaced_bands, player::PlayerControl,
+    },
+    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    pcm_provenance::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
-    },
     temp_dir,
 };
+use kithara_test_fixtures::signal::{
+    FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, goertzel_magnitude,
+    phase,
+};
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const RESAMPLED_RENDER_RATE: u32 = 48_000;
@@ -49,9 +52,12 @@ const CROSSFADE_SECS: f32 = 5.0;
 const CROSSFADE_DURATION_WAIT_SECS: f64 = 12.0;
 const REAL_GEOMETRY_DURATION_WAIT_SECS: f64 = 30.0;
 const SEEK_OFFSET_SECS: f64 = 0.5;
+/// `SEEK_OFFSET_SECS` at `SAMPLE_RATE`: what a seek to `duration - 0.5s` leaves
+/// of track A.
 const EXPECTED_POST_SEEK_FRAMES: usize = 22_050;
-const SEEK_LANDING_WINDOW_FRAMES: usize = 13_230;
-const SEEK_PHASE_TOL_UNITS: i32 = 3 * 512;
+/// One phase unit is one frame, so this admits a landing anywhere inside the
+/// render block that carries it - the granularity post-seek audio starts at.
+const SEEK_PHASE_TOL_UNITS: usize = 512;
 const MIN_RENDER_PEAK: f32 = 1.0e-6;
 const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
@@ -64,8 +70,7 @@ type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
 fn with_provenance_headroom(harness: OfflinePlayerHarness) -> OfflinePlayerHarness {
-    apply_mix([(harness.player().as_ref(), PROVENANCE_LEVEL)])
-        .expect("apply provenance fixture headroom");
+    harness.set_host_level(PROVENANCE_LEVEL);
     harness
 }
 
@@ -708,7 +713,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
 
-    let (rendered, seek_issue_frame, duration) =
+    let (rendered, seek_issue_frame, seek_complete_frame, duration) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     assert_provenance_headroom(&rendered, "FLAC seek near EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
@@ -722,26 +727,11 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         None,
         setup.queue.current_index(),
     );
-    let b_onset_frame = frame_for_window(b_onset_window);
-    let landing_frame = find_seek_landing_frame(&left, seek_issue_frame, b_onset_frame, duration)
-        .unwrap_or_else(|| {
-            panic!(
-                "seek landing must reach the expected near-EOF phase; \
-                     seek_issue_frame={seek_issue_frame}; {}",
-                dump(
-                    &[],
-                    &runs,
-                    None,
-                    Some(b_onset_window),
-                    setup.queue.current_index()
-                )
-            )
-        });
-    let landing_window = landing_frame / WINDOW_FRAMES;
+    let seek_complete_window = seek_complete_frame / WINDOW_FRAMES;
     let search_context = ProvenanceDumpContext {
         replays: &[],
         runs: &runs,
-        onset_window: Some(landing_window),
+        onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
         current_index: setup.queue.current_index(),
     };
@@ -753,7 +743,21 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
-    let phase_start_frame = landing_frame.saturating_add(WINDOW_FRAMES);
+    // Where the seek landed, read off the rendered audio rather than off the
+    // event. `SeekComplete` is published from a read, so its frame leads the
+    // audible position by the ring depth, and a length measured from it would
+    // carry that lead as a tolerance instead of stating a property. The last
+    // Ascending run before B is the post-seek tail itself: its first window is
+    // the landing, its length is what the seek left of track A.
+    let (_, landing_window, landing_windows) = require_run_containing(
+        &runs,
+        FrameClass::Ascending,
+        last_ascending_window,
+        &search_context,
+    );
+    let landing_frame = frame_for_window(landing_window);
+
+    let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
         &left,
         phase_start_frame,
@@ -763,7 +767,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let context = ProvenanceDumpContext {
         replays: &replays,
         runs: &runs,
-        onset_window: Some(landing_window),
+        onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
         current_index: setup.queue.current_index(),
     };
@@ -774,20 +778,29 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         dump(
             &replays,
             &runs,
-            Some(landing_window),
+            Some(seek_complete_window),
             Some(b_onset_window),
             setup.queue.current_index()
         )
     );
 
-    let ascending_frames = last_ascending_end_frame.saturating_sub(landing_frame);
+    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+    let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
+    assert!(
+        landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
+        "seek must land at the requested position in track A: \
+         landing_frame={landing_frame}; phase_delta={landing_phase_delta} units; {}",
+        context.dump()
+    );
+
     assert_close_len(
-        ascending_frames,
+        landing_windows * WINDOW_FRAMES,
         EXPECTED_POST_SEEK_FRAMES,
         TRACK_FRAME_TOLERANCE,
         "post-seek ascending length must be approximately 0.5s before B starts",
         &context,
     );
+
     assert_no_ascending_after_b(&classes, &context);
     assert_eq!(
         setup.queue.current_index(),
@@ -796,7 +809,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         dump(
             &replays,
             &runs,
-            Some(landing_window),
+            Some(seek_complete_window),
             Some(b_onset_window),
             setup.queue.current_index()
         )
@@ -907,7 +920,7 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
 
 struct QueueSetup {
     harness: OfflinePlayerHarness,
-    queue: Queue,
+    queue: QueueControl<TestPools>,
 }
 
 struct RenderProgress {
@@ -918,7 +931,10 @@ struct RenderProgress {
     descending_seen_at: Option<usize>,
 }
 
-fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
+fn with_autoplay(
+    mut config: QueueConfig<TestPools>,
+    should_autoplay: bool,
+) -> QueueConfig<TestPools> {
     config.should_autoplay = should_autoplay;
     config
 }
@@ -996,12 +1012,10 @@ async fn setup_queue_with_sample_rate(
             .build(),
         render_sample_rate,
     ));
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+    let queue = harness.insert_control(Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
-    ));
+    )));
 
     let resource_a = hls_resource(
         harness.player(),
@@ -1039,12 +1053,10 @@ async fn setup_multivariant_flac_queue(
             .build(),
         SAMPLE_RATE,
     ));
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+    let queue = harness.insert_control(Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
-    ));
+    )));
 
     let resource_a = hls_multivariant_flac_resource(
         harness.player(),
@@ -1128,12 +1140,10 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     } else {
         harness
     };
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+    let queue = harness.insert_control(Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
         should_autoplay,
-    ));
+    )));
 
     let resource_a = hls_resource_with_segments_and_duration(
         harness.player(),
@@ -1179,12 +1189,10 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+    let queue = harness.insert_control(Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
-    ));
+    )));
 
     let resource_a = hls_sine_aac_resource(
         harness.player(),
@@ -1211,7 +1219,7 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
 }
 
 async fn hls_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1221,7 +1229,7 @@ async fn hls_resource(
 }
 
 async fn hls_resource_with_segments(
-    player: &PlayerImpl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1241,7 +1249,7 @@ async fn hls_resource_with_segments(
 }
 
 async fn hls_resource_with_segments_and_duration(
-    player: &PlayerImpl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1263,14 +1271,14 @@ async fn hls_resource_with_segments_and_duration(
         .await
         .expect("create advance-boundary HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary HLS resource");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for advance-boundary fixture");
@@ -1279,7 +1287,7 @@ async fn hls_resource_with_segments_and_duration(
 }
 
 async fn hls_multivariant_flac_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1299,14 +1307,14 @@ async fn hls_multivariant_flac_resource(
         .await
         .expect("create advance-boundary multivariant FLAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary multivariant FLAC resource");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS multivariant FLAC resource for advance-boundary fixture");
@@ -1315,7 +1323,7 @@ async fn hls_multivariant_flac_resource(
 }
 
 async fn hls_sine_aac_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -1331,14 +1339,14 @@ async fn hls_sine_aac_resource(
         .await
         .expect("create advance-boundary sine AAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary sine AAC resource");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS sine AAC resource for advance-boundary fixture");
@@ -1348,7 +1356,7 @@ async fn hls_sine_aac_resource(
 
 #[kithara::flash(true)]
 async fn render_until_b_with_postroll(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     class_tolerance: f32,
     render_sample_rate: u32,
@@ -1384,7 +1392,7 @@ async fn render_until_b_with_postroll(
 
 #[kithara::flash(true)]
 async fn render_until_b_with_late_variant_switch(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
 ) -> (Vec<f32>, usize, usize, Option<usize>) {
     let block_duration = render_block_duration(SAMPLE_RATE);
@@ -1457,7 +1465,7 @@ async fn render_until_b_with_late_variant_switch(
 
 #[kithara::flash(true)]
 async fn render_crossfade_until_b_with_postroll(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
@@ -1491,7 +1499,7 @@ async fn render_crossfade_until_b_with_postroll(
 }
 
 async fn render_app_layer_crossfade_until_b_with_postroll(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
@@ -1507,7 +1515,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
 
 #[kithara::flash(true)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
     block_budget: usize,
@@ -1545,7 +1553,10 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     )
 }
 
-fn drive_app_layer_crossfade_advance(queue: &Queue, auto_advanced_index: &mut Option<usize>) {
+fn drive_app_layer_crossfade_advance(
+    queue: &QueueControl<TestPools>,
+    auto_advanced_index: &mut Option<usize>,
+) {
     let crossfade_secs = f64::from(queue.crossfade_duration());
     if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
         && dur > crossfade_secs
@@ -1554,7 +1565,9 @@ fn drive_app_layer_crossfade_advance(queue: &Queue, auto_advanced_index: &mut Op
         let current = queue.current_index().unwrap_or(0);
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
-            let _ = queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+            queue
+                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+                .expect("advance provenance crossfade");
         }
     }
 }
@@ -1581,17 +1594,31 @@ fn drain_variant_applied_events(
 
 #[kithara::flash(true)]
 async fn render_seek_near_end_until_b_with_postroll(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize, f64) {
+) -> (Vec<f32>, usize, usize, f64) {
     let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
+    let mut events = queue.subscribe();
     let mut seek_issue_frame: Option<usize> = None;
+    let mut seek_complete_frame: Option<usize> = None;
     let mut seek_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
+
+        loop {
+            match events.try_recv().map(|envelope| envelope.event) {
+                Ok(Event::Audio(AudioEvent::SeekComplete { .. })) if seek_issue_frame.is_some() => {
+                    seek_complete_frame.get_or_insert(progress.rendered_frames());
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
+        }
+
         let block = harness.render(BLOCK_FRAMES);
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
 
@@ -1608,7 +1635,7 @@ async fn render_seek_near_end_until_b_with_postroll(
 
         time::sleep(block_duration).await;
 
-        if progress.has_b_postroll() {
+        if progress.has_b_postroll() && seek_complete_frame.is_some() {
             break;
         }
     }
@@ -1616,13 +1643,14 @@ async fn render_seek_near_end_until_b_with_postroll(
     (
         progress.rendered,
         seek_issue_frame.expect("seek must be issued after duration becomes available"),
-        seek_duration.expect("duration must be recorded when seek is issued"),
+        seek_complete_frame.expect("seek must complete before track B postroll"),
+        seek_duration.expect("seek must be issued after duration becomes available"),
     )
 }
 
 #[kithara::flash(true)]
 async fn render_until_tone_b_with_postroll(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, f64) {
@@ -1747,38 +1775,6 @@ impl ToneRenderProgress {
         self.b_seen_at
             .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
-}
-
-fn find_seek_landing_frame(
-    left: &[f32],
-    seek_issue_frame: usize,
-    b_onset_frame: usize,
-    duration: f64,
-) -> Option<usize> {
-    let expected_phase =
-        frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAWTOOTH_PERIOD_FRAMES;
-    let expected_phase = i32::try_from(expected_phase).expect("sawtooth phase fits i32");
-    let latest_start = b_onset_frame.saturating_sub(SEEK_LANDING_WINDOW_FRAMES);
-
-    (seek_issue_frame..=latest_start).find(|frame| {
-        let phase_delta = phase_distance(phase_units(left[*frame]), expected_phase).abs();
-        phase_delta <= SEEK_PHASE_TOL_UNITS
-            && ascending_phase_replays(
-                left,
-                *frame,
-                frame.saturating_add(SEEK_LANDING_WINDOW_FRAMES),
-                PHASE_TOL_UNITS,
-            )
-            .is_empty()
-    })
-}
-
-fn phase_distance(actual: i32, expected: i32) -> i32 {
-    const SAWTOOTH_PERIOD_UNITS: i32 = 65_536;
-    const SAWTOOTH_HALF_PERIOD_UNITS: i32 = 32_768;
-
-    (actual - expected + SAWTOOTH_HALF_PERIOD_UNITS).rem_euclid(SAWTOOTH_PERIOD_UNITS)
-        - SAWTOOTH_HALF_PERIOD_UNITS
 }
 
 fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
@@ -2029,6 +2025,28 @@ fn require_last_class_window_before(
         })
 }
 
+/// The run of `target` that covers `window`. A window says which class a moment
+/// belongs to; the run says where that stretch began and how long it lasted,
+/// which is what a length property is stated about.
+fn require_run_containing(
+    runs: &[ClassRun],
+    target: FrameClass,
+    window: usize,
+    context: &ProvenanceDumpContext<'_>,
+) -> ClassRun {
+    runs.iter()
+        .copied()
+        .find(|(class, start, len)| {
+            *class == target && *start <= window && window < start.saturating_add(*len)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "window {window} must belong to a {target:?} run; {}",
+                context.dump()
+            )
+        })
+}
+
 fn require_last_class_window_before_with_switch(
     classes: &[FrameClass],
     target: FrameClass,
@@ -2177,7 +2195,7 @@ fn assert_no_ascending_after_b_with_switch(
 
 fn assert_crossfade_contract(
     rendered: &[f32],
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     expected_a_end_frame: usize,
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,

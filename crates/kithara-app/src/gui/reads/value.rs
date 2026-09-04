@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, ReadValue};
+use kithara::ui::render::{Node, ReadValue};
 
 pub(super) struct Value<'a>(pub(super) ReadValue<'a>);
 

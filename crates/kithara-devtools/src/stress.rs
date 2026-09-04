@@ -55,52 +55,52 @@ pub enum StressCommand {
 #[derive(Debug, Args)]
 #[non_exhaustive]
 pub struct RunArgs {
-    /// Subject workspace whose tests are selected and executed.
-    #[arg(long, default_value = ".")]
-    subject_root: PathBuf,
-    /// Fresh raw evidence directory owned by this run.
-    #[arg(long)]
-    output: Option<PathBuf>,
-    /// Nextest filterset selecting tests to repeat.
-    #[arg(long)]
-    filter: Option<String>,
     /// Number of times to run every selected test.
     #[arg(long)]
     count: Option<usize>,
-    /// Configured stress mode; repeat the flag for several, empty for the
-    /// project's own list. Each becomes one lane of the same run.
-    #[arg(long = "mode")]
-    modes: Vec<String>,
     /// Trusted controller revision to compare with the checkout.
     #[arg(long)]
     expected_controller_sha: Option<String>,
     /// Trusted subject revision to compare with the checkout.
     #[arg(long)]
     expected_subject_sha: Option<String>,
+    /// Nextest filterset selecting tests to repeat.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Fresh raw evidence directory owned by this run.
+    #[arg(long)]
+    output: Option<PathBuf>,
+    /// Subject workspace whose tests are selected and executed.
+    #[arg(long, default_value = ".")]
+    subject_root: PathBuf,
+    /// Configured stress mode; repeat the flag for several, empty for the
+    /// project's own list. Each becomes one lane of the same run.
+    #[arg(long = "mode")]
+    modes: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 #[non_exhaustive]
 pub struct ReportArgs {
-    /// Downloaded raw evidence directory.
     #[arg(long)]
-    raw: PathBuf,
+    execute_result: ExecuteResult,
+    #[arg(long)]
+    count: Option<usize>,
+    #[arg(long)]
+    filter: Option<String>,
     /// Markdown report destination.
     #[arg(long)]
     output: Option<PathBuf>,
+    /// Downloaded raw evidence directory.
+    #[arg(long)]
+    raw: PathBuf,
     #[arg(long)]
     expected_controller_sha: String,
     #[arg(long)]
     expected_subject_sha: String,
-    #[arg(long)]
-    filter: Option<String>,
-    #[arg(long)]
-    count: Option<usize>,
     /// Lane to verify; repeat to verify several, empty for the project's list.
     #[arg(long = "mode")]
     modes: Vec<String>,
-    #[arg(long)]
-    execute_result: ExecuteResult,
 }
 
 /// Runs the selected stress command.
@@ -125,27 +125,27 @@ pub(crate) fn run_stderr_output(command: &mut Command, path: &Path) -> Result<Ex
 
 #[derive(Debug)]
 struct Paths {
-    raw: PathBuf,
-    attempts: PathBuf,
+    envelopes: Option<PathBuf>,
+    lines: Option<PathBuf>,
     /// One `JUnit` copy per attempt of a command lane, named by attempt.
     attempt_junit: PathBuf,
-    envelopes: Option<PathBuf>,
+    attempts: PathBuf,
     inventory: PathBuf,
     junit: PathBuf,
     log: PathBuf,
     manifest: PathBuf,
-    lines: Option<PathBuf>,
     pressure: PathBuf,
+    raw: PathBuf,
     report: PathBuf,
 }
 
 struct ReportExpectation<'a> {
     config: &'a StressConfig,
-    mode_name: &'a str,
     mode: &'a StressModeConfig,
     filter: &'a str,
-    count: usize,
+    mode_name: &'a str,
     runner: ConfiguredLane,
+    count: usize,
 }
 
 impl<'a> ReportExpectation<'a> {
@@ -454,11 +454,11 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     // artifacts alone while the lane is still executing them.
     let _build_lease = lease::hold(&build);
     let spec = StressRunSpec {
+        count,
         inventory: paths.inventory.clone(),
         junit: subject_junit.clone(),
         config_file: config_file.clone(),
         filter: filter.clone(),
-        count,
         test_threads: config.test_threads.clone(),
         profile: config.nextest_profile.clone(),
         max_count: config.max_count,
@@ -474,6 +474,9 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     let environment = RunEnvironment::new(&paths.raw, &build, config, mode)?;
     let mut manifest = Manifest::start(
         ManifestSpec {
+            controller_sha,
+            subject_sha,
+            runner,
             mode: mode_name.to_owned(),
             build: BuildSnapshot::new(&build)?,
             config: ManifestConfig::new(
@@ -481,12 +484,9 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
                 config.nextest_config.clone(),
                 config.workflow_job_timeout_minutes,
             ),
-            controller_sha,
-            subject_sha,
-            runner,
             selection: Selection {
-                filter: filter.clone(),
                 count,
+                filter: filter.clone(),
                 test_threads: config.test_threads.clone(),
             },
             policy: policy_snapshot(config, mode),
@@ -998,11 +998,11 @@ fn verify_run_result(execute_result: ExecuteResult, exit_codes: &[Option<i32>]) 
 
 /// What one lane's manifest says about itself, and whether it is believable.
 struct LaneProvenance {
-    verdict: Result<()>,
-    details: Vec<String>,
     /// The lane's own exit code, kept so the run can check the job's
     /// result against all of its lanes rather than against each one alone.
     exit_code: Option<i32>,
+    verdict: Result<()>,
+    details: Vec<String>,
 }
 
 fn verify_manifest(
@@ -1042,16 +1042,16 @@ fn verify_manifest(
     let mismatches = manifest.validate_provenance(&expected);
     if mismatches.is_empty() {
         return LaneProvenance {
+            exit_code,
             verdict: Ok(()),
             details: Vec::new(),
-            exit_code,
         };
     }
     let details = mismatches.iter().map(ToString::to_string).collect();
     LaneProvenance {
-        verdict: Err(NotClean::raised("stress provenance", mismatches.len())),
         details,
         exit_code,
+        verdict: Err(NotClean::raised("stress provenance", mismatches.len())),
     }
 }
 

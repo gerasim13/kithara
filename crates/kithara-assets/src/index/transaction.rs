@@ -44,7 +44,7 @@ impl Drop for ResourceTransaction {
             self.cell.held.store(false, Ordering::Release);
             true
         } else {
-            // A cancelled waiter may have consumed the only unlock notification.
+            // WHY: A cancelled waiter may have consumed the only unlock notification.
             !self.cell.held.load(Ordering::Acquire)
         };
         if should_notify {

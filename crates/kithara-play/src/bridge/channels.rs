@@ -1,8 +1,18 @@
-use core::sync::atomic::AtomicU64;
-
 use kithara_audio::SeekBegin;
-use kithara_platform::{sync::Arc, time::Duration};
-use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
+use kithara_events::TrackId;
+use kithara_output::LiveOutput;
+use kithara_platform::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+use kithara_signal::AudioSpec;
+use ringbuf::{
+    HeapCons, HeapProd, HeapRb,
+    traits::{Observer, Producer, Split},
+};
 use smallvec::SmallVec;
 
 use super::PlaybackShared;
@@ -23,14 +33,45 @@ pub struct NodeInputs {
 /// Producer for interleaved stereo mix samples and their drop count.
 #[non_exhaustive]
 pub struct MixTapWriter {
-    pub(crate) pcm: HeapProd<f32>,
     pub(crate) drops: Arc<AtomicU64>,
+    pub(crate) samples: HeapProd<f32>,
 }
 
 impl MixTapWriter {
     #[must_use]
-    pub fn new(pcm: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
-        Self { pcm, drops }
+    pub fn new(samples: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
+        Self { drops, samples }
+    }
+}
+
+impl From<MixTapWriter> for (HeapProd<f32>, Arc<AtomicU64>) {
+    fn from(writer: MixTapWriter) -> Self {
+        (writer.samples, writer.drops)
+    }
+}
+
+impl LiveOutput for MixTapWriter {
+    fn reconfigure(&mut self, _spec: AudioSpec) {}
+
+    fn write_stereo(&mut self, frames: usize, left: &[f32], right: &[f32]) {
+        let stereo = 2;
+        let writable = frames
+            .min(left.len())
+            .min(right.len())
+            .min(self.samples.vacant_len() / stereo);
+        let pushed = self.samples.push_iter(
+            left[..writable]
+                .iter()
+                .zip(&right[..writable])
+                .flat_map(|(&left, &right)| [left, right]),
+        );
+        let dropped = frames.saturating_mul(stereo).saturating_sub(pushed);
+        if dropped > 0 {
+            self.drops.fetch_add(
+                u64::try_from(dropped).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+        }
     }
 }
 
@@ -48,17 +89,11 @@ pub struct SlotControl {
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
-type SeekBinding = (Arc<str>, Arc<dyn SeekBegin>);
+type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
-    /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, src: Arc<str>, handle: Arc<dyn SeekBegin>) {
-        self.unbind_seek(&src);
-        self.seek.0.push((src, handle));
-    }
-
     /// Begin a seek on every track this slot holds, off the audio thread.
     pub fn begin_seek(&self, position: Duration) {
         for (_, handle) in &self.seek.0 {
@@ -66,9 +101,16 @@ impl SlotControl {
         }
     }
 
-    /// Forget a track's seek path once the processor reports it unloaded.
-    pub fn unbind_seek(&mut self, src: &str) {
-        self.seek.0.retain(|(bound, _)| &**bound != src);
+    /// Record the control half of a track's seek path.
+    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
+        self.seek.0.push((item_id, handle));
+    }
+
+    /// Forget the exact resource generation returned by the processor.
+    pub fn unbind_seek(&mut self, item_id: TrackId, handle: &Arc<dyn SeekBegin>) {
+        self.seek.0.retain(|(bound_id, bound_handle)| {
+            *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
+        });
     }
 }
 

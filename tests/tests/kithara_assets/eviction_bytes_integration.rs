@@ -9,7 +9,10 @@ use kithara::{
     assets::{AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide},
     platform::{CancelToken, time::Duration},
 };
-use kithara_integration_tests::{cancel_token, temp_dir};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    cancel_token, temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
@@ -24,8 +27,8 @@ fn asset_scope_with_root_and_limit(
     asset_root: &str,
     max_bytes: Option<u64>,
     cancel: CancelToken,
-) -> AssetScope {
-    AssetStore::builder()
+) -> AssetScope<TestPools> {
+    AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

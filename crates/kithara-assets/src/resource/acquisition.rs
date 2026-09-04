@@ -2,6 +2,7 @@
 
 use std::{fmt, fmt::Debug, ops::Range, path::Path};
 
+use kithara_bufpool::ByteBuffer;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
@@ -131,7 +132,7 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     ///
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+    fn read_into(&self, buf: &mut ByteBuffer) -> StorageResult<usize> {
         let Some(len) = self.len() else {
             let mut probe = [0u8; 1];
             let _ = self.read_at(0, &mut probe)?;
@@ -141,8 +142,16 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
             buf.clear();
             return Ok(0);
         }
-        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
-        buf.resize(len_usize, 0);
+        let len_usize = usize::try_from(len).map_err(|error| {
+            kithara_storage::StorageError::Failed(format!(
+                "resource read: len {len} does not fit usize: {error}"
+            ))
+        })?;
+        buf.ensure_len(len_usize).map_err(|error| {
+            kithara_storage::StorageError::Failed(format!(
+                "resource read buffer growth failed: {error}"
+            ))
+        })?;
         let n = self.read_at(0, buf)?;
         buf.truncate(n);
         Ok(n)
@@ -186,6 +195,15 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// The reader phase produced by [`commit`](Self::commit).
     type Reader: ReadSide;
 
+    /// Release the writer without marking the resource failed and without
+    /// removing what it wrote.
+    ///
+    /// For a caller whose write was cancelled and who knows a successor is
+    /// already refilling the same resource: a failure stamp or a cleanup sweep
+    /// would hit that successor, not this writer. Every other release keeps
+    /// both — see [`fail`](Self::fail) and the drop paths.
+    fn abandon(self);
+
     /// Finalize the resource (running any processing) and consume the writer
     /// into a [`ReadSide`] reader.
     ///
@@ -195,15 +213,6 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
 
     /// Mark the resource failed, waking any waiting reader.
     fn fail(self, reason: String);
-
-    /// Release the writer without marking the resource failed and without
-    /// removing what it wrote.
-    ///
-    /// For a caller whose write was cancelled and who knows a successor is
-    /// already refilling the same resource: a failure stamp or a cleanup sweep
-    /// would hit that successor, not this writer. Every other release keeps
-    /// both — see [`fail`](Self::fail) and the drop paths.
-    fn abandon(self);
 
     /// A clone-able raw-write handle for streaming pre-processing bytes into
     /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`

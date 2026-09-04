@@ -30,7 +30,6 @@ pub struct PreKillGuard {
 
 impl PreKillGuard {
     /// Construct the inert no-`hang` counterpart of the stress timer.
-    #[must_use]
     pub const fn new(_test_name: &str) -> Self {
         Self { _private: () }
     }
@@ -123,6 +122,7 @@ pub fn default_timeout() -> Duration {
 /// No watchdog compiled in, so there is no budget to shorten: the guard exists
 /// only so a test that asks for a tighter one still compiles.
 #[derive(Debug)]
+#[must_use = "the override lasts only while this guard is alive"]
 pub struct TimeoutOverride;
 
 /// See [`override_timeout`](super::override_timeout) in the watchdog build.

@@ -4,16 +4,18 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -22,7 +24,7 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
 
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
-    let spec = PcmSpec {
+    let spec = AudioSpec {
         channels: CHANNELS,
         sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };
@@ -45,7 +47,11 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
         .position(|frame| frame.iter().any(|s| s.abs() > threshold))
 }
 
-fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usize) -> Vec<f32> {
+fn render_loop(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayerHarness,
+    block_budget: usize,
+) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
         let _ = queue.tick();
@@ -55,7 +61,7 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
     pcm
 }
 
-fn make_fixture() -> (OfflinePlayerHarness, Queue) {
+fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -63,10 +69,10 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
         SAMPLE_RATE,
     );
     let config = QueueConfig::builder()
-        .player(Arc::clone(harness.player()))
+        .player(harness.take_player())
         .should_autoplay(false)
         .build();
-    let queue = Queue::new(config);
+    let queue = harness.insert_control(Queue::new(config));
     (harness, queue)
 }
 

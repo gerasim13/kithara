@@ -1,0 +1,402 @@
+(
+    schema: "kithara.layout",
+    version: 1,
+    id: "gallery",
+    root: Split(
+        axis: Vertical,
+        children: [
+            (weight: 1.0, node: Module(
+                instance: "titlebar",
+                source: "modules/titlebar.kmodule.ron",
+                size: (w: Fill, h: Fixed(26.0)),
+            )),
+            (weight: 1.0, node: Split(
+                axis: Horizontal,
+                children: [
+                    (weight: 1.0, node: Module(
+                        instance: "gallery",
+                        source: "modules/nav.kmodule.ron",
+                        corners: true,
+                        frame: (right: false),
+                        size: (w: Fixed(198.0), h: Fill),
+                    )),
+                    (weight: 1.0, node: Tabs(
+                        state: "/page",
+                        initial: "atoms",
+                        pages: {
+                            "assets": Module(instance: "assets", source: "modules/tabs/assets.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "atoms": Module(
+                                instance: "atoms",
+                                source: "modules/tabs/atoms.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "buttons": Module(
+                                instance: "buttons",
+                                source: "modules/tabs/buttons.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "cells": Module(
+                                instance: "cells",
+                                source: "modules/tabs/cells.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "chrome": Split(
+                                axis: Vertical,
+                                children: [
+                                    (weight: 1.0, node: Split(
+                                        axis: Horizontal,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-row-a",
+                                                source: "modules/tabs/chrome-row-a.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fixed(180.0), h: Fill),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-full-all",
+                                                source: "modules/tabs/chrome-full-all.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                    (weight: 1.0, node: Split(
+                                        axis: Horizontal,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-row-b",
+                                                source: "modules/tabs/chrome-row-b.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fixed(180.0), h: Fill),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-join-left",
+                                                source: "modules/tabs/chrome-join-left.kmodule.ron",
+                                                corners: true,
+                                                frame: (right: false),
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-join-right",
+                                                source: "modules/tabs/chrome-join-right.kmodule.ron",
+                                                corners: true,
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                    (weight: 1.0, node: Split(
+                                        axis: Horizontal,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-row-c",
+                                                source: "modules/tabs/chrome-row-c.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fixed(180.0), h: Fill),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "chrome-open-top",
+                                                source: "modules/tabs/chrome-open-top.kmodule.ron",
+                                                corners: true,
+                                                frame: (top: false, left: false),
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                ],
+                            ),
+                            "clock": Module(instance: "clock-components", source: "modules/tabs/clock.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "custom": Module(instance: "custom-page", source: "modules/tabs/custom.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "faders": Module(
+                                instance: "faders",
+                                source: "modules/tabs/faders.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "library2": Module(
+                                instance: "library2",
+                                source: "modules/tabs/library2.kmodule.ron",
+                                corners: true,
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "lottie": Module(instance: "lottie", source: "modules/tabs/lottie.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "menu": Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Split(
+                                        axis: Vertical,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "app-menu",
+                                                source: "modules/tabs/menu-bar.kmodule.ron",
+                                                frame: (left: false, right: false, top: false),
+                                                size: (w: Fixed(340.0), h: Fixed(42.0)),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "menu-notes",
+                                                source: "modules/tabs/menu-notes.kmodule.ron",
+                                                corners: true,
+                                                frame: (left: false, right: false, top: false),
+                                                size: (w: Fixed(340.0), h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "ctx",
+                                        source: "modules/tabs/menu-context.kmodule.ron",
+                                        corners: true,
+                                        frame: (left: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                ],
+                            ),
+                            "micro": Split(
+                                axis: Vertical,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "micro-player",
+                                        source: "modules/deck-micro.kmodule.ron",
+                                        frame: (left: false, right: false, top: false, bottom: false),
+                                        with: { "deck": "a" },
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "micro-notes",
+                                        source: "modules/tabs/micro-notes.kmodule.ron",
+                                        corners: true,
+                                        frame: (left: false),
+                                        size: (w: Fill, h: Fixed(160.0)),
+                                    )),
+                                ],
+                            ),
+                            "mixer": Split(
+                                axis: Horizontal,
+                                children: [
+                                    (weight: 1.0, node: Split(
+                                        axis: Vertical,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "mixer-standard-label",
+                                                source: "modules/tabs/mixer-label.kmodule.ron",
+                                                corners: true,
+                                                with: { "label": "1D MIXER / STANDARD" },
+                                                size: (w: Fill, h: Fixed(62.0)),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "mixer-standard",
+                                                source: "modules/tabs/mixer-1d.kmodule.ron",
+                                                corners: true,
+                                                frame: (right: false),
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                    (weight: 1.0, node: Split(
+                                        axis: Vertical,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "mixer-xone-label",
+                                                source: "modules/tabs/mixer-label.kmodule.ron",
+                                                corners: true,
+                                                with: { "label": "1G MIXER / XONE 4-BAND EQ" },
+                                                size: (w: Fill, h: Fixed(62.0)),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "mixer-xone",
+                                                source: "modules/tabs/mixer-1g.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                ],
+                            ),
+                            "modules": Split(
+                                axis: Vertical,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "modules-tabs",
+                                        source: "modules/module-tabs.kmodule.ron",
+                                        size: (w: Fill, h: Fixed(28.0)),
+                                    )),
+                                    (weight: 1.0, node: Tabs(
+                                        state: "/module",
+                                        initial: "deck",
+                                        pages: {
+                                            "deck": Module(
+                                                instance: "modules",
+                                                source: "modules/module-deck.kmodule.ron",
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            ),
+                                            "deck-micro": Module(
+                                                instance: "modules",
+                                                source: "modules/module-deck-micro.kmodule.ron",
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            ),
+                                            "global-bar": Module(
+                                                instance: "modules",
+                                                source: "modules/module-global-bar.kmodule.ron",
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            ),
+                                            "layout": Module(
+                                                instance: "modules",
+                                                source: "modules/module-layout.kmodule.ron",
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            ),
+                                            "telemetry": Module(
+                                                instance: "modules",
+                                                source: "modules/module-telemetry.kmodule.ron",
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            ),
+                                        },
+                                    )),
+                                ],
+                            ),
+                            "motion": Module(instance: "motion-components", source: "modules/tabs/motion.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "objects": Module(instance: "objects-components", source: "modules/tabs/objects.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "pivot": Module(instance: "pivot", source: "modules/pivot-portals.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "scene": Module(instance: "scene", source: "modules/tabs/scene.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "shader": Module(instance: "shader-page", source: "modules/tabs/shader.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "sizes": Module(
+                                instance: "sizes",
+                                source: "modules/tabs/sizes.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "skins": Module(instance: "skins", source: "modules/tabs/skins.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "sprites": Module(instance: "sprites", source: "modules/tabs/sprites.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "stress": Module(
+                                instance: "stress",
+                                source: "modules/stress.kmodule.ron",
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "table": Module(
+                                instance: "table",
+                                source: "modules/tabs/table.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "table-long": Module(
+                                instance: "table-long",
+                                source: "modules/tabs/table-long.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "titlebars": Module(
+                                instance: "titlebars",
+                                source: "modules/tabs/titlebars.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "tokens": Split(
+                                axis: Vertical,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "tokens",
+                                        source: "modules/tabs/tokens.kmodule.ron",
+                                        corners: true,
+                                        frame: (left: false),
+                                        size: (w: Fill, h: Fixed(436.0)),
+                                    )),
+                                    (weight: 1.0, node: Split(
+                                        axis: Horizontal,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "tokens-anatomy",
+                                                source: "modules/tabs/tokens-anatomy.kmodule.ron",
+                                                frame: (left: false, right: false),
+                                                corners: true,
+                                                size: (w: Fixed(500.0), h: Fill),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "tokens-notes",
+                                                source: "modules/tabs/tokens-notes.kmodule.ron",
+                                                corners: true,
+                                                frame: (left: false),
+                                                size: (w: Fill, h: Fill),
+                                            )),
+                                        ],
+                                    )),
+                                ],
+                            ),
+                            "tree": Module(
+                                instance: "tree",
+                                source: "modules/tabs/tree.kmodule.ron",
+                                corners: true,
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "typography": Module(
+                                instance: "typography",
+                                source: "modules/tabs/typography.kmodule.ron",
+                                corners: true,
+                                frame: (left: false),
+                                size: (w: Fill, h: Fill),
+                            ),
+                            "vis": Split(
+                                axis: Vertical,
+                                children: [
+                                    (weight: 1.0, node: Module(
+                                        instance: "vis-top",
+                                        source: "modules/tabs/spacer.kmodule.ron",
+                                        corners: true,
+                                        frame: (top: false, right: false, bottom: false, left: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                    (weight: 1.0, node: Split(
+                                        axis: Horizontal,
+                                        children: [
+                                            (weight: 1.0, node: Module(
+                                                instance: "vis-left",
+                                                source: "modules/tabs/spacer.kmodule.ron",
+                                                corners: true,
+                                                frame: (top: false, right: false, bottom: false, left: false),
+                                                size: (w: Fill, h: Fixed(350.0)),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "vis",
+                                                source: "modules/tabs/vis.kmodule.ron",
+                                                corners: true,
+                                                size: (w: Fixed(560.0), h: Fixed(350.0)),
+                                            )),
+                                            (weight: 1.0, node: Module(
+                                                instance: "vis-right",
+                                                source: "modules/tabs/spacer.kmodule.ron",
+                                                corners: true,
+                                                frame: (top: false, right: false, bottom: false, left: false),
+                                                size: (w: Fill, h: Fixed(350.0)),
+                                            )),
+                                        ],
+                                    )),
+                                    (weight: 1.0, node: Module(
+                                        instance: "vis-bottom",
+                                        source: "modules/tabs/spacer.kmodule.ron",
+                                        corners: true,
+                                        frame: (top: false, right: false, bottom: false, left: false),
+                                        size: (w: Fill, h: Fill),
+                                    )),
+                                ],
+                            ),
+                        },
+                    )),
+                ],
+            )),
+        ],
+    ),
+)

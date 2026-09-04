@@ -1,0 +1,9 @@
+(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-gallery",
+    contract: 1,
+    screens: {
+        "gallery": "gallery.klayout.ron",
+    },
+)

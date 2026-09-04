@@ -46,9 +46,9 @@ static PROBES: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 
 /// One recorded line and how many times it repeated inside the window.
 struct Entry {
-    line: String,
     /// `line` without [`FOLD_COUNTERS`] — what a repeat is matched on.
     key: String,
+    line: String,
     repeats: u32,
 }
 
@@ -119,14 +119,6 @@ fn classify(meta: &Metadata<'_>) -> Option<Lane> {
 }
 
 impl<S: Subscriber> Layer<S> for RingLayer {
-    fn register_callsite(&self, meta: &'static Metadata<'static>) -> Interest {
-        if classify(meta).is_some() {
-            Interest::always()
-        } else {
-            Interest::never()
-        }
-    }
-
     fn enabled(&self, meta: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
         classify(meta).is_some()
     }
@@ -157,6 +149,14 @@ impl<S: Subscriber> Layer<S> for RingLayer {
             Lane::Probe => &PROBES,
         };
         record(ring, line, key);
+    }
+
+    fn register_callsite(&self, meta: &'static Metadata<'static>) -> Interest {
+        if classify(meta).is_some() {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
     }
 }
 
@@ -193,8 +193,8 @@ fn clamp(mut text: String) -> String {
 }
 
 struct LineVisitor<'a> {
-    line: &'a mut String,
     key: &'a mut String,
+    line: &'a mut String,
 }
 
 impl Visit for LineVisitor<'_> {

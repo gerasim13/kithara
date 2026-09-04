@@ -48,21 +48,41 @@ pub(crate) fn make_sync_test_attrs() -> TokenStream2 {
 ///
 /// Uses `new_multi_thread().worker_threads(2)` when `multi_thread` or `selenium`
 /// is set; otherwise uses `new_current_thread()`.
+///
+/// Under Miri the runtime gets a timer and no reactor. `enable_all` builds the
+/// I/O driver, whose first act is the host's event-loop syscall - `kqueue` on
+/// macOS, `epoll_create1` on Linux - and Miri answers that with
+/// "unsupported operation", aborting the whole test binary at the first async
+/// test. The crates the Miri lane interprets hold atomics rather than sockets,
+/// so the timer is what they use and the reactor is what they can go without.
 pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
-    if args.is_multi_thread {
-        quote! {
-            ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .expect("kithara test runtime")
-        }
+    // Each constructor is taken on its own line: they return the builder by
+    // value and every method after them borrows it, so naming one expression
+    // that ends in a method call would bind a reference to a temporary.
+    let (base, threads) = if args.is_multi_thread {
+        (
+            quote! {
+                ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_multi_thread()
+            },
+            quote! { builder.worker_threads(2); },
+        )
     } else {
-        quote! {
-            ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("kithara test runtime")
+        (
+            quote! {
+                ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_current_thread()
+            },
+            TokenStream2::new(),
+        )
+    };
+    quote! {
+        {
+            let mut builder = #base;
+            #threads
+            #[cfg(not(miri))]
+            builder.enable_all();
+            #[cfg(miri)]
+            builder.enable_time();
+            builder.build().expect("kithara test runtime")
         }
     }
 }
@@ -250,6 +270,46 @@ pub(crate) fn make_hang_budget(secs: Option<u64>) -> TokenStream2 {
             );
         }
     })
+}
+
+/// Backstop for a test whose runtime never shuts down: a plain thread that
+/// sleeps past the deadline and aborts the process if the guard has not fired.
+///
+/// Emitted for every target but Miri. The thread counts real seconds against a
+/// body Miri interprets some hundred times slower than it would execute, and
+/// the way it reports an overrun is `abort()`, which ends the whole test binary
+/// rather than the one test. Under Miri the lane's own job timeout is the
+/// backstop.
+///
+/// Reads `__timeout_dur` and `__done` from the scope it is emitted into.
+pub(crate) fn make_hard_timeout_watchdog(fn_name: &str) -> TokenStream2 {
+    quote! {
+        #[cfg(not(miri))]
+        {
+            let __done_w = __done.clone();
+            let __fn = #fn_name;
+            ::std::thread::spawn(move || {
+                ::std::thread::sleep(
+                    __timeout_dur + ::std::time::Duration::from_secs(3),
+                );
+                if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
+                    let __timeout_diagnostic = format!(
+                        "test `{}` exceeded {:?} (runtime shutdown blocked)",
+                        __fn, __timeout_dur,
+                    );
+                    eprintln!(
+                        "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: {}. Aborting process.\n",
+                        __timeout_diagnostic,
+                    );
+                    ::kithara_test_utils::hang::record_test_hang(
+                        "hard-timeout",
+                        &__timeout_diagnostic,
+                    );
+                    ::std::process::abort();
+                }
+            });
+        }
+    }
 }
 
 /// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.

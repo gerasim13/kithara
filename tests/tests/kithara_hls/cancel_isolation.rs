@@ -4,12 +4,15 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task},
     stream::Stream,
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
 };
 
 struct Consts;
@@ -85,13 +88,19 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     });
 
     let cancel = CancelToken::never();
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(master.url())
         .store(store)
+        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
-    let stream = Stream::<Hls>::new(config)
+    let stream = Stream::<Hls<TestPools>>::new(config)
         .await
         .expect("HLS stream creation must succeed with valid playlists");
 

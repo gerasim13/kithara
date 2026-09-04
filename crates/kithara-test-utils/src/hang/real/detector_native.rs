@@ -177,10 +177,15 @@ impl<C: HangDump> HangDetector<C> {
         }
         self.fire_dump();
         panic!(
-            "[HangDetector] `{label}` no progress for {timeout:?} — {diag}",
+            "[HangDetector] `{label}` no progress for {timeout:?} — {diag}{ctx}",
             label = self.label,
             timeout = self.timeout,
             diag = self.diagnostic(),
+            ctx = self
+                .ctx
+                .as_ref()
+                .map(|ctx| format!(" | ctx {}", ctx.dump_json()))
+                .unwrap_or_default(),
         );
     }
 

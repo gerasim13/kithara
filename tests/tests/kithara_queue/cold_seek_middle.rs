@@ -3,23 +3,25 @@
 use kithara::{
     assets::AssetStore,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
-    fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
+    fixture_protocol::DelayRule, kithara, offline::OfflineQueue, temp_dir,
     waits::wait_for_position_event,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -33,7 +35,7 @@ fn install_tracing() {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -68,20 +70,29 @@ async fn wait_for_status(
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let queue_for_tick = Arc::clone(&queue);
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -91,8 +102,12 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     (queue, downloader, store, tick_handle)
@@ -130,7 +145,7 @@ enum PostSeekProgress {
 /// without ever interleaving the worker's progress.
 async fn wait_for_post_seek_progress(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     pos_before: f64,
     budget: Duration,
 ) -> PostSeekProgress {
@@ -181,7 +196,7 @@ async fn wait_for_post_seek_progress(
 
 async fn observe_seek_advance_or_panic(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     tick_handle: tokio::task::JoinHandle<()>,
     seek_target: f64,
     observation_window: Duration,
@@ -218,21 +233,34 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .collect();
 
     let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
 
-    let queue_for_tick = Arc::clone(&queue);
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -246,13 +274,13 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let ids: Vec<TrackId> = resolved
         .iter()
         .map(|u| {
-            let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(u).expect("valid URL"))
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+            let cfg = ResourceConfig::for_src(ResourceSrc::parse(u).expect("valid URL"))
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .build();
-            queue.append(TrackSource::Config(Box::new(cfg)))
+            queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("append cold-seek track")
         })
         .collect();
     let selected_id = ids[select_index];
@@ -384,10 +412,8 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     let master = created.master_url();
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
-    let track_source = |url: &str| -> TrackSource {
-        let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+    let track_source = |url: &str| -> TrackSource<TestPools> {
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .build();
@@ -395,7 +421,9 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     };
 
     let mut rx = queue.subscribe();
-    let id = queue.append(track_source(master.as_str()));
+    let id = queue
+        .append(track_source(master.as_str()))
+        .expect("append long cold-seek track");
     wait_for_status(
         &mut rx,
         &queue,
@@ -474,10 +502,8 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     let master = created.master_url();
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
-    let track_source = |url: &str| -> TrackSource {
-        let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+    let track_source = |url: &str| -> TrackSource<TestPools> {
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .build();
@@ -485,7 +511,9 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     };
 
     let mut rx = queue.subscribe();
-    let id = queue.append(track_source(master.as_str()));
+    let id = queue
+        .append(track_source(master.as_str()))
+        .expect("append multivariant cold-seek track");
     wait_for_status(
         &mut rx,
         &queue,

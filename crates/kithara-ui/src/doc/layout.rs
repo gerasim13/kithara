@@ -6,7 +6,7 @@ use super::ron_io;
 use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, InstanceId, NodeId, SourceUri},
+    ids::{DocId, InstanceId, NodeId, SourceUri, StateId},
     module::{BindingRef, MeasureAxis},
     size::SizeSpec,
 };
@@ -74,6 +74,21 @@ pub enum LayoutNode {
         #[serde(default)]
         corners: bool,
     },
+    /// Shows the one page its state stands at, and compiles no other.
+    ///
+    /// The body alone: what turns the state is an ordinary control writing a
+    /// [`crate::doc::module::BindingRef::Page`], so a document keeps every say
+    /// over the chrome that offers the pages.
+    ///
+    /// A page is a layout of its own, so a page that is one module and a page
+    /// that is a split of nine each say so where they stand.
+    Tabs {
+        state: StateId,
+        /// The page a screen that has turned nothing stands at.
+        initial: String,
+        /// What each page shows, by the name a control writes.
+        pages: BTreeMap<String, Self>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,6 +116,85 @@ impl Default for FrameSides {
     }
 }
 
+/// Which of a box's four corners are the window's own.
+///
+/// The window has no frame of its own to round: what stands at its corner is
+/// whichever module the layout puts there, so the shape of the window is the
+/// shape of those boxes. A compiled layout hands each module the corners it
+/// inherits from the root, and the skin's frame radius does the rest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct FrameCorners {
+    pub bottom_left: bool,
+    pub bottom_right: bool,
+    pub top_left: bool,
+    pub top_right: bool,
+}
+
+impl FrameCorners {
+    /// Every corner, which is what the root of a layout is given.
+    pub const ALL: Self = Self {
+        bottom_left: true,
+        bottom_right: true,
+        top_left: true,
+        top_right: true,
+    };
+
+    /// No corner, which is what a box inside the window is given.
+    pub const EMPTY: Self = Self {
+        bottom_left: false,
+        bottom_right: false,
+        top_left: false,
+        top_right: false,
+    };
+
+    /// Whether any corner is the window's.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.bottom_left || self.bottom_right || self.top_left || self.top_right
+    }
+
+    /// The bottom pair of `self`, the top pair dropped.
+    #[must_use]
+    pub const fn bottom(self) -> Self {
+        Self {
+            top_left: false,
+            top_right: false,
+            ..self
+        }
+    }
+
+    /// The left pair of `self`, the right pair dropped.
+    #[must_use]
+    pub const fn left(self) -> Self {
+        Self {
+            bottom_right: false,
+            top_right: false,
+            ..self
+        }
+    }
+
+    /// The right pair of `self`, the left pair dropped.
+    #[must_use]
+    pub const fn right(self) -> Self {
+        Self {
+            bottom_left: false,
+            top_left: false,
+            ..self
+        }
+    }
+
+    /// The top pair of `self`, the bottom pair dropped.
+    #[must_use]
+    pub const fn top(self) -> Self {
+        Self {
+            bottom_left: false,
+            bottom_right: false,
+            ..self
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum Axis {
@@ -112,8 +206,8 @@ pub enum Axis {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct AdaptiveStep {
-    pub from: f32,
     pub node: LayoutNode,
+    pub from: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -121,15 +215,15 @@ pub struct AdaptiveStep {
 #[non_exhaustive]
 pub struct SplitChild {
     pub node: LayoutNode,
-    #[serde(default = "default_weight")]
-    pub weight: f32,
+    #[serde(default)]
+    pub until: Option<f32>,
     /// The room the child stands from, and the room it stands until. Both
     /// answer the axis its split measures, and the pair a child keeps by
     /// default stands in every room.
     #[serde(default)]
     pub from: f32,
-    #[serde(default)]
-    pub until: Option<f32>,
+    #[serde(default = "default_weight")]
+    pub weight: f32,
 }
 
 const fn default_weight() -> f32 {

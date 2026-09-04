@@ -7,7 +7,6 @@
 //! guess. Attributing each finding to the attempt it came from turns a
 //! violation that fires intermittently into a rate, which is the same thing the
 //! per-test lanes report and the reason the lane is in a run at all.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::evidence::{backtrace_signature, strip_ansi};
@@ -50,9 +49,9 @@ pub(crate) fn findings(log: &str, evidence: &StressEvidenceConfig) -> Findings {
 }
 
 struct Block {
-    kind: String,
     call: Option<String>,
     body: String,
+    kind: String,
     stack: bool,
 }
 

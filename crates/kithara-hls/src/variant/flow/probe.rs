@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, VecDeque};
 
+use kithara_bufpool::HasPool;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
@@ -49,7 +50,10 @@ impl SizeDemandState {
     }
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn apply_cached_size(&self, demand: SizeDemand) -> bool {
         let len = match demand {
             SizeDemand::Init => self.init_committed_final_len(),
@@ -100,7 +104,7 @@ impl HlsVariant {
 
     fn build_size_probe_cmd(
         self: &Arc<Self>,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
         demand: SizeDemand,
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
@@ -126,7 +130,7 @@ impl HlsVariant {
 
     pub(super) fn dispatch_size_demands(
         self: &Arc<Self>,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
         out: &mut Vec<FetchCmd>,
         remaining: &mut usize,
         cancel: &CancelToken,

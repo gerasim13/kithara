@@ -9,6 +9,7 @@ use kithara_ui::{
     module::parse_module,
     skin::ColorRole,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 fn resolver(module: &str) -> MemResolver {
@@ -36,6 +37,7 @@ fn swatch_compiles_without_bindings() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {

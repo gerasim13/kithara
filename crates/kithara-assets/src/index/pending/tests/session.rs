@@ -2,7 +2,7 @@ use super::*;
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn follower_uses_the_elected_writers_session() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();

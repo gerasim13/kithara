@@ -1,28 +1,40 @@
-use kithara_ui::render::{Node, Scope};
+use kithara::ui::render::{Node, Scope};
 
 use super::{
     broadcast::BroadcastNode,
     deck::{DeckNode, DecksNode, EngineNode},
     library::LibraryNode,
-    mix::{MixNode, StripsNode},
+    mix::{MixNode, PlayerNode, StripsNode},
+    stage::{DeckTempo, TempoNode, VisNode},
     ui::{DragNode, UiNode},
 };
-use crate::{broadcast::Broadcaster, gui::app::Kithara};
+use crate::{
+    broadcast::Broadcaster,
+    gui::{app::Kithara, ui::cache::analysis_bpm, view::playhead},
+};
 
 pub(in crate::gui) struct ReadRoot<'a> {
     broadcast: BroadcastNode<'a>,
     engine: EngineNode,
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
+    player: PlayerNode<'a>,
     mixer: StripsNode<'a>,
+    tempo: TempoNode<'a>,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
+    vis: VisNode<'a>,
 }
 
 impl<'a> ReadRoot<'a> {
     pub(in crate::gui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.ui.cache;
-        let library = LibraryNode::new(&state.catalog, &cache.deck_marks, state.selected_track);
+        let library = LibraryNode::new(
+            &state.catalog,
+            &cache.deck_marks,
+            state.selected_track,
+            &cache.library,
+        );
         let focus = cache.focus_deck();
         let decks: Vec<DeckNode<'a>> = state
             .decks
@@ -34,6 +46,16 @@ impl<'a> ReadRoot<'a> {
             })
             .collect();
         let engine = EngineNode::new(&decks);
+        let tempos: Vec<DeckTempo> = state
+            .decks
+            .iter()
+            .enumerate()
+            .map(|(at, deck)| DeckTempo {
+                bpm: analysis_bpm(&deck.ui),
+                focused: at == focus,
+                position: playhead(&deck.ui).max(0.0),
+            })
+            .collect();
         let drag = DragNode::new(
             cache.drag.and_then(|row| library.title(row)),
             cache.drag_target(),
@@ -41,16 +63,19 @@ impl<'a> ReadRoot<'a> {
         );
 
         Self {
+            library,
+            decks,
+            engine,
             broadcast: BroadcastNode::new(
                 state.broadcast.is_on_air(),
                 state.broadcast.url().unwrap_or_default(),
                 Broadcaster::is_available(),
             ),
-            library,
-            decks,
-            engine,
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
+            player: PlayerNode::new(state.session.mix()),
+            tempo: TempoNode::new(&cache.stage, &tempos),
+            vis: VisNode::new(&cache.stage, &tempos),
             ui: UiNode::new(
                 drag,
                 cache.layout(),
@@ -72,6 +97,9 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
             "engine" => Box::new(self.engine),
             "mix" => Box::new(self.mix),
             "mixer" => Box::new(self.mixer),
+            "player" => Box::new(self.player),
+            "tempo" => Box::new(&self.tempo),
+            "vis" => Box::new(self.vis),
             "ui" => Box::new(self.ui),
             _ => return None,
         };
@@ -81,10 +109,12 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::audio::effects::eq::GainDb;
+    use ::kithara::{
+        play::effects::eq::GainDb,
+        ui::render::{ReadValue, Reads, Walk},
+    };
     use iced::Size;
     use kithara_test_utils::kithara;
-    use kithara_ui::render::{ReadValue, Reads, Walk};
 
     use super::*;
     use crate::{
@@ -93,7 +123,10 @@ mod tests {
         gui::{
             deck::DeckView,
             ui::{
-                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout},
+                cache::{
+                    CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView,
+                    StageView,
+                },
                 endpoints::readable_endpoints,
                 menu::MenuState,
                 modules::Modules,
@@ -101,28 +134,22 @@ mod tests {
             },
         },
         mix::MixState,
-        state::{AbrVariant, UiState},
+        state::{AbrVariant, UiState, covered},
     };
-
-    const DERIVED: [&str; 5] = [
-        "deck.track.title",
-        "deck.track.source_kind",
-        "deck.playback.position_secs",
-        "deck.playback.duration_secs",
-        "deck.playback.position_normalized",
-    ];
 
     struct Fixture {
         catalog: Catalog,
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
-        menu: MenuState,
-        modules: Modules,
-        window: WindowState,
-        mix: MixState,
         eq_mode: EqMode,
-        broadcast_available: bool,
+        library: LibraryView,
+        menu: MenuState,
+        mix: MixState,
+        modules: Modules,
+        stage: StageView,
         decks: Vec<(UiState, DeckCache)>,
+        window: WindowState,
+        broadcast_available: bool,
     }
 
     impl Fixture {
@@ -131,18 +158,20 @@ mod tests {
                 catalog: Catalog::new(vec!["dropped.mp3".to_string()]),
                 marks: CatalogRowMarks::default(),
                 collapsed: CollapsedModules::default(),
+                library: LibraryView::default(),
                 menu: MenuState::default(),
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
                 mix: MixState::new(tempos.len()),
+                stage: StageView::default(),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
         }
 
         fn root(&self) -> ReadRoot<'_> {
-            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0));
+            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0), &self.library);
             let decks: Vec<DeckNode<'_>> = self
                 .decks
                 .iter()
@@ -152,15 +181,28 @@ mod tests {
                 })
                 .collect();
             let engine = EngineNode::new(&decks);
+            let tempos: Vec<DeckTempo> = self
+                .decks
+                .iter()
+                .enumerate()
+                .map(|(at, (ui, _))| DeckTempo {
+                    bpm: analysis_bpm(ui),
+                    focused: at == 0,
+                    position: playhead(ui).max(0.0),
+                })
+                .collect();
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             ReadRoot {
-                broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 library,
                 decks,
                 engine,
+                broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
+                player: PlayerNode::new(&self.mix),
+                tempo: TempoNode::new(&self.stage, &tempos),
+                vis: VisNode::new(&self.stage, &tempos),
                 ui: UiNode::new(
                     drag,
                     DeckLayout::Dual,
@@ -211,6 +253,31 @@ mod tests {
         fixture
     }
 
+    /// The waveform read is where a renderer learns what the analysis has not
+    /// covered; a snapshot that holds the whole track leaves it empty.
+    #[kithara::test]
+    fn the_waveform_read_carries_what_the_snapshot_has_not_covered() {
+        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        fixture.decks[0]
+            .0
+            .set_analysis(Some(covered(&[(0, 200), (400, 1_000)], Some(1_000))));
+        fixture.decks[1]
+            .0
+            .set_analysis(Some(covered(&[(0, 1_000)], Some(1_000))));
+        let root = fixture.root();
+        let walk = Walk::new(&root);
+
+        let Some(ReadValue::Waveform(partial)) = walk.get("deck.playback.waveform@deck=a") else {
+            panic!("the deck publishes a waveform");
+        };
+        assert_eq!(partial.unready, [[0.2, 0.4]]);
+
+        let Some(ReadValue::Waveform(whole)) = walk.get("deck.playback.waveform@deck=b") else {
+            panic!("the deck publishes a waveform");
+        };
+        assert!(whole.unready.is_empty(), "{:?}", whole.unready);
+    }
+
     #[kithara::test]
     fn the_menu_marks_the_rung_in_force_and_hides_the_slots_the_ladder_lacks() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
@@ -246,6 +313,8 @@ mod tests {
 
     #[kithara::test]
     fn the_read_tree_answers_every_key_the_renderer_asks_for() {
+        const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
+
         let documented = readable_endpoints().map(|(id, scopes)| {
             let scope: Vec<String> = scopes
                 .iter()
@@ -396,12 +465,10 @@ mod tests {
     #[kithara::test]
     fn the_menu_reads_its_own_state_and_the_layout_in_force() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
-        fixture.menu.toggle();
         fixture.menu.toggle_layouts();
         let root = fixture.root();
         let walk = Walk::new(&root);
 
-        assert_eq!(walk.get("ui.menu.open"), Some(ReadValue::Bool(true)));
         assert_eq!(
             walk.get("ui.menu.group_open@group=lay"),
             Some(ReadValue::Bool(true))

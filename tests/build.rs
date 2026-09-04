@@ -10,8 +10,10 @@
 //! - a change to the encoding code or to an encoder crate's resolved version
 //!   yields a fresh namespace, so a stale cache can never serve outdated bytes.
 
-#[path = "src/encoder_crates.rs"]
-mod encoder_crates;
+// Transitional: `kithara-test-fixtures` owns the encoder-version fingerprint now.
+// This build script and its L2 cache both disappear in the migration's stage 2.
+#[path = "../crates/kithara-test-fixtures/src/encoders.rs"]
+mod encoders;
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -20,7 +22,7 @@ use std::{
     path::Path,
 };
 
-use encoder_crates::Lockfile;
+use encoders::Lockfile;
 
 /// Hash every `.rs` file under `dir` (path + contents) and register each for
 /// change-tracking so the fingerprint refreshes whenever encoding code changes.
@@ -74,21 +76,25 @@ fn main() {
     let mut hasher = DefaultHasher::new();
 
     // Hash ONLY the spec→bytes transformation code: the encoders, the fMP4
-    // muxer, the packaged-variant encode glue, and the signal encode route.
+    // muxer, the waveform vocabulary the glue renders from, the packaged-variant
+    // encode glue, and the signal encode route.
     // Spec changes flow into per-entry cache KEYS, and server delivery code
     // (routes/behavior, throttling, playlists) never changes encoded bytes —
     // hashing all of `src/native` forced a cold cache (and per-test ffmpeg
     // re-encodes blowing test budgets) on every test-server edit.
-    for dir in ["../crates/kithara-encode/src", "src/native/fmp4"] {
+    for dir in [
+        "../crates/kithara-encode/src",
+        "../crates/kithara-test-fixtures/src/fmp4",
+        "../crates/kithara-test-fixtures/src/signal",
+    ] {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }
-    // The encode glue and the PCM signal generator also determine the bytes.
+    // The encode glue also determines the bytes.
     for file in [
+        "src/native/fmp4.rs",
         "src/native/hls_stream.rs",
         "src/native/routes/signal.rs",
-        "src/signal_pcm.rs",
-        "src/wav.rs",
     ] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
@@ -97,6 +103,7 @@ fn main() {
     }
     hash_encoder_versions(&mut hasher);
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../crates/kithara-test-fixtures/src/encoders.rs");
 
     println!(
         "cargo:rustc-env=KITHARA_FIXTURE_BUILD={:016x}",

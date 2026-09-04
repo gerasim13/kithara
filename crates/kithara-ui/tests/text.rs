@@ -6,6 +6,7 @@ use kithara_ui::{
     envelope::{DocKind, probe},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    source::SourceResolver,
     text::parse_text,
 };
 
@@ -47,6 +48,7 @@ const BUILTIN_ENTRIES: &[(&str, &str)] = &[
     ("track_list.column.energy", "ENERGY"),
     ("track_list.column.transition", "TRANSITION"),
     ("track_list.footer_tracks", "TRACKS"),
+    ("table.footer_rows", "ROWS"),
     (
         "tree.search_placeholder",
         "Search Zvuk: track, artist, release...",
@@ -140,7 +142,11 @@ fn text_envelope_is_probed_as_text() {
 
 #[kithara::test]
 fn rejects_a_document_of_a_different_kind() {
-    let error = parse_text(builtin::DARK_SKIN, &origin()).unwrap_err();
+    let skin = builtin::resolver()
+        .load(None, builtin::DARK_SKIN_PATH)
+        .expect("the shipped folder holds the dark skin")
+        .text;
+    let error = parse_text(&skin, &origin()).unwrap_err();
 
     assert!(matches!(
         error,

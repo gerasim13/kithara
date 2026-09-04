@@ -1,7 +1,7 @@
+use kithara_bufpool::HasPool;
+
 use super::{GlideConfig, resampler::GlideResampler};
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
-
-const BACKEND_GLIDE: &str = "glide";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GlideBackend {
@@ -28,7 +28,13 @@ impl GlideBackend {
 impl ResamplerBackend for GlideBackend {
     type Resampler = GlideResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         settings.validate(self)?;
         GlideResampler::new(self.name(), self.config, settings)
     }
@@ -42,6 +48,8 @@ impl ResamplerBackend for GlideBackend {
     }
 
     fn name(&self) -> &'static str {
+        const BACKEND_GLIDE: &str = "glide";
+
         BACKEND_GLIDE
     }
 }

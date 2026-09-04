@@ -1,0 +1,136 @@
+name: Dispatch
+
+# When the lanes run unattended, and the one door for starting any of them by
+# hand. Eleven crons fired this workflow so that one job ran and ten skipped,
+# and the collector then reported on each nearly-empty run; two crons carry the
+# same coverage, because what a night runs is now declared by the lanes
+# themselves rather than by which cron happened to fire.
+#
+# A schedule belongs to whichever copy of the repository carries it, and this
+# one is carried by every copy. What decides whether it does anything is the
+# variable naming the runners that serve the lanes, so a copy without runners
+# spends a scheduled run doing nothing rather than a machine's night doing
+# nothing. A copy that does have runners must also let GitHub start it:
+# scheduled workflows do not run in a fork until Actions is enabled there.
+on:
+  schedule:
+    # The night: every lane whose membership names `nightly`.
+    - cron: '0 1 * * *'
+    # The week: the lanes that cost hours - Miri, the deep assessment, the
+    # mutation suites - and would owe the machine a night it needs for lanes
+    # that answer faster.
+    - cron: '0 8 * * 6'
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Which cadence to run, when starting this by hand.
+        type: choice
+        options: [nightly, weekly]
+        default: nightly
+      only:
+        description: >-
+          Space-separated lane names to run instead of a role's whole
+          selection. This is how one subtask is started on its own.
+        type: string
+        default: ''
+
+jobs:
+  # The gate lanes a night adds to the ones every push already runs: the
+  # sanitizer soak, the secret scan, the check the merge request does.
+  gate:
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    uses: ./.github/workflows/run.yml
+    with:
+      role: gate
+      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      only: ${{ inputs.only || '' }}
+
+  # Reachable by name; the fan-out itself renders nothing here, because every
+  # platform lane names a machine this fleet does not have. The jobs below call
+  # the workflows that do.
+  platforms:
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    uses: ./.github/workflows/run.yml
+    with:
+      role: platforms
+      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      only: ${{ inputs.only || '' }}
+
+  # The lanes that ask for the whole fleet take turns with each other. One
+  # machine serves every lane, and a queue that also stalled the pushes was
+  # measured on the Linux host: a nightly assessment held the only slot with
+  # three jobs while two pushes waited fourteen minutes with fifteen of
+  # eighteen runner slots idle. The group is held by the calling job, so the
+  # fan-out's own lanes still run concurrently inside its turn.
+  deep:
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    concurrency:
+      group: heavy-linux-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/run.yml
+    with:
+      role: deep
+      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      only: ${{ inputs.only || '' }}
+
+  quality:
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    concurrency:
+      group: heavy-linux-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/run.yml
+    with:
+      role: quality
+      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      only: ${{ inputs.only || '' }}
+
+  # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
+  # and one executor serves every declared lane.
+  network:
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
+    uses: ./.github/workflows/network.yml
+
+  # Three machines the Linux fan-out cannot reach: each has a runner pool of
+  # its own, named by a variable of its own, so each stays a workflow of its
+  # own until the catalog can name a pool.
+  #
+  # `only` names lanes, and the fan-out is what selects lanes, so a request for
+  # one lane leaves these out - the UI suite excepted, because it is a declared
+  # lane and this is the only caller that can start it. Each of these workflows
+  # also starts on its own, which is how one of them is run by hand.
+  windows:
+    if: >-
+      vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
+    uses: ./.github/workflows/windows.yml
+
+  android:
+    if: >-
+      vars.KITHARA_ANDROID_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
+    uses: ./.github/workflows/android.yml
+
+  ui:
+    if: >-
+      vars.KITHARA_GPU_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+      && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
+    uses: ./.github/workflows/ui.yml
+
+  # The repeated run that turns "fails sometimes" into a rate. It has a runner
+  # of its own and a group of its own, and its own admission: only the owner of
+  # a fork may spend a night of the fleet on it.
+  stress:
+    if: >-
+      vars.KITHARA_STRESS_ENABLED == 'true'
+      && vars.KITHARA_STRESS_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
+    uses: ./.github/workflows/stress.yml

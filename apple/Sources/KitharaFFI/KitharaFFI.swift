@@ -2265,6 +2265,10 @@ open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
     }
     /**
      * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     *
+     * # Panics
+     *
+     * Panics if Kithara's built-in FFI buffer pools cannot be initialized.
      */
 public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
     let handle =
@@ -3576,7 +3580,7 @@ public struct FfiItemConfig: Equatable, Hashable {
      * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
      * `https://…/master.m3u8`) **or** an absolute local file path
      * (`/Users/…/song.flac`). Parsed via
-     * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+     * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
      * to [`kithara::play::ResourceConfig::for_src`].
      */
     public let url: String
@@ -3614,7 +3618,7 @@ public struct FfiItemConfig: Equatable, Hashable {
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
          * `https://…/master.m3u8`) **or** an absolute local file path
          * (`/Users/…/song.flac`). Parsed via
-         * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+         * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
          * to [`kithara::play::ResourceConfig::for_src`].
          */url: String,
         /**
@@ -8656,7 +8660,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 56225) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {

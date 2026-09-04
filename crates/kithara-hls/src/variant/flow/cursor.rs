@@ -1,10 +1,14 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
 use super::{HlsVariant, core::NO_PREFETCH_DEFERRAL};
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Record the cursor byte at which the front-of-queue segment enters the
     /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`] when nothing is
     /// deferred. Written by [`HlsVariant::dispatch`] on every pass, so it
@@ -17,22 +21,22 @@ impl HlsVariant {
         self.flow.prefetch_anchor.load(Ordering::Acquire)
     }
 
-    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
-        if !self.flow.reader.is_seek_active() {
-            self.retire_seek_projection_if_moved(pos);
-        }
-        if moved {
-            // The parked read belonged to the position the seek abandoned.
-            self.flow.reader.clear_wait();
-            self.set_exact_byte_seek_demand(pos);
-        }
-    }
-
     /// End of the unready range the reader is parked on, if any. Owed
     /// dispatch consumes this: those bytes gate the reader's progress, so
     /// they are debt no matter where the projected cursor points.
     pub(crate) fn read_wait_end(&self) -> Option<u64> {
         self.flow.reader.wait_end()
+    }
+
+    pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
+        if !self.flow.reader.is_seek_active() {
+            self.retire_seek_projection_if_moved(pos);
+        }
+        if moved {
+            // WHY: The parked read belonged to the position the seek abandoned.
+            self.flow.reader.clear_wait();
+            self.set_exact_byte_seek_demand(pos);
+        }
     }
 
     #[kithara::probe(variant = self.variant as u64, byte)]

@@ -1,8 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
     hls::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -10,24 +12,32 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
-    audio_fixture::EmbeddedAudio,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
-/// Bounded look-ahead over the 222 s packaged fixture: the downloader must
-/// still need further segments when the blip lands, otherwise the track is
-/// already fully cached and no fetch can fail. Kept narrow for the same
-/// reason as in the outage trap — a wide window makes the scenario depend on
-/// how much happened to be cached.
+/// The ladder the blip lands on. One variant, since playback pins variant 0
+/// below, and 72 s of it: the downloader must still need further segments
+/// when the network drops, or the track is already fully cached and no fetch
+/// can fail.
+const VARIANT_SEGMENTS: usize = 24;
+const SEGMENT_SECS: f64 = 3.0;
+/// Bounded look-ahead: kept narrow because a wide window makes the scenario
+/// depend on how much happened to be cached. At the encoder's default
+/// 128 kbit/s a segment above runs roughly 48 KiB, so this window holds
+/// about one of them — the ratio the captured tree gave, where a 64 KiB
+/// window sat against ~50 KiB segments.
 const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 const PLAY_BEFORE_FAILURE_SECS: f64 = 1.0;
 /// How far playback must carry on past the blip. Bounds the "no auto-skip"
@@ -42,7 +52,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -59,16 +69,27 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     // one with parallel siblings would fail them instead.
     let server = PrivateTestServer::start().await;
     let helper = server.helper();
-    let target_url = helper.asset("hls/master.m3u8");
+    let target = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(VARIANT_SEGMENTS)
+                .segment_duration_secs(SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the blip lands on");
+    let target_url = target.master_url();
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
     });
     let fallback_url = fallback_fixture.child_url("fallback.mp3");
 
+    let pools = pools();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -80,43 +101,61 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         )
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
+            .build(),
+    );
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
+            .build(),
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
 
-    let target = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(
-            ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
-        )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader.clone())
-        .initial_abr_mode(AbrMode::manual(0))
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build(),
-    )));
+    let target = queue
+        .append(TrackSource::Config(Box::new(
+            ResourceConfig::for_src(
+                ResourceSrc::parse(target_url.as_str()).expect("valid HLS URL"),
+            )
+            .downloader(downloader.clone())
+            .initial_abr_mode(AbrMode::manual(0))
+            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .store(store.clone())
+            .build(),
+        )))
+        .expect("append target track");
     // A next track is what an auto-skip would move to. Without it the queue
     // has nowhere to go and the regression could not show itself.
-    let fallback = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(
-            ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
-        )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .downloader(downloader)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build(),
-    )));
+    let fallback = queue
+        .append(TrackSource::Config(Box::new(
+            ResourceConfig::for_src(
+                ResourceSrc::parse(fallback_url.as_str()).expect("valid fallback URL"),
+            )
+            .downloader(downloader)
+            .store(store)
+            .build(),
+        )))
+        .expect("append fallback track");
 
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let ticker = spawn_ticker(queue.control());
     let mut rx = queue.subscribe();
     queue
         .select(target, Transition::None)

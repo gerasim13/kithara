@@ -4,20 +4,26 @@ Contracts and invariants for kithara-file; the README is the overview.
 
 ## Architecture
 
-`FileConfig::for_src(src)` → `File` (StreamType marker) → internal `FileCoord`, which splits by
-source: `FileSrc::Local` reads through `AssetStore` with an absolute `ResourceKey`;
+`FileConfig<S>::for_src(src)` -> `File<S>` (StreamType marker) -> internal `FileCoord`, which splits by
+source: `FileSrc::Local` reads through `AssetStore<S>` with an absolute `ResourceKey`;
 `FileSrc::Remote` runs an internal pull-driven `FilePeer` emitting `FetchCmd` batches to the
-shared `dl::Downloader`. The `AssetStore` owns one pending resource per `ResourceKey`: consumer
+shared `dl::Downloader`. The `AssetStore<S>` owns one pending resource per `ResourceKey`: consumer
 demand, the canonical reader/writer, and writer epochs stay in that storage state, while File
-drives HTTP through a writer epoch capability. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File>`
+drives HTTP through a writer epoch capability. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File<S>>`
 (`Read + Seek`) wraps `FileSource`. `FileSource` is synchronous: every async concern (HTTP fetch,
 body streaming, finalization) belongs to the `Downloader` through `FilePeer`, and it holds the
 `PeerHandle` from `Downloader::register` for its whole lifetime — dropping the last handle cancels
 in-flight fetches.
 
+`store: AssetStore<S>` and `pools: PoolRegion<S>` are both required configuration fields. They use
+the same closed schema `S: HasPool<u8>`; `FileConfig<S>` keeps cheap clones of both. Remote source,
+storage, and fallback transport therefore obtain byte buffers through one facade and one shared
+hard budget. Local sources keep the same explicit contract even though they skip the downloader.
+There is no global or lazily inferred pool.
+
 ## Reader contract
 
-`Stream<File>::Read + Seek` goes through `FileSource::wait_range` / `read_at`.
+`Stream<File<S>>::Read + Seek` goes through `FileSource::wait_range` / `read_at`.
 
 - `wait_range(_, Some(_))` is the audio-worker probe: checks phase once, returns
   `SourceError::WaitBudgetExceeded` for missing in-range bytes instead of blocking.
@@ -41,7 +47,7 @@ in-flight fetches.
 ## Fetch targeting
 
 `FilePeer` targets one fetch at a time, and it targets it at the reader cursor
-(`kithara_stream::Source::position`). `Stream<File>::probe_seek` moves that cursor and arms the
+(`kithara_stream::Source::position`). `Stream<File<S>>::probe_seek` moves that cursor and arms the
 peer precisely so the peer re-targets around the new position.
 
 - The next fetch starts at the first gap **at or after** the cursor. Only when nothing is missing
@@ -51,12 +57,19 @@ peer precisely so the peer re-targets around the new position.
   first; the earlier span still has to land for the resource to commit, so it is filled next. Drop
   the cursor lookup and a forward seek waits for the whole skipped span; drop the byte-0 lookup and
   a seeked-over span never lands and the resource never commits.
-- A fetch streams forward from where it started, so a cursor that sits inside the fetch's span but
-  past its write offset can no longer be served by it — that fetch would deliver the whole skipped
-  span first. The peer cancels it. Cancellation relinquishes the writer epoch, the completion path
-  wakes the peer, and the next plan re-elects a writer and anchors on the new cursor. A fetch whose
-  span ends before the cursor is a backfill: it starts behind the cursor by construction and never
-  promised it anything, so it runs to completion.
+- A fetch streams forward from where it started, so a cursor that sits inside the fetch's span
+  past the bytes it has landed can no longer be served by it — that fetch would deliver the whole
+  skipped span first. The peer cancels it. Stored bytes decide where the fetch has got to (the
+  first gap at or after its start), not a write offset the fetch publishes: that offset lands
+  after `write_at`, and the landing is what wakes the reader, so a reader that consumed the bytes
+  in between sat ahead of the offset without being ahead of the fetch and got its own fetch
+  cancelled. Cancellation relinquishes the writer epoch, the completion path wakes the peer, and
+  the next plan re-elects a writer and anchors on the new cursor. A fetch whose span ends before
+  the cursor is a backfill: it starts behind the cursor by construction and never promised it
+  anything, so it runs to completion.
+- A plan that finds no gap over a known extent commits the resource from the peer. A cancelled
+  fetch relinquishes without committing, and when it had already landed everything its replacement
+  has nothing to fetch; parking there would leave every consumer waiting on a complete resource.
 - The cursor steers nothing until the resource extent is known, and nothing once it sits outside
   it. A range request needs an extent: before the first response answers how long the resource is,
   a cursor past the end is indistinguishable from one inside it, and anchoring there would both ask
@@ -113,8 +126,9 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 - Each fetch uses a child of the writer cancel token. Source cancellation cancels only that fetch
   child; the peer holds non-owning wake guards for both source and session cancellation. Either
   cancellation wakes a parked peer before its next readiness check. Session cancellation ends the
-  peer and forbids writer re-election, while source cancellation relinquishes only this source's
-  epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
+  peer and forbids writer re-election. Source cancellation that races after a valid response has
+  landed every advertised byte commits the canonical resource; otherwise it relinquishes only this
+  source's epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
   zero-progress error, fails the current epoch. Other transient completions keep partial coverage
   active, but may commit when every advertised byte already landed. Late stale callbacks cannot
   write, commit, fail, or publish File events for a successor. The peer clears its in-flight flag
@@ -137,5 +151,5 @@ folding in the explicit discriminator when present. Query parameters are never a
 identity for direct files. A higher layer may register any `AssetLayout` for `File`;
 `kithara_play::policy::QueryIdentityLayout` is the built-in domain-aware option selecting stable
 identity parameters while ignoring rotating signatures and expiry values. Layouts are registered
-once through `AssetStore::builder().layouts`, and every `FileConfig` holds a cheap clone of that
-same store handle.
+once through `AssetStore::builder(pools.clone()).layouts`, and every `FileConfig<S>` holds cheap
+clones of that same store handle and region.

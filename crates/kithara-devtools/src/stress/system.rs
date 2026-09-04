@@ -9,17 +9,17 @@ use serde::{Deserialize, Serialize};
 struct Consts;
 
 impl Consts {
-    const PROC_ROOT: &str = "/proc";
     const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+    const PROC_ROOT: &str = "/proc";
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SystemSnapshot {
-    pub(super) kernel: String,
     pub(super) cgroup_v2: CgroupV2,
     pub(super) cpuset: CpuSet,
     pub(super) limits: Limits,
+    pub(super) kernel: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -105,12 +105,12 @@ fn capture_from(proc_root: &Path, cgroup_root: &Path) -> Result<SystemSnapshot> 
 
     Ok(SystemSnapshot {
         kernel,
+        cpuset,
+        limits,
         cgroup_v2: CgroupV2 {
             scope,
             path: cgroup_path,
         },
-        cpuset,
-        limits,
     })
 }
 

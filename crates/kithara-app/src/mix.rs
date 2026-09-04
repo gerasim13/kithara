@@ -1,4 +1,4 @@
-use kithara::play::{CrossfaderBus, PlayError, crossfader_gain};
+use kithara::host::{CrossfaderBus, PlayError, crossfader_gain};
 
 /// One deck's channel strip.
 #[derive(Clone, Copy, Debug, PartialEq)]

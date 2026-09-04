@@ -1,8 +1,8 @@
 use kithara::{
     self,
+    encode::EncodeError,
     stream::{AudioCodec, ContainerFormat},
 };
-use kithara_encode::EncodeError;
 
 #[kithara::test]
 fn error_display_mentions_codec() {

@@ -91,6 +91,9 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 /// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
+/// The asset root an absolute key is filed under.
+pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
+
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
@@ -117,19 +120,8 @@ pub(super) struct InnerIndex {
 }
 
 impl AvailabilityIndex {
-    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
-        Self {
-            inner: Arc::new(InnerIndex {
-                assets: ArcSwap::from_pointee(AssetTree::new()),
-                retired: Retired::new(RETIRE_CAPACITY),
-                #[cfg(not(target_arch = "wasm32"))]
-                persist: OnceLock::new(),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-                pending_durability: DashSet::new(),
-            }),
-        }
+        Self::default()
     }
 
     /// Bind this aggregate to a [`FlushHub`] for coordinated flushing.
@@ -190,6 +182,29 @@ impl AvailabilityIndex {
         contains
     }
 
+    /// Publish a structural change to the snapshot tree.
+    ///
+    /// Rebuilds under [`ArcSwap::rcu`]: readers keep loading complete trees
+    /// throughout, and a racing edit re-runs against the tree that won. The
+    /// closure must therefore be idempotent — every caller here is (map
+    /// insert-if-absent and removals).
+    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
+        self.inner.assets.rcu(|tree| {
+            let mut next = AssetTree::clone(tree);
+            edit(&mut next);
+            next
+        });
+    }
+
+    fn entry(&self, asset_root: &str, path: &str) -> Option<Entry> {
+        self.inner
+            .assets
+            .load()
+            .get(asset_root)
+            .and_then(|asset| asset.get(path))
+            .cloned()
+    }
+
     /// Also on the produce path — see [`Self::contains_range`].
     pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         let (root, path) = Self::resolve_refs(key);
@@ -231,15 +246,6 @@ impl AvailabilityIndex {
         result
     }
 
-    fn entry(&self, asset_root: &str, path: &str) -> Option<Entry> {
-        self.inner
-            .assets
-            .load()
-            .get(asset_root)
-            .and_then(|asset| asset.get(path))
-            .cloned()
-    }
-
     fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Entry {
         if let Some(entry) = self.entry(asset_root, path) {
             return entry;
@@ -258,32 +264,11 @@ impl AvailabilityIndex {
         winner
     }
 
-    /// Publish a structural change to the snapshot tree.
-    ///
-    /// Rebuilds under [`ArcSwap::rcu`]: readers keep loading complete trees
-    /// throughout, and a racing edit re-runs against the tree that won. The
-    /// closure must therefore be idempotent — every caller here is (map
-    /// insert-if-absent and removals).
-    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
-        self.inner.assets.rcu(|tree| {
-            let mut next = AssetTree::clone(tree);
-            edit(&mut next);
-            next
-        });
-    }
-
     fn mark_dirty(&self) {
         self.inner.dirty.store(true, Ordering::Release);
         if let Some(hub) = self.inner.hub.get() {
             hub.signal();
         }
-    }
-
-    /// Enqueue a committed file for the durability barrier. The manifest
-    /// flush pays one barrier per queued file and only then names them, so
-    /// the resource-write path never waits on the medium itself.
-    pub(crate) fn record_pending_durability(&self, path: PathBuf) {
-        self.inner.pending_durability.insert(path);
     }
 
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
@@ -295,11 +280,18 @@ impl AvailabilityIndex {
         }
     }
 
+    /// Enqueue a committed file for the durability barrier. The manifest
+    /// flush pays one barrier per queued file and only then names them, so
+    /// the resource-write path never waits on the medium itself.
+    pub(crate) fn record_pending_durability(&self, path: PathBuf) {
+        self.inner.pending_durability.insert(path);
+    }
+
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
         if range.start >= range.end {
             return;
         }
-        // The write side pays the frees the produce-core reads parked.
+        // WHY: The write side pays the frees the produce-core reads parked.
         self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
@@ -334,7 +326,27 @@ impl AvailabilityIndex {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => (ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
+        }
+    }
+
+    /// Keep only the entries `keep` accepts, by asset root and relative path.
+    pub(crate) fn retain<F: Fn(&str, &str) -> bool>(&self, keep: F) {
+        let mut dropped = false;
+        self.edit_tree(|tree| {
+            tree.retain(|root, entries| {
+                let kept: HashMap<String, Entry> = entries
+                    .iter()
+                    .filter(|(path, _)| keep(root, path))
+                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
+                    .collect();
+                dropped |= kept.len() != entries.len();
+                *entries = Arc::new(kept);
+                !entries.is_empty()
+            });
+        });
+        if dropped {
+            self.mark_dirty();
         }
     }
 }
@@ -382,7 +394,17 @@ impl InnerIndex {
 
 impl Default for AvailabilityIndex {
     fn default() -> Self {
-        Self::new()
+        Self {
+            inner: Arc::new(InnerIndex {
+                assets: ArcSwap::from_pointee(AssetTree::new()),
+                retired: Retired::new(RETIRE_CAPACITY),
+                #[cfg(not(target_arch = "wasm32"))]
+                persist: OnceLock::new(),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
+                pending_durability: DashSet::new(),
+            }),
+        }
     }
 }
 
@@ -398,10 +420,10 @@ impl std::fmt::Debug for AvailabilityIndex {
 /// single `ResourceKey`.
 pub(crate) struct ScopedAvailabilityObserver {
     index: AvailabilityIndex,
-    key: ResourceKey,
     /// Backing file, when the resource has one whose durability the index
     /// must force before naming it in the manifest.
     path: Option<PathBuf>,
+    key: ResourceKey,
 }
 
 impl ScopedAvailabilityObserver {

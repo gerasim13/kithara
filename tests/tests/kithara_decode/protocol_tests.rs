@@ -1,16 +1,24 @@
 use std::io::Cursor;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara::encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara::{
     self,
-    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{Decoder, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    decode_ext::DecoderChunkOutcomeTestExt,
+};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_integration_tests::{encode_test_pcm::SawtoothPcmFixture, ensure_silence_1s_alac_m4a};
+use kithara_test_fixtures::{
+    assets::alac_silence_1s,
+    signal::{Pcm, Wave},
+};
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
@@ -33,9 +41,8 @@ enum Backend {
 impl Backend {
     fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
-        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .backend(self.to_choice())
             .build();
         DecoderFactory::create_from_media_info(source, info, config)
@@ -43,20 +50,19 @@ impl Backend {
     }
 
     fn make_mp3(self) -> Box<dyn Decoder> {
-        const TEST_MP3_BYTES: &[u8] =
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Mp3))
             .maybe_container(Some(ContainerFormat::MpegAudio))
             .build();
-        self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
+        self.make_decoder(signal_mp3_track_sine440_187s().bytes().to_vec(), &info)
     }
 
     fn make_wav(self) -> Box<dyn Decoder> {
-        let bytes = create_test_wav(
-            Consts::WAV_FRAMES,
+        let bytes = signal::wav(
             Consts::WAV_SAMPLE_RATE,
             Consts::WAV_CHANNELS,
+            Consts::WAV_FRAMES,
+            signal::TONE,
         );
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
@@ -201,7 +207,7 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
         let mut dec = backend.make_mp3();
         dec.seek(TARGET).expect("seek should succeed");
         let outcome = dec.next_chunk().expect("next_chunk after seek");
-        let chunk = PcmChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
+        let chunk = AudioChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
 
         let ts = chunk.meta.timestamp;
         assert!(
@@ -286,17 +292,13 @@ enum StandaloneCase {
 impl StandaloneCase {
     fn fixture(self) -> (Vec<u8>, MediaInfo) {
         match self {
-            Self::AlacM4a => {
-                let path = ensure_silence_1s_alac_m4a();
-                let bytes = std::fs::read(&path).expect("read ALAC fixture");
-                (
-                    bytes,
-                    MediaInfo::builder()
-                        .maybe_codec(Some(AudioCodec::Alac))
-                        .maybe_container(Some(ContainerFormat::Mp4))
-                        .build(),
-                )
-            }
+            Self::AlacM4a => (
+                alac_silence_1s().bytes().to_vec(),
+                MediaInfo::builder()
+                    .maybe_codec(Some(AudioCodec::Alac))
+                    .maybe_container(Some(ContainerFormat::Mp4))
+                    .build(),
+            ),
             Self::NativeFlac => (
                 synth_native_flac_1s(),
                 MediaInfo::builder()
@@ -314,12 +316,13 @@ impl StandaloneCase {
 /// that the device misdecodes — the pinned contract for that regression.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn synth_native_flac_1s() -> Vec<u8> {
-    let pcm = SawtoothPcmFixture::new(
-        Consts::WAV_FRAMES / 2,
+    let pcm = Pcm::new(
         Consts::WAV_SAMPLE_RATE,
         Consts::WAV_CHANNELS,
+        Consts::WAV_FRAMES / 2,
+        Wave::Sawtooth,
     );
-    let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+    let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Flac,
         bit_rate: None,

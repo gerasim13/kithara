@@ -7,7 +7,6 @@ use std::{
 use bytes::Bytes;
 use futures::Stream;
 use kithara_apple::foundation::ns::NSData;
-use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
     sync::{Arc, Mutex},
@@ -16,7 +15,7 @@ use kithara_platform::{
 
 use super::{
     delegate::AppleSessionEvents,
-    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
+    response::{AppleDataResponse, ByteBuffers, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
     session::{AppleTask, TaskId},
 };
 use crate::{ByteStream, error::NetError, types::Headers};
@@ -135,7 +134,7 @@ impl Stream for AppleBodyStream {
 
 pub(super) struct AppleBodyQueue {
     task: AppleTask,
-    byte_pool: BytePool,
+    buffers: ByteBuffers,
     inner: Mutex<AppleBodyQueueInner>,
     capacity: usize,
     resume_at: usize,
@@ -153,10 +152,10 @@ impl AppleBodyQueue {
         task: AppleTask,
         capacity: usize,
         resume_at: usize,
-        byte_pool: BytePool,
+        buffers: ByteBuffers,
     ) -> Self {
         Self {
-            byte_pool,
+            buffers,
             task,
             capacity,
             resume_at,
@@ -234,7 +233,7 @@ impl AppleBodyQueue {
     }
 
     pub(super) fn push_data(&self, data: &NSData) {
-        match copy_data(data, &self.byte_pool) {
+        match copy_data(data, &self.buffers) {
             Ok(bytes) => self.push(bytes),
             Err(error) => {
                 self.task.cancel();

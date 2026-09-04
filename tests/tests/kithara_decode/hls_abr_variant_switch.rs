@@ -5,6 +5,7 @@ use std::{
 };
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio, tokio::task::spawn_blocking},
@@ -12,6 +13,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
@@ -54,17 +56,24 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())
         .events(bus)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
 
     info!("Opening HLS stream with ABR enabled");
 
-    let mut stream = Stream::<Hls>::new(config).await?;
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await?;
 
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
@@ -163,14 +172,21 @@ async fn test_basic_multi_segment_reading(
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancelToken::never();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await?;
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await?;
 
     let result = spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut all_bytes = Vec::new();
@@ -233,16 +249,23 @@ async fn test_abr_variant_switch_with_seek_backward(
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
         .events(bus)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
 
     println!("\nCreating HLS stream with ABR");
-    let mut stream = Stream::<Hls>::new(config).await?;
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await?;
 
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();

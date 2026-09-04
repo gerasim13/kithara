@@ -2,7 +2,7 @@ use super::*;
 
 #[kithara::test]
 fn abr_cancel_observes_the_file_source_scope() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -27,7 +27,7 @@ fn abr_cancel_observes_the_file_source_scope() {
 
 #[kithara::test]
 fn cancelled_waiting_source_relinquishes_writer() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -70,7 +70,7 @@ fn cancelled_waiting_source_relinquishes_writer() {
 #[kithara::test]
 fn cancelled_download_session_wakes_peer_and_prevents_reelection() {
     let store_scope = CancelScope::new(None);
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(store_scope.token())
         .build();
@@ -106,7 +106,7 @@ fn cancelled_download_session_wakes_peer_and_prevents_reelection() {
 #[kithara::test]
 fn cancelled_active_session_does_not_start_another_fetch() {
     let store_scope = CancelScope::new(None);
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(store_scope.token())
         .build();
@@ -143,7 +143,7 @@ fn cancelled_active_session_does_not_start_another_fetch() {
 
 #[kithara::test]
 fn writer_drop_promotes_follower_with_same_partial_bytes() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -194,7 +194,7 @@ fn writer_drop_promotes_follower_with_same_partial_bytes() {
 
 #[kithara::test]
 fn late_cancelled_epoch_cannot_poison_successor() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -259,7 +259,7 @@ fn late_cancelled_epoch_cannot_poison_successor() {
 
 #[kithara::test]
 fn dropping_last_file_source_clears_active_session_synchronously() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();

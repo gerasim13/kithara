@@ -7,6 +7,11 @@ validation scope.
 
 - `just test` is the acceptance entrypoint. Pass harness arguments through
   `just test run <args>`.
+- `just test ui` is the complete UI acceptance entrypoint: unit and integration
+  tests, GPU renderer tests, and host-parity captures. The general workspace
+  lane excludes these tests because CI runs them separately. UI uses wall-clock
+  scheduling because it exercises the real window and graphics contracts;
+  virtual-clock coverage remains in the general runtime lanes.
 - Raw `cargo test` or `cargo nextest` is a scoped probe, not a final claim.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.
@@ -47,3 +52,14 @@ validation scope.
   fit an owner suite.
 - Tests should assert contracts: state, events, bytes, positions, typed errors,
   or resource cleanup. Do not test only that nothing panicked.
+
+## Test-Driven Development
+
+- Behavior changes are driven by tests that describe the intended contract.
+- Tests are deterministic and never depend on the external network.
+- A test captures the contract, not an incidental implementation detail.
+- Test logs and generated data stay at a reasonable size.
+- `src/` is production code, not a fixture warehouse. Large fixtures, local
+  servers, generated content, and multi-step scenarios belong in `tests/`;
+  small unit tests and tiny helpers under `#[cfg(test)]` stay next to the code.
+- Any public API change comes with tests that capture the contract.

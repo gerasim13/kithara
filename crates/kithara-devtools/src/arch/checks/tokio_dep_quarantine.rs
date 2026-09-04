@@ -68,8 +68,8 @@ fn production_tokio_deps(manifest: &Value) -> Vec<String> {
 }
 
 fn collect_from_table(table: Option<&Value>, out: &mut BTreeSet<String>) {
-    // Crate names quarantined: a *production* (non-dev, non-build) dependency
-    // on any of these is forbidden outside the platform owner / exemptions.
+    /// Crate names quarantined: a *production* (non-dev, non-build) dependency
+    /// on any of these is forbidden outside the platform owner / exemptions.
     const QUARANTINED: &[&str] = &["tokio", "tokio-util", "tokio-stream"];
     let Some(table) = table.and_then(Value::as_table) else {
         return;

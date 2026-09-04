@@ -6,9 +6,9 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_hang_budget,
-        make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
-        make_tracing_init, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
-        wrap_with_timeout,
+        make_hard_timeout_watchdog, make_prekill_guard, make_runtime_builder, make_selenium_attrs,
+        make_serial_attr, make_tracing_init, make_wasm_serial_guard, wrap_with_model,
+        wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -162,6 +162,7 @@ pub(crate) fn emit_async_timeout_test(
     };
 
     let hang_budget = make_hang_budget(args.hang_timeout_secs);
+    let hard_timeout_watchdog = make_hard_timeout_watchdog(&fn_name_str);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
@@ -242,30 +243,7 @@ pub(crate) fn emit_async_timeout_test(
             let __done = ::kithara_test_utils::kithara_platform::sync::Arc::new(
                 ::std::sync::atomic::AtomicBool::new(false),
             );
-            {
-                let __done_w = __done.clone();
-                let __fn = #fn_name_str;
-                ::std::thread::spawn(move || {
-                    ::std::thread::sleep(
-                        __timeout_dur + ::std::time::Duration::from_secs(3),
-                    );
-                    if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
-                        let __timeout_diagnostic = format!(
-                            "test `{}` exceeded {:?} (runtime shutdown blocked)",
-                            __fn, __timeout_dur,
-                        );
-                        eprintln!(
-                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: {}. Aborting process.\n",
-                            __timeout_diagnostic,
-                        );
-                        ::kithara_test_utils::hang::record_test_hang(
-                            "hard-timeout",
-                            &__timeout_diagnostic,
-                        );
-                        ::std::process::abort();
-                    }
-                });
-            }
+            #hard_timeout_watchdog
             struct __WG(
                 ::kithara_test_utils::kithara_platform::sync::Arc<
                     ::std::sync::atomic::AtomicBool,

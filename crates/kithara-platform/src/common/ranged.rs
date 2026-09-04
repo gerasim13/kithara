@@ -2,9 +2,9 @@
 ///
 /// The generated type stores one float, carries its own bounds as `MIN` /
 /// `MAX` and its fallback as `DEFAULT` — all three values of the type itself —
-/// and is built through `From`, which clamps. A caller imports the type
-/// instead of a pair of loose bounds constants, and cannot hold a value the
-/// range does not allow.
+/// and is built through `From`, which clamps, or `checked`, which rejects an
+/// invalid value. A caller imports the type instead of a pair of loose bounds
+/// constants, and cannot hold a value the range does not allow.
 ///
 /// `NaN` is in no range, so it yields `DEFAULT` rather than propagating.
 ///
@@ -36,6 +36,16 @@ macro_rules! ranged {
             /// Value a default-constructed instance carries, and the answer to
             /// a `NaN` input.
             pub const DEFAULT: Self = Self($default);
+
+            /// Builds a value only when it is finite and inside the range.
+            #[must_use]
+            pub fn checked(value: $t) -> Option<Self> {
+                if value.is_finite() && (Self::MIN.0..=Self::MAX.0).contains(&value) {
+                    Some(Self(value))
+                } else {
+                    None
+                }
+            }
 
             fn clamp(value: $t) -> $t {
                 if value.is_nan() {
@@ -112,5 +122,20 @@ mod tests {
     #[kithara::test]
     fn the_default_value_is_the_declared_one() {
         assert_eq!(Probe::default(), Probe::DEFAULT);
+    }
+
+    #[kithara::test]
+    fn checked_construction_keeps_an_in_range_value() {
+        assert_eq!(Probe::checked(-3.5), Some(Probe::from(-3.5)));
+    }
+
+    #[kithara::test]
+    #[case::below(-24.1)]
+    #[case::above(6.1)]
+    #[case::not_a_number(f32::NAN)]
+    #[case::positive_infinity(f32::INFINITY)]
+    #[case::negative_infinity(f32::NEG_INFINITY)]
+    fn checked_construction_rejects_an_invalid_value(#[case] value: f32) {
+        assert_eq!(Probe::checked(value), None);
     }
 }

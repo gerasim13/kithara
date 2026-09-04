@@ -12,7 +12,6 @@
 //! off ambient (so `flash(false)` tests keep real timing), and virtual inside an
 //! ambient flash test. Raw `flash::enter_dynamic` / `flash::dynamic` are that
 //! macro's private expansion and must never be called by hand.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::platform::time::Duration;

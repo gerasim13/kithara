@@ -10,8 +10,9 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     error::UiDocError,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
-    render::{ReadValue, Reads, tree},
+    render::{Clock, ReadValue, Reads, tree},
     source::UiConfig,
+    view,
 };
 
 /// Records every endpoint the renderer asks for and answers nothing.
@@ -39,11 +40,20 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let reads = RecordingReads::default();
 
-    drop(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+    drop(tree::render(
+        &ui.root,
+        &ui,
+        &reads,
+        &view::EMPTY,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    ));
 
     let seen = reads.0.borrow();
     for deck in ["a", "b"] {
@@ -118,12 +128,21 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
 fn rendered_endpoints(ui: &CompiledUi, truthy: BTreeSet<String>) -> BTreeSet<String> {
     let reads = FlagReads::new(truthy);
-    drop(tree::render(&ui.root, ui, &reads, builtin::skin()));
+    drop(tree::render(
+        &ui.root,
+        ui,
+        &reads,
+        &view::EMPTY,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    ));
     reads.seen.into_inner()
 }
 
@@ -190,6 +209,7 @@ fn menu_ui(module: &'static str) -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 

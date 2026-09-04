@@ -2,10 +2,16 @@ mod capabilities;
 pub use capabilities::ElasticCapabilities;
 
 mod config;
-pub use config::{ElasticConfig, ElasticSpanConfig};
+pub use config::{
+    BungeeConfig, ElasticBackendConfig, ElasticConfig, ElasticSpanConfig, SignalsmithConfig,
+};
+
+mod drain;
+pub use drain::ElasticDrain;
 
 mod engine;
-pub use engine::{ElasticEngine, ElasticPriming};
+pub use engine::ElasticEngine;
+pub(crate) use engine::PitchScale;
 
 mod error;
 pub use error::ElasticError;

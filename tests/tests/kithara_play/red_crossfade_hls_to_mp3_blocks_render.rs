@@ -1,23 +1,34 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
-    audio::{Audio, AudioConfig, AudioWorkerHandle},
+    audio::AudioConfig,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::Resource,
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    host::HostConfig,
+    platform::{sync::Arc, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig, Resource},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::offline::resource_from_reader;
+use kithara_integration_tests::{offline::resource_from_reader, temp_dir};
+use kithara_test_fixtures::{
+    assets::signal_mp3_track_sine440_187s,
+    signal::{self, Wave},
+};
 use tracing::info;
 
-use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    common::test_defaults::Consts as Shared,
+    continuity::render_offline_window,
+};
 
 struct Consts;
 impl Consts {
     const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
-    const BLOCK: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK: usize = 512;
     const SR: u32 = Shared::SAMPLE_RATE;
 }
 
@@ -30,10 +41,8 @@ impl Consts {
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     use kithara::assets::{AssetStore, StorageBackend};
     use kithara_integration_tests::{
-        create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
         offline::OfflinePlayer,
-        signal_pcm::signal,
     };
 
     const HLS_SEGMENT_COUNT: usize = 3;
@@ -44,11 +53,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
     let hls_server = HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(create_wav_exact_bytes(
-            signal::Sawtooth,
+        custom_data: Some(Arc::new(signal::wav_of_size(
             44_100u32,
             2u16,
             HLS_TOTAL_BYTES,
+            Wave::Sawtooth,
         ))),
         segment_duration_secs: segment_duration,
         segment_size: HLS_SEGMENT_SIZE,
@@ -56,53 +65,55 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         ..Default::default()
     })
     .await;
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
         .max_assets(8)
         .build();
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let mut player = OfflinePlayer::new(Consts::SR);
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools.clone())
+            .sample_rate(NonZeroU32::new(Consts::SR).expect("sample rate is non-zero"))
+            .build(),
+    );
 
-    let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+    let media_dir = temp_dir();
+    let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
 
-    let make_mp3 = |w: AudioWorkerHandle| {
+    let make_mp3 = |w: PlayWorker<TestPools>| {
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
-            let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(store).build();
-            let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .hint("mp3".to_string())
-                .worker(w)
+            let file_cfg = FileConfig::for_src(FileSrc::Local(p))
+                .store(store)
+                .pools(w.pools().clone())
                 .build();
-            let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
-                .await
-                .expect("create local MP3 audio");
+            let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
+                .hint("mp3".to_string())
+                .build();
+            let audio = w.open(audio_cfg).await.expect("create local MP3 audio");
             resource_from_reader(audio)
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
+    let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))
                 .maybe_container(Some(ContainerFormat::Wav))
                 .build();
-            let cfg = HlsConfig::for_url(u).store(s).build();
-            let audio_cfg = AudioConfig::<Hls>::for_stream(cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .media_info(wav_info)
-                .worker(w)
+            let cfg = HlsConfig::for_url(u)
+                .store(s)
+                .pools(w.pools().clone())
                 .build();
-            let audio = Audio::<Stream<Hls>>::new(audio_cfg)
-                .await
-                .expect("create HLS audio");
+            let audio_cfg = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
+                .media_info(wav_info)
+                .build();
+            let audio = w.open(audio_cfg).await.expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
             time::timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
@@ -118,7 +129,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        player.load_and_fadein(hls, &format!("red_hls_{iter}"));
+        player.load_and_fadein(hls);
         let _hls_warmup = render_offline_window(
             &mut player,
             40,
@@ -133,7 +144,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             .expect("MP3 preload")
             .expect("MP3 preload result");
         let before_fade = Instant::now();
-        player.load_and_fadein(mp3, &format!("red_mp3_{iter}"));
+        player.load_and_fadein(mp3);
         let fade_stats = render_offline_window(
             &mut player,
             60,

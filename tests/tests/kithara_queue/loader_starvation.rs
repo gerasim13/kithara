@@ -5,7 +5,6 @@
 //! Each hung track is a throttled body that never delivers a byte, so the
 //! probe read parks inside `Resource::new` and keeps the permit; a freshly
 //! selected, reachable track then can never acquire one.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -14,6 +13,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -21,15 +21,17 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
+    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
 };
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -86,28 +88,37 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
+    );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .max_concurrent_loads(cap)
-            .store(store.clone())
-            .player(player)
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .max_concurrent_loads(cap)
+                .store(store.clone())
+                .player(player)
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -117,20 +128,28 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
-fn is_loading(queue: &Queue, id: TrackId) -> bool {
+fn is_loading(queue: &QueueControl<TestPools>, id: TrackId) -> bool {
     matches!(
         queue.track(id).map(|e| e.status),
         Some(TrackStatus::Loading)
     )
 }
 
-async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
+async fn wait_until_loading(
+    queue: &QueueControl<TestPools>,
+    id: TrackId,
+    deadline: Duration,
+) -> Result<(), String> {
     let start = kithara::platform::time::Instant::now();
     loop {
         if is_loading(queue, id) {
@@ -158,9 +177,7 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
@@ -170,7 +187,11 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     // Saturate every permit: each hung append parks in `Resource::new`.
     let mut hung_ids = Vec::new();
     for url in &hung_urls {
-        hung_ids.push(queue.append(TrackSource::Config(Box::new(mk_cfg(url)))));
+        hung_ids.push(
+            queue
+                .append(TrackSource::Config(Box::new(mk_cfg(url))))
+                .expect("append hung track"),
+        );
     }
 
     // Gate: select only after every hung track holds a permit (Loading).
@@ -181,7 +202,9 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     }
 
     // Reachable track: its load queues behind the saturated semaphore.
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&fast_url))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&fast_url))))
+        .expect("append fast track");
     queue
         .select(fast_id, Transition::None)
         .expect("select fast");

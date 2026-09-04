@@ -72,3 +72,14 @@ Use channels when:
 Avoid channels when they replace a simple function call, create unbounded queues,
 let multiple consumers mutate one domain state, or require side-channel atomics to
 recover meaning.
+
+## Coupling
+
+- Keep cache, network, orchestration, decode, and playback responsibilities
+  separate, and avoid circular dependencies.
+- Dependencies point downward toward base abstractions, not back upward into
+  higher-level orchestration.
+- Facade layers may aggregate components, but must not hide "smart" logic that
+  belongs lower in the stack.
+- External code must not depend on internal cache layout or a specific HTTP
+  client unless that is explicitly part of the contract.

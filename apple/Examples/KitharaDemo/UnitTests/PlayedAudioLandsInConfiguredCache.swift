@@ -5,7 +5,7 @@ import Testing
 extension IntegrationRegressionsIOS {
     @Test("Played audio lands in the configured cache")
     func playedAudioLandsInConfiguredCache() async throws {
-        let fixtureURL = try TestServerFixture.asset("test.mp3")
+        let fixtureURL = try TestServerFixture.signal("signal_mp3_track_sine440_187s.mp3")
         let expectedSize = try await cachedFixtureContentLength(at: fixtureURL)
         try #require(
             expectedSize == 2_994_349,

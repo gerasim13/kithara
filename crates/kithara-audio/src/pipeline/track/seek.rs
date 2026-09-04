@@ -1,9 +1,9 @@
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::trace;
 
 use super::{
-    AtEof, CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
+    CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
     decode::{DecodeStep, decode_step},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
@@ -31,7 +31,10 @@ impl TrackPhase for SeekRequested {
 }
 
 impl Track<SeekRequested> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let request = self.into_inner();
         if !src.readiness.source_is_ready(&src.shared_stream) {
             let phase = src.shared_stream.phase();
@@ -77,7 +80,10 @@ impl TrackPhase for ApplyingSeek {
 }
 
 impl Track<ApplyingSeek> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let applying = self.into_inner();
         let anchor_variant = match applying.mode {
             SeekMode::Anchor(anchor) => anchor.variant_index,
@@ -156,7 +162,10 @@ impl TrackPhase for AwaitingResume {
 }
 
 impl Track<AwaitingResume> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let resume = self.into_inner();
         let post_seek_offset = post_seek_anchor_offset(&src.shared_stream, &resume);
         let ready = post_seek_offset.map_or_else(
@@ -180,8 +189,7 @@ impl Track<AwaitingResume> {
                 return TrackStep::Blocked(reason);
             }
         }
-        // Restore the phase so the decode loop's `resume_state()` /
-        // post-seek skip trimming sees the canonical `ResumeState`.
+        // WHY: Restore the phase so the decode loop's `resume_state()` / post-seek skip trimming sees the canonical `ResumeState`.
         src.update_state(Self::new(resume).erase());
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
@@ -235,7 +243,10 @@ impl TrackPhase for WaitingForSource {
 }
 
 impl Track<WaitingForSource> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let WaitState {
             context,
             reason: stored_reason,
@@ -265,7 +276,7 @@ impl Track<WaitingForSource> {
         let phase = source_phase_for_wait_context(&src.shared_stream, &context);
 
         if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
-            // Still waiting — restore the phase with its stored reason.
+            // WHY: Still waiting - restore the phase with its stored reason.
             src.update_state(
                 Self::new(WaitState {
                     context,
@@ -279,19 +290,13 @@ impl Track<WaitingForSource> {
             return TrackStep::Blocked(reason);
         }
 
-        match phase {
-            SourcePhase::Cancelled => {
-                src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-                return TrackStep::Failed;
-            }
-            SourcePhase::Eof => {
-                src.update_state(Track::<AtEof>::new(()).erase());
-                return TrackStep::Eof;
-            }
-            _ => {}
+        if phase == SourcePhase::Cancelled {
+            src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
+            return TrackStep::Failed;
         }
 
-        // Source ready — resume into the phase that initiated the wait.
+        // WHY: Source ready - resume into the phase that initiated the wait. `Eof` resumes like `Ready`: byte-space EOF is not end of PCM,
+        // only the decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
         match context {
             WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),

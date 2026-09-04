@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::{marker::PhantomData, path::PathBuf};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetsError, BytePool,
-    ReadSide, ResourceAttachment, ResourceKey,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetsError, ReadSide,
+    ResourceAttachment, ResourceKey,
 };
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
@@ -25,7 +26,7 @@ use crate::{
 };
 
 /// Marker type for file streaming.
-pub struct File;
+pub struct File<S>(PhantomData<fn() -> S>);
 
 struct Consts;
 
@@ -51,13 +52,13 @@ impl TmpClaimProgress {
 }
 
 struct RemoteFileOpen {
+    coord: Arc<FileCoord>,
     cancel: CancelToken,
     downloader: Downloader,
     bus: EventBus,
-    coord: Arc<FileCoord>,
     headers: Option<Headers>,
-    reader_event_capacity: usize,
     url: Url,
+    reader_event_capacity: usize,
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -91,12 +92,15 @@ fn completed_coord(len: Option<u64>) -> Arc<FileCoord> {
     coord
 }
 
-fn cached_source(
-    reader: AssetReader,
+fn cached_source<S>(
+    reader: AssetReader<S>,
     bus: EventBus,
     cancel: CancelToken,
     reader_event_capacity: usize,
-) -> FileSource {
+) -> FileSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
     FileSource::local(
@@ -139,27 +143,32 @@ fn source_extension(url: &Url, hint: Option<&str>) -> String {
         .unwrap_or_else(|| Consts::DEFAULT_EXTENSION.to_string())
 }
 
-fn remote_key(
-    store: &AssetStore,
+fn remote_key<S>(
+    store: &AssetStore<S>,
     url: &Url,
     discriminator: Option<String>,
     extension: Option<&str>,
-) -> Result<ResourceKey, SourceError> {
+) -> Result<ResourceKey, SourceError>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let source = AssetSource::Remote {
         discriminator,
         url: url.clone(),
     };
-    let scope = store.scope::<File>(&source)?;
+    let scope = store.scope::<File<S>>(&source)?;
     let resource = AssetResource::Source {
         extension: source_extension(url, extension),
     };
     scope.key(&resource).map_err(SourceError::from)
 }
 
-fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
+fn default_downloader<S>(cancel: &CancelToken, pools: PoolRegion<S>) -> Downloader
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let cancel_for_dl = cancel.child();
-    let net_options = NetOptions::builder().maybe_byte_pool(pool).build();
-    let client = HttpClient::new(net_options, cancel_for_dl.child());
+    let client = HttpClient::new(NetOptions::default(), pools, cancel_for_dl.child());
     Downloader::new(
         DownloaderConfig::for_client(client)
             .cancel(cancel_for_dl)
@@ -168,7 +177,10 @@ fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloade
 }
 
 impl RemoteFileOpen {
-    fn into_source(self, attachment: ResourceAttachment) -> FileSource {
+    fn into_source<S>(self, attachment: ResourceAttachment<S>) -> FileSource<S>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         let Self {
             bus,
             cancel,
@@ -186,10 +198,10 @@ impl RemoteFileOpen {
 
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
-                bus: bus.clone(),
                 reader_event_capacity,
+                coord: Arc::clone(&coord),
+                bus: bus.clone(),
             },
             FileAssetCtx {
                 reader,
@@ -211,10 +223,13 @@ impl RemoteFileOpen {
     }
 }
 
-impl StreamType for File {
-    type Config = FileConfig;
+impl<S> StreamType for File<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    type Config = FileConfig<S>;
     type Events = EventBus;
-    type Source = FileSource;
+    type Source = FileSource<S>;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
         let cancel = CancelScope::new(config.cancel.clone()).token();
@@ -233,13 +248,16 @@ impl StreamType for File {
     }
 }
 
-impl File {
+impl<S> File<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Create a source for a local file.
     fn create_local(
         path: PathBuf,
-        config: FileConfig,
+        config: FileConfig<S>,
         cancel: &CancelToken,
-    ) -> Result<FileSource, SourceError> {
+    ) -> Result<FileSource<S>, SourceError> {
         let key = local_key(path)?;
         let store = config.store.clone();
         let reader_event_capacity = config.reader_event_capacity;
@@ -268,9 +286,9 @@ impl File {
     /// `len()` returns `None`.
     fn create_remote(
         url: Url,
-        config: FileConfig,
+        config: FileConfig<S>,
         cancel: CancelToken,
-    ) -> Result<FileSource, SourceError> {
+    ) -> Result<FileSource<S>, SourceError> {
         let FileConfig {
             bus,
             discriminator,
@@ -279,12 +297,12 @@ impl File {
             extension,
             headers,
             look_ahead_bytes,
-            pool,
+            pools,
             reader_event_capacity,
             store,
             ..
         } = config;
-        let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
+        let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pools));
         let backend = store;
         let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
         let publish_bus = bus.clone();
@@ -306,13 +324,13 @@ impl File {
                 ))
             }
             AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
+                coord,
                 cancel,
                 downloader,
                 bus,
-                coord,
                 headers,
-                reader_event_capacity,
                 url,
+                reader_event_capacity,
             }
             .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),
@@ -337,9 +355,9 @@ impl File {
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
         url: Url,
-        config: FileConfig,
+        config: FileConfig<S>,
         cancel: CancelToken,
-    ) -> Result<FileSource, StreamSourceError> {
+    ) -> Result<FileSource<S>, StreamSourceError> {
         let poll_interval = config.tmp_claim_poll_interval;
         let mut progress = TmpClaimProgress::default();
         loop {
@@ -378,6 +396,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::test_pools::pools;
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("valid test URL")
@@ -404,7 +423,7 @@ mod tests {
 
     #[kithara::test]
     fn remote_key_uses_file_source_layout() {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .build();
         let key = remote_key(
@@ -420,7 +439,7 @@ mod tests {
 
     #[kithara::test]
     fn remote_key_uses_only_explicit_discriminator() {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .build();
         let first = remote_key(
@@ -462,8 +481,11 @@ mod tests {
         let backend = StorageBackend::Disk {
             root: dir.path().to_path_buf(),
         };
-        let holder_store = AssetStore::builder().backend(backend.clone()).build();
-        let waiting_store = AssetStore::builder().backend(backend).build();
+        let pools = pools();
+        let holder_store = AssetStore::builder(pools.clone())
+            .backend(backend.clone())
+            .build();
+        let waiting_store = AssetStore::builder(pools.clone()).backend(backend).build();
         let remote_url = url("http://example.test/audio.mp3");
         let key = remote_key(&holder_store, &remote_url, None, None).expect("remote key");
         let holder = match holder_store
@@ -480,6 +502,7 @@ mod tests {
         let mut events = bus.subscribe();
         let config = FileConfig::for_src(FileSrc::Remote(remote_url))
             .store(waiting_store)
+            .pools(pools)
             .cancel(cancel.clone())
             .events(bus)
             .build();

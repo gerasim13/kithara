@@ -19,8 +19,8 @@ all:
 # why they do not go through `just test run`. `just platform wasm` keeps the
 # artifacts (check, build, size-check); the tests belong here.
 #
-# SUITE `all` adds the integration browser suite; `webcodecs` runs only
-# kithara-decode's own target, which is what the browser CI job asks for.
+# Both suites run the wasm Host unit tests. SUITE `all` also runs the integration
+# browser suite; `webcodecs` adds only kithara-decode's browser target.
 
 # Run the Rust tests that need a browser (SUITE: all | webcodecs).
 [positional-arguments]
@@ -56,6 +56,21 @@ wasm BROWSER="chrome" SUITE="all":
     # without this the run dies with "failed to start test_server ... No such
     # file or directory".
     cargo build -p kithara-integration-tests --bin test_server
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-encode --no-default-features \
+      --features client-reqwest,tls-rustls \
+      --test session
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-host --lib --no-default-features \
+      --features backend-web-audio,wasm-bindgen,symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
     if [[ "$suite" == "all" ]]; then
       # The integration browser tests live in `suite_heavy`. Building the whole
       # crate for wasm compiles every native suite too, and those reach for
@@ -120,7 +135,7 @@ audio-artifacts OUTPUT:
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_light \
         --run-ignored=only \
-        -E 'test(=kithara_audio::no_sync_passthrough::record_no_sync_unity_playback_artifacts)'
+        -E 'test(/kithara_audio::no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_heavy \
         --run-ignored=only \
@@ -134,6 +149,63 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e "$@"
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
+
+# Every UI test target, followed by both hosts drawing the same gallery and
+# shipped studio pages, and the gallery built the other way it ships. This is
+# the UI pipeline's single entrypoint; the general workspace lane deliberately
+# excludes the same tests.
+#
+# The frame and page harnesses live behind their own feature, so the lane above
+# does not compile them and the censuses inside them - one row per control the
+# document can name, one per gallery page - were checked by hand or not at all.
+# They run here as their own lane. Nothing in them judges a duration: what they
+# assert is that a run did the thing it claims to measure, so the numbers stay
+# a report and the censuses become a gate.
+#
+# The last step builds the gallery's suite with the toolkit's default features
+# - iced alone, no retained host - and runs it there. Everything above is one
+# feature set, so a page, a walk or a census that only holds when both hosts
+# are compiled in would pass all of it and fail the first consumer who takes
+# the toolkit without masonry.
+ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$PWD/target/parity"
+    rm -rf "$dir/scenario"
+    KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
+    just test run --lane=ui-doc
+    just test run --lane=ui-perf
+    just test parity --dir "$dir"
+    cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
+
+# The picture parity programme on its own. `just test ui` runs it after the UI
+# lanes; run it alone to re-check a drawing change without paying for the
+# suites again.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. Both
+# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
+# prices each page, and a page over its price - or missing from a set - ends
+# this non-zero.
+#
+# One control is then photographed on its own, because the retained host is the
+# only one that can find a control by its document path and nothing else here
+# asks it to. A page that stops drawing that control ends this non-zero rather
+# than leaving the shortest capture path untested.
+#
+# The steps are xtask's, not this file's: which sets are taken, in which order,
+# and what each is priced against is logic, and logic in a recipe body is logic
+# nothing can test.
+[positional-arguments]
+parity *ARGS:
+    just _xtask parity "$@"
+
+# The same pages through a real window, which is the only one of the three
+# captures that needs a display. Its job is to say whether the headless iced
+# set draws what a window draws, so compare it against a set photographed at
+# the geometry this one recorded in `frame.txt`.
+ui-window DIR="target/parity/window":
+    cargo run -p kithara-ui --example gallery --features kithara-ui/capture -- --shoot {{ DIR }} --windowed
 
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
@@ -230,6 +302,11 @@ loom-debug FILE *ARGS:
 # an FFI call into one, so the selection is the crates that hold atomics and
 # forbid `unsafe` themselves. What it can still answer is whether their memory
 # ordering is sound and whether a dependency reaches undefined behaviour.
+#
+# Flashless on purpose. Under `flash` the platform's `Mutex`, `RwLock` and
+# `Condvar` are flash's own, so the lane would interpret the harness instead of
+# the primitives it is here to check. The cost is the handful of tests whose
+# assertion is a wall-clock interval; they say so at their own `cfg_attr`.
 [positional-arguments]
 miri *ARGS:
     #!/usr/bin/env bash
@@ -347,7 +424,9 @@ rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
-rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" "apple-fused-src" FILTER)
+# `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
+# makes it.
+rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap kithara_audio::analysis_offer_is_realtime_safe": (_rtsan "suite_light" "apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" "apple-fused-src" FILTER)
 

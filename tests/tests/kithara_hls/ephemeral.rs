@@ -14,17 +14,19 @@ use kithara::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::create_wav_exact_bytes;
+use kithara_integration_tests::bufpool_ext::TestPools;
+use kithara_integration_tests::bufpool_ext::pools;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
-use kithara_integration_tests::signal_pcm::signal;
+use kithara_test_fixtures::signal::{self, Wave};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;
@@ -46,7 +48,7 @@ fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect
             root: temp.path().into(),
         }
     };
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(backend)
         .build()
         .scope::<StorageProbe>(&AssetSource::Remote {
@@ -113,11 +115,11 @@ async fn ephemeral_pipeline_no_disk_writes() {
     const SEGMENT_COUNT: usize = 3;
     const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-    let wav_data = create_wav_exact_bytes(
-        signal::Sawtooth,
+    let wav_data = signal::wav_of_size(
         SawWav::DEFAULT.sample_rate,
         SawWav::DEFAULT.channels,
         TOTAL_BYTES,
+        Wave::Sawtooth,
     );
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
@@ -135,13 +137,20 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -150,12 +159,11 @@ async fn ephemeral_pipeline_no_disk_writes() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

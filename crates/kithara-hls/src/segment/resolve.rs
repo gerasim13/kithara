@@ -1,4 +1,5 @@
 use kithara_assets::AssetScope;
+use kithara_bufpool::HasPool;
 
 use crate::segment::Segment;
 
@@ -6,7 +7,10 @@ impl Segment {
     /// Committed on-disk length for this slot when its resource is `Committed`
     /// with a known `final_len`, routed through the slot's narrow disk handle.
     /// `None` when the resource is not committed.
-    pub(crate) fn committed_len(&self, scope: &AssetScope) -> Option<u64> {
+    pub(crate) fn committed_len<S>(&self, scope: &AssetScope<S>) -> Option<u64>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.resource(scope).committed_len()
     }
 

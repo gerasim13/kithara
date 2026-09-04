@@ -4,13 +4,14 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{ChunkRetire, PcmChunk};
+use kithara_decode::ChunkRetire;
+use kithara_signal::AudioChunk;
 use tracing::warn;
 
 use crate::pipeline::decode::DecoderGeneration;
 
 pub(crate) struct Retired {
-    chunks: ArrayQueue<PcmChunk>,
+    chunks: ArrayQueue<AudioChunk>,
     generations: ArrayQueue<DecoderGeneration>,
     overflowed: AtomicBool,
 }
@@ -22,6 +23,11 @@ impl Retired {
             generations: ArrayQueue::new(generations),
             overflowed: AtomicBool::new(false),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn chunk_len(&self) -> usize {
+        self.chunks.len()
     }
 
     pub(crate) fn drain(&self) {
@@ -37,11 +43,6 @@ impl Retired {
         self.generations.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn chunk_len(&self) -> usize {
-        self.chunks.len()
-    }
-
     pub(crate) fn retire_generation(&self, generation: DecoderGeneration) {
         if let Err(generation) = self.generations.push(generation) {
             self.overflowed.store(true, Ordering::Release);
@@ -51,7 +52,7 @@ impl Retired {
 }
 
 impl ChunkRetire for Retired {
-    fn retire(&self, chunk: PcmChunk) {
+    fn retire(&self, chunk: AudioChunk) {
         if let Err(chunk) = self.chunks.push(chunk) {
             self.overflowed.store(true, Ordering::Release);
             mem::forget(chunk);

@@ -57,8 +57,8 @@ impl CasAnchorCell {
     pub(super) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
-            // A writer owns the body: bail to not-ready for this poll instead of
-            // spinning. The level-triggered re-poll observes the demand a tick
+            // WHY: A writer owns the body: bail to not-ready for this poll instead of spinning. The level-triggered re-poll observes the demand
+            // a tick
             return None;
         }
         let generation = self.active.load(Ordering::Acquire);
@@ -67,16 +67,15 @@ impl CasAnchorCell {
         }
         let segment = self.segment.load(Ordering::Relaxed);
         let anchor = self.anchor.load(Ordering::Relaxed);
-        // Pin the Relaxed body loads before the re-validation: on weak-memory
-        // targets (AArch64) they could otherwise sink past the version/`active`
-        // recheck and accept a torn `{segment, anchor}` from a newer writer.
+        // WHY: Pin the Relaxed body loads before the re-validation: on weak-memory targets (AArch64) they could otherwise sink past the
+        // version/`active` recheck and accept a torn `{segment, anchor}` from a newer writer.
         fence(Ordering::Acquire);
-        // Version sandwich: an unchanged even version proves no writer touched
-        // body or `active` across the read, so the snapshot is coherent.
+        // WHY: Version sandwich: an unchanged even version proves no writer touched body or `active` across the read, so the snapshot is
+        // coherent.
         if self.version.load(Ordering::Acquire) != start {
             return None;
         }
-        // Reject a snapshot a concurrent `clear` already retired.
+        // WHY: Reject a snapshot a concurrent `clear` already retired.
         if self.active.load(Ordering::Acquire) != generation {
             return None;
         }
@@ -93,7 +92,7 @@ impl CasAnchorCell {
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
         if generation == 0 {
-            // 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
+            // WHY: 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
             self.next_gen
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
@@ -124,12 +123,12 @@ impl CasAnchorCell {
             spin_loop();
         };
         let generation = self.next_gen();
-        // Hide the demand for the body write so a stale `take_if(old)` cannot
+        // WHY: Hide the demand for the body write so a stale `take_if(old)` cannot
         self.active.store(0, Ordering::Release);
         self.segment.store(segment, Ordering::Relaxed);
         self.anchor.store(anchor, Ordering::Relaxed);
         self.active.store(generation, Ordering::Release);
-        // Release the version lock (odd -> even).
+        // WHY: Release the version lock (odd -> even).
         self.version.store(held.wrapping_add(1), Ordering::Release);
     }
 }

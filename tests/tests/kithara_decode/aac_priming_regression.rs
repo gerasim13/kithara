@@ -1,26 +1,23 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use kithara_integration_tests::{
+    TestServerHelper,
+    bufpool_ext::{TestPools, pools},
+};
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(1.0),
-        format: SignalFormat::Aac,
-        bit_rate: None,
-    };
-
     let response = client
-        .get(server.sawtooth(&spec).await)
+        .get(server.signal(SignalAsset::AAC_SAW_1S))
         .send()
         .await
         .expect("fetch /signal aac fixture");
@@ -30,9 +27,8 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some("aac"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .expect("probe AAC decoder");
@@ -52,7 +48,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     // before the chunk is emitted and the first surfaced chunk
     // starts with real sawtooth content.
     let outcome = decoder.next_chunk().expect("decode chunk 0");
-    let chunk = PcmChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
+    let chunk = AudioChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
     assert!(
         !chunk.samples.is_empty(),
         "AAC chunk 0 must not be empty after priming strip",

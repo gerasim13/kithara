@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use iced::Element;
-use kithara::prelude::{ResourceConfig, ResourceSrc};
+use kithara::prelude::ResourceSrc;
 
 use super::{app::Kithara, message::Message};
 use crate::state::UiState;
@@ -31,7 +31,7 @@ pub(crate) fn track_subtitle(ui: &UiState) -> String {
     let Some(url) = entry.url.as_deref() else {
         return "Artist / Album unavailable".to_string();
     };
-    if !matches!(ResourceConfig::parse_src(url), Ok(ResourceSrc::Path(_))) {
+    if !matches!(ResourceSrc::parse(url), Ok(ResourceSrc::Path(_))) {
         return "Artist / Album unavailable".to_string();
     }
 

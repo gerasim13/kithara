@@ -25,7 +25,7 @@ extension IntegrationRegressionsIOS {
             config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(
-            url: try TestServerFixture.asset("test.mp3").absoluteString
+            url: try TestServerFixture.signal("signal_mp3_track_sine440_187s.mp3").absoluteString
         )
         let timeline = SeekTimeline()
         let cancellable = player.eventPublisher.sink { event in

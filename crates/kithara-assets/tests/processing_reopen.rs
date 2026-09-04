@@ -132,7 +132,7 @@ fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8
 fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -177,11 +177,11 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
         "reopened processed resource must stay committed after cache eviction"
     );
 
-    let mut buf = Vec::new();
+    let mut buf = support::pools().get::<u8>();
     let read = reopened.read_into(&mut buf).unwrap();
 
     assert_eq!(read, expected.len());
-    assert_eq!(buf, expected);
+    assert_eq!(&buf[..], expected);
     assert_eq!(
         call_count.load(Ordering::SeqCst),
         calls_after_eviction,
@@ -193,7 +193,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
 fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -229,18 +229,18 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
         "reopened processed resource must stay committed after cache eviction"
     );
 
-    let mut buf = Vec::new();
+    let mut buf = support::pools().get::<u8>();
     let read = reopened.read_into(&mut buf).unwrap();
 
     assert_eq!(read, expected.len());
-    assert_eq!(buf, expected);
+    assert_eq!(&buf[..], expected);
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -286,7 +286,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

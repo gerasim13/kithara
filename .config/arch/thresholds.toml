@@ -392,14 +392,14 @@ expose_methods = [
 ]
 
 [field_passthrough]
-# `render/skin.rs::Skin` deliberately holds a flat copy of every resolved
+# `render/skin/neutral.rs::Skin` deliberately holds a flat copy of every resolved
 # sub-skin (`button`, `cell`, ...) alongside the raw `document: SkinDoc` it
 # was resolved from. The duplication is intentional: `Skin` is the hot-path
 # render type (direct field/getter access, no `self.document.button`
 # indirection on every draw call); `document` is retained only so the doc
 # can be round-tripped (edited and saved back) without re-deriving it from
-# the resolved values. See `crates/kithara-ui/CONTEXT.md`.
-exempt_files = ["crates/kithara-ui/src/render/skin.rs"]
+# the resolved values.
+exempt_files = ["crates/kithara-ui/src/render/skin/neutral.rs"]
 
 [single_impl_size]
 # LOC of a single `impl X` or `impl Trait for X` block. Catches god-impl
@@ -444,6 +444,11 @@ test_crates = [
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-fuzz",
+  # Build-time test assets. Its exports are consumed by code this scanner
+  # cannot read — accessors generated into OUT_DIR and its own build script —
+  # and a call it makes into a workspace API is a fixture, not a shipped
+  # caller.
+  "kithara-test-fixtures",
 ]
 # Ignored as export owners: build tooling and the cargo-hakari workspace-hack
 # shim own no production contract, so their definitions are never collected.
@@ -475,7 +480,7 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   through a split field-borrow (self.tracks.get_mut inside a
 #   self.tracks_transitions.retain closure); a &mut self method cannot replace
 #   it without a borrow conflict. Relocating the tests in-crate would duplicate
-#   the integration crate's PcmReader mock.
+#   the integration crate's AudioReader mock.
 #   try_pop_notification: white-box drain of the processor->main notification
 #   channel; the processor is the producer side, so no production reader exists.
 #   Same relocation constraint as track_mut.

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
 [![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -16,7 +16,7 @@
 
 A streaming audio engine for Rust. Point it at a URL and it plays: `.m3u8`
 streams adaptively over HLS, everything else downloads progressively. One
-`Resource` type gives you a unified PCM read/seek interface. The player engine
+`Resource` type gives you a unified decoded-audio read/seek interface. The player engine
 underneath adds multi-deck mixing, crossfade, and parametric EQ for DJ and
 pro-audio apps.
 
@@ -28,8 +28,9 @@ pro-audio apps.
 - **DRM** — AES-128 decryption for protected HLS.
 
 `kithara` is the facade crate: it aggregates the engine layers
-(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `stream`, and the
-feature-gated `file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines) behind one
+(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `signal`, `stream`, `warp`, and the
+feature-gated `analysis`/`file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines plus `encode`, `stretch`, `ui`, and
+`worker`) behind one
 dependency and a single `Resource` entry point. The `abr` and `drm` modules are
 available when `hls` is enabled.
 
@@ -38,16 +39,27 @@ available when `hls` is enabled.
 ```rust
 use kithara::audio::ReadOutcome;
 use kithara::assets::AssetStore;
-use kithara::bufpool::{BytePool, PcmPool};
+use kithara::bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara::prelude::*;
 
-let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
-    "https://example.com/song.mp3",
-)?)
-    .store(AssetStore::builder().build())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
-    .build();
+pool_schema! {
+    AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+let pool_config = || PoolConfig::builder().max_buffers(128).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(pool_config())
+    .samples(pool_config())
+    .build()?;
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+let config: ResourceConfig<AppPools> =
+    ResourceConfig::for_src(ResourceSrc::parse("https://example.com/song.mp3")?)
+        .store(AssetStore::builder(pools).build())
+        .worker(worker)
+        .build();
 let mut resource = Resource::new(config).await?;
 resource.preload().await?;
 
@@ -61,7 +73,7 @@ loop {
 }
 ```
 
-`Resource` is a type-erased `Box<dyn PcmReader>`: the same `read()` / `seek()`
+`Resource` is a type-erased `Box<dyn AudioReader>`: the same `read()` / `seek()`
 interface whether the source is HLS, a remote file, or a local path. Build it
 from a `ResourceConfig`; `ReadOutcome` reports `Frames` / `Pending` / `Eof`.
 The optional `EventBus` (`resource.event_bus()`) is an observability

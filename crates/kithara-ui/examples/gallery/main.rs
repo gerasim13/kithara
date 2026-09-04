@@ -1,421 +1,120 @@
-mod mock;
-mod mock_data;
-mod mock_mixer;
-mod mock_stress;
-mod mock_transport;
+//! The gallery: one program that reads its pages from disk and shows them.
+//!
+//! What the pages are made of is the toolkit's; what checks them is
+//! `tests/gallery.rs`, which mounts these same modules. This file is only the
+//! window and the harnesses that stand in front of it, each named by a flag of
+//! its own — `--help` lists them.
+
+mod app;
+mod capture;
+mod cli;
+mod compare;
+mod custom;
+mod demo;
+mod fixture;
+#[cfg(feature = "masonry")]
+mod host;
+mod offscreen;
+#[cfg(feature = "masonry")]
+mod retained;
 mod sections;
 
-use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
-use kithara_platform::time::Duration;
-use kithara_ui::{
-    builtin,
-    compile::{CompiledUi, compile},
-    render::{Skin, UiEvent, WindowCommand, fonts, tree},
-    source::{MemResolver, UiConfig},
+use clap::Parser;
+use iced::{
+    Color, Subscription, Task, Theme, theme, theme::Base, time as iced_time, window,
+    window::Settings,
 };
+use kithara_ui::render::{UiEvent, WindowCommand, fonts};
 
 use self::{
-    mock::MockReads,
-    sections::{ModuleDemo, Tab},
+    app::{Gallery, Message},
+    capture::Capture,
+    cli::{Args, Host},
 };
 
-struct Consts;
-
-impl Consts {
-    const HEIGHT: f32 = 720.0;
-    const MIN_HEIGHT: f32 = 320.0;
-    const MIN_WIDTH: f32 = 400.0;
-    const STRESS_TICK_MS: u64 = 16;
-    const WIDTH: f32 = 1450.0;
+/// What a run was asked for, once its flags have been read.
+enum Asked {
+    /// Nothing but the gallery: show it.
+    Gallery,
+    /// A harness ran and said what it found; the program is done.
+    Done,
 }
 
-const ASSETS: &[(&str, &str)] = &[
-    (
-        "gallery-clock.klayout.ron",
-        include_str!("assets/gallery-clock.klayout.ron"),
-    ),
-    (
-        "gallery-atoms.klayout.ron",
-        include_str!("assets/gallery-atoms.klayout.ron"),
-    ),
-    (
-        "gallery-buttons.klayout.ron",
-        include_str!("assets/gallery-buttons.klayout.ron"),
-    ),
-    (
-        "gallery-cells.klayout.ron",
-        include_str!("assets/gallery-cells.klayout.ron"),
-    ),
-    (
-        "gallery-chrome.klayout.ron",
-        include_str!("assets/gallery-chrome.klayout.ron"),
-    ),
-    (
-        "gallery-faders.klayout.ron",
-        include_str!("assets/gallery-faders.klayout.ron"),
-    ),
-    (
-        "gallery-library2.klayout.ron",
-        include_str!("assets/gallery-library2.klayout.ron"),
-    ),
-    (
-        "gallery-menu.klayout.ron",
-        include_str!("assets/gallery-menu.klayout.ron"),
-    ),
-    (
-        "gallery-pivot.klayout.ron",
-        include_str!("assets/gallery-pivot.klayout.ron"),
-    ),
-    (
-        "gallery-micro.klayout.ron",
-        include_str!("assets/gallery-micro.klayout.ron"),
-    ),
-    (
-        "gallery-mixer.klayout.ron",
-        include_str!("assets/gallery-mixer.klayout.ron"),
-    ),
-    (
-        "gallery-modules-deck-micro.klayout.ron",
-        include_str!("assets/gallery-modules-deck-micro.klayout.ron"),
-    ),
-    (
-        "gallery-modules-global-bar.klayout.ron",
-        include_str!("assets/gallery-modules-global-bar.klayout.ron"),
-    ),
-    (
-        "gallery-modules-layout.klayout.ron",
-        include_str!("assets/gallery-modules-layout.klayout.ron"),
-    ),
-    (
-        "gallery-modules-telemetry.klayout.ron",
-        include_str!("assets/gallery-modules-telemetry.klayout.ron"),
-    ),
-    (
-        "gallery-modules.klayout.ron",
-        include_str!("assets/gallery-modules.klayout.ron"),
-    ),
-    (
-        "gallery-sizes.klayout.ron",
-        include_str!("assets/gallery-sizes.klayout.ron"),
-    ),
-    (
-        "gallery-stress.klayout.ron",
-        include_str!("assets/gallery-stress.klayout.ron"),
-    ),
-    (
-        "gallery-titlebars.klayout.ron",
-        include_str!("assets/gallery-titlebars.klayout.ron"),
-    ),
-    (
-        "gallery-tokens.klayout.ron",
-        include_str!("assets/gallery-tokens.klayout.ron"),
-    ),
-    (
-        "gallery-tracklist.klayout.ron",
-        include_str!("assets/gallery-tracklist.klayout.ron"),
-    ),
-    (
-        "gallery-tree.klayout.ron",
-        include_str!("assets/gallery-tree.klayout.ron"),
-    ),
-    (
-        "gallery-typography.klayout.ron",
-        include_str!("assets/gallery-typography.klayout.ron"),
-    ),
-    (
-        "gallery-vis.klayout.ron",
-        include_str!("assets/gallery-vis.klayout.ron"),
-    ),
-    (
-        "modules/deck/key-lock.kmodule.ron",
-        include_str!("../../assets/modules/deck/key-lock.kmodule.ron"),
-    ),
-    (
-        "modules/deck/overview-row.kmodule.ron",
-        include_str!("../../assets/modules/deck/overview-row.kmodule.ron"),
-    ),
-    (
-        "modules/pivot-portals.kmodule.ron",
-        include_str!("../../assets/modules/pivot-portals.kmodule.ron"),
-    ),
-    (
-        "modules/pivot-portals/row.kmodule.ron",
-        include_str!("../../assets/modules/pivot-portals/row.kmodule.ron"),
-    ),
-    (
-        "modules/pivot-portals/track-row.kmodule.ron",
-        include_str!("../../assets/modules/pivot-portals/track-row.kmodule.ron"),
-    ),
-    (
-        "modules/module-deck-micro.kmodule.ron",
-        include_str!("assets/modules/module-deck-micro.kmodule.ron"),
-    ),
-    (
-        "modules/module-deck.kmodule.ron",
-        include_str!("assets/modules/module-deck.kmodule.ron"),
-    ),
-    (
-        "modules/module-global-bar.kmodule.ron",
-        include_str!("assets/modules/module-global-bar.kmodule.ron"),
-    ),
-    (
-        "modules/module-layout.kmodule.ron",
-        include_str!("assets/modules/module-layout.kmodule.ron"),
-    ),
-    (
-        "modules/module-tabs.kmodule.ron",
-        include_str!("assets/modules/module-tabs.kmodule.ron"),
-    ),
-    (
-        "modules/module-telemetry.kmodule.ron",
-        include_str!("assets/modules/module-telemetry.kmodule.ron"),
-    ),
-    (
-        "modules/nav.kmodule.ron",
-        include_str!("assets/modules/nav.kmodule.ron"),
-    ),
-    (
-        "modules/nav/item.kmodule.ron",
-        include_str!("assets/modules/nav/item.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/chips.kmodule.ron",
-        include_str!("assets/modules/primitives/chips.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/knobs.kmodule.ron",
-        include_str!("assets/modules/primitives/knobs.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/meters.kmodule.ron",
-        include_str!("assets/modules/primitives/meters.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/readouts.kmodule.ron",
-        include_str!("assets/modules/primitives/readouts.kmodule.ron"),
-    ),
-    (
-        "modules/primitives/toggles.kmodule.ron",
-        include_str!("assets/modules/primitives/toggles.kmodule.ron"),
-    ),
-    (
-        "modules/stress.kmodule.ron",
-        include_str!("assets/modules/stress.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/atoms.kmodule.ron",
-        include_str!("assets/modules/tabs/atoms.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/buttons.kmodule.ron",
-        include_str!("assets/modules/tabs/buttons.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/cells.kmodule.ron",
-        include_str!("assets/modules/tabs/cells.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/clock.kmodule.ron",
-        include_str!("assets/modules/tabs/clock.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-full-all.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-full-all.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-join-left.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-join-left.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-join-right.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-join-right.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-open-top.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-open-top.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-row-a.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-row-a.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-row-b.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-row-b.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/chrome-row-c.kmodule.ron",
-        include_str!("assets/modules/tabs/chrome-row-c.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/faders.kmodule.ron",
-        include_str!("assets/modules/tabs/faders.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/library2.kmodule.ron",
-        include_str!("assets/modules/tabs/library2.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/menu-context.kmodule.ron",
-        include_str!("assets/modules/tabs/menu-context.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/menu-context/track-row.kmodule.ron",
-        include_str!("assets/modules/tabs/menu-context/track-row.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/menu-notes.kmodule.ron",
-        include_str!("assets/modules/tabs/menu-notes.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-notes.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-notes.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/mixer-1d.kmodule.ron",
-        include_str!("assets/modules/tabs/mixer-1d.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/mixer-1g.kmodule.ron",
-        include_str!("assets/modules/tabs/mixer-1g.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/mixer-label.kmodule.ron",
-        include_str!("assets/modules/tabs/mixer-label.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/sizes.kmodule.ron",
-        include_str!("assets/modules/tabs/sizes.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/titlebars.kmodule.ron",
-        include_str!("assets/modules/tabs/titlebars.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/tokens-anatomy.kmodule.ron",
-        include_str!("assets/modules/tabs/tokens-anatomy.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/tokens-notes.kmodule.ron",
-        include_str!("assets/modules/tabs/tokens-notes.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/tokens.kmodule.ron",
-        include_str!("assets/modules/tabs/tokens.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/tracklist.kmodule.ron",
-        include_str!("assets/modules/tabs/tracklist.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/tree.kmodule.ron",
-        include_str!("assets/modules/tabs/tree.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/typography.kmodule.ron",
-        include_str!("assets/modules/tabs/typography.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/vis-spacer.kmodule.ron",
-        include_str!("assets/modules/tabs/vis-spacer.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/vis.kmodule.ron",
-        include_str!("assets/modules/tabs/vis.kmodule.ron"),
-    ),
-    (
-        "modules/titlebar.kmodule.ron",
-        include_str!("assets/modules/titlebar.kmodule.ron"),
-    ),
-];
-
-#[derive(Clone, Debug)]
-enum Message {
-    Close(window::Id),
-    Tick,
-    Ui(UiEvent),
-}
-
-struct Gallery {
-    skin: &'static Skin,
-    window_id: window::Id,
-    reads: MockReads,
-    layouts: [CompiledUi; Tab::ALL.len()],
-    module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
-}
-
-impl Gallery {
-    fn new() -> (Self, Task<Message>) {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let layouts = Tab::ALL.map(|tab| {
-            compile(
-                tab.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                &UiConfig::default(),
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "embedded gallery document {} must compile: {error}",
-                    tab.entry()
-                )
-            })
-        });
-        let module_layouts = ModuleDemo::ALL.map(|module| {
-            compile(
-                module.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                &UiConfig::default(),
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "embedded gallery document {} must compile: {error}",
-                    module.entry()
-                )
-            })
-        });
-        let settings = Settings {
-            size: Size::new(Consts::WIDTH, Consts::HEIGHT),
-            min_size: Some(Size::new(Consts::MIN_WIDTH, Consts::MIN_HEIGHT)),
-            decorations: false,
-            exit_on_close_request: false,
-            ..Settings::default()
-        };
-        let (window_id, open) = window::open(settings);
-        (
-            Self {
-                layouts,
-                module_layouts,
-                window_id,
-                skin: builtin::skin(),
-                reads: MockReads::default(),
-            },
-            open.discard(),
-        )
-    }
-
-    fn compiled(&self) -> &CompiledUi {
-        if self.reads.active_tab() == Tab::Modules {
-            &self.module_layouts[self.reads.active_module().index()]
-        } else {
-            &self.layouts[self.reads.active_tab().index()]
-        }
-    }
-
-    fn select_tab(&mut self, tab: Tab) {
-        self.reads.select_tab(tab);
-    }
-}
-
+/// Shows the gallery, unless a flag asked for one of the harnesses standing in
+/// front of it: a two-host comparison, or a set of photographs.
 fn main() -> iced::Result {
-    let daemon = iced::daemon(Gallery::new, update, view)
+    let args = Args::parse();
+    match harness(&args) {
+        Ok(Asked::Done) => Ok(()),
+        Ok(Asked::Gallery) => gallery(&args),
+        Err(error) => refuse(&error),
+    }
+}
+
+/// Ends the program on something it was asked for and cannot do, saying what.
+///
+/// A gate reads the exit code; iced's error type has no shape for "the two
+/// hosts disagree", and inventing one would say less.
+fn refuse(error: &str) -> ! {
+    eprintln!("{error}");
+    std::process::exit(1)
+}
+
+/// Runs whichever harness the flags named, or says the gallery itself was
+/// asked for.
+///
+/// A capture through a window is the one that answers `Gallery`: it walks the
+/// pages from inside the window it photographs, so the window has to open.
+fn harness(args: &Args) -> Result<Asked, String> {
+    if let Some(sets) = args.compare.as_deref() {
+        return if compare::run(sets, args.budget.as_deref())? {
+            Ok(Asked::Done)
+        } else {
+            Err("the two sets differ by more than their budget allows".to_owned())
+        };
+    }
+    let Some(dir) = args.shoot.as_deref() else {
+        return Ok(Asked::Gallery);
+    };
+    if args.windowed {
+        return match args.host {
+            Host::Immediate => Ok(Asked::Gallery),
+            #[cfg(feature = "masonry")]
+            Host::Retained => Err(
+                "the retained host photographs off-screen; drop --windowed to use it".to_owned(),
+            ),
+        };
+    }
+    let written = match args.host {
+        Host::Immediate if args.element.is_some() => {
+            return Err(
+                "the immediate host forgets the controls it draws; use --host retained".to_owned(),
+            );
+        }
+        Host::Immediate => offscreen::run(args, dir)?,
+        #[cfg(feature = "masonry")]
+        Host::Retained => retained::shoot(args, dir)?,
+    };
+    println!("{written} picture(s) written to {}", dir.display());
+    Ok(Asked::Done)
+}
+
+/// The gallery itself, through whichever host was named.
+fn gallery(args: &Args) -> iced::Result {
+    match args.host {
+        Host::Immediate => immediate(args),
+        #[cfg(feature = "masonry")]
+        Host::Retained => retained::show(args).map_or_else(|error| refuse(&error), Ok),
+    }
+}
+
+/// The gallery with a window of iced's in front of it.
+fn immediate(args: &Args) -> iced::Result {
+    let start = args.clone();
+    let daemon = iced::daemon(move || mount(&start), app::update, app::view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
-        .theme(|state: &Gallery, _window| theme(state.skin))
+        .theme(|state: &Gallery, _window| app::theme(state.skin()))
+        .style(|_state: &Gallery, theme: &Theme| window_style(theme))
         .subscription(subscription)
         .default_font(fonts::SANS);
     fonts::FONT_BYTES
@@ -424,625 +123,66 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn update(state: &mut Gallery, message: Message) -> Task<Message> {
-    match message {
-        Message::Close(id) if id == state.window_id => iced::exit(),
-        Message::Close(id) => window::close(id),
-        Message::Tick => {
-            state.reads.tick();
-            Task::none()
-        }
-        Message::Ui(UiEvent::Control { path, action }) => {
-            if let Ok(tab) = Tab::try_from(path.as_str()) {
-                state.select_tab(tab);
-            } else {
-                state.reads.apply(&path, &action);
-            }
-            Task::none()
-        }
-        Message::Ui(UiEvent::LibraryQuery(query)) => {
-            state.reads.set_library_query(query);
-            Task::none()
-        }
-        Message::Ui(UiEvent::ToggleModule(module)) => {
-            state.reads.toggle_module(module);
-            Task::none()
-        }
-        Message::Ui(UiEvent::Window(command)) => match command {
-            WindowCommand::Drag => window::drag(state.window_id),
-            WindowCommand::Minimize => window::minimize(state.window_id, true),
-            WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
-            WindowCommand::Close => iced::exit(),
-            _ => Task::none(),
-        },
-        Message::Ui(_) => Task::none(),
-    }
+/// The pages are the ones the mounted state compiles, so the program and what
+/// checks it open on the same gallery.
+fn mount(args: &Args) -> (Gallery, Task<Message>) {
+    let settings = Settings {
+        size: args.size.into(),
+        min_size: Some(args.min_size.into()),
+        decorations: false,
+        exit_on_close_request: false,
+        transparent: true,
+        ..Settings::default()
+    };
+    let (window_id, open) = window::open(settings);
+    let capture = args
+        .shoot
+        .clone()
+        .filter(|_| args.windowed)
+        .map(Capture::new);
+    let start = if capture.is_some() {
+        Task::done(Message::CaptureNext)
+    } else {
+        Task::none()
+    };
+    let gallery = Gallery {
+        window_id,
+        capture,
+        step: args.step(),
+        ..Gallery::mounted()
+    };
+    (gallery, open.discard().chain(start))
 }
 
-fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
-    tree::render(
-        &state.compiled().root,
-        state.compiled(),
-        &state.reads,
-        state.skin,
-    )
-    .map(Message::Ui)
-}
-
+/// Time runs on the pages that move, which the gallery answers for itself.
+/// Naming the pages here instead is a second account of the same fact, and it
+/// drifts: a page that gained something moving kept its picture frozen until an
+/// unrelated event redrew it, and one that lost it went on waking the host
+/// every tick for nothing.
+///
+/// A capture never ticks: the offscreen host photographs one frame of a freshly
+/// mounted page, so a clock running here would put the two hosts at different
+/// moments and the comparison would measure the difference between them.
+///
+/// A close request arrives as the window command the title bar's own button
+/// sends, so the two ways to shut the gallery meet in one arm rather than
+/// ending the program from two places.
 fn subscription(state: &Gallery) -> Subscription<Message> {
-    let close = window::close_requests().map(Message::Close);
-    if matches!(state.reads.active_tab(), Tab::Stress | Tab::Vis) {
-        Subscription::batch([
-            close,
-            iced_time::every(Duration::from_millis(Consts::STRESS_TICK_MS)).map(|_| Message::Tick),
-        ])
+    let close =
+        window::close_requests().map(|_| Message::Ui(UiEvent::Window(WindowCommand::Close)));
+    if state.capture.is_none() && state.moves() {
+        Subscription::batch([close, iced_time::every(state.step).map(|_| Message::Tick)])
     } else {
         close
     }
 }
 
-fn resolver() -> MemResolver {
-    let mut resolver = builtin::resolver();
-    for (path, text) in ASSETS {
-        resolver.insert(path, text);
-    }
-    resolver
-}
-
-fn theme(skin: &Skin) -> Theme {
-    let palette = skin.palette;
-    Theme::custom(
-        "Kithara".to_owned(),
-        iced::theme::Palette {
-            background: palette.bg,
-            text: palette.text,
-            primary: palette.accent,
-            success: palette.success,
-            danger: palette.danger,
-            warning: palette.warning,
-        },
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-    use kithara_ui::{
-        compile::CompiledNode,
-        expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-        module::ChromeStyle,
-        render::{ControlAction, Reads},
-    };
-
-    use super::*;
-
-    #[kithara::test]
-    fn every_module_demo_compiles_with_full_chrome() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-
-        for module in ModuleDemo::ALL {
-            let ui = compile(
-                module.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                &UiConfig::default(),
-            )
-            .unwrap();
-            let CompiledNode::Split { children, .. } = &ui.root else {
-                panic!("expected gallery split");
-            };
-            let CompiledNode::Split {
-                children: gallery_children,
-                ..
-            } = &children[1].node
-            else {
-                panic!("expected gallery content");
-            };
-            let CompiledNode::Split {
-                children: module_children,
-                ..
-            } = &gallery_children[1].node
-            else {
-                panic!("expected module demo stack");
-            };
-            let CompiledNode::Module {
-                title,
-                chip,
-                chrome,
-                footer,
-                ..
-            } = &module_children[1].node
-            else {
-                panic!("expected module demo");
-            };
-
-            assert_eq!(*chrome, ChromeStyle::Full, "{}", module.entry());
-            assert!(title.is_some(), "{}", module.entry());
-            assert!(chip.is_some(), "{}", module.entry());
-            assert!(footer.is_some(), "{}", module.entry());
-        }
-    }
-
-    #[kithara::test]
-    fn every_gallery_tab_compiles() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-
-        for tab in Tab::ALL {
-            compile(
-                tab.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                &UiConfig::default(),
-            )
-            .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
-        }
-    }
-
-    #[kithara::test]
-    fn every_nav_item_path_selects_its_tab() {
-        let ui = compile(
-            Tab::Atoms.entry(),
-            &resolver(),
-            &mock::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut paths = Vec::new();
-        collect_nav_item_paths(&ui.root, &ui, &mut paths);
-
-        assert_eq!(paths.len(), Tab::ALL.len());
-        let selected: Vec<_> = paths
-            .iter()
-            .map(|path| Tab::try_from(path.as_str()).unwrap_or_else(|()| panic!("{path}")))
-            .collect();
-        assert_eq!(selected, Tab::ALL);
-    }
-
-    fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_nav_item_paths(child, ui, paths);
-                }
-            }
-            CompiledNode::Optional { child, .. } => collect_nav_item_paths(child, ui, paths),
-            CompiledNode::Module { root, .. } => collect_expanded_nav_paths(root, ui, paths),
-            _ => {}
-        }
-    }
-
-    fn collect_expanded_nav_paths(node: &ExpandedNode, ui: &CompiledUi, paths: &mut Vec<String>) {
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_expanded_nav_paths(child, ui, paths);
-                }
-            }
-            ExpandedNode::Control {
-                path,
-                spec: ControlSpec::NavItem { .. },
-                ..
-            } => paths.push(ui.resolve(*path).to_owned()),
-            _ => {}
-        }
-    }
-
-    #[kithara::test]
-    fn module_demo_tabs_activate_their_compiled_control_paths() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let ui = compile(
-            Tab::Modules.entry(),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut paths = Vec::new();
-        collect_tab_large_paths(&ui.root, &ui, &mut paths);
-
-        assert_eq!(paths.len(), ModuleDemo::ALL.len());
-        let mut reads = MockReads::default();
-        for (path, module) in paths.iter().zip(ModuleDemo::ALL) {
-            reads.apply(path, &ControlAction::Activate);
-            assert_eq!(reads.active_module(), module, "{path}");
-        }
-    }
-
-    #[kithara::test]
-    fn menu_tab_carries_the_app_menu_and_one_popover_per_track() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let ui = compile(
-            Tab::Menu.entry(),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut found = MenuTab::default();
-        collect_menu_tab(&ui.root, &ui, &mut found);
-
-        assert_eq!(
-            found.popovers,
-            [
-                ("app-menu/pop", "ui.menu.open"),
-                ("ctx/track-1/menu", "gallery.menu.context@row=1"),
-                ("ctx/track-2/menu", "gallery.menu.context@row=2"),
-                ("ctx/track-3/menu", "gallery.menu.context@row=3"),
-                ("ctx/track-4/menu", "gallery.menu.context@row=4"),
-            ]
-        );
-
-        let track_one: Vec<_> = found
-            .pressables
-            .iter()
-            .copied()
-            .filter(|path| path.starts_with("ctx/track-1"))
-            .collect();
-        assert_eq!(
-            track_one,
-            [
-                "ctx/track-1/row",
-                "ctx/track-1/deck-a",
-                "ctx/track-1/deck-b",
-                "ctx/track-1/queue",
-            ]
-        );
-        assert!(found.pressables.contains(&"app-menu/burger"));
-    }
-
-    #[kithara::test]
-    fn the_mock_answers_every_read_the_menu_tab_names() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let ui = compile(
-            Tab::Menu.entry(),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut keys = Vec::new();
-        collect_menu_reads(&ui.root, &ui, &mut keys);
-        assert!(!keys.is_empty());
-
-        let mut reads = MockReads::default();
-        reads.apply("app-menu/new-window", &ControlAction::Activate);
-        let unanswered: Vec<_> = keys
-            .iter()
-            .copied()
-            .filter(|key| reads.get(key).is_none())
-            .collect();
-
-        assert_eq!(unanswered, [""; 0]);
-    }
-
-    #[kithara::test]
-    fn tree_query_binding_reaches_the_compiled_control() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let ui = compile(
-            Tab::Tree.entry(),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut queries = Vec::new();
-        collect_tree_queries(&ui.root, &ui, &mut queries);
-
-        assert_eq!(queries, ["library.query"]);
-    }
-
-    #[kithara::test]
-    fn context_scope_binding_reaches_the_compiled_control() {
-        let resolver = resolver();
-        let endpoints = mock::registry();
-        let ui = compile(
-            Tab::Library2.entry(),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::default(),
-        )
-        .unwrap();
-        let mut contexts = Vec::new();
-        collect_context_scopes(&ui.root, &ui, &mut contexts);
-
-        assert_eq!(
-            contexts,
-            [("library2/context", "library.scope", "library.scope", 2)]
-        );
-    }
-
-    fn collect_tab_large_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_tab_large_paths(child, ui, paths);
-                }
-            }
-            CompiledNode::Module { root, .. } => collect_expanded_tab_paths(root, ui, paths),
-            _ => {}
-        }
-    }
-
-    fn collect_expanded_tab_paths(node: &ExpandedNode, ui: &CompiledUi, paths: &mut Vec<String>) {
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_expanded_tab_paths(child, ui, paths);
-                }
-            }
-            ExpandedNode::Control {
-                path,
-                spec: ControlSpec::TabLarge { .. },
-                ..
-            } => paths.push(ui.resolve(*path).to_owned()),
-            ExpandedNode::Control { .. } => {}
-            _ => {}
-        }
-    }
-
-    #[derive(Default)]
-    struct MenuTab<'a> {
-        popovers: Vec<(&'a str, &'a str)>,
-        pressables: Vec<&'a str>,
-    }
-
-    fn collect_menu_tab<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, found: &mut MenuTab<'a>) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_menu_tab(child, ui, found);
-                }
-            }
-            CompiledNode::Optional { child, .. } => collect_menu_tab(child, ui, found),
-            CompiledNode::Module { root, .. } => collect_menu_tab_module(root, ui, found),
-            node => panic!("the menu walker does not know {node:?}"),
-        }
-    }
-
-    fn collect_menu_tab_module<'a>(
-        node: &'a ExpandedNode,
-        ui: &'a CompiledUi,
-        found: &mut MenuTab<'a>,
-    ) {
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_menu_tab_module(child, ui, found);
-                }
-            }
-            ExpandedNode::Optional { child, .. } => collect_menu_tab_module(child, ui, found),
-            ExpandedNode::Popover {
-                path,
-                open,
-                anchor,
-                content,
-                ..
-            } => {
-                found
-                    .popovers
-                    .push((ui.resolve(*path), ui.resolve(open.key)));
-                collect_menu_tab_module(anchor, ui, found);
-                collect_menu_tab_module(content, ui, found);
-            }
-            ExpandedNode::Pressable { path, child, .. } => {
-                found.pressables.push(ui.resolve(*path));
-                collect_menu_tab_module(child, ui, found);
-            }
-            ExpandedNode::Control { .. } => {}
-            node => panic!("the menu walker does not know {node:?}"),
-        }
-    }
-
-    fn collect_menu_reads<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, keys: &mut Vec<&'a str>) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_menu_reads(child, ui, keys);
-                }
-            }
-            CompiledNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key));
-                collect_menu_reads(child, ui, keys);
-            }
-            CompiledNode::Module { root, .. } => collect_menu_module_reads(root, ui, keys),
-            node => panic!("the menu walker does not know {node:?}"),
-        }
-    }
-
-    fn collect_menu_module_reads<'a>(
-        node: &'a ExpandedNode,
-        ui: &'a CompiledUi,
-        keys: &mut Vec<&'a str>,
-    ) {
-        match node {
-            ExpandedNode::Row {
-                active, children, ..
-            } => {
-                if let Some(binding) = active {
-                    keys.push(ui.resolve(binding.key));
-                }
-                for child in children {
-                    collect_menu_module_reads(child, ui, keys);
-                }
-            }
-            ExpandedNode::Column { children, .. } | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_menu_module_reads(child, ui, keys);
-                }
-            }
-            ExpandedNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key));
-                collect_menu_module_reads(child, ui, keys);
-            }
-            ExpandedNode::Popover {
-                open,
-                anchor,
-                content,
-                ..
-            } => {
-                keys.push(ui.resolve(open.key));
-                collect_menu_module_reads(anchor, ui, keys);
-                collect_menu_module_reads(content, ui, keys);
-            }
-            ExpandedNode::Pressable { child, .. } => collect_menu_module_reads(child, ui, keys),
-            ExpandedNode::Control { spec, read, .. } => {
-                if let Some(binding) = read {
-                    keys.push(ui.resolve(binding.key));
-                }
-                if let ControlSpec::Text {
-                    active: Some(binding),
-                    ..
-                }
-                | ControlSpec::Glyph {
-                    active: Some(binding),
-                    ..
-                } = spec
-                {
-                    keys.push(ui.resolve(binding.key));
-                }
-            }
-            node => panic!("the menu walker does not know {node:?}"),
-        }
-    }
-
-    fn collect_tree_queries<'a>(
-        node: &'a CompiledNode,
-        ui: &'a CompiledUi,
-        queries: &mut Vec<&'a str>,
-    ) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_tree_queries(child, ui, queries);
-                }
-            }
-            CompiledNode::Module { root, .. } => collect_expanded_tree_queries(root, ui, queries),
-            _ => {}
-        }
-    }
-
-    fn collect_expanded_tree_queries<'a>(
-        node: &'a ExpandedNode,
-        ui: &'a CompiledUi,
-        queries: &mut Vec<&'a str>,
-    ) {
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_expanded_tree_queries(child, ui, queries);
-                }
-            }
-            ExpandedNode::Control {
-                spec:
-                    ControlSpec::Tree {
-                        query:
-                            Some(Binding {
-                                kind: BindingKind::Model,
-                                id,
-                                ..
-                            }),
-                    },
-                ..
-            } => queries.push(ui.resolve(*id)),
-            ExpandedNode::Control { .. } => {}
-            _ => {}
-        }
-    }
-
-    fn collect_context_scopes<'a>(
-        node: &'a CompiledNode,
-        ui: &'a CompiledUi,
-        contexts: &mut Vec<(&'a str, &'a str, &'a str, usize)>,
-    ) {
-        match node {
-            CompiledNode::Split { children, .. } => {
-                for cell in children {
-                    let child = &cell.node;
-                    collect_context_scopes(child, ui, contexts);
-                }
-            }
-            CompiledNode::Module { root, .. } => {
-                collect_expanded_context_scopes(root, ui, contexts)
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_expanded_context_scopes<'a>(
-        node: &'a ExpandedNode,
-        ui: &'a CompiledUi,
-        contexts: &mut Vec<(&'a str, &'a str, &'a str, usize)>,
-    ) {
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    collect_expanded_context_scopes(child, ui, contexts);
-                }
-            }
-            ExpandedNode::Control {
-                path,
-                spec:
-                    ControlSpec::ContextBar {
-                        scope_items,
-                        scope:
-                            Some(Binding {
-                                kind: BindingKind::Model,
-                                id: scope,
-                                ..
-                            }),
-                    },
-                write:
-                    Some(Binding {
-                        kind: BindingKind::Model,
-                        id: write,
-                        ..
-                    }),
-                ..
-            } => contexts.push((
-                ui.resolve(*path),
-                ui.resolve(*scope),
-                ui.resolve(*write),
-                scope_items.len(),
-            )),
-            ExpandedNode::Control { .. } => {}
-            _ => {}
-        }
+/// The window paints no ground of its own: the document lays down the page in
+/// the shape the skin gives the window, and whatever the shape leaves out is
+/// the desktop behind it.
+fn window_style(theme: &Theme) -> theme::Style {
+    theme::Style {
+        background_color: Color::TRANSPARENT,
+        text_color: theme.base().text_color,
     }
 }

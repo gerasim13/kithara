@@ -7,9 +7,11 @@ use std::{
 
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    GaplessMode, GaplessProfile, PcmChunk, PcmSpec,
+    GaplessMode, GaplessProfile,
 };
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::MediaInfo;
+use kithara_test_utils::kithara;
 use tracing::warn;
 
 use crate::pipeline::{gapless::GaplessStage, seek::ResumeState};
@@ -21,7 +23,7 @@ mod holdback;
 struct Holdback {
     join_frames: u64,
     slots: usize,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -31,18 +33,18 @@ pub(crate) enum StageProgress {
 }
 
 pub(crate) struct StageFailure {
-    pub(crate) chunk: PcmChunk,
+    pub(crate) chunk: AudioChunk,
     pub(crate) error: DecodeError,
 }
 
 pub(crate) enum StageResult {
     Ready,
     NeedMore,
-    Invalid(StageFailure),
+    Invalid(Box<StageFailure>),
 }
 
 pub(crate) enum StageOutput {
-    Output(Option<PcmChunk>),
+    Output(Option<AudioChunk>),
     Invalid(StageFailure),
 }
 
@@ -75,7 +77,7 @@ pub(crate) struct DecoderGeneration {
     timeline_gap_floor: u64,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
-    staged: VecDeque<PcmChunk>,
+    staged: VecDeque<AudioChunk>,
     #[cfg(test)]
     staged_scan_count: Cell<usize>,
     #[field(get, vis = "pub(crate)")]
@@ -95,7 +97,7 @@ impl DecoderGeneration {
     ) -> Self {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
-        let gapless = GaplessStage::build(gapless_profile, gapless_mode);
+        let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
         Self {
             decoder,
             media_info,
@@ -136,7 +138,9 @@ impl DecoderGeneration {
         }
         self.finished = true;
         self.holdback = None;
-        self.gapless.set_tail_compensation(self.gapless_profile());
+        let codec = self.media_info.as_ref().and_then(|info| info.codec);
+        self.gapless
+            .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
         self.gapless.flush();
     }
 
@@ -163,11 +167,12 @@ impl DecoderGeneration {
         self.media_info.as_ref()
     }
 
-    pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
         self.holdback = None;
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
 
+    #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
             Ok(result) => result,
@@ -194,7 +199,7 @@ impl DecoderGeneration {
         self.pending_head_skip.as_mut()
     }
 
-    pub(crate) fn stage(&mut self, chunk: PcmChunk) {
+    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.gapless.push(chunk);
         while let Some(chunk) = self.gapless.next() {
@@ -202,22 +207,22 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.gapless.push(chunk);
     }
 
-    pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
         self.holdback = None;
         self.staged.pop_front()
     }
 
-    pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.staged.push_front(chunk);
     }
 
-    pub(crate) fn staged_span(&self) -> Option<(u64, u64, PcmSpec)> {
+    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
         #[cfg(test)]
         self.record_staged_scan();
         let first = self.staged.front()?;
@@ -233,7 +238,7 @@ impl DecoderGeneration {
         Some((start, end, spec))
     }
 
-    pub(crate) fn staged_covers(&self, spec: PcmSpec, start: u64, frames: u64) -> bool {
+    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
         let Some(end) = start.checked_add(frames) else {
             return false;
         };
@@ -245,7 +250,7 @@ impl DecoderGeneration {
 
     pub(crate) fn copy_staged_frames(
         &self,
-        spec: PcmSpec,
+        spec: AudioSpec,
         start: u64,
         frames: u64,
         output: &mut [f32],
@@ -331,7 +336,7 @@ impl DecoderGeneration {
     }
 }
 
-fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
+fn chunk_range(chunk: &AudioChunk, spec: AudioSpec) -> Option<(u64, u64)> {
     let channels = usize::from(spec.channels);
     if channels == 0 || chunk.spec() != spec || !chunk.samples.len().is_multiple_of(channels) {
         return None;
@@ -349,7 +354,7 @@ fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
     ))
 }
 
-fn stage_failure(chunk: PcmChunk, detail: &'static str) -> StageFailure {
+fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
     StageFailure {
         chunk,
         error: DecodeError::InvalidData { detail },
@@ -368,20 +373,23 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{cell::Cell, num::NonZeroU32};
 
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, PcmMeta};
+    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, GaplessTailCompensation};
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioChunkInfo;
     use kithara_stream::PrerollHint;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{Pools, pools, sample_buffer};
 
     struct EofDecoder {
         gapless: Option<GaplessInfo>,
         default_priming: u64,
-        spec: PcmSpec,
+        spec: AudioSpec,
+        late_tail_frames: Option<u64>,
+        profile_calls: Cell<u32>,
     }
 
     impl Decoder for EofDecoder {
@@ -402,30 +410,38 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
 
         fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
-            GaplessProfile::new(self.spec, self.gapless, None, self.default_priming)
+            let call = self.profile_calls.get();
+            self.profile_calls.set(call.saturating_add(1));
+            let tail = (call > 0)
+                .then_some(self.late_tail_frames)
+                .flatten()
+                .map(GaplessTailCompensation::new);
+            GaplessProfile::new(self.spec, self.gapless, tail, self.default_priming)
         }
 
         fn update_byte_len(&self, _len: u64) {}
     }
 
-    fn spec(channels: u16, rate: u32) -> PcmSpec {
-        PcmSpec::new(
+    fn spec(channels: u16, rate: u32) -> AudioSpec {
+        AudioSpec::new(
             channels,
             NonZeroU32::new(rate).expect("test rate must be non-zero"),
         )
     }
 
-    fn generation(spec: PcmSpec) -> DecoderGeneration {
+    fn generation(spec: AudioSpec) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
                 default_priming: 0,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -435,12 +451,14 @@ mod tests {
         )
     }
 
-    fn media_generation(spec: PcmSpec, trailing_frames: u64) -> DecoderGeneration {
+    fn media_generation(spec: AudioSpec, trailing_frames: u64) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
                 default_priming: 0,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -452,12 +470,14 @@ mod tests {
 
     /// A track whose container carries no gapless metadata while the codec
     /// table offers an estimate — the AAC-LC case at a quality-switch seam.
-    fn priming_generation(spec: PcmSpec, mode: GaplessMode) -> DecoderGeneration {
+    fn priming_generation(spec: AudioSpec, mode: GaplessMode) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
                 default_priming: 1_024,
                 spec,
+                late_tail_frames: None,
+                profile_calls: Cell::new(0),
             }),
             None,
             0,
@@ -467,16 +487,75 @@ mod tests {
         )
     }
 
-    fn chunk(spec: PcmSpec, offset: u64, frames: u32, sample_frames: usize) -> PcmChunk {
-        PcmChunk::new(
-            PcmMeta {
+    fn chunk(
+        pools: &Pools,
+        spec: AudioSpec,
+        offset: u64,
+        frames: u32,
+        sample_frames: usize,
+    ) -> AudioChunk {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 frame_offset: offset,
                 frames,
                 ..Default::default()
             },
-            PcmPool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
+            sample_buffer(
+                pools,
+                &vec![0.25; sample_frames * usize::from(spec.channels)],
+            ),
         )
+    }
+
+    #[kithara::test]
+    #[case(None, 4, "an unnamed codec keeps the compensated trim")]
+    #[case(
+        Some(kithara_stream::AudioCodec::Flac),
+        4,
+        "FLAC carries the frame exactly, so the compensation applies"
+    )]
+    #[case(
+        Some(kithara_stream::AudioCodec::AacLc),
+        3,
+        "AAC would buy back its tapered frame, so the trim stays whole"
+    )]
+    fn finish_installs_the_tail_compensation_the_decoder_resolved_while_decoding(
+        #[case] codec: Option<kithara_stream::AudioCodec>,
+        #[case] expected_frames: u64,
+        #[case] label: &str,
+    ) {
+        let pools = pools();
+        let pushed_frames = 5_u64;
+        let trailing_frames = 2_u64;
+        let spec = spec(2, 44_100);
+        let media_info = codec.map(|codec| MediaInfo::builder().codec(codec).build());
+        let mut generation = DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: Some(GaplessInfo::new(0, trailing_frames)),
+                default_priming: 0,
+                spec,
+                late_tail_frames: Some(pushed_frames + 1),
+                profile_calls: Cell::new(0),
+            }),
+            media_info,
+            0,
+            0,
+            None,
+            GaplessMode::MediaOnly,
+        );
+
+        for frame in 0..pushed_frames {
+            generation.stage(chunk(&pools, spec, frame, 1, 1));
+        }
+        generation.finish_staging();
+
+        let mut frames = 0u64;
+        while let Some(next) = generation.next() {
+            frames = frames.saturating_add(u64::from(next.meta.frames));
+        }
+
+        assert_eq!(frames, expected_frames, "{label}");
     }
 
     /// An unlabelled AAC track keeps its encoder priming in the PCM (the
@@ -492,6 +571,7 @@ mod tests {
 
     #[kithara::test]
     fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata() {
+        let pools = pools();
         let active = spec(2, 44_100);
 
         let mut gap = generation(active);
@@ -500,10 +580,11 @@ mod tests {
             StageResult::NeedMore
         ));
         assert!(matches!(
-            gap.push_holdback(chunk(active, 0, 4, 4)),
+            gap.push_holdback(chunk(&pools, active, 0, 4, 4)),
             StageResult::NeedMore
         ));
-        let StageResult::Invalid(gap_failure) = gap.push_holdback(chunk(active, 5, 4, 4)) else {
+        let StageResult::Invalid(gap_failure) = gap.push_holdback(chunk(&pools, active, 5, 4, 4))
+        else {
             panic!("a discontinuity must return its offending chunk");
         };
         assert_eq!(gap_failure.chunk.meta.frame_offset, 5);
@@ -516,9 +597,9 @@ mod tests {
 
         let mut mixed = generation(active);
         let _ = mixed.prepare_holdback(active, 4);
-        let _ = mixed.push_holdback(chunk(active, 0, 4, 4));
+        let _ = mixed.push_holdback(chunk(&pools, active, 0, 4, 4));
         let StageResult::Invalid(mixed_failure) =
-            mixed.push_holdback(chunk(spec(2, 48_000), 4, 4, 4))
+            mixed.push_holdback(chunk(&pools, spec(2, 48_000), 4, 4, 4))
         else {
             panic!("mixed PCM must return its offending chunk");
         };
@@ -527,7 +608,8 @@ mod tests {
 
         let mut bad_meta = generation(active);
         let _ = bad_meta.prepare_holdback(active, 4);
-        let StageResult::Invalid(meta_failure) = bad_meta.push_holdback(chunk(active, 0, 3, 4))
+        let StageResult::Invalid(meta_failure) =
+            bad_meta.push_holdback(chunk(&pools, active, 0, 3, 4))
         else {
             panic!("bad metadata must return its offending chunk");
         };
@@ -537,12 +619,14 @@ mod tests {
 
     #[kithara::test]
     fn staged_holdback_never_grows_past_prepared_capacity() {
+        let pools = pools();
         let spec = spec(1, 44_100);
         let mut generation = generation(spec);
         let _ = generation.prepare_holdback(spec, 3);
         let capacity = generation.staged.capacity();
         for frame in 0..capacity {
             let result = generation.push_holdback(chunk(
+                &pools,
                 spec,
                 u64::try_from(frame).unwrap_or(u64::MAX),
                 1,
@@ -553,6 +637,7 @@ mod tests {
             }
         }
         let StageResult::Invalid(failure) = generation.push_holdback(chunk(
+            &pools,
             spec,
             u64::try_from(capacity).unwrap_or(u64::MAX),
             1,
@@ -571,10 +656,11 @@ mod tests {
 
     #[kithara::test]
     fn prepare_holdback_reserves_from_staged_len_to_logical_limit() {
+        let pools = pools();
         let spec = spec(1, 44_100);
         let mut generation = generation(spec);
         let _ = generation.prepare_holdback(spec, 1);
-        let _ = generation.push_holdback(chunk(spec, 0, 1, 1));
+        let _ = generation.push_holdback(chunk(&pools, spec, 0, 1, 1));
         let old_capacity = generation.staged.capacity();
         let slots = old_capacity.checked_add(1).expect("test slot limit");
         let join_frames = u64::try_from(slots - 1).expect("test join frame count");
@@ -592,6 +678,7 @@ mod tests {
 
         for frame in generation.staged.len()..slots {
             let result = generation.push_holdback(chunk(
+                &pools,
                 spec,
                 u64::try_from(frame).expect("test frame offset"),
                 1,
@@ -613,6 +700,7 @@ mod tests {
         const TRAILING_FRAMES: u64 = 10;
         const JOIN_FRAMES: u64 = 2;
 
+        let pools = pools();
         let spec = spec(1, 44_100);
         let mut generation = media_generation(spec, TRAILING_FRAMES);
         assert!(matches!(
@@ -623,11 +711,12 @@ mod tests {
 
         for frame in 0..TRAILING_FRAMES {
             assert!(matches!(
-                generation.push_holdback(chunk(spec, frame, 1, 1)),
+                generation.push_holdback(chunk(&pools, spec, frame, 1, 1)),
                 StageResult::NeedMore
             ));
         }
         let release = generation.push_holdback(chunk(
+            &pools,
             spec,
             TRAILING_FRAMES,
             u32::try_from(TRAILING_FRAMES).expect("test release frame count"),
@@ -662,6 +751,7 @@ mod tests {
     fn checked_holdback_scans_the_preexisting_span_once() {
         const JOIN_FRAMES: u64 = 7_680;
 
+        let pools = pools();
         let spec = spec(1, 384_000);
         let mut generation = generation(spec);
         assert!(matches!(
@@ -671,7 +761,7 @@ mod tests {
         let capacity = generation.staged.capacity();
 
         for frame in 0..=JOIN_FRAMES {
-            let result = generation.push_holdback(chunk(spec, frame, 1, 1));
+            let result = generation.push_holdback(chunk(&pools, spec, frame, 1, 1));
             if frame == JOIN_FRAMES {
                 assert!(matches!(result, StageResult::Ready));
             } else {
@@ -695,7 +785,7 @@ mod tests {
             };
             assert_eq!(next.meta.frame_offset, frame);
             assert!(matches!(
-                generation.push_holdback(chunk(spec, JOIN_FRAMES + frame + 1, 1, 1)),
+                generation.push_holdback(chunk(&pools, spec, JOIN_FRAMES + frame + 1, 1, 1,)),
                 StageResult::Ready
             ));
             assert_eq!(generation.staged.capacity(), capacity);

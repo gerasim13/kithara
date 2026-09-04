@@ -1,12 +1,14 @@
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64,
+    bufpool_ext::{TestPools, pools},
     hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
 use tracing::info;
@@ -19,7 +21,7 @@ struct SeekStats {
 }
 
 fn run_seek_iterations(
-    stream: &mut Stream<Hls>,
+    stream: &mut Stream<Hls<TestPools>>,
     server: &HlsTestServer,
     seek_positions: &[u64],
     buf: &mut [u8],
@@ -75,7 +77,7 @@ fn run_seek_iterations(
 }
 
 fn read_final_tail(
-    stream: &mut Stream<Hls>,
+    stream: &mut Stream<Hls<TestPools>>,
     server: &HlsTestServer,
     buf: &mut [u8],
     final_seek: u64,
@@ -207,14 +209,23 @@ async fn stress_random_seek_read_hls(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
+    let mut stream = Stream::<Hls<TestPools>>::new(config)
+        .await
+        .expect("create HLS stream");
 
     let result = spawn_blocking(move || {
         info!(total_bytes, "Stream byte length");

@@ -4,20 +4,24 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
+    events::TrackId,
     platform::time::{self, Duration, Instant},
-    play::{PlayerEvent, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::signal::goertzel_magnitude;
 
-use crate::gapless_common::{
-    AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS,
-    AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+use crate::{
+    bufpool_ext::TestPools,
+    gapless_common::{
+        AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS,
+        AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+    },
 };
 
 const BLOCK_FRAMES: u32 = 512;
@@ -26,6 +30,13 @@ const POST_ROLL_BLOCKS: usize = 8;
 /// silence. Picked low enough to ignore quantisation noise and high enough
 /// that genuine sine peaks are never classified as silence.
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
+/// Tone carried by the first queued item.
+const GAPLESS_LEADING_TONE_HZ: f64 = 1_000.0;
+/// Tone carried by the second queued item, far enough from the first that a
+/// single analysis window tells them apart.
+const GAPLESS_TRAILING_TONE_HZ: f64 = 3_000.0;
+/// Analysis window on each side of a candidate handover frame.
+const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 
 #[kithara::test(
     native,
@@ -50,7 +61,9 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         harness.player(),
         &server,
         temp_dir.path(),
-        PackagedSignal::Sine { freq_hz: 1_000.0 },
+        PackagedSignal::Sine {
+            freq_hz: GAPLESS_LEADING_TONE_HZ,
+        },
         0,
     )
     .await;
@@ -58,7 +71,9 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         harness.player(),
         &server,
         temp_dir.path(),
-        PackagedSignal::Sine { freq_hz: 3_000.0 },
+        PackagedSignal::Sine {
+            freq_hz: GAPLESS_TRAILING_TONE_HZ,
+        },
         u64::try_from(expected_visible_frames).expect("visible frame count fits u64"),
     )
     .await;
@@ -69,25 +84,37 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
-    let item1_end_event = nth_item_end_frame(&events, 0)
-        .expect("first item must emit ItemDidPlayToEnd before the queue completes");
-    let item2_end_event = nth_item_end_frame(&events, 1)
-        .expect("second item must emit ItemDidPlayToEnd before the queue completes");
+    // Measure both track lengths from the rendered audio, not from the frame
+    // stamps of the end-of-item events. `render_until_second_item_end` only
+    // returns once both arrived, so their presence is already pinned; where
+    // they landed is not a track length. A notification is published by
+    // whichever render block observed EOF, so its stamp is quantised to the
+    // block grid, and this asset is an exact multiple of that grid: both
+    // stamps normally sit one block late and the delta lands on the tolerance
+    // itself. One block of delivery jitter then fails a test whose audio is
+    // untouched.
+    let audible_start = first_audible_frame(&left)
+        .expect("rendered audio must contain the first track after the queue starts");
+    let handover = tone_switch_frame(&left, GAPLESS_SAMPLE_RATE)
+        .expect("rendered audio must switch from the first tone to the second");
+    let audible_end = last_audible_frame(&left)
+        .expect("rendered audio must contain the second track before the post-roll");
 
-    let track1_len = item1_end_event;
-    let track2_len = item2_end_event - item1_end_event;
+    let track1_len = handover.saturating_sub(audible_start);
+    let track2_len = audible_end.saturating_sub(handover);
     let length_delta = track1_len.abs_diff(track2_len);
     assert!(
         length_delta <= BLOCK_FRAMES as usize,
         "track lengths should match within one render block; \
          track1={track1_len}, track2={track2_len}, delta={length_delta}, \
-         tolerance={}; events={events:?}",
+         tolerance={}, audible_start={audible_start}, handover={handover}, \
+         audible_end={audible_end}, expected_visible_frames={expected_visible_frames}; \
+         events={events:?}",
         BLOCK_FRAMES,
     );
-    let _ = expected_visible_frames;
 
-    let search_start = item1_end_event.saturating_sub(BLOCK_FRAMES as usize * 2);
-    let search_end = item1_end_event
+    let search_start = handover.saturating_sub(BLOCK_FRAMES as usize * 2);
+    let search_end = handover
         .saturating_add(BLOCK_FRAMES as usize)
         .min(left.len());
     let max_silence = max_silence_run(&left, search_start, search_end);
@@ -223,7 +250,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
 }
 
 async fn create_gapless_hls_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     signal: PackagedSignal,
@@ -256,14 +283,14 @@ async fn create_gapless_hls_resource(
         .expect("create seamless queue HLS fixture");
 
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare seamless queue HLS resource config");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");
@@ -272,14 +299,17 @@ async fn create_gapless_hls_resource(
 }
 
 fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
-    harness.player().reserve_slots(items.len());
-    for (index, resource) in items.into_iter().enumerate() {
-        harness.player().replace_item(index, resource);
-    }
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.reserve_slots(items.len());
+        for (index, resource) in items.into_iter().enumerate() {
+            player
+                .replace_item(index, resource, TrackId::allocate())
+                .expect("replace seamless fixture item");
+        }
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 }
 
 async fn render_until_second_item_end(
@@ -363,6 +393,55 @@ fn nth_item_end_frame(events: &[TimedPlayerEvent], n: usize) -> Option<usize> {
         .filter(|timed| matches!(&timed.event, PlayerEvent::ItemDidPlayToEnd { .. }))
         .nth(n)
         .map(|timed| timed.frame_end)
+}
+
+/// Frames the tone detector steps by when locating the handover. Smaller than
+/// the analysis window so the located frame is not quantised to the render
+/// block grid the delivery race lives on.
+const TONE_SCAN_STEP: usize = 64;
+
+/// Frame where the output stops carrying the first item's tone and starts
+/// carrying the second's.
+///
+/// Both queued items are pure sines, so the handover is the frame that best
+/// separates them: the leading tone behind it, the trailing tone ahead of it.
+/// Scoring both sides of the candidate keeps the estimate unbiased — a
+/// one-sided detector reports the boundary about half an analysis window late,
+/// which on its own would consume the whole per-track tolerance.
+fn tone_switch_frame(left: &[f32], sample_rate: u32) -> Option<usize> {
+    let window = TONE_SCAN_WINDOW;
+    let mut best_score = f64::NEG_INFINITY;
+    let mut best_frame = None;
+    let mut frame = window;
+    while frame + window <= left.len() {
+        let behind = &left[frame - window..frame];
+        let ahead = &left[frame..frame + window];
+        let score = goertzel_magnitude(behind, GAPLESS_LEADING_TONE_HZ, sample_rate)
+            - goertzel_magnitude(behind, GAPLESS_TRAILING_TONE_HZ, sample_rate)
+            + goertzel_magnitude(ahead, GAPLESS_TRAILING_TONE_HZ, sample_rate)
+            - goertzel_magnitude(ahead, GAPLESS_LEADING_TONE_HZ, sample_rate);
+        if score > best_score {
+            best_score = score;
+            best_frame = Some(frame);
+        }
+        frame += TONE_SCAN_STEP;
+    }
+    best_frame
+}
+
+/// First frame above the silence threshold, i.e. where the first item became
+/// audible after any pre-roll the harness rendered while the queue loaded.
+fn first_audible_frame(left: &[f32]) -> Option<usize> {
+    left.iter()
+        .position(|sample| sample.abs() > SILENCE_THRESHOLD)
+}
+
+/// One past the last frame above the silence threshold, i.e. the end of the
+/// second item before the post-roll blocks.
+fn last_audible_frame(left: &[f32]) -> Option<usize> {
+    left.iter()
+        .rposition(|sample| sample.abs() > SILENCE_THRESHOLD)
+        .map(|index| index + 1)
 }
 
 /// Longest run of near-zero samples in `[start..end)`. Used to detect audible

@@ -226,7 +226,7 @@ pub(in crate::flash) fn snapshot() -> String {
     let Ok(mut reg) = REGISTRY.try_lock() else {
         return "sync registry: lock held — cannot snapshot\n".to_string();
     };
-    let mut live = Vec::new();
+    let mut live: Vec<Arc<PrimEntry>> = Vec::new();
     reg.entries.retain(|_, w| {
         w.upgrade().is_some_and(|e| {
             live.push(e);
@@ -259,10 +259,10 @@ mod tests {
 
     use super::{PrimKind, build, snapshot};
 
-    // `build` is the toggle-free core, so these tests are deterministic without
-    // touching the process-wide `KITHARA_FLASH_SYNC_TRACE` env. Assertions key on
-    // THIS entry's id tag (not global counts), so they hold even when other tests
-    // share the process (cargo test threads) rather than nextest's per-test fork.
+    /// `build` is the toggle-free core, so these tests are deterministic without
+    /// touching the process-wide `KITHARA_FLASH_SYNC_TRACE` env. Assertions key on
+    /// THIS entry's id tag (not global counts), so they hold even when other tests
+    /// share the process (cargo test threads) rather than nextest's per-test fork.
     #[kithara::test(native, flash(false))]
     fn registers_holder_and_prunes_on_drop() {
         let loc: &'static Location<'static> = Location::caller();

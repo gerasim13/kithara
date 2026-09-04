@@ -1,5 +1,8 @@
 id: style.no-local-use-in-prod-functions
-message: Move `use` imports to file top; local `use` inside non-test functions is discouraged.
+message: |
+  Move `use` imports to file top. A target-gated function may keep its import
+  local so the same `target_arch` / `target_os` condition is not duplicated at
+  module scope.
 severity: warning
 language: Rust
 files:
@@ -16,3 +19,36 @@ rule:
     - inside:
         kind: function_item
         stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'target_(arch|os)'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end

@@ -112,41 +112,12 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    // Snapshot the per-test ambient gate on the PARENT: thread-locals do not
-    // cross `spawn`, so a flash test's spawned graph would otherwise see the
-    // default `false`. The child re-establishes it for its whole lifetime.
     let ambient = crate::flash::ambient_snapshot();
-    // Reserve this pacer's `active` slot NOW, on the parent, before the child is
-    // scheduled — so a sibling that parks in the spawn→run gap still sees the
-    // pacer counted and the virtual clock cannot jump past its warm-up. The
-    // slot also owns the named-thread count; a spawn that never runs the child
-    // returns both via the slot's Drop.
     let slot = crate::flash::system::credit::DedicatedSlot::reserve_named();
     move || {
-        // Held for the closure's lifetime: restores the previous ambient on the
-        // child thread when the closure returns (it must outlive `f()`).
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
-        // A DEDICATED pacer must run its WHOLE callstack in the test's flash mode,
-        // not just propagate ambient. It loops on stateful waits (`Condvar`,
-        // `park_timeout`) keyed on AMBIENT (virtual under a flash test) while
-        // computing their deadlines from `Instant::now()`, which keys on the
-        // `active` mode flag (stateless). If only ambient were set, `Instant::now()` would stay REAL
-        // while the wait registers a VIRTUAL deadline — the pacer feeds a real-clock
-        // deadline into the virtual scheduler, which the virtual clock instantly
-        // overshoots, so the wait never blocks and the pacer spins, pinning the
-        // engine's `active` count and freezing the big clock jump every flash test
-        // needs. Setting `active` = ambient here (the audio worker already does
-        // this via its `#[kithara::flash(true)]` run loop; this generalizes it to
-        // EVERY `spawn_named` pacer — flush hub, offline render, …) keeps the
-        // pacer's `Instant::now()` in the same clock domain as its waits.
         let _flash = crate::flash::enter_dynamic(true);
         crate::flash::system::credit::reset_credit();
-        // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
-        // only kind of thread counted in the engine's sync `active` set (tokio
-        // workers and the main thread are driven by the runtime, not by wrapped
-        // waits, so counting them leaks). The claim marks this thread dedicated;
-        // the participant's Drop (after `f()` returns or unwinds) settles the
-        // credit and the named-thread count.
         let _participant = slot.claim_dedicated();
         f()
     }
@@ -217,7 +188,7 @@ pub fn park_timeout(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));
     } else {
-        // Real-time scope: a true wall-clock park, invisible to the engine.
+        // WHY: Real-time scope: a true wall-clock park, invisible to the engine.
         crate::backend::thread::park_timeout(duration);
     }
 }

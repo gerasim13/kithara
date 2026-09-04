@@ -4,7 +4,11 @@ use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
 };
-use kithara_integration_tests::{Xorshift64, wav::create_test_wav};
+use kithara_integration_tests::{
+    Xorshift64,
+    bufpool_ext::{TestPools, pools},
+};
+use kithara_test_fixtures::signal;
 
 use crate::common::test_defaults::SawWav;
 
@@ -15,15 +19,14 @@ fn stress_seeks_preserve_timeline_integrity() {
     const SEEK_ITERATIONS: usize = 200;
     const CHUNKS_PER_BURST: usize = 5;
 
-    let wav_data = create_test_wav(SAMPLE_COUNT, SawWav::DEFAULT.sample_rate, 2);
+    let wav_data = signal::wav(SawWav::DEFAULT.sample_rate, 2, SAMPLE_COUNT, signal::TONE);
     let cursor = Cursor::new(wav_data);
 
     let mut decoder = DecoderFactory::create_with_probe(
         cursor,
         Some("wav"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .unwrap();

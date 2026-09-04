@@ -78,9 +78,8 @@ fn poll_cancelled(f: &mut Fields<'_>, cx: &mut Context<'_>) -> Poll<()> {
         f.node.refresh_task(id, cx.waker());
         return Poll::Pending;
     }
-    // Register, then handle the race: cancel may have fired between the
-    // is_cancelled() above and the registration. register() returns None if the
-    // node already fired (born/late) — resolve at once.
+    // WHY: Register, then handle the race: cancel may have fired between the is_cancelled() above and the registration. register()
+    // returns None if the node already fired (born/late) - resolve at once.
     if let Some(id) = f.node.register(Slot::Task(cx.waker().clone())) {
         *f.slot = Some(id);
         Poll::Pending

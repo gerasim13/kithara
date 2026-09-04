@@ -10,8 +10,8 @@ use crate::junit::CaseTiming;
 struct Interval {
     key: AttemptKey,
     test: String,
-    start: u64,
     end: u64,
+    start: u64,
 }
 
 pub(super) fn for_targets(
@@ -74,9 +74,9 @@ fn interval(case: &CaseTiming) -> Option<Interval> {
     let start = case.timestamp.as_deref().and_then(parse_timestamp_ms)?;
     Some(Interval {
         key: AttemptKey {
+            iteration,
             suite: case.suite.clone(),
             name: case.name.clone(),
-            iteration,
         },
         test: format!("{} {}", case.suite, case.name),
         start,
@@ -90,11 +90,11 @@ mod tests {
 
     fn case(name: &str, iteration: usize, failed: bool, start: &str, secs: f64) -> CaseTiming {
         CaseTiming {
+            failed,
+            secs,
             name: name.to_owned(),
             suite: "demo".to_owned(),
             iteration: Some(iteration),
-            failed,
-            secs,
             timestamp: Some(start.to_owned()),
             output: String::new(),
             output_truncated: false,

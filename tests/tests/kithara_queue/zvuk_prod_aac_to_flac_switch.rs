@@ -1,22 +1,24 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::Resource,
+    play::{PlayWorker, PlayWorkerConfig, Resource},
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
+use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
+use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer};
 use tracing::info;
 
 #[path = "source_helper.rs"]
@@ -179,25 +181,29 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
+    let pools = app_pools().expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools)
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker)
         .store(store)
         .build();
     let temp = TestTempDir::new();
@@ -205,7 +211,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let TrackSource::Config(cfg) = source_helper::app_track_source(
         PROD_TRACK,
         &config,
-        kithara_integration_tests::disk_asset_store(temp.path()),
+        source_helper::app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),
@@ -236,8 +242,12 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         flac_idx, "loaded zvuk prod HLS master"
     );
 
-    let mut player = OfflinePlayer::new(OUT_RATE);
-    player.load_and_fadein(resource, TRACK_NAME);
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let pre = render_until_position_at_least(
         &mut player,

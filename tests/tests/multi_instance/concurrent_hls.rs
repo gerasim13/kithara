@@ -1,13 +1,16 @@
 use std::path::Path;
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
@@ -42,12 +45,20 @@ async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
     abr: AbrMode,
-) -> Audio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.url("/master.m3u8");
     let cancel = CancelToken::never();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(abr)
         .build();
@@ -58,14 +69,14 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
 
-    Audio::<Stream<Hls>>::new(config)
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

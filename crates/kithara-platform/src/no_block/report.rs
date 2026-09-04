@@ -8,10 +8,10 @@ use super::{
 struct Consts;
 
 impl Consts {
-    const SPIN_CPU_FRACTION: f64 = 0.8;
-    const MAX_RUN_ID_BYTES: usize = 1_024;
     const MAX_ATTEMPT_ID_BYTES: usize = 1_024;
     const MAX_CANONICAL_FIELD_BYTES: usize = 512;
+    const MAX_RUN_ID_BYTES: usize = 1_024;
+    const SPIN_CPU_FRACTION: f64 = 0.8;
 }
 
 enum OverBudgetAction {
@@ -148,7 +148,7 @@ fn nextest_prefix_from(
     test_name: Option<&str>,
     stress_current: Option<&str>,
 ) -> String {
-    let mut fields = Vec::with_capacity(5);
+    let mut fields: Vec<String> = Vec::with_capacity(5);
     if let Some(run_id) = run_id.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "run_id={}",

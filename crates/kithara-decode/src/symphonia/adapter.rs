@@ -26,14 +26,6 @@ pub(crate) struct ReadSeekAdapter<R> {
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
-    pub(crate) fn byte_len_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.byte_len)
-    }
-
-    pub(crate) fn byte_pos_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.byte_pos)
-    }
-
     /// Build the adapter. `shared_handle` is `Some` to publish/read the
     /// byte length through an externally owned cell instead of a fresh
     /// one; `seek_enabled` starts the adapter seekable or not (toggled
@@ -58,6 +50,14 @@ impl<R: Seek> ReadSeekAdapter<R> {
             inner,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
         }
+    }
+
+    pub(crate) fn byte_len_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_len)
+    }
+
+    pub(crate) fn byte_pos_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_pos)
     }
 
     fn probe_byte_len(reader: &mut R) -> Option<u64> {

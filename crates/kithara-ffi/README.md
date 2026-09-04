@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -14,14 +14,25 @@
 
 Cross-platform FFI adapter for the kithara audio player. Not published — consumed by Apple (Swift via UniFFI), Android (Kotlin via UniFFI / JNI), and browser (wasm-bindgen) build flows.
 
-## Role
+## Usage
+
+See the workspace tooling for end-to-end builds:
+
+- `just platform apple xcframework` — builds the Apple XCFramework (release).
+- `just platform android aar` — builds Android AARs (release).
+- `just platform wasm build` — builds the browser demo via Trunk (output in `dist/`).
+- `just tooling xtask wasm postbuild` — post-build patches for the wasm output.
+
+## Integration
 
 - Exposes a stable, language-agnostic surface over `kithara-play` so platform shims (`kithara/apple`, `kithara/android`, and the browser demo) can talk to the engine without depending on internal Rust types.
 - Owns the UniFFI definitions used by `just platform apple xcframework` and `just platform android aar`.
 - Exposes native Rust-owned `FfiAssetLayoutRegistry` and `FfiAssetStore` objects. The store snapshots protocol layouts, owns the cache root and runtime resources, and is injected through the single `FfiPlayerConfig.store` field.
 - Owns the wasm-bindgen / Web Worker glue under [`src/web/`](src/web/) and the Trunk-driven demo (`index.html` + `Trunk.toml`).
 
-## Layout
+Do not depend on this crate directly from application code — use the platform-specific shims (`kithara/apple`, `kithara/android`).
+
+### Layout
 
 - `src/` — UniFFI bindings + error mapping (native targets).
 - `src/native/asset/` — Rust-owned native layout registry and shareable asset-store lifetime.
@@ -36,16 +47,5 @@ create one `FfiAssetStore` from the outer cache root and a registry snapshot.
 The same store object can be supplied to multiple player configurations. The
 browser worker instead owns its in-memory `AssetStore`; the native UniFFI store
 and registry are not part of the wasm API.
-
-## Build flows
-
-See the workspace tooling for end-to-end builds:
-
-- `just platform apple xcframework` — builds the Apple XCFramework (release).
-- `just platform android aar` — builds Android AARs (release).
-- `just platform wasm build` — builds the browser demo via Trunk (output in `dist/`).
-- `just tooling xtask wasm postbuild` — post-build patches for the wasm output.
-
-This crate is `publish = false`. Do not depend on it directly from application code — use the platform-specific shims (`kithara/apple`, `kithara/android`).
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

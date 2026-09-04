@@ -1,0 +1,54 @@
+name: Network
+
+# The one test lane the catalog cannot declare. Its build bakes production DRM
+# keys into the binary, so it needs four repository secrets at compile time -
+# and one executor serves every declared lane, so handing them to it would hand
+# them to all of them. A lane that needs more than a recipe stays a workflow of
+# its own, beside the three that need a machine of their own.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The store the build-time audio assets are read from; see lane.yml.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+
+# Heavy work: this asks for the whole fleet, so it queues with the other heavy
+# lanes and takes its turn among them rather than beside them. A push is not
+# behind that queue; see ci.yml.
+concurrency:
+  group: heavy-linux-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  network:
+    name: network
+    if: vars.KITHARA_RUNNER_LABELS != ''
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run the lane
+        env:
+          # Baked at build time by kithara-app's build script, so they belong
+          # to the build rather than to the test process. `KITHARA_DRM_REQUIRE`
+          # turns a missing one into a build error naming it, instead of the
+          # silent degrade that would run the lane against no key server and
+          # report it green.
+          KITHARA_DRM_REQUIRE: 1
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
+          KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
+        # A build of its own, because these binaries carry production keys
+        # the declared lanes' do not - but on the volume the other lanes build
+        # on, not in the checkout that is deleted before this job starts. A
+        # child of the volume root is the shape the build-cache budget reads:
+        # its own eviction unit, with its own lease while it runs.
+        run: CARGO_TARGET_DIR=/cache/target/lane-network just test run --lane=network

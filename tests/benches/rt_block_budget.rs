@@ -4,8 +4,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -15,8 +14,12 @@ use kithara::{
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader,
+    bufpool_ext::{Pools, pools},
+};
 use ringbuf::traits::Producer;
 
 struct Consts;
@@ -50,22 +53,24 @@ fn block_budget() -> Duration {
     Duration::from_secs_f64(f64::from(Consts::BLOCK_FRAMES) / f64::from(Consts::SAMPLE_RATE))
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(
+fn spec() -> AudioSpec {
+    AudioSpec::new(
         Consts::CHANNELS,
         non_zero(Consts::SAMPLE_RATE, "sample rate"),
     )
 }
 
-fn processor() -> (PlayerNodeProcessor, SlotControl) {
+fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
+    let pools = pools();
     let shape = StreamShape {
         sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &pools),
         control,
+        pools,
     )
 }
 
@@ -75,13 +80,22 @@ fn send(control: &mut SlotControl, cmd: PlayerCmd) {
     }
 }
 
-fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, count: usize) {
-    let pool = PcmPool::default();
-    let sources: Vec<Arc<str>> = (0..count)
-        .map(|idx| Arc::from(format!("bench-track-{idx}").as_str()))
+fn load_tracks(
+    processor: &mut PlayerNodeProcessor,
+    control: &mut SlotControl,
+    pools: &Pools,
+    count: usize,
+) {
+    let tracks: Vec<(TrackId, Arc<str>)> = (0..count)
+        .map(|idx| {
+            (
+                TrackId::allocate(),
+                Arc::from(format!("bench-track-{idx}").as_str()),
+            )
+        })
         .collect();
 
-    for src in &sources {
+    for (item_id, src) in &tracks {
         let resource = Resource::from_reader(
             TestPcmReader::new(spec(), Consts::TRACK_SECONDS),
             Some(Arc::clone(src)),
@@ -89,16 +103,19 @@ fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, c
         send(
             control,
             PlayerCmd::LoadTrack {
-                resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: None,
+                resource: Box::new(
+                    PlayerResource::new(resource, Arc::clone(src), pools)
+                        .expect("bench player resource fits the pool budget"),
+                ),
+                item_id: *item_id,
             },
         );
     }
     send(control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
 
-    for src in &sources {
-        match processor.track_mut(src) {
+    for (item_id, src) in &tracks {
+        match processor.track_mut(*item_id) {
             Some(track) => track.play(),
             None => panic!("bench track {src} did not reach the arena"),
         }
@@ -135,8 +152,8 @@ fn peak_of(samples: &[f32]) -> f32 {
 }
 
 fn measure(tracks: usize) -> Measurement {
-    let (mut processor, mut control) = processor();
-    load_tracks(&mut processor, &mut control, tracks);
+    let (mut processor, mut control, pools) = processor();
+    load_tracks(&mut processor, &mut control, &pools, tracks);
 
     let frames = block_frames();
     let mut out_l = vec![0.0_f32; frames];

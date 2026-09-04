@@ -19,15 +19,40 @@ enum Publish {
 }
 
 impl<D: DriverIo> ResourceCore<D> {
+    /// Release the writer without the anti-hang failure stamp. Idempotent.
+    pub(super) fn abandon_inner(&self) {
+        self.inner.stamp_on_drop.store(false, Ordering::Release);
+    }
+
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.finish_inner(final_len, Publish::Snapshot)
     }
 
-    /// Commit without publishing a driver snapshot — see [`DriverIo::seal`].
-    /// Readiness is announced exactly as in [`Self::commit_inner`]: waiters
-    /// must wake whether or not a snapshot was published.
-    pub(super) fn seal_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.finish_inner(final_len, Publish::Skip)
+    /// Called from the decode produce path (`phase_at` cascade), so the loaded
+    /// snapshot is parked rather than dropped here: a write publishes a new
+    /// generation on every chunk, and a read that races one would otherwise be
+    /// its last owner and free the range tree on the audio thread.
+    pub(super) fn contains_range_inner(&self, range: Range<u64>) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+        // WHY: Lock-free committed fast path. A published committed snapshot covers the whole `[0, committed_len)` (both drivers are linear
+        // - `valid_window()` is `None`, no eviction - so a snapshot implies no gaps), so coverage reduces
+        if let Some(committed_len) = self.inner.driver.committed_len() {
+            return range.end <= committed_len;
+        }
+        let snap = self.inner.available_snapshot.load();
+        let covered = range_covered_by(&snap, &range);
+        self.inner.retired.retire(Guard::into_inner(snap));
+        covered
+    }
+
+    pub(super) fn fail_inner(&self, reason: String) {
+        {
+            let mut state = self.inner.gate.lock();
+            state.failed = Some(reason);
+        }
+        self.inner.gate.notify_all();
     }
 
     fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
@@ -61,7 +86,7 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
-        // The write side pays the frees the produce-core reads parked.
+        // WHY: The write side pays the frees the produce-core reads parked.
         self.inner.retired.drain();
 
         if let Some(len) = final_len
@@ -73,39 +98,9 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
-    /// Called from the decode produce path (`phase_at` cascade), so the loaded
-    /// snapshot is parked rather than dropped here: a write publishes a new
-    /// generation on every chunk, and a read that races one would otherwise be
-    /// its last owner and free the range tree on the audio thread.
-    pub(super) fn contains_range_inner(&self, range: Range<u64>) -> bool {
-        if range.is_empty() {
-            return true;
-        }
-        // Lock-free committed fast path. A published committed snapshot covers the
-        // whole `[0, committed_len)` (both drivers are linear — `valid_window()` is
-        // `None`, no eviction — so a snapshot implies no gaps), so coverage reduces
-        if let Some(committed_len) = self.inner.driver.committed_len() {
-            return range.end <= committed_len;
-        }
-        let snap = self.inner.available_snapshot.load();
-        let covered = range_covered_by(&snap, &range);
-        self.inner.retired.retire(Guard::into_inner(snap));
-        covered
-    }
-
-    pub(super) fn fail_inner(&self, reason: String) {
-        {
-            let mut state = self.inner.gate.lock();
-            state.failed = Some(reason);
-        }
-        self.inner.gate.notify_all();
-    }
-
     pub(super) fn len_inner(&self) -> Option<u64> {
-        // The committed snapshot stays published across a `reactivate` so reads
-        // remain consistent, so confirm the *lifecycle* is still committed (the
-        // lock-free flag) before reporting its length as the resource's final
-        // length. A reactivated (being-rewritten) resource has no known total.
+        // WHY: The committed snapshot stays published across a `reactivate` so reads remain consistent, so confirm the *lifecycle* is still
+        // committed (the lock-free flag) before reporting its length as the resource's final length.
         if self.inner.committed.load(Ordering::Acquire)
             && let Some(committed_len) = self.inner.driver.committed_len()
         {
@@ -140,9 +135,8 @@ impl<D: DriverIo> ResourceCore<D> {
 
         self.inner.driver.reactivate()?;
         self.inner.committed.store(false, Ordering::Release);
-        // A new write generation starts armed: `abandon` waives the anti-hang
-        // stamp for the writer that owns the refill, not for whoever writes
-        // next over the same core.
+        // WHY: A new write generation starts armed: `abandon` waives the anti-hang stamp for the writer that owns the refill, not for
+        // whoever writes next over the same core.
         self.inner.stamp_on_drop.store(true, Ordering::Release);
 
         {
@@ -155,9 +149,11 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
-    /// Release the writer without the anti-hang failure stamp. Idempotent.
-    pub(super) fn abandon_inner(&self) {
-        self.inner.stamp_on_drop.store(false, Ordering::Release);
+    /// Commit without publishing a driver snapshot — see [`DriverIo::seal`].
+    /// Readiness is announced exactly as in [`Self::commit_inner`]: waiters
+    /// must wake whether or not a snapshot was published.
+    pub(super) fn seal_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.finish_inner(final_len, Publish::Skip)
     }
 
     /// Whether dropping an uncommitted writer should mark the core failed.

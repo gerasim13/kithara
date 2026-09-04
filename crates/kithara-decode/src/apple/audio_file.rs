@@ -1,6 +1,10 @@
 use std::{
     cell::Cell,
     io::{Error, ErrorKind, Read, Seek, SeekFrom},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_apple::audio_toolbox::{
@@ -10,6 +14,7 @@ use kithara_apple::audio_toolbox::{
     AudioFilePacketRead, AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus,
     PARAM_ERR, SInt64, UInt32,
 };
+use kithara_platform::sync::Arc;
 
 use super::consts::os_status_to_string;
 use crate::{
@@ -43,7 +48,16 @@ struct CallbackCtx {
     /// stash the original error here so the wrapper can rewrap it into
     /// `DecodeError::Backend` with the chain intact.
     last_error: Cell<Option<Error>>,
+    terminal_short_read: Cell<Option<TerminalShortRead>>,
+    byte_len: OnceLock<Arc<AtomicU64>>,
     size: SizeMode,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct TerminalShortRead {
+    end: u64,
+    position: u64,
+    request: usize,
 }
 
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
@@ -58,28 +72,6 @@ pub(crate) struct AppleAudioFile {
 impl AppleAudioFile {
     pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
         read_magic_cookie(&self.handle)
-    }
-
-    /// The source byte offset `AudioFileServices` maps `packet` to — the same
-    /// offset its own packet read seeks to, so a seek can report it as
-    /// `landed_byte` and keep the stream's byte cursor consistent with where
-    /// the decoder resumes.
-    ///
-    /// `None` when `AudioFile` cannot map the packet. Measured: a size-less
-    /// open ([`SizeMode::Unknown`]) rejects every packet with
-    /// `kAudioFileInvalidPacketOffsetError` (`'pck?'`) — with no total it
-    /// cannot bound the packet, let alone average one. Only an open with a
-    /// known size answers; the size-less path needs its own estimate.
-    pub(crate) fn packet_to_byte(&self, packet: u64) -> Option<u64> {
-        let query = AudioBytePacketTranslation {
-            packet: SInt64::try_from(packet).ok()?,
-            ..AudioBytePacketTranslation::default()
-        };
-        let translated = self
-            .handle
-            .get_property_with_input(AUDIO_FILE_PROPERTY_PACKET_TO_BYTE, query)
-            .ok()?;
-        u64::try_from(translated.byte).ok()
     }
 
     /// Open a complete local `source` as an audio file. `hint` is one of the
@@ -109,6 +101,8 @@ impl AppleAudioFile {
             source,
             size,
             last_error: Cell::new(None),
+            byte_len: OnceLock::new(),
+            terminal_short_read: Cell::new(None),
         };
         let handle = AudioFile::open_with_callbacks(ctx, hint, has_size).map_err(|status| {
             DecodeError::BackendStatus {
@@ -124,11 +118,7 @@ impl AppleAudioFile {
         }
 
         let data_format = read_data_format(&handle)?;
-        // `read_packet_count` / `read_max_packet_size` force a full-file scan
-        // for VBR formats with no on-disk packet index (FLAC). Only the
-        // complete open (`Snapshot` + `scan_packets`) pays it; the streaming
-        // paths source duration and the read buffer size from header metadata
-        // (STREAMINFO) instead.
+        // WHY: `read_packet_count` / `read_max_packet_size` force a full-file scan for VBR formats with no on-disk packet index (FLAC).
         let packet_count = if has_size && scan_packets {
             Some(read_packet_count(&handle)?)
         } else {
@@ -193,6 +183,28 @@ impl AppleAudioFile {
         Self::open_inner(source, hint, size, false)
     }
 
+    /// The source byte offset `AudioFileServices` maps `packet` to — the same
+    /// offset its own packet read seeks to, so a seek can report it as
+    /// `landed_byte` and keep the stream's byte cursor consistent with where
+    /// the decoder resumes.
+    ///
+    /// `None` when `AudioFile` cannot map the packet. Measured: a size-less
+    /// open ([`SizeMode::Unknown`]) rejects every packet with
+    /// `kAudioFileInvalidPacketOffsetError` (`'pck?'`) — with no total it
+    /// cannot bound the packet, let alone average one. Only an open with a
+    /// known size answers; the size-less path needs its own estimate.
+    pub(crate) fn packet_to_byte(&self, packet: u64) -> Option<u64> {
+        let query = AudioBytePacketTranslation {
+            packet: SInt64::try_from(packet).ok()?,
+            ..AudioBytePacketTranslation::default()
+        };
+        let translated = self
+            .handle
+            .get_property_with_input(AUDIO_FILE_PROPERTY_PACKET_TO_BYTE, query)
+            .ok()?;
+        u64::try_from(translated.byte).ok()
+    }
+
     /// Probe the source length via a seek-to-end, restoring the cursor to the
     /// start. `None` means the source reports no length (`ErrorKind::Unsupported`
     /// — e.g. a chunked stream with no `Content-Length`, or a streamed source
@@ -241,19 +253,15 @@ impl AppleAudioFile {
         let mut packets: UInt32 = 1;
         let mut desc = AudioStreamPacketDescription::default();
         let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
-        self.handle.callbacks().last_error.set(None);
+        let callbacks = self.handle.callbacks();
+        callbacks.last_error.set(None);
+        callbacks.terminal_short_read.set(None);
         let read =
             self.handle
                 .read_packet_data(starting_packet, Some(&mut desc), &mut packets, buf);
 
-        // A not-ready streamed read is masked by AudioFile either as a
-        // graceful EOF (noErr, 0 packets) or as a truncated packet (a short
-        // `packets >= 1` with a stashed callback error) — both for
-        // compressed formats. Surface the transient error BEFORE trusting
-        // `status`/`packets` so it classifies as `Pending` and the partial
-        // read is discarded. A non-transient stashed error (an incidental
-        // probe past a complete file's true EOF) is ignored so genuine
-        // end-of-stream still reports `Ok(None)`.
+        // WHY: A not-ready streamed read is masked by AudioFile either as a graceful EOF (noErr, 0 packets) or as a truncated packet (a
+        // short `packets >= 1` with a stashed callback error) - both for compressed formats.
         if let Some(pending) = self.take_pending_callback_error() {
             return Err(pending);
         }
@@ -283,13 +291,28 @@ impl AppleAudioFile {
     ) -> DecodeResult<(u32, u32)> {
         let mut packets: UInt32 = max_packets;
         let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
-        self.handle.callbacks().last_error.set(None);
+        let callbacks = self.handle.callbacks();
+        callbacks.last_error.set(None);
+        callbacks.terminal_short_read.set(None);
         let read = self
             .handle
             .read_packet_data(starting_packet, None, &mut packets, buf);
         match read {
             Ok(read) => Ok((read.bytes, read.packets)),
             Err(status) => Err(self.read_failure_error("AudioFileReadPacketData(cbr)", status)),
+        }
+    }
+
+    pub(crate) fn set_byte_len_handle(&self, handle: Option<Arc<AtomicU64>>) {
+        let Some(handle) = handle else {
+            return;
+        };
+        let byte_len = &self.handle.callbacks().byte_len;
+        if let Some(current) = byte_len.get() {
+            debug_assert!(Arc::ptr_eq(current, &handle));
+        } else {
+            let installed = byte_len.set(handle).is_ok();
+            debug_assert!(installed, "byte-length handle is installed once");
         }
     }
 
@@ -354,18 +377,51 @@ impl AudioFileCallbacks for CallbackCtx {
         if matches!(self.size, SizeMode::Unknown) && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
             return Ok(0);
         }
+        let request = buffer.len();
+        if let Some(previous) = self.terminal_short_read.get()
+            && previous.position == pos
+            && previous.request == request
+            && self
+                .byte_len
+                .get()
+                .is_some_and(|byte_len| byte_len.load(Ordering::Acquire) == previous.end)
+        {
+            return Ok(0);
+        }
         if let Err(err) = self.source.seek(SeekFrom::Start(pos)) {
+            self.terminal_short_read.set(None);
             self.last_error.set(Some(err));
             return Err(PARAM_ERR);
         }
         let n = match self.source.read(buffer) {
             Ok(n) => n,
             Err(err) => {
+                self.terminal_short_read.set(None);
                 self.last_error.set(Some(err));
                 return Err(PARAM_ERR);
             }
         };
+        let end = u64::try_from(n).ok().and_then(|read| pos.checked_add(read));
+        let terminal_short_read = match end {
+            Some(end)
+                if n > 0
+                    && n < request
+                    && self
+                        .byte_len
+                        .get()
+                        .is_some_and(|byte_len| byte_len.load(Ordering::Acquire) == end) =>
+            {
+                Some(TerminalShortRead {
+                    request,
+                    end,
+                    position: pos,
+                })
+            }
+            _ => None,
+        };
+        self.terminal_short_read.set(terminal_short_read);
         let Ok(n_u32) = UInt32::try_from(n) else {
+            self.terminal_short_read.set(None);
             self.last_error.set(Some(Error::other(
                 "AppleAudioFile read_callback: bytes read > u32::MAX",
             )));

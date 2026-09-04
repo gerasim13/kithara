@@ -6,8 +6,9 @@ sccache := `command -v sccache 2>/dev/null || true`
 export RUSTC_WRAPPER := sccache
 
 # sccache refuses incremental compilations, so a wrapper without this is never
-# hit. `check clippy` opts back in: `clippy-driver` is not cached either way,
-# and without incremental it costs 15s where 2.4s would do.
+# hit. `check clippy` opts back in on a workstation, where the dependencies are
+# already built and incremental turns 15s into 2.4s, and leaves the shared cache
+# alone in CI, where nothing is already built.
 export CARGO_INCREMENTAL := if sccache == "" { "" } else { "0" }
 
 mod fmt ".config/just/fmt.just"

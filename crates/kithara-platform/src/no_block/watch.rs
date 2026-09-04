@@ -55,7 +55,7 @@ impl<F: Future> Future for Watched<F> {
 
         let paused_before = ctx::paused_nanos();
         let wall_start = Instant::now();
-        // Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
+        // WHY: Snapshot can be up to 1 ms old, which is safe: budgets are 25 ms strict / 3000 ms blanket.
         let cpu_start = clock::snapshot(wall_start);
         let res = {
             let _scope = ctx::PollScope::enter((this.name, this.loc));

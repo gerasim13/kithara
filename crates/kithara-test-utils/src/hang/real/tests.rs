@@ -28,9 +28,9 @@ mod detector_tests {
         }
     }
 
-    // Real-clock contract tests of the detector itself: the wait and the
-    // detector's internal `Instant` must read the SAME (real) clock, so the
-    // bodies stay un-rewritten via `flash(false)`.
+    /// Real-clock contract tests of the detector itself: the wait and the
+    /// detector's internal `Instant` must read the SAME (real) clock, so the
+    /// bodies stay un-rewritten via `flash(false)`.
     #[kithara::test(native, flash(false))]
     #[should_panic(expected = "HangDetector")]
     fn tick_after_timeout_panics() {
@@ -85,7 +85,7 @@ mod native_detector_tests {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
     }
 
-    // Real-clock contract test (see detector_tests above).
+    /// Real-clock contract test (see detector_tests above).
     #[kithara::test(native, flash(false))]
     fn tick_with_stores_context_for_dump() {
         #[derive(serde::Serialize)]
@@ -133,14 +133,14 @@ mod native_detector_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // The whole point of the watchdog upgrade: a fired panic names the exact
-    // `hang_tick!` call site (its file:line), not the detector internals. Real
-    // clock so the 1ms timeout and the detector's `Instant` read the same clock.
+    /// The whole point of the watchdog upgrade: a fired panic names the exact
+    /// `hang_tick!` call site (its file:line), not the detector internals. Real
+    /// clock so the 1ms timeout and the detector's `Instant` read the same clock.
     #[kithara::test(native, flash(false))]
     fn panic_reports_hang_tick_call_site_not_detector_internals() {
-        // `hang_tick!()` sits exactly one line below the `line!()` marker, so
-        // the captured expectation equals the line the macro forwards via
-        // `file!()`/`line!()` — exact and stable under rustfmt.
+        /// `hang_tick!()` sits exactly one line below the `line!()` marker, so
+        /// the captured expectation equals the line the macro forwards via
+        /// `file!()`/`line!()` — exact and stable under rustfmt.
         #[kithara::hang_watchdog(timeout = Duration::from_millis(1))]
         fn spin(tick_line: &mut u32) {
             loop {
@@ -437,8 +437,8 @@ mod panic_dump_tests {
         }
     }
 
-    // Real clock: the detector's deadline and the sleep must agree (see the
-    // detector contract tests above).
+    /// Real clock: the detector's deadline and the sleep must agree (see the
+    /// detector contract tests above).
     #[kithara::test(native, flash(false))]
     fn watchdog_panic_is_not_duplicated_as_a_panic_dump() {
         install_panic_dump();

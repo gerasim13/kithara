@@ -29,9 +29,6 @@ pub(super) struct CommonState {
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
     pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
-    /// Snapshots parked by produce-core reads, freed by write-side drains —
-    /// see [`Retired`].
-    pub(super) retired: Retired,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
     /// committed snapshot, which stays published across a reactivate so reads
@@ -53,6 +50,9 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
+    /// Snapshots parked by produce-core reads, freed by write-side drains —
+    /// see [`Retired`].
+    pub(super) retired: Retired,
 }
 
 /// Generic storage resource state machine, parameterized by backend driver.

@@ -12,15 +12,19 @@ use firewheel::{
 };
 use kithara::{
     self,
-    bufpool::{PcmPool, Region},
     events::EventBus,
     platform::sync::Arc,
-    play::{Cmd, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionDispatcher},
+    play::{
+        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply,
+        SessionDispatcher,
+    },
 };
 use kithara_integration_tests::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 512;
@@ -53,9 +57,11 @@ fn expect_ok(reply: Reply) {
 fn register_started_player(session: &ManualRingSession) -> PlayerId {
     let player_id = match session
         .exec(Cmd::RegisterPlayer {
+            grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            pcm_pool: PcmPool::default(),
+            pools: pools(),
+            sample_rate: SAMPLE_RATE,
         })
         .expect("register player command")
     {
@@ -88,14 +94,12 @@ fn remove_player(session: &ManualRingSession, player_id: PlayerId) {
     );
 }
 
-fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl {
-    let region = Region::default();
-    let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
+fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
+    let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
     PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
-            .sample_rate(SAMPLE_RATE)
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .sample_rate(session_rate())
             .crossfade_duration(0.0)
             .session(dispatcher)
             .build(),

@@ -9,6 +9,7 @@ use kithara_ui::{
     expand::{Binding, ExpandedNode},
     ids::InternId,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 fn resolver_with(fixture_name: &str, text: &str) -> MemResolver {
@@ -92,6 +93,7 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let mut instances = Vec::new();
@@ -129,6 +131,7 @@ fn two_deck_layout_compiles() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
 }
@@ -163,6 +166,7 @@ fn scoped_read_keys_address_each_deck() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
 

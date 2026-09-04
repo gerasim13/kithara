@@ -1,5 +1,7 @@
-use kithara::audio::effects::eq::GainDb;
-use kithara_ui::render::{Node, ReadValue, Scope, WaveformView};
+use kithara::{
+    play::effects::eq::GainDb,
+    ui::render::{Node, ReadValue, Scope, WaveformView},
+};
 use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
@@ -117,8 +119,10 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
         let value = match segment {
             "waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.cache.wave,
+                revision: self.cache.wave_revision,
                 beats: &self.ui.beat_marks,
                 downbeats: &self.ui.downbeat_marks,
+                unready: &self.ui.unready_ranges,
                 bpm: analysis_bpm(self.ui),
                 r#loop: None,
                 cues: &[],
@@ -215,8 +219,8 @@ impl<'a> Node<'a> for StreamNode<'a> {
 
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
     mode: EqMode,
 }
 

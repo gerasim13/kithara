@@ -1,12 +1,14 @@
 use std::io::Read;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
@@ -22,14 +24,21 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancelToken::never();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
 
     let mut all_bytes = Vec::new();
     let mut read_buf = vec![0u8; 64 * 1024];

@@ -1,7 +1,29 @@
 use std::path::PathBuf;
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
-use crate::ci::config::CiPins;
+use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
+
+/// Where a job builds and what it reuses, before the linker entries are added.
+const CACHE_ENVIRONMENT: [&str; 6] = [
+    // Encoded audio fixtures. Their default home is the container's own temp
+    // directory, and a container serves one job and is thrown away — so every
+    // job re-encoded every fixture it touched, and a test that builds one
+    // inside its own deadline lost the race under load. Entries are
+    // content-addressed and namespaced by a build fingerprint, so sharing them
+    // across runners cannot serve one build's bytes to another.
+    "KITHARA_FIXTURE_CACHE=/cache/fixtures",
+    "CARGO_TARGET_DIR=/cache/target",
+    "RUSTC_WRAPPER=sccache",
+    // Without this the wrapper is inert: sccache declines to cache an
+    // incremental compilation, and cargo leaves incremental on by default.
+    // Setting the wrapper and not this is how a cache gets installed, enabled,
+    // and still never hit.
+    "CARGO_INCREMENTAL=0",
+    "SCCACHE_DIR=/cache/sccache",
+    // Well under the volume it lives on, and sccache evicts by least use
+    // rather than growing until the disk decides for it.
+    "SCCACHE_CACHE_SIZE=100G",
+];
 
 /// What one runner's container is, independent of who starts it.
 ///
@@ -69,27 +91,23 @@ impl Container<'_> {
     /// nothing.
     /// `sccache` keys on the inputs of a compilation instead, which is what
     /// makes sharing it across runners sound rather than merely concurrent.
-    pub(super) const ENVIRONMENT: [&'static str; 6] = [
-        // Encoded audio fixtures. Their default home is the container's own
-        // temp directory, and a container serves one job and is thrown away —
-        // so every job re-encoded every fixture it touched, and a test that
-        // builds one inside its own deadline lost the race under load. Entries
-        // are content-addressed and namespaced by a build fingerprint, so
-        // sharing them across runners cannot serve one build's bytes to
-        // another.
-        "KITHARA_FIXTURE_CACHE=/cache/fixtures",
-        "CARGO_TARGET_DIR=/cache/target",
-        "RUSTC_WRAPPER=sccache",
-        // Without this the wrapper is inert: sccache declines to cache an
-        // incremental compilation, and cargo leaves incremental on by default.
-        // Setting the wrapper and not this is how a cache gets installed,
-        // enabled, and still never hit.
-        "CARGO_INCREMENTAL=0",
-        "SCCACHE_DIR=/cache/sccache",
-        // Well under the volume it lives on, and sccache evicts by least use
-        // rather than growing until the disk decides for it.
-        "SCCACHE_CACHE_SIZE=100G",
-    ];
+    ///
+    /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
+    /// executor reads too: one statement of what a Linux job links with rather
+    /// than one per way of starting a job.
+    pub(super) fn environment() -> Vec<String> {
+        let mut environment: Vec<String> = CACHE_ENVIRONMENT
+            .iter()
+            .map(|entry| (*entry).to_owned())
+            .collect();
+        environment.extend(
+            LINUX_LINKER_ENV
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        );
+        environment
+    }
+
     pub(super) const PIDS_LIMIT: u32 = 8192;
 }
 
@@ -112,5 +130,26 @@ pub(super) fn container<'a>(
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
         mounts: Container::mounts(runner),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The linker a Linux job links with is part of what a job is told, not a
+    /// property of whichever image happened to be built: an unnamed linker is
+    /// `bfd`, and `bfd` is where a test job spends more time than it spends
+    /// testing.
+    #[test]
+    fn a_job_is_told_which_linker_to_use() {
+        let environment = Container::environment();
+
+        for (name, value) in LINUX_LINKER_ENV {
+            assert!(
+                environment.contains(&format!("{name}={value}")),
+                "{name} is missing from {environment:?}"
+            );
+        }
     }
 }

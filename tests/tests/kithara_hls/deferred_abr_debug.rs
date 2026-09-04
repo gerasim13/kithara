@@ -3,15 +3,21 @@
 use std::io::Read;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, hls_server::TestServer, rt_cancel, temp_dir};
+use kithara_integration_tests::{
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    hls_server::TestServer,
+    rt_cancel, temp_dir,
+};
 use tracing::info;
 
-fn read_to_eof_with_progress(stream: &mut Stream<Hls>) -> (Vec<u8>, i32) {
+fn read_to_eof_with_progress(stream: &mut Stream<Hls<TestPools>>) -> (Vec<u8>, i32) {
     let mut all_data = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut read_count = 0;
@@ -65,15 +71,22 @@ async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(1))
         .events(bus)
         .build();
 
     info!("Opening HLS stream...");
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
 
     let events_handle = tokio::task::spawn(async move {
         while let Ok(event) = events_rx.recv().await.map(|env| env.event) {

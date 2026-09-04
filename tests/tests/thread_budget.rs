@@ -2,17 +2,20 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    audio::{Audio, AudioConfig, AudioWorkerHandle},
+    audio::{AudioConfig, AudioControl},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
         thread::{active_named_thread_count, sleep as thread_sleep},
         time::{Duration, Instant},
     },
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara, temp_dir, waits::wait_thread_count_quiesced,
+    PackagedTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara, temp_dir,
+    waits::wait_thread_count_quiesced,
 };
 use tracing::info;
 
@@ -45,21 +48,26 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools)
+            .cancel(CancelToken::never())
+            .build(),
+    );
     // The named-thread increment is eager/synchronous (it runs at the spawn
     // call site, before the child runs), so `after` is already correct the
-    // moment `with_cancel()` returns — no settle needed on the spawn side.
+    // moment `PlayWorker::new` returns — no settle needed on the spawn side.
     let after = active_named_thread_count();
 
     let delta = after.saturating_sub(before);
-    worker.shutdown();
+    drop(worker);
     // Teardown gate: wait until the worker thread's closure has actually
     // returned and decremented the counter back to baseline, leaving a clean
     // state for the next serial test (state-driven, not a fixed sleep).
     wait_for_named_threads(before, Duration::from_secs(30));
     assert_eq!(
         delta, 1,
-        "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
+        "PlayWorker must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
     );
 }
 
@@ -72,23 +80,26 @@ fn thread_budget_audio_worker_is_one_thread() {
     hang_timeout_secs(3)
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+    let server = PackagedTestServer::new().await;
     let cancel = CancelToken::never();
 
     let before = active_named_thread_count();
 
-    let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
+        .store(store)
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create hls audio");
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker.open(config).await.expect("create hls audio");
     audio.preload().expect("preload must succeed");
     // Spawn side: the named-thread increment is eager/synchronous at each
     // `spawn_named` call site, so once `preload()` returns the count already
@@ -98,6 +109,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     info!(before, after, delta, "single HLS pipeline");
 
     drop(audio);
+    drop(worker);
     cancel.cancel();
     // Teardown gate: wait until the pipeline's threads have actually returned
     // and the counter has quiesced (state-driven), not a fixed sleep.
@@ -119,72 +131,68 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     hang_timeout_secs(3)
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+    let server = PackagedTestServer::new().await;
     let cancel = CancelToken::never();
-    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let pools = pools();
+    let shared_worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(CancelToken::never())
+            .build(),
+    );
     let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
 
-    // Baseline gate: include the eager shared audio worker, but measure before
+    // Baseline gate: include the eager shared playback worker, but measure before
     // the store registers with the flush hub and starts its worker.
     let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
-    let shared_store = AssetStore::builder()
+    let shared_store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
         .flush_hub(shared_hub.clone())
         .build();
 
-    let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
+    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .worker(shared_worker.clone())
-        .build();
-    let a1 = Audio::<Stream<Hls>>::new(config).await;
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config).build();
+    let a1 = shared_worker
+        .open(config)
+        .await
+        .expect("open first shared-worker track");
 
-    let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
+    let hls_config2 = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config2)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .worker(shared_worker.clone())
-        .build();
-    let a2 = Audio::<Stream<Hls>>::new(config).await;
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config2).build();
+    let a2 = shared_worker
+        .open(config)
+        .await
+        .expect("open second shared-worker track");
 
-    let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
+    let drm_config = HlsConfig::for_url(server.url("/master-encrypted.m3u8"))
         .store(shared_store)
+        .pools(pools)
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(drm_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .worker(shared_worker.clone())
-        .build();
-    let a3 = Audio::<Stream<Hls>>::new(config).await;
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(drm_config).build();
+    let a3 = shared_worker
+        .open(config)
+        .await
+        .expect("open third shared-worker track");
 
-    let mut audios: Vec<Box<dyn std::any::Any>> = Vec::new();
-    if let Ok(mut a) = a1 {
-        a.preload().expect("preload must succeed");
-        audios.push(Box::new(a));
-    }
-    if let Ok(mut a) = a2 {
-        a.preload().expect("preload must succeed");
-        audios.push(Box::new(a));
-    }
-    if let Ok(mut a) = a3 {
-        a.preload().expect("preload must succeed");
-        audios.push(Box::new(a));
+    let mut audios = [a1, a2, a3];
+    for audio in &mut audios {
+        audio.preload().expect("preload shared-worker track");
     }
     // Spawn side: the flush-hub worker starts on the first store registration
-    // during `AssetStore::builder().build()`, and its named-thread increment is
+    // during `AssetStore::builder(pools).build()`, and its named-thread increment is
     // eager/synchronous at the spawn call site. No settle is needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
@@ -198,7 +206,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     drop(audios);
     cancel.cancel();
-    shared_worker.shutdown();
+    drop(shared_worker);
     drop(shared_hub);
     // Teardown gate: wait until every torn-down thread's closure has returned
     // and the counter has quiesced (state-driven), not a fixed sleep.
@@ -206,7 +214,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     assert_eq!(
         delta, 1,
-        "3 tracks with a shared audio worker and a shared flush hub must add exactly 1 \
+        "3 tracks with a shared playback worker and a shared flush hub must add exactly 1 \
          kithara thread (the single shared flush-hub worker, started lazily on the first \
          store registration); it must not scale per track. got delta={delta} \
          (before={before}, after={after})"

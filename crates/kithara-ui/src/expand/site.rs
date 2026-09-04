@@ -20,6 +20,7 @@ pub(super) struct ExtraBindings {
     pub(super) query: Option<BindingRef>,
     pub(super) scope: Option<BindingRef>,
     pub(super) zoom: Option<BindingRef>,
+    pub(super) uniforms: Vec<(String, BindingRef)>,
 }
 
 #[derive(Clone, Copy)]
@@ -48,7 +49,7 @@ impl ExtraBindings {
         path: &str,
     ) -> Result<Self, UiDocError> {
         let columns_state = match control {
-            ControlNode::TrackList { columns_state, .. } => {
+            ControlNode::Table { columns_state, .. } => {
                 substituted(columns_state.as_ref(), context, path)?
             }
             _ => None,
@@ -68,8 +69,16 @@ impl ExtraBindings {
         let active = match control {
             ControlNode::Text { active, .. }
             | ControlNode::Glyph { active, .. }
+            | ControlNode::Lottie { active, .. }
             | ControlNode::StatusDot { active, .. } => substituted(active.as_ref(), context, path)?,
             _ => None,
+        };
+        let uniforms = match control {
+            ControlNode::Shader { uniforms, .. } => uniforms
+                .iter()
+                .map(|(name, binding)| Ok((name.clone(), context.substitute(binding, path)?)))
+                .collect::<Result<Vec<_>, UiDocError>>()?,
+            _ => Vec::new(),
         };
         Ok(Self {
             active,
@@ -77,6 +86,7 @@ impl ExtraBindings {
             query,
             scope,
             zoom,
+            uniforms,
         })
     }
 }

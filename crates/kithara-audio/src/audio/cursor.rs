@@ -1,53 +1,51 @@
 use std::num::NonZeroUsize;
 
-use fast_interleave::deinterleave_variable;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::time::Duration;
-use kithara_stream::{ChunkPosition, PlayheadWrite};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView};
+use kithara_stream::PlayheadWrite;
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
+    ConsumerPhase, DecodeError, PendingReason, ReadOutcome, chunk_position,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
+use crate::SourceSpan;
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
-    pub(super) last_output_meta: Option<PcmMeta>,
+    pub(super) last_output_meta: Option<AudioChunkInfo>,
     pub(super) outcome: ReadOutcome,
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct ChunkCursor {
-    interleaved: Option<PcmBuf>,
     #[field(get, vis = "pub(super)", copy)]
-    spec: PcmSpec,
+    spec: AudioSpec,
+    interleaved: Option<SampleBuffer>,
     current_chunk_consumed_frames: u64,
 }
 
 impl ChunkCursor {
-    pub(super) fn new(pool: &PcmPool, spec: PcmSpec) -> Self {
+    pub(super) fn new<S>(pools: &PoolRegion<S>, spec: AudioSpec) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = usize::from(spec.channels).max(2);
         let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
-        let interleaved = pool.get_with(|buffer| {
-            buffer.clear();
-            let current = buffer.capacity();
-            if current < capacity {
-                buffer.reserve(capacity - current);
-            }
-        });
-        Self {
+        let mut interleaved = pools.get_with_len::<f32>(capacity)?;
+        interleaved.clear();
+        Ok(Self {
             spec,
             current_chunk_consumed_frames: 0,
             interleaved: Some(interleaved),
-        }
+        })
     }
 
-    pub(super) const fn begin_chunk(&mut self, chunk: &PcmChunk) {
+    pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
         self.spec = chunk.spec();
         self.current_chunk_consumed_frames = 0;
     }
@@ -58,7 +56,8 @@ impl ChunkCursor {
 
     fn copy_into(
         &mut self,
-        chunk: &PcmChunk,
+        chunk: &AudioChunk,
+        source_span: Option<SourceSpan>,
         output: &mut [f32],
         playhead: &dyn PlayheadWrite,
     ) -> Result<CopyOutcome, DecodeError> {
@@ -69,6 +68,8 @@ impl ChunkCursor {
             return Ok(CopyOutcome {
                 samples: 0,
                 finished: true,
+                output_frames: 0,
+                source_span: None,
             });
         }
 
@@ -79,6 +80,8 @@ impl ChunkCursor {
             return Ok(CopyOutcome {
                 samples: 0,
                 finished: false,
+                output_frames: 0,
+                source_span: None,
             });
         }
 
@@ -88,15 +91,22 @@ impl ChunkCursor {
         let consumed_total = consumed + take_frames;
         self.current_chunk_consumed_frames = consumed_total;
         let finished = take_frames == remaining_frames;
+        let source_span = source_span
+            .and_then(|span| source_subspan(span, consumed, consumed_total, total_frames));
         if finished {
-            playhead.advance(&ChunkPosition::from(&chunk.meta));
+            playhead.advance(&chunk_position(&chunk.meta));
         } else {
             playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
         }
-        Ok(CopyOutcome { finished, samples })
+        Ok(CopyOutcome {
+            finished,
+            output_frames: take_frames,
+            samples,
+            source_span,
+        })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,
@@ -114,22 +124,47 @@ impl ChunkCursor {
                 return Ok(eof(playhead));
             }
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::pcm_stream("cursor read", source));
+                return Err(DecodeError::audio_stream("cursor read", source));
             }
             _ => {}
         }
 
         let mut written = 0;
         let mut last_output_meta = None;
+        let mut source_span = None;
+        let mut source_output_frames = 0_u64;
         while written < buf.len() {
             hang_tick!();
 
             if let Some(chunk) = ring.current_chunk.as_ref() {
-                let copied = self.copy_into(chunk, &mut buf[written..], playhead)?;
+                let chunk_source_span = ring.current_source_span;
+                if written > 0
+                    && !source_spans_coalesce(
+                        source_span,
+                        source_output_frames,
+                        chunk_source_span,
+                        u64::from(chunk.meta.frames),
+                    )
+                {
+                    break;
+                }
+                let copied =
+                    self.copy_into(chunk, chunk_source_span, &mut buf[written..], playhead)?;
                 if copied.samples > 0 {
                     hang_reset!();
                     last_output_meta = Some(chunk.meta);
                     written += copied.samples;
+                    if let Some(next) = copied.source_span {
+                        source_span = source_span.map_or(Some(next), |current| {
+                            SourceSpan::new(current.start(), next.end(), current.sample_rate())
+                        });
+                        source_output_frames = source_output_frames
+                            .checked_add(copied.output_frames)
+                            .ok_or(DecodeError::SampleCountOverflow {
+                                frames: source_output_frames,
+                                channels: 1,
+                            })?;
+                    }
                 }
                 if copied.finished {
                     ring.recycle_current();
@@ -165,14 +200,18 @@ impl ChunkCursor {
             );
             return Ok(CursorRead {
                 last_output_meta,
-                outcome: ReadOutcome::Frames { count, position },
+                outcome: ReadOutcome::Frames {
+                    count,
+                    position,
+                    source_span,
+                },
             });
         }
 
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::pcm_stream("cursor read", source));
+                return Err(DecodeError::audio_stream("cursor read", source));
             }
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
@@ -187,16 +226,22 @@ impl ChunkCursor {
         recv: RecvCtx<'_>,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<CursorRead, DecodeError> {
-        let Some(out_channels) = NonZeroUsize::new(output.len()) else {
+        let out_planes = output.len();
+        if out_planes == 0 {
             return Ok(pending(playhead, PendingReason::Buffering));
-        };
+        }
         // An interleaved source frame carries `spec.channels` samples; the plane
         // count belongs to the device, not to the stream. Sizing, framing, and
         // deinterleaving all follow the stream so a mono source keeps one
         // sample per frame instead of being read as interleaved stereo.
-        let src_channels = source_channels(self.spec);
+        let src_channels = self.spec.channel_count()?;
         let frames = output[0].len();
-        let total_samples = frames * src_channels.get();
+        let total_samples = frames.checked_mul(src_channels.get()).ok_or_else(|| {
+            DecodeError::SampleCountOverflow {
+                frames: u64::try_from(frames).unwrap_or(u64::MAX),
+                channels: u64::try_from(src_channels.get()).unwrap_or(u64::MAX),
+            }
+        })?;
         let Some(mut interleaved) = self.interleaved.take() else {
             return Err(DecodeError::ScratchDetached);
         };
@@ -206,17 +251,33 @@ impl ChunkCursor {
         let result = self.read(ring, events, playhead, recv, &mut interleaved[..]);
         let result = match result {
             Ok(mut read) => {
-                if let ReadOutcome::Frames { count, position } = read.outcome {
+                if let ReadOutcome::Frames {
+                    count,
+                    position,
+                    source_span,
+                } = read.outcome
+                {
                     let actual_frames = count.get() / src_channels.get();
                     debug_assert!(actual_frames <= frames);
-                    deinterleave_variable(&interleaved[..], src_channels, output, 0..actual_frames);
-                    spread_leading_channel(src_channels, out_channels, output, actual_frames);
+                    let input = InterleavedView::new(
+                        &interleaved[..count.get()],
+                        self.spec,
+                        FrameCount::new(actual_frames),
+                    )?;
+                    let (filled, unfilled) =
+                        output.split_at_mut(src_channels.get().min(out_planes));
+                    input.deinterleave_channels_into(filled)?;
+                    spread_leading_channel(filled, unfilled, actual_frames);
                     read.outcome = NonZeroUsize::new(actual_frames).map_or(
                         ReadOutcome::Pending {
                             position,
                             reason: PendingReason::Buffering,
                         },
-                        |count| ReadOutcome::Frames { position, count },
+                        |count| ReadOutcome::Frames {
+                            position,
+                            count,
+                            source_span,
+                        },
                     );
                 }
                 Ok(read)
@@ -230,28 +291,71 @@ impl ChunkCursor {
 
 struct CopyOutcome {
     finished: bool,
+    output_frames: u64,
     samples: usize,
+    source_span: Option<SourceSpan>,
 }
 
-/// Samples one interleaved source frame carries. Mirrors [`ChunkCursor::copy_into`],
-/// which frames the same buffer by the chunk's own channel count.
-fn source_channels(spec: PcmSpec) -> NonZeroUsize {
-    NonZeroUsize::new(usize::from(spec.channels)).unwrap_or(NonZeroUsize::MIN)
+fn source_spans_coalesce(
+    current: Option<SourceSpan>,
+    current_output_frames: u64,
+    next: Option<SourceSpan>,
+    next_output_frames: u64,
+) -> bool {
+    let (Some(current), Some(next)) = (current, next) else {
+        return current.is_none() && next.is_none();
+    };
+    if current.end() != next.start()
+        || current.sample_rate() != next.sample_rate()
+        || current_output_frames == 0
+        || next_output_frames == 0
+    {
+        return false;
+    }
+    let Some(current_source_frames) = current.end().checked_sub(current.start()) else {
+        return false;
+    };
+    let Some(next_source_frames) = next.end().checked_sub(next.start()) else {
+        return false;
+    };
+    u128::from(current_source_frames)
+        .checked_mul(u128::from(next_output_frames))
+        .zip(u128::from(next_source_frames).checked_mul(u128::from(current_output_frames)))
+        .is_some_and(|(current_slope, next_slope)| current_slope == next_slope)
+}
+
+fn source_subspan(
+    span: SourceSpan,
+    output_start: u64,
+    output_end: u64,
+    output_frames: u64,
+) -> Option<SourceSpan> {
+    if output_frames == 0 || output_start > output_end || output_end > output_frames {
+        return None;
+    }
+    let source_frames = span.end().checked_sub(span.start())?;
+    let source_at = |output_frame: u64| {
+        let offset = u128::from(source_frames)
+            .checked_mul(u128::from(output_frame))?
+            .checked_div(u128::from(output_frames))?;
+        span.start().checked_add(u64::try_from(offset).ok()?)
+    };
+    let start = source_at(output_start)?;
+    let end = if output_end == output_frames {
+        span.end()
+    } else {
+        source_at(output_end)?
+    };
+    SourceSpan::new(start, end, span.sample_rate())
 }
 
 /// Copy the leading source channel into the output planes the stream leaves
 /// untouched, so a mono stream reaches every plane of a stereo device.
-fn spread_leading_channel(
-    src_channels: NonZeroUsize,
-    out_channels: NonZeroUsize,
-    output: &mut [&mut [f32]],
-    frames: usize,
-) {
-    if src_channels >= out_channels {
+fn spread_leading_channel(filled: &[&mut [f32]], unfilled: &mut [&mut [f32]], frames: usize) {
+    let Some(leading) = filled.first() else {
         return;
-    }
-    let (filled, unfilled) = output.split_at_mut(src_channels.get());
-    let leading = &filled[0][..frames];
+    };
+    let leading = &leading[..frames];
     for plane in unfilled {
         plane[..frames].copy_from_slice(leading);
     }
@@ -262,7 +366,7 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
         .map_err(|_| DecodeError::SampleCountOverflow { frames, channels })
 }
 
-fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> Duration {
+fn interpolated_position(meta: AudioChunkInfo, consumed_frames: u64) -> Duration {
     let total_frames = u64::from(meta.frames).max(1);
     let start_ns = u64::try_from(meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
     let end_ns = u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
@@ -296,32 +400,35 @@ fn eof(playhead: &dyn PlayheadWrite) -> CursorRead {
 mod tests {
     use std::{num::NonZeroU32, sync::atomic::AtomicU64};
 
-    use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, SourceEnd,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        test_pools::{Pools, pools, sample_buffer},
     };
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let duration = Duration::from_nanos(36_360_000_000);
         let chunk = timed_chunk(
+            &pools,
             spec,
             148,
             duration.saturating_sub(Duration::from_millis(2)),
             duration.saturating_add(Duration::from_millis(2)),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
-            pcm_rx: data_rx,
+            audio_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -334,8 +441,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let pool = PcmPool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
@@ -351,22 +457,136 @@ mod tests {
                 &mut buf,
             )
             .expect("partial read succeeds");
-        let ReadOutcome::Frames { count, position } = read.outcome else {
+        let ReadOutcome::Frames {
+            count,
+            position,
+            source_span,
+        } = read.outcome
+        else {
             panic!("expected frames from partial resampled chunk");
         };
         assert_eq!(count.get(), 200);
         assert_eq!(position, duration);
+        assert_eq!(source_span, None);
         assert_eq!(cursor.current_chunk_consumed_frames, 100);
     }
 
     #[kithara::test]
-    fn read_buffer_shorter_than_frame_preserves_current_chunk() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
-        let (trash_tx, mut trash_rx) = connect::<PcmChunk>(3, None);
+    fn reads_preserve_each_rendered_source_span() {
+        let pools = pools();
+        let rate = NonZeroU32::new(48_000).expect("test rate");
+        let spec = AudioSpec::new(1, rate);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
-            pcm_rx: data_rx,
+            audio_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        let mut first = timed_chunk(&pools, spec, 3, Duration::ZERO, Duration::from_millis(3));
+        first.meta.frame_offset = 100;
+        let mut second = timed_chunk(
+            &pools,
+            spec,
+            2,
+            Duration::from_millis(3),
+            Duration::from_millis(5),
+        );
+        second.meta.frame_offset = 106;
+        let mut changed = timed_chunk(
+            &pools,
+            spec,
+            2,
+            Duration::from_millis(5),
+            Duration::from_millis(7),
+        );
+        changed.meta.frame_offset = 110;
+        data_tx
+            .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
+            .expect("first rendered chunk reaches ring");
+        data_tx
+            .try_push(Fetch::rendered(second, 0, SourceEnd::new(110, rate)))
+            .expect("second rendered chunk reaches ring");
+        data_tx
+            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(115, rate)))
+            .expect("changed-slope rendered chunk reaches ring");
+
+        let playhead = PlayheadState::new();
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
+        let mut events = AudioEvents::test();
+        let mut output = [0.0; 8];
+        let first_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("first read succeeds");
+        let ReadOutcome::Frames {
+            count, source_span, ..
+        } = first_read.outcome
+        else {
+            panic!("expected first rendered frames");
+        };
+        assert_eq!(count.get(), 5);
+        assert_eq!(source_span, SourceSpan::new(100, 110, rate));
+
+        let second_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output[..1],
+            )
+            .expect("partial changed-slope read succeeds");
+        let ReadOutcome::Frames { source_span, .. } = second_read.outcome else {
+            panic!("expected partial changed-slope frames");
+        };
+        assert_eq!(source_span, SourceSpan::new(110, 112, rate));
+
+        let final_read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("final changed-slope read succeeds");
+        let ReadOutcome::Frames { source_span, .. } = final_read.outcome else {
+            panic!("expected final rendered frames");
+        };
+        assert_eq!(source_span, SourceSpan::new(112, 115, rate));
+    }
+
+    #[kithara::test]
+    fn read_buffer_shorter_than_frame_preserves_current_chunk() {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
+        let (trash_tx, mut trash_rx) = connect::<AudioChunk>(3, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            audio_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -375,12 +595,11 @@ mod tests {
         ring.preloaded = true;
         data_tx
             .try_push(Fetch::data(
-                timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
+                timed_chunk(&pools, spec, 1, Duration::ZERO, Duration::from_millis(1)),
                 0,
             ))
             .expect("chunk reaches test ring");
-        let pool = PcmPool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut output = [0.0];
 
@@ -411,7 +630,8 @@ mod tests {
 
     #[kithara::test]
     fn mono_planar_read_consumes_one_source_frame_per_output_frame() {
-        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor();
+        let pools = pools();
+        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor(&pools);
         let mut left = vec![0.0; MONO_OUTPUT_FRAMES];
         let mut right = vec![0.0; MONO_OUTPUT_FRAMES];
         let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
@@ -442,7 +662,8 @@ mod tests {
 
     #[kithara::test]
     fn mono_planar_read_carries_each_sample_to_both_channels() {
-        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor();
+        let pools = pools();
+        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor(&pools);
         let mut left = vec![0.0; MONO_OUTPUT_FRAMES];
         let mut right = vec![0.0; MONO_OUTPUT_FRAMES];
         let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
@@ -474,25 +695,25 @@ mod tests {
 
     /// A cursor over one mono chunk whose samples ramp `0.0, 1.0, ...` so a
     /// misread of the interleave shows up as a gap in the recovered order.
-    fn mono_ramp_cursor() -> (ChunkCursor, RingConsumer, AudioEvents, PlayheadState) {
-        let spec = PcmSpec::new(1, NonZeroU32::new(48_000).expect("test rate"));
+    fn mono_ramp_cursor(pools: &Pools) -> (ChunkCursor, RingConsumer, AudioEvents, PlayheadState) {
+        let spec = AudioSpec::new(1, NonZeroU32::new(48_000).expect("test rate"));
         let frames = u32::try_from(MONO_OUTPUT_FRAMES * 2).expect("test frame count fits u32");
         let samples: Vec<f32> = (0..frames).map(|i| i as f32).collect();
-        let chunk = PcmChunk::new(
-            PcmMeta {
+        let chunk = AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 timestamp: Duration::ZERO,
                 end_timestamp: Duration::from_millis(1),
                 frames,
                 ..Default::default()
             },
-            PcmPool::default().attach(samples),
+            sample_buffer(pools, &samples),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
-            pcm_rx: data_rx,
+            audio_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -502,28 +723,33 @@ mod tests {
         data_tx
             .try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches test ring");
-        let pool = PcmPool::default();
         (
-            ChunkCursor::new(&pool, spec),
+            ChunkCursor::new(pools, spec).expect("cursor scratch fits test pools"),
             ring,
             AudioEvents::test(),
             PlayheadState::new(),
         )
     }
 
-    fn timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
+    fn timed_chunk(
+        pools: &Pools,
+        spec: AudioSpec,
+        frames: u32,
+        start: Duration,
+        end: Duration,
+    ) -> AudioChunk {
         let channels = usize::from(spec.channels.max(1));
         let frame_count = usize::try_from(frames).expect("test frame count fits usize");
         let samples = vec![0.5; frame_count * channels];
-        PcmChunk::new(
-            PcmMeta {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 timestamp: start,
                 end_timestamp: end,
                 frames,
                 ..Default::default()
             },
-            PcmPool::default().attach(samples),
+            sample_buffer(pools, &samples),
         )
     }
 }

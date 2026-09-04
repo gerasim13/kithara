@@ -3,20 +3,24 @@
 use std::fmt;
 
 use dashmap::mapref::entry::Entry;
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{PendingResourceSession, WriterClaim, WriterEpoch, WriterIdentity};
 
 /// Elected writer role for one attached consumer.
 #[non_exhaustive]
-pub struct WriterHandle {
-    identity: Arc<WriterIdentity>,
+pub struct WriterHandle<S> {
+    identity: Arc<WriterIdentity<S>>,
 }
 
-impl WriterHandle {
+impl<S> WriterHandle<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(in crate::index) fn new(
         claim: Arc<WriterClaim>,
-        session: &Arc<PendingResourceSession>,
+        session: &Arc<PendingResourceSession<S>>,
     ) -> Self {
         Self {
             identity: WriterIdentity::new(claim, session),
@@ -25,7 +29,7 @@ impl WriterHandle {
 
     /// Clone an epoch capability for fetch callbacks.
     #[must_use]
-    pub fn epoch(&self) -> WriterEpoch {
+    pub fn epoch(&self) -> WriterEpoch<S> {
         WriterEpoch::new(Arc::clone(&self.identity))
     }
 
@@ -53,7 +57,7 @@ impl WriterHandle {
     }
 }
 
-impl Drop for WriterHandle {
+impl<S> Drop for WriterHandle<S> {
     fn drop(&mut self) {
         let session = &self.identity.session;
         let Entry::Occupied(occupied) = session.inner.slots.entry(session.key.clone()) else {
@@ -75,7 +79,7 @@ impl Drop for WriterHandle {
     }
 }
 
-impl fmt::Debug for WriterHandle {
+impl<S> fmt::Debug for WriterHandle<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WriterHandle")
             .field("key", &self.identity.session.key)

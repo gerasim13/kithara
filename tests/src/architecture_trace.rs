@@ -61,11 +61,11 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn caller_symbol_is_reduced_to_owner_and_method() {
         assert_eq!(
-            symbol_name("kithara_queue::queue::lifecycle::Queue::append"),
+            symbol_name("kithara::queue::queue::lifecycle::Queue::append"),
             Some("Queue::append".to_string())
         );
         assert_eq!(
-            symbol_name("kithara_play::worker::run::{{closure}}"),
+            symbol_name("kithara::play::worker::run::{{closure}}"),
             Some("worker::run".to_string())
         );
     }

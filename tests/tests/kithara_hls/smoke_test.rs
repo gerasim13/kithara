@@ -3,6 +3,7 @@
 use std::error::Error as StdError;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -13,7 +14,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    hls_fixture::HlsStreamBuilder,
+    hls_server::TestServer,
+    temp_dir,
 };
 use tracing::info;
 use url::Url;
@@ -29,13 +34,20 @@ async fn test_hls_session_creation(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(test_stream_url.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(CancelToken::never())
         .events(bus)
         .build();
 
-    let _stream = Stream::<Hls>::new(config).await?;
+    let _stream = Stream::<Hls<TestPools>>::new(config).await?;
     info!("HLS source opened successfully");
 
     let (events_sender, events_receiver) = oneshot::channel::<u64>();
@@ -93,13 +105,20 @@ async fn test_hls_session_events_consumption(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(test_stream_url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(CancelToken::never())
         .events(bus)
         .build();
 
-    let _stream = Stream::<Hls>::new(config).await?;
+    let _stream = Stream::<Hls<TestPools>>::new(config).await?;
 
     // State-wait: block on the first published event instead of a fixed 500ms
     // pacing window. Session creation publishes events; `recv()` returns when one
@@ -125,12 +144,19 @@ async fn test_hls_invalid_url_handling(
     let url_result = Url::parse(invalid_url);
 
     if let Ok(url) = url_result {
+        let pools = pools();
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build();
         let config = HlsConfig::for_url(url)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .store(store)
+            .pools(pools)
             .cancel(CancelToken::never())
             .build();
 
-        let result = Stream::<Hls>::new(config).await;
+        let result = Stream::<Hls<TestPools>>::new(config).await;
         assert!(result.is_err(), "invalid URL should fail, got Ok");
     } else {
         assert!(url_result.is_err());

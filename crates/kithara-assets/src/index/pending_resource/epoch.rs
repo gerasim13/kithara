@@ -3,6 +3,7 @@
 use std::fmt;
 
 use dashmap::mapref::entry::Entry;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_storage::StorageResult;
 
@@ -42,14 +43,24 @@ impl<T> From<WriterOutcome<T>> for Option<T> {
 }
 
 /// Cloneable capability used by one writer epoch's callbacks.
-#[derive(Clone)]
 #[doc(hidden)]
-pub struct WriterEpoch {
-    identity: Arc<WriterIdentity>,
+pub struct WriterEpoch<S> {
+    identity: Arc<WriterIdentity<S>>,
 }
 
-impl WriterEpoch {
-    pub(super) const fn new(identity: Arc<WriterIdentity>) -> Self {
+impl<S> Clone for WriterEpoch<S> {
+    fn clone(&self) -> Self {
+        Self {
+            identity: Arc::clone(&self.identity),
+        }
+    }
+}
+
+impl<S> WriterEpoch<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(super) const fn new(identity: Arc<WriterIdentity<S>>) -> Self {
         Self { identity }
     }
 
@@ -240,7 +251,7 @@ impl WriterEpoch {
     }
 }
 
-impl fmt::Debug for WriterEpoch {
+impl<S> fmt::Debug for WriterEpoch<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WriterEpoch")
             .field("key", &self.identity.session.key)

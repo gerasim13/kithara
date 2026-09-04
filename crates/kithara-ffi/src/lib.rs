@@ -11,7 +11,7 @@
 uniffi::setup_scaffolding!();
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
-use kithara_events::TrackId;
+use kithara::events::TrackId;
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::custom_type!(TrackId, u64, { remote });
@@ -20,6 +20,7 @@ mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub mod player;
+pub mod pools;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

@@ -19,7 +19,7 @@ mod state;
 mod types;
 
 pub use abr::Abr;
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub use abr::AbrMock;
 pub use controller::AbrController;
 #[cfg(test)]

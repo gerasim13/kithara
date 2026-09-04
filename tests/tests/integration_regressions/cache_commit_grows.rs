@@ -5,16 +5,22 @@ use std::path::Path;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AssetEvent, DownloaderEvent, Event},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineQueue,
+    temp_dir,
+    test_defaults::Consts as Shared,
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 #[derive(Default)]
 struct Transfer {
@@ -62,13 +68,11 @@ async fn observe_transfer(rx: &mut kithara::events::EventReceiver, deadline: Dur
 fn resource_config(
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    store: &AssetStore,
+    store: &AssetStore<TestPools>,
     name: &str,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     let url = handle.child_url(name);
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
@@ -93,16 +97,18 @@ fn dir_size_bytes(root: &Path) -> u64 {
 }
 
 async fn load_and_observe(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     rx: &mut kithara::events::EventReceiver,
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    store: &AssetStore,
+    store: &AssetStore<TestPools>,
     name: &str,
 ) -> Transfer {
-    let id = queue.append(TrackSource::Config(Box::new(resource_config(
-        handle, downloader, store, name,
-    ))));
+    let id = queue
+        .append(TrackSource::Config(Box::new(resource_config(
+            handle, downloader, store, name,
+        ))))
+        .expect("queue is open while loading the fixture");
     queue
         .select(id, Transition::None)
         .unwrap_or_else(|error| panic!("select {name}: {error}"));
@@ -116,7 +122,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 delivery: Delivery::Throttle {
@@ -126,29 +132,41 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             })
         })
         .collect();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    ));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
         .event_bus(player.bus().clone())
         .build();
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    );
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let mut rx = queue.subscribe();
 
     let before = dir_size_bytes(temp_dir.path());

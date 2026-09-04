@@ -37,6 +37,7 @@ pub(crate) mod no_passthrough_builder;
 pub(crate) mod parallel_loops;
 pub(crate) mod pointwise_loop;
 pub(crate) mod retry_fallback;
+pub(crate) mod thin_wrapper_economy;
 
 pub(crate) struct Context<'a> {
     pub(crate) config: &'a IdiomsConfig,
@@ -79,5 +80,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(const_group_enum_shape::ConstGroupEnumShape),
         Box::new(nested_if_let_pyramid::NestedIfLetPyramid),
         Box::new(no_passthrough_builder::NoPassthroughBuilder),
+        Box::new(thin_wrapper_economy::ThinWrapperEconomy),
     ]
 }

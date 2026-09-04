@@ -3,13 +3,17 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
+};
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 use crate::common::test_defaults::Consts;
 
@@ -37,7 +41,7 @@ async fn audio_file_mp3_decodes_with_duration(
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -46,16 +50,17 @@ async fn audio_file_mp3_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -63,7 +68,8 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .maybe_hint(hint.map(str::to_owned))
         .build();
-    let mut audio = Audio::<Stream<File>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
@@ -114,7 +120,7 @@ async fn audio_file_mp3_decodes_with_duration(
     );
 }
 
-/// Duration must be correct IMMEDIATELY after `Audio::new` — before any
+/// Duration must be correct IMMEDIATELY after `PlayWorker::open` — before any
 /// decode calls. This is what the GUI reads to show track length.
 ///
 /// Uses throttled server: Content-Length is sent immediately but body
@@ -127,7 +133,7 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Throttle {
@@ -136,19 +142,21 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
         },
     });
     let url = handle.url();
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .maybe_hint(hint.map(String::from))
         .build();
-    let audio = Audio::<Stream<File>>::new(config)
+    let audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
 
@@ -170,23 +178,23 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
     });
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
+    let mut audio = worker.open(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;

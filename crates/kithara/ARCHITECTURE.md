@@ -8,17 +8,26 @@ Architecture, contracts, and invariants for the kithara facade crate; the README
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
     RC[ResourceConfig] -->|auto-detect| R[Resource]
-    R -->|".m3u8"| AH["Audio‹Stream‹Hls››"]
-    R -->|other| AF["Audio‹Stream‹File››"]
-    AH --> PR["Box‹dyn PcmReader›"]
+    R --> TC[TrackConfig]
+    TC --> PW[PlayWorker]
+    PW -->|".m3u8"| AH["identity Warp‹Audio‹Stream‹Hls››› + DecoderNode‹WarpSource›"]
+    PW -->|other| AF["identity Warp‹Audio‹Stream‹File››› + DecoderNode‹WarpSource›"]
+    AH --> PR["Box‹dyn AudioReader›"]
     AF --> PR
     PR -->|"read / seek"| APP[Your audio callback]
 ```
 
-PCM flows straight from the decoder to your callback through `read()`. The
-optional `EventBus` (`resource.event_bus()`) is a side-channel for
-observability — decode progress, buffering, HLS variant switches — and never
-sits in the audio path.
+`kithara-signal` owns decoded-audio values and checked layout/time conversion;
+`kithara-audio` prepares the decoded source, while `kithara-analysis` owns the
+progressive source-analysis pass and its artifacts.
+`kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track node,
+ordinary post-Warp effects, and final output admission before `read()` reaches
+the callback. It composes the resident `Warp<S>` and synchronous
+`kithara-warp::WarpRenderer`; `kithara-warp` owns the Warp protocol and
+time-stretch stage, while `kithara-stretch` supplies its backend engines. R7
+does not yet drive `WarpMap` progress or presentation acknowledgement. The
+optional `EventBus` (`resource.event_bus()`) is a side-channel for observability — decode
+progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Features
 
@@ -38,15 +47,17 @@ sits in the audio path.
 
 <tr><td><code>resample-glide</code></td><td>no</td><td>Glide resampler backend for explicit playback/decode config selection without Rubato</td></tr>
 
-<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-audio</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
+<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-analysis</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
 
-<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-analysis</code>; waveform/blob types remain unconditional</td></tr>
 
-<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>analysis</code></td><td>via analyzer defaults</td><td>Analysis module without selecting an analyzer backend</td></tr>
 
-<tr><td><code>stretch-bungee</code></td><td>no</td><td>Bungee time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Signalsmith engine lives in <code>kithara-stretch</code></td></tr>
 
-<tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-audio</code> / <code>kithara-beat</code></td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Bungee engine lives in <code>kithara-stretch</code></td></tr>
+
+<tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-analysis</code> / <code>kithara-beat</code></td></tr>
 
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (<code>kithara-audio/apple</code>, <code>kithara-decode/apple</code>, <code>kithara-play/apple</code>) plus queue forwarding when <code>queue</code> is enabled; does not imply Rubato</td></tr>
 
@@ -67,6 +78,14 @@ sits in the audio path.
 <tr><td><code>bufpool</code></td><td>no</td><td>Aggregator flag used by <code>full</code>; the <code>kithara::bufpool</code> module is always re-exported</td></tr>
 
 <tr><td><code>queue</code></td><td>no</td><td>Queue module (<code>kithara-queue</code>) exposed as <code>kithara::queue</code></td></tr>
+
+<tr><td><code>encode</code> / <code>ffmpeg</code></td><td>no</td><td>Encoding API exposed as <code>kithara::encode</code>; FFmpeg remains opt-in</td></tr>
+
+<tr><td><code>ui</code> / <code>ui-iced</code> / <code>ui-masonry</code> / <code>ui-capture</code></td><td>no</td><td>UI document and renderer APIs exposed as <code>kithara::ui</code></td></tr>
+
+<tr><td><code>worker</code></td><td>no</td><td>Prioritized worker API exposed as <code>kithara::worker</code></td></tr>
+
+<tr><td><code>signal</code></td><td>no</td><td>Process signal handling forwarded to <code>kithara-platform</code></td></tr>
 
 <tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
 
@@ -94,7 +113,7 @@ sits in the audio path.
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>Resource</code></td><td>Type-erased <code>Box&lt;dyn PcmReader&gt;</code> — the single entry point for PCM reads</td></tr>
+<tr><td><code>Resource</code></td><td>Type-erased <code>Box&lt;dyn AudioReader&gt;</code> — the single entry point for PCM reads</td></tr>
 
 <tr><td><code>ResourceConfig</code></td><td>Builder for source, network, ABR, decoder backend, and cache options</td></tr>
 
@@ -106,19 +125,24 @@ sits in the audio path.
 
 <tr><td><code>EventBus</code></td><td>Broadcast publisher for the unified <code>Event</code> stream (observability only)</td></tr>
 
+<tr><td><code>PlayWorker</code></td><td>Owner of the shared playback worker and registered per-track producer chains</td></tr>
+
+<tr><td><code>EngineLoadSnapshot</code></td><td>Copyable view of the play-owned producer-chain cost meter</td></tr>
+
 </table>
 
 ## Re-exports
 
-Each engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
+Each enabled engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
 `kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
-`kithara::stream`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
-feature-gated; `kithara::abr` and `kithara::drm` are exposed with `hls`. For
+`kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue`/`encode`/`ui`/`worker`
+modules are feature-gated; `kithara::analysis` is exposed with `analysis`, `kithara::abr` and `kithara::drm` are exposed with `hls`, while
+`kithara::stretch` is exposed with either stretch backend. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
 speed-control type `StretchControls` is re-exported even when no stretch backend
-is compiled; backend-specific `StretchKind`, `TimeStretchProcessor`, and
-`StretchBackend` are gated on a native stretch backend.
+is compiled; the flat `StretchKind` re-export and
+`kithara::warp::WarpRenderer` are gated on a native stretch backend.
 `mock` macro is re-exported unconditionally; `test`, `fixture`, and `flash` are
 gated behind `probe`. The facade `flash` macro emits `kithara::platform::flash`
 paths so integration tests do not need a direct `kithara-platform` dependency.

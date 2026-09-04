@@ -1,11 +1,11 @@
 mod cochlea_continuity_oracle;
 #[cfg(not(target_arch = "wasm32"))]
-mod engine_offline_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod engine_session_contract;
 mod engine_tests;
 mod gapless_offline_e2e;
 mod gapless_startup_regressions;
+mod generated_gapless_hls;
 mod hls_seek_middle_no_queue;
 mod hls_seek_middle_stress;
 mod hls_seek_past_end_terminates;
@@ -32,3 +32,8 @@ mod rt_metrics;
 mod seamless_queue_advance;
 #[cfg(not(target_arch = "wasm32"))]
 mod session_transport;
+mod sync_listening;
+#[cfg(not(target_arch = "wasm32"))]
+mod sync_oracle;
+mod sync_product_matrix;
+mod sync_runtime_oracles;

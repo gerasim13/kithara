@@ -18,16 +18,6 @@ pub(crate) const SCHEMA: &str = "devtools.pressure.v2";
 struct Consts;
 
 impl Consts {
-    const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-    const MAX_METRIC_BYTES: usize = 32 * 1_024;
-    const MAX_METRIC_READ_BYTES: u64 = 32 * 1_024 + 1;
-    const MAX_RECORD_BYTES: usize = 1_048_576;
-    const MAX_RECOVERY_BYTES: u64 = 2 * 1_048_576 + 2;
-    const PROC_METRICS: &[(&str, &str)] = &[
-        ("proc.pressure.cpu", "pressure/cpu"),
-        ("proc.pressure.memory", "pressure/memory"),
-        ("proc.pressure.io", "pressure/io"),
-    ];
     const CGROUP_METRICS: &[(&str, &str)] = &[
         ("cgroup.cpu.stat", "cpu.stat"),
         ("cgroup.cpu.pressure", "cpu.pressure"),
@@ -41,6 +31,10 @@ impl Consts {
         ("cgroup.pids.events", "pids.events"),
         ("cgroup.cpuset.cpus.effective", "cpuset.cpus.effective"),
     ];
+    const MAX_METRIC_BYTES: usize = 32 * 1_024;
+    const MAX_METRIC_READ_BYTES: u64 = 32 * 1_024 + 1;
+    const MAX_RECORD_BYTES: usize = 1_048_576;
+    const MAX_RECOVERY_BYTES: u64 = 2 * 1_048_576 + 2;
     const MEMINFO_FIELDS: &[&str] = &[
         "MemTotal",
         "MemFree",
@@ -50,25 +44,31 @@ impl Consts {
         "SwapTotal",
         "SwapFree",
     ];
+    const PROC_METRICS: &[(&str, &str)] = &[
+        ("proc.pressure.cpu", "pressure/cpu"),
+        ("proc.pressure.memory", "pressure/memory"),
+        ("proc.pressure.io", "pressure/io"),
+    ];
+    const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 }
 
 pub(super) struct Sampler {
-    cancel: SyncSender<()>,
-    path: PathBuf,
     worker: JoinHandle<WorkerOutcome>,
+    path: PathBuf,
+    cancel: SyncSender<()>,
 }
 
 #[derive(Debug)]
 struct SampleContext {
     cgroup_path: Option<PathBuf>,
-    cgroup_scope: String,
     proc_path: PathBuf,
+    cgroup_scope: String,
 }
 
 #[derive(Debug)]
 struct Observation {
-    load1: Option<f64>,
     metrics: BTreeMap<String, String>,
+    load1: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -81,30 +81,30 @@ enum Marker {
 
 #[derive(Serialize)]
 struct Scope<'a> {
-    proc_pressure: &'static str,
     cgroup_v2: &'a str,
+    proc_pressure: &'static str,
 }
 
 #[derive(Serialize)]
 struct SampleRecord<'a> {
+    metrics: &'a BTreeMap<String, String>,
     schema: &'static str,
     marker: Marker,
-    timestamp_ms: u64,
+    cgroup_path: Option<&'a Path>,
     load1: Option<f64>,
     scope: Scope<'a>,
-    cgroup_path: Option<&'a Path>,
-    metrics: &'a BTreeMap<String, String>,
+    timestamp_ms: u64,
 }
 
 #[derive(Serialize)]
 struct EndRecord {
     schema: &'static str,
-    marker: Marker,
-    timestamp_ms: u64,
-    load1: Option<f64>,
     metrics: BTreeMap<String, String>,
-    sampler_healthy: bool,
+    marker: Marker,
+    load1: Option<f64>,
     primary_exit_code: Option<i32>,
+    sampler_healthy: bool,
+    timestamp_ms: u64,
 }
 
 struct WorkerOutcome {
@@ -113,6 +113,50 @@ struct WorkerOutcome {
 }
 
 impl Sampler {
+    pub(super) fn finish(self, primary_exit_code: Option<i32>) -> Result<bool> {
+        let Self {
+            cancel,
+            path,
+            worker,
+        } = self;
+        let cancel_error = cancel
+            .send(())
+            .err()
+            .map(|_| anyhow!("cancel pressure sampler worker"));
+        drop(cancel);
+
+        let outcome = match worker.join() {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                let failure = anyhow!(
+                    "pressure sampler worker panicked outside its guard: {}",
+                    panic_message(payload.as_ref())
+                );
+                return match append_unhealthy_end(&path, primary_exit_code) {
+                    Ok(()) => Err(failure),
+                    Err(end_error) => Err(failure.context(format!(
+                        "append unhealthy pressure end marker also failed: {end_error:#}"
+                    ))),
+                };
+            }
+        };
+        let mut failure = outcome.error;
+        if let Some(error) = cancel_error {
+            add_failure(&mut failure, error);
+        }
+        let healthy = failure.is_none();
+        let end = append_end(&path, outcome.last_timestamp_ms, healthy, primary_exit_code);
+
+        match (failure, end) {
+            (None, Ok(())) => Ok(true),
+            (Some(error), Ok(())) => Err(error.context("pressure sampler worker failed")),
+            (None, Err(error)) => Err(error),
+            (Some(error), Err(end_error)) => Err(error.context(format!(
+                "append unhealthy pressure end marker also failed: {end_error:#}"
+            ))),
+        }
+    }
+
     pub(super) fn start(
         path: &Path,
         cgroup_path: Option<&Path>,
@@ -171,54 +215,10 @@ impl Sampler {
         };
 
         Ok(Self {
-            cancel,
-            path,
             worker,
+            path,
+            cancel,
         })
-    }
-
-    pub(super) fn finish(self, primary_exit_code: Option<i32>) -> Result<bool> {
-        let Self {
-            cancel,
-            path,
-            worker,
-        } = self;
-        let cancel_error = cancel
-            .send(())
-            .err()
-            .map(|_| anyhow!("cancel pressure sampler worker"));
-        drop(cancel);
-
-        let outcome = match worker.join() {
-            Ok(outcome) => outcome,
-            Err(payload) => {
-                let failure = anyhow!(
-                    "pressure sampler worker panicked outside its guard: {}",
-                    panic_message(payload.as_ref())
-                );
-                return match append_unhealthy_end(&path, primary_exit_code) {
-                    Ok(()) => Err(failure),
-                    Err(end_error) => Err(failure.context(format!(
-                        "append unhealthy pressure end marker also failed: {end_error:#}"
-                    ))),
-                };
-            }
-        };
-        let mut failure = outcome.error;
-        if let Some(error) = cancel_error {
-            add_failure(&mut failure, error);
-        }
-        let healthy = failure.is_none();
-        let end = append_end(&path, outcome.last_timestamp_ms, healthy, primary_exit_code);
-
-        match (failure, end) {
-            (None, Ok(())) => Ok(true),
-            (Some(error), Ok(())) => Err(error.context("pressure sampler worker failed")),
-            (None, Err(error)) => Err(error),
-            (Some(error), Err(end_error)) => Err(error.context(format!(
-                "append unhealthy pressure end marker also failed: {end_error:#}"
-            ))),
-        }
     }
 }
 
@@ -244,11 +244,11 @@ fn worker_entry(
         Ok(file) => file,
         Err(error) => {
             return WorkerOutcome {
+                last_timestamp_ms,
                 error: Some(Error::new(error).context(format!(
                     "open pressure artifact for sampling {}",
                     path.display()
                 ))),
-                last_timestamp_ms,
             };
         }
     };
@@ -271,8 +271,8 @@ fn worker_entry(
         add_failure(&mut failure, error);
     }
     WorkerOutcome {
-        error: failure,
         last_timestamp_ms,
+        error: failure,
     }
 }
 
@@ -334,7 +334,7 @@ fn collect(context: &SampleContext) -> Result<Observation> {
         }
     }
 
-    Ok(Observation { load1, metrics })
+    Ok(Observation { metrics, load1 })
 }
 
 fn insert_available(metrics: &mut BTreeMap<String, String>, key: &str, path: &Path) -> Result<()> {
@@ -399,9 +399,9 @@ fn write_sample(
     context: &SampleContext,
 ) -> Result<()> {
     let record = SampleRecord {
-        schema: SCHEMA,
         marker,
         timestamp_ms,
+        schema: SCHEMA,
         load1: observation.load1,
         scope: Scope {
             proc_pressure: "host",
@@ -432,12 +432,12 @@ fn append_end(
             .context("terminate incomplete pressure record")?;
     }
     let record = EndRecord {
+        timestamp_ms,
+        sampler_healthy,
         schema: SCHEMA,
         marker: Marker::End,
-        timestamp_ms,
         load1: None,
         metrics: BTreeMap::new(),
-        sampler_healthy,
         primary_exit_code: exit_code,
     };
     write_record(&mut writer, &record)
@@ -572,9 +572,9 @@ mod tests {
         .expect("write pressure fixture");
         let path = temp.path().join("pressure.jsonl");
         let context = SampleContext {
+            proc_path,
             cgroup_path: Some(cgroup_path.clone()),
             cgroup_scope: "current_process_cgroup".to_owned(),
-            proc_path,
         };
 
         let sampler = Sampler::start_with_context(&path, context).expect("start sampler");
@@ -609,9 +609,9 @@ mod tests {
         fs::create_dir(&proc_path).expect("create proc fixture");
         let path = temp.path().join("pressure.jsonl");
         let context = SampleContext {
+            proc_path,
             cgroup_path: None,
             cgroup_scope: "unavailable".to_owned(),
-            proc_path,
         };
 
         let sampler = Sampler::start_with_context(&path, context).expect("start sampler");
@@ -686,9 +686,9 @@ mod tests {
         .expect("write pressure fixture");
         fs::write(cgroup_path.join("memory.current"), "4096\n").expect("write cgroup fixture");
         let context = SampleContext {
+            proc_path,
             cgroup_path: Some(cgroup_path),
             cgroup_scope: "current_process_cgroup".to_owned(),
-            proc_path,
         };
 
         let observation = collect(&context).expect("collect pressure metrics");

@@ -4,31 +4,52 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{self, Duration},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestServerHelper, auto, waits::wait_thread_count_quiesced};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{Pools, TestPools, pools},
+    fixture_protocol::EncryptionRequest,
+    hls_fixture::{aes128_iv, aes128_key_bytes},
+    waits::wait_thread_count_quiesced,
+};
 use tracing::info;
+use url::Url;
 
 struct Consts;
 impl Consts {
     const ITERATIONS: usize = 4;
     const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
+    /// Encrypted ladder the cycle runs against: two variants so `auto` ABR
+    /// has somewhere to go, and long enough that every seek target above
+    /// lands inside the track.
+    const VARIANTS: usize = 2;
+    const SEGMENTS: usize = 12;
+    const SEGMENT_SECS: f64 = 6.0;
+
+    fn media_secs() -> f64 {
+        Self::SEGMENTS as f64 * Self::SEGMENT_SECS
+    }
 }
 
-async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
+async fn next_chunk_or_timeout(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    label: &str,
+) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
@@ -41,43 +62,42 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     }
 }
 
-async fn preload_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    if let Some(gate) = PcmSession::preload_gate(audio) {
+async fn preload_or_timeout(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    label: &str,
+) {
+    if let Some(gate) = AudioSession::preload_gate(audio) {
         time::timeout(Duration::from_secs(3), gate.wait())
             .await
             .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
     }
 
-    PcmControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
+    AudioControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
 
 async fn run_drm_seek_resume_cycle(
-    server: &TestServerHelper,
+    url: &Url,
     downloader: &Downloader,
-    shared_worker: &AudioWorkerHandle,
+    shared_worker: &PlayWorker<TestPools>,
+    pools: &Pools,
     iter_idx: usize,
 ) {
-    let url = server.asset("drm/master.m3u8");
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::for_url(url)
+    let hls_config = HlsConfig::for_url(url.clone())
         .store(store)
+        .pools(pools.clone())
         .downloader(downloader.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .worker(shared_worker.clone())
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = shared_worker
+        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .await
+        .expect("audio creation");
     preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;
 
     for w in 0..4 {
@@ -107,7 +127,7 @@ async fn run_drm_seek_resume_cycle(
 }
 
 /// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared `AudioWorkerHandle`, the count of kithara-named threads must
+/// and shared `PlayWorker`, the count of kithara-named threads must
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
@@ -119,22 +139,61 @@ async fn run_drm_seek_resume_cycle(
 )]
 async fn red_leak_native_drm_seek_resume_thread_budget()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServerHelper::new().await;
-    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    // A seek past the end still reports success, so nothing downstream
+    // would notice the cycle exercising the past-EOF path instead of the
+    // seek path it exists to stress. Against the captured 220 s tree the
+    // targets were inside by a wide margin; on a fixture sized here, that
+    // has to be checked.
+    assert!(
+        Consts::SEEK_TARGETS_SECS
+            .iter()
+            .all(|&target| target < Consts::media_secs()),
+        "seek targets {:?} must land inside the {} s ladder",
+        Consts::SEEK_TARGETS_SECS,
+        Consts::media_secs(),
+    );
 
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(CancelToken::never())
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANTS)
+                .segments_per_variant(Consts::SEGMENTS)
+                .segment_duration_secs(Consts::SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2)
+                .encryption(EncryptionRequest {
+                    key_hex: hex::encode(aes128_key_bytes()),
+                    iv_hex: Some(hex::encode(aes128_iv())),
+                }),
+        )
+        .await
+        .expect("create the encrypted ladder");
+    let url = created.master_url();
+    let cancel = CancelToken::never();
+    let pools = pools();
+    let shared_worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
             .build(),
     );
 
-    run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, 0).await;
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            cancel.clone(),
+        ))
+        .cancel(cancel)
+        .build(),
+    );
+
+    run_drm_seek_resume_cycle(&url, &downloader, &shared_worker, &pools, 0).await;
     let threads_baseline = wait_thread_count_quiesced(Duration::from_secs(30)).await;
 
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
     for i in 1..=Consts::ITERATIONS {
-        run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, i).await;
+        run_drm_seek_resume_cycle(&url, &downloader, &shared_worker, &pools, i).await;
         let now = wait_thread_count_quiesced(Duration::from_secs(30)).await;
         info!(
             iter = i,
@@ -159,6 +218,6 @@ async fn red_leak_native_drm_seek_resume_thread_budget()
         threads_after,
     );
 
-    shared_worker.shutdown();
+    drop(shared_worker);
     Ok(())
 }

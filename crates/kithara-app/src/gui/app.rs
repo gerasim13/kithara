@@ -1,8 +1,11 @@
 use iced::{
-    Event as IcedEvent, Subscription, Task, Theme, event, event::Status,
-    keyboard::Event as KeyboardEvent, time as iced_time, window,
+    Color, Event as IcedEvent, Subscription, Task, Theme, event,
+    event::Status,
+    keyboard::Event as KeyboardEvent,
+    theme::{Base, Style},
+    time as iced_time, window,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara::platform::{sync::Arc, time::Duration};
 
 use super::{
     deck::DeckUi, frontend::window_settings, message::Message, subscription,
@@ -23,23 +26,23 @@ use crate::{
 /// what belongs to no single deck: the highlighted catalog row and the app
 /// window.
 pub(crate) struct Kithara {
-    pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
+    /// The compiled UI and its host-owned view state.
+    pub(crate) ui: AppUi,
+    pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// The app's track list; decks load from it.
     pub(crate) catalog: Catalog,
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
     /// One EQ topology shared by every deck.
     pub(crate) eq_mode: EqMode,
-    pub(crate) palette: gui::GuiPalette,
 
+    pub(crate) palette: gui::GuiPalette,
     /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-    /// The compiled UI and its host-owned view state.
-    pub(crate) ui: AppUi,
 }
 
 /// A non-empty set of deck view-models, addressed by id.
@@ -83,25 +86,52 @@ impl Kithara {
         catalog: Catalog,
         config: AppConfig,
         ui: AppUi,
-        palette: gui::GuiPalette,
         broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings(ui.window_min()));
 
-        let state = Self {
+        (
+            Self::mounted(session, decks, catalog, config, ui, broadcast, window_id),
+            open.discard(),
+        )
+    }
+
+    /// The same state without a window of iced's: a host that owns its own
+    /// window mounts the application through here.
+    pub(crate) fn mounted(
+        session: DeckSet,
+        decks: Decks,
+        catalog: Catalog,
+        config: AppConfig,
+        ui: AppUi,
+        broadcast: crate::broadcast::Broadcaster,
+        window_id: window::Id,
+    ) -> Self {
+        let palette = config.palette.into();
+        let mut state = Self {
             broadcast,
             session,
             decks,
             catalog,
             config,
             ui,
-            eq_mode: EqMode::default(),
             palette,
             window_id,
+            eq_mode: EqMode::default(),
             selected_track: None,
         };
+        state.ui.cache.refresh(&state.decks, &state.catalog);
+        state
+    }
 
-        (state, open.discard())
+    /// The window paints no ground of its own: the document lays down the page
+    /// in the shape the skin gives the window, and whatever the shape leaves
+    /// out is the desktop behind it.
+    pub(crate) fn style(_state: &Self, theme: &Theme) -> Style {
+        Style {
+            background_color: Color::TRANSPARENT,
+            text_color: theme.base().text_color,
+        }
     }
 
     /// Time-tick subscription for player state sync plus keyboard. Tick
@@ -110,7 +140,7 @@ impl Kithara {
         const SUBSCRIPTION_CAPACITY: usize = 4;
         let playing = self.decks.iter().any(|deck| deck.ui.playing);
         let cfg = subscription_config(playing);
-        let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
+        let mut subs: Vec<Subscription<Message>> = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
@@ -118,7 +148,6 @@ impl Kithara {
         subs.push(window::resize_events().map(|(_, size)| Message::WindowResized(size)));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on what the focused widget left
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     ref key, modifiers, ..
                 }) if status == Status::Ignored => subscription::shortcut(key, modifiers),
@@ -136,5 +165,11 @@ impl Kithara {
     /// Window title.
     pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
         "Kithara".to_string()
+    }
+}
+
+impl Drop for Kithara {
+    fn drop(&mut self) {
+        self.broadcast.release(self.session.host());
     }
 }

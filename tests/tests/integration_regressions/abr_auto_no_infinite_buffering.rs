@@ -3,6 +3,7 @@
 use std::io::Read;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::AbrMode,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -10,6 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     kithara, rt_cancel, temp_dir,
@@ -41,12 +43,21 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
     })
     .await;
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(server.url("/master.m3u8"))
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::Auto(None))
         .build();
-    let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
+    let mut stream = Stream::<Hls<TestPools>>::new(config)
+        .await
+        .expect("create HLS stream");
     let handle = stream
         .abr_handle()
         .expect("HLS stream must expose an ABR handle");

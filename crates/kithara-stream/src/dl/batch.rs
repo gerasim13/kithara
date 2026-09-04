@@ -211,7 +211,7 @@ impl BatchGroup {
             .max_concurrent
             .saturating_sub(inner.inflight.load(Ordering::Relaxed));
         let mut dispatched = 0;
-        let mut pending = Vec::new();
+        let mut pending: Vec<SlotEntry> = Vec::new();
         for SlotEntry { cmd, peer_cancel } in self.entries {
             if cmd.cancel.is_cancelled() {
                 deliver_cancelled_with_event(cmd, &peer_cancel);
@@ -485,9 +485,8 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
-            // Collect the body here, on the downloader's (possibly separate)
-            // worker, so only `Send` bytes cross back to the caller — the raw
-            // HTTP body stream is `!Send` on wasm.
+            // WHY: Collect the body here, on the downloader's (possibly separate) worker, so only `Send` bytes cross back to the caller - the
+            // raw HTTP body stream is `!Send` on wasm.
             let collected = match result {
                 Ok(resp) => {
                     let headers = resp.headers.clone();

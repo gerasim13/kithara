@@ -1,25 +1,27 @@
-pub use kithara::audio::analysis::TrackAnalysis;
+use std::num::NonZeroU32;
+
+pub use kithara::analysis::TrackAnalysis;
 use kithara::{
-    audio::{
-        PcmReader,
-        analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
+    analysis::{
+        AnalysisFileError, AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisProgress,
+        AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
-    bufpool::PcmPool,
-    prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::Arc,
-    tokio::{
-        sync::watch,
-        task::{self, JoinHandle},
+    audio::AudioReader,
+    platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{
+            sync::watch,
+            task::{self, JoinHandle},
+        },
     },
+    prelude::{PlaybackResamplerBackend, Resource},
+    worker::Worker,
 };
 use tracing::warn;
 
-type AppAnalysisWorker = AnalysisWorker<PlaybackResamplerBackend>;
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
-type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
+use crate::pools::{AppResourceConfig, Pools};
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
@@ -28,7 +30,9 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    worker: Arc<AppAnalysisWorker>,
+    /// What this configuration produces, per artifact: the cache keys off it.
+    fingerprint: AnalysisFingerprint,
+    worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
@@ -36,7 +40,7 @@ pub struct TrackAnalysisRunner {
     active: bool,
 }
 
-/// An in-flight run: its child token and the spawned open/forward task.
+/// An in-flight run: its child token and the spawned fallback-reader open task.
 /// Teardown is cooperative — cancelling the token exits the worker's decode
 /// loop at its next per-chunk check.
 struct RunHandle {
@@ -51,38 +55,62 @@ impl TrackAnalysisRunner {
     #[must_use]
     pub fn new(
         master: &CancelToken,
+        base_worker: Option<Worker>,
+        chunk_seconds: NonZeroU32,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
-        pcm_pool: PcmPool,
+        pools: Pools,
     ) -> Self {
-        let builder = AnalyzerBuilder::default()
-            .with_pcm_pool(pcm_pool)
-            .with_beat_config(beat_config);
+        let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
-        let active = !builder.is_empty();
-        let worker = Arc::new(AnalysisWorker::new(master, builder));
+        let worker = Arc::new(AnalysisWorker::new(
+            AnalysisWorkerConfig::for_builder(builder)
+                .cancel(master.clone())
+                .chunk_seconds(chunk_seconds)
+                .maybe_worker(base_worker)
+                .build(),
+        ));
+        let active = worker.is_active();
+        let fingerprint = worker.fingerprint().clone();
         Self {
+            fingerprint,
             worker,
             active,
             current: None,
         }
     }
 
-    /// Cancel any prior run and queue `config` for analysis.
+    /// Cancel any prior run and queue `config` for analysis on the `rate`
+    /// axis: the reader is opened onto it and the pass is measured in it, so
+    /// a producer feeding the same pass later shares one axis with it.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
-    pub fn analyze(&mut self, config: AppResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
+    /// `deliver` receives the producer half synchronously, before the fallback
+    /// reader is opened. The runner does not know what the handle is for;
+    /// attaching it to the track's playback path is the caller's business.
+    pub fn analyze<D>(
+        &mut self,
+        config: AppResourceConfig,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+        deliver: D,
+    ) -> watch::Receiver<Option<AnalysisProgress>>
+    where
+        D: FnOnce(AnalysisProducer),
+    {
         self.clear();
 
-        let run = self.worker.child_token();
-        let (tx, rx) = watch::channel(None);
+        let (rx, producer, pass) = self.worker.open(token, rate);
+        let run = pass.cancel_token().clone();
+        deliver(producer);
         let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
-            tx,
+            rate,
+            pass,
         ));
         self.current = Some(RunHandle { task, cancel: run });
         rx
@@ -95,6 +123,45 @@ impl TrackAnalysisRunner {
             prev.task.abort();
         }
     }
+
+    /// What the active configuration produces, per artifact.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
+    }
+
+    /// Resume a validated checkpoint, preserving the same synchronous
+    /// playback-producer handoff as a fresh pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an archive error when the checkpoint or source extent no longer
+    /// matches the current analyzer configuration.
+    pub fn resume<D>(
+        &mut self,
+        config: AppResourceConfig,
+        progress: AnalysisProgress,
+        deliver: D,
+    ) -> Result<watch::Receiver<Option<AnalysisProgress>>, AnalysisFileError>
+    where
+        D: FnOnce(AnalysisProducer),
+    {
+        self.clear();
+
+        let rate = progress.analysis().source_sample_rate();
+        let (rx, producer, pass) = self.worker.open_resume(progress)?;
+        let run = pass.cancel_token().clone();
+        deliver(producer);
+        let task = task::spawn(run_resume_analysis(
+            Arc::clone(&self.worker),
+            config,
+            run.clone(),
+            rate,
+            pass,
+        ));
+        self.current = Some(RunHandle { task, cancel: run });
+        Ok(rx)
+    }
 }
 
 impl Drop for TrackAnalysisRunner {
@@ -103,39 +170,48 @@ impl Drop for TrackAnalysisRunner {
     }
 }
 
-/// Open `config` and run it through the shared worker, forwarding every
-/// staged update to `tx`.
+/// Open `config` and start the already-open pass on the shared worker.
 async fn run_analysis(
-    worker: Arc<AppAnalysisWorker>,
+    worker: Arc<AnalysisWorker>,
     config: AppResourceConfig,
     cancel: CancelToken,
-    tx: watch::Sender<Option<TrackAnalysis>>,
+    rate: NonZeroU32,
+    pass: AnalysisPass,
 ) {
-    let Some(reader) = open_reader(config, &cancel).await else {
+    let Some(reader) = open_reader(config, &cancel, rate).await else {
         return;
     };
-    let mut rx = worker.analyze(reader, cancel);
+    worker.start(pass, reader);
+}
 
-    while rx.changed().await.is_ok() {
-        let analysis = rx.borrow().clone();
-        if let Some(analysis) = analysis {
-            // The receiver may be gone (deck swapped).
-            tx.send(Some(analysis)).ok();
-        }
+async fn run_resume_analysis(
+    worker: Arc<AnalysisWorker>,
+    config: AppResourceConfig,
+    cancel: CancelToken,
+    rate: NonZeroU32,
+    pass: AnalysisPass,
+) {
+    let Some(reader) = open_reader(config, &cancel, rate).await else {
+        return;
+    };
+    if let Err(error) = worker.start_resume(pass, reader) {
+        warn!(%error, "analysis: resume checkpoint rejected by source");
     }
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app
-/// shutdown tear the standalone audio worker down top-down) and unwrap the
+/// shutdown tear its registered playback task down top-down) and unwrap the
 /// reader for the analysis worker.
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
-) -> Option<Box<dyn PcmReader>> {
+    rate: NonZeroU32,
+) -> Option<Box<dyn AudioReader>> {
     if cancel.is_cancelled() {
         return None;
     }
     config.set_cancel(cancel.child());
+    config.set_host_sample_rate(rate);
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {

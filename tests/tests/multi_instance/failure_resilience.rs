@@ -3,7 +3,8 @@ use std::path::Path;
 #[cfg(target_arch = "wasm32")]
 use kithara::platform::thread;
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -11,10 +12,12 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::{JoinHandle, spawn, spawn_blocking},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use tracing::info;
@@ -47,7 +50,7 @@ struct Outcome {
 /// Returns total samples read. Unlike `read_to_eof`, this tolerates
 /// early termination because some instances are intentionally cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
+fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     loop {
@@ -62,7 +65,7 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
+fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
     const MAX_ZERO_READS: usize = 200;
 
     let mut buf = vec![0.0f32; 4096];
@@ -70,18 +73,17 @@ fn read_hls_best_effort(audio: &mut Audio<Stream<Hls>>) -> u64 {
     let mut zero_reads = 0usize;
 
     while zero_reads < MAX_ZERO_READS {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            if audio.is_eof() {
-                break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                zero_reads += 1;
+                thread::sleep(Duration::from_millis(10));
             }
-            zero_reads += 1;
-            thread::sleep(Duration::from_millis(10));
-            continue;
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                zero_reads = 0;
+                total += count.get() as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) | Err(_) => break,
         }
-
-        zero_reads = 0;
-        total += n as u64;
     }
 
     total
@@ -104,11 +106,19 @@ async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
     cancel: CancelToken,
-) -> Audio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.url("/master.m3u8");
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -117,13 +127,13 @@ async fn create_hls_audio(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
 
-    Audio::<Stream<Hls>>::new(config)
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }
@@ -131,7 +141,7 @@ async fn create_hls_audio(
 /// Spawn a reader instance whose cancel, when `cancel_after` is set, fires
 /// `delay_ms` after creation completes — modelling a peer cancelled mid
 /// playback. The timer is armed only once `create_hls_audio` returns so a
-/// slow create under load cannot race the cancel into `Audio::new` and
+/// slow create under load cannot race the cancel into `PlayWorker::open` and
 /// surface as `source error: cancelled` from creation itself.
 async fn spawn_instance(
     id: usize,

@@ -1,11 +1,15 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use tracing::debug;
 
 use super::HlsVariant;
 use crate::segment::{FetchClaim, Loaded, PlannedFetch};
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Settle hook: shrinks the appropriate size atom to `actual` and
     /// rebuilds the offset map. Called from
     /// [`FetchSlot::settle`] via `Weak<HlsVariant>::upgrade()` once the
@@ -17,7 +21,7 @@ impl HlsVariant {
     /// stale offsets and fall into a non-existent gap, hanging on
     /// `range_ready`. The closure performs the caller-owned size store and
     /// reports the post-store `init_size` to seed the recompute.
-    pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded>) {
+    pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded, S>) {
         self.layout.apply_commit(&self.segments, || {
             if !self.defer_prefix_settle(loaded.planned(), loaded.final_len()) {
                 self.apply_loaded_size(loaded.planned(), loaded.final_len());
@@ -25,6 +29,27 @@ impl HlsVariant {
             self.init_route_size()
         });
         self.complete_exact_seek_if_ready();
+    }
+
+    /// Settle-side size store: shrink the appropriate atom to `final_len`.
+    /// The caller runs this inside [`Layout::apply_commit`](
+    /// offsets::Layout::apply_commit)'s write-lock so a reader never
+    /// observes a new size against a stale offset table.
+    pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
+        match planned {
+            PlannedFetch::Init => {
+                // WHY: Only a `Some(Init)` slot is ever settled (it is the only init that gets fetched). A `None` init has no size atom; a stray
+                // settle is a no-op rather than resurrecting an init.
+                if let Some(init) = self.segments.init.as_ref() {
+                    init.set_loaded_size(final_len);
+                }
+            }
+            PlannedFetch::Segment(idx) => {
+                if let Some(slot) = self.segments.get(idx as usize) {
+                    slot.set_loaded_size(final_len);
+                }
+            }
+        }
     }
 
     /// Post-seek frame stability: while a segment-aware seek tail is
@@ -58,27 +83,5 @@ impl HlsVariant {
         );
         self.seek.deferred_prefix.lock().push((idx, final_len));
         true
-    }
-
-    /// Settle-side size store: shrink the appropriate atom to `final_len`.
-    /// The caller runs this inside [`Layout::apply_commit`](
-    /// offsets::Layout::apply_commit)'s write-lock so a reader never
-    /// observes a new size against a stale offset table.
-    pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
-        match planned {
-            PlannedFetch::Init => {
-                // Only a `Some(Init)` slot is ever settled (it is the only init
-                // that gets fetched). A `None` init has no size atom; a stray
-                // settle is a no-op rather than resurrecting an init.
-                if let Some(init) = self.segments.init.as_ref() {
-                    init.set_loaded_size(final_len);
-                }
-            }
-            PlannedFetch::Segment(idx) => {
-                if let Some(slot) = self.segments.get(idx as usize) {
-                    slot.set_loaded_size(final_len);
-                }
-            }
-        }
     }
 }

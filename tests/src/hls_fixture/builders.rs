@@ -8,7 +8,10 @@ use kithara::{
     stream::Stream,
 };
 
-use crate::hls_server::TestServer;
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    hls_server::TestServer,
+};
 
 /// Builder for creating `Stream<Hls>` in integration tests.
 ///
@@ -89,15 +92,16 @@ impl HlsStreamBuilder {
         server: &TestServer,
         temp_path: &Path,
         cancel: CancelToken,
-    ) -> Stream<Hls> {
+    ) -> Stream<Hls<TestPools>> {
         let url = server.url(self.master_path);
+        let pools = pools();
 
         let store_path = match self.store_subdir {
             Some(sub) => temp_path.join(sub),
             None => temp_path.to_path_buf(),
         };
 
-        let store_opts = AssetStore::builder()
+        let store_opts = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk { root: store_path })
             .maybe_max_assets(self.max_assets)
             .maybe_max_bytes(self.max_bytes)
@@ -105,11 +109,12 @@ impl HlsStreamBuilder {
 
         let config = HlsConfig::for_url(url)
             .store(store_opts)
+            .pools(pools)
             .cancel(cancel)
             .initial_abr_mode(self.initial_abr_mode)
             .build();
 
-        Stream::<Hls>::new(config)
+        Stream::<Hls<TestPools>>::new(config)
             .await
             .expect("HLS stream creation")
     }

@@ -3,20 +3,20 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
-use super::{AudioWorkerHandle, PreloadGate, SeekOutcome};
+use super::{PreloadGate, SeekOutcome};
 use crate::traits::SeekBegin;
 
 /// The control-plane half of a seek: rebuilds the source's byte space, publishes a lifecycle event,
 /// nudges the peer and wakes the worker. Each takes a lock, so the audio thread only runs
 /// [`Audio::sync_seek`](super::Audio::sync_seek).
 pub struct SeekHandle {
-    bus: EventBus,
-    peer_wake: Option<Arc<DeferredWake>>,
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek: Arc<dyn SeekControl>,
+    wake: Arc<dyn kithara_stream::WorkerWake>,
+    bus: EventBus,
+    peer_wake: Option<Arc<DeferredWake>>,
     seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    worker: Option<AudioWorkerHandle>,
 }
 
 impl SeekHandle {
@@ -28,16 +28,16 @@ impl SeekHandle {
             preload_gate,
             seek,
             seek_prepare,
-            worker,
+            wake,
         } = parts;
         Self {
-            bus,
-            peer_wake,
             playhead,
             preload_gate,
             seek,
+            wake,
+            bus,
+            peer_wake,
             seek_prepare,
-            worker,
         }
     }
 }
@@ -58,9 +58,7 @@ impl SeekBegin for SeekHandle {
             wake.notify_now();
         }
         self.preload_gate.rearm();
-        if let Some(worker) = &self.worker {
-            worker.wake();
-        }
+        self.wake.wake();
 
         trace!(?position, epoch, "seek begun");
         match self.playhead.duration() {
@@ -77,11 +75,11 @@ impl SeekBegin for SeekHandle {
 }
 
 pub(super) struct SeekHandleParts {
-    pub(super) bus: EventBus,
-    pub(super) peer_wake: Option<Arc<DeferredWake>>,
     pub(super) playhead: Arc<dyn PlayheadWrite>,
     pub(super) preload_gate: Arc<PreloadGate>,
     pub(super) seek: Arc<dyn SeekControl>,
+    pub(super) wake: Arc<dyn kithara_stream::WorkerWake>,
+    pub(super) bus: EventBus,
+    pub(super) peer_wake: Option<Arc<DeferredWake>>,
     pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    pub(super) worker: Option<AudioWorkerHandle>,
 }

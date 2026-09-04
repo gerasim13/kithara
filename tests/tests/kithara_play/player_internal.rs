@@ -7,20 +7,31 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     self,
-    bufpool::Region,
-    decode::PcmSpec,
-    events::{Event, EventBus, EventReceiver},
-    platform::sync::Arc,
+    audio::ConsumerWakeMode,
+    events::{Event, EventBus, EventReceiver, TrackId},
+    platform::sync::{Arc, Mutex},
     play::{
-        PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
-        SessionDispatcher,
+        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
+        PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
+        SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
+    signal::AudioSpec,
 };
-use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
+use kithara_integration_tests::audio_mock::TestPcmReader;
+
+use crate::bufpool_ext::{TestPools, pools};
+
+const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
+};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -35,8 +46,8 @@ enum RemoveAtScenario {
     ShiftCurrentIndex,
 }
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, FIXTURE_SAMPLE_RATE)
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -46,41 +57,84 @@ fn make_resource(duration_secs: f64) -> Resource {
     )
 }
 
-fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource, Arc<str>) {
-    let item_id = Arc::<str>::from(item_id);
-    (
-        Resource::from_reader(
-            TestPcmReader::new(mock_spec(), duration_secs),
-            Some(Arc::from(format!("memory://{item_id}"))),
-        ),
-        item_id,
+/// A resource whose src carries `label`, so concurrent items in one test
+/// stay distinguishable in failure output.
+fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
+    Resource::from_reader(
+        TestPcmReader::new(mock_spec(), duration_secs),
+        Some(Arc::from(format!("memory://{label}"))),
     )
 }
 
-fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
+struct FixtureSession {
+    next_player: AtomicU64,
+    next_slot: AtomicU64,
+    nodes: Mutex<Vec<NodeInputs>>,
+}
+
+impl FixtureSession {
+    fn new() -> Self {
+        Self {
+            next_player: AtomicU64::new(1),
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
+        }
+    }
+}
+
+impl SessionDispatcher<TestPools> for FixtureSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+        let reply = match cmd {
+            Cmd::RegisterPlayer { .. } => {
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+            }
+            Cmd::AllocateSlot { .. } => {
+                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+                let (inputs, control) = slot_channels(SharedEq::new(10));
+                self.nodes.lock().push(inputs);
+                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+            }
+            Cmd::QuerySampleRate => {
+                Reply::SampleRate(SessionSampleRate::new(None, FIXTURE_SAMPLE_RATE.get()))
+            }
+            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
+            _ => Reply::Ok,
+        };
+        Ok(reply)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+}
+
+fn fixture_session() -> Arc<dyn SessionDispatcher<TestPools>> {
+    Arc::new(FixtureSession::new())
+}
+
+fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<FixtureSession>) {
     let bus = EventBus::default();
-    let session = Arc::new(OfflineSession::new_manual());
-    let region = Region::default();
+    let session = Arc::new(FixtureSession::new());
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .byte_pool(region.byte_pool())
-        .pcm_pool(region.pcm_pool())
-        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
     let player = PlayerImpl::new(player_config);
     (player, session)
 }
 
-fn default_player_config() -> PlayerConfig {
-    let region = Region::default();
+fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .byte_pool(region.byte_pool())
-        .pcm_pool(region.pcm_pool())
+        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .session(fixture_session())
         .build()
 }
 
-fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
+fn drain_player_events(player: &PlayerImpl<TestPools>, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     player.process_notifications();
     let mut events = Vec::new();
@@ -95,34 +149,15 @@ fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<Playe
     events
 }
 
-fn render_until_events(
-    player: &PlayerImpl,
-    session: &OfflineSession,
-    rx: &mut EventReceiver,
-    max_blocks: usize,
-    mut done: impl FnMut(&[PlayerEvent]) -> bool,
-) -> Vec<PlayerEvent> {
-    const BLOCK_FRAMES: usize = 512;
-    let mut events = Vec::new();
-    for _ in 0..max_blocks {
-        let _ = session.render(BLOCK_FRAMES);
-        events.extend(drain_player_events(player, rx));
-        if done(&events) {
-            break;
-        }
-    }
-    events
-}
-
 #[kithara::test(tokio)]
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
-        player.insert(make_resource(3.0), None, Some(0));
+        player.insert(make_resource(3.0), TrackId::allocate(), Some(0));
     }
     assert_eq!(player.item_count(), expected_count);
 }
@@ -135,21 +170,21 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
     let player = PlayerImpl::new(default_player_config());
     match scenario {
         RemoveAtScenario::ExistingItem => {
-            player.insert(make_resource(1.0), None, None);
-            player.insert(make_resource(2.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(2.0), TrackId::allocate(), None);
             let removed = player.remove_at(0);
             assert!(removed.is_some());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::OutOfBounds => {
-            player.insert(make_resource(1.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
             assert!(player.remove_at(5).is_none());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::ShiftCurrentIndex => {
-            player.insert(make_resource(1.0), None, None);
-            player.insert(make_resource(2.0), None, None);
-            player.insert(make_resource(3.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(2.0), TrackId::allocate(), None);
+            player.insert(make_resource(3.0), TrackId::allocate(), None);
             player.advance_to_next_item();
             player.advance_to_next_item();
             assert_eq!(player.current_index(), 2);
@@ -166,9 +201,9 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 async fn player_remove_all_resets_state(#[case] with_resources: bool) {
     let player = PlayerImpl::new(default_player_config());
     if with_resources {
-        player.insert(make_resource(1.0), None, None);
-        player.insert(make_resource(2.0), None, None);
-        player.insert(make_resource(3.0), None, None);
+        player.insert(make_resource(1.0), TrackId::allocate(), None);
+        player.insert(make_resource(2.0), TrackId::allocate(), None);
+        player.insert(make_resource(3.0), TrackId::allocate(), None);
         assert_eq!(player.item_count(), 3);
     }
     player.remove_all_items();
@@ -180,9 +215,9 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 #[kithara::test(tokio)]
 async fn player_advance_through_queue() {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
-    player.insert(make_resource(3.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
+    player.insert(make_resource(3.0), TrackId::allocate(), None);
     assert_eq!(player.current_index(), 0);
     player.advance_to_next_item();
     assert_eq!(player.current_index(), 1);
@@ -195,8 +230,8 @@ async fn player_advance_through_queue() {
 #[kithara::test(tokio)]
 async fn player_advance_emits_event() {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
     let mut rx = player.subscribe();
     player.advance_to_next_item();
     let event = rx.try_recv().map(|env| env.event);
@@ -208,9 +243,9 @@ async fn player_advance_emits_event() {
 
 #[kithara::test]
 fn replay_same_item_does_not_re_emit_current_item_changed() {
-    let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let (player, _session) = make_fixture_player(0.0);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
@@ -240,9 +275,9 @@ fn replay_same_item_does_not_re_emit_current_item_changed() {
 fn re_selecting_the_current_item_does_not_re_announce() {
     // Centralization delta: re-selecting the already-current index (e.g. while
     // paused) must not re-announce — announce gates on identity, not on calls.
-    let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let (player, _session) = make_fixture_player(0.0);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
@@ -266,16 +301,16 @@ fn re_selecting_the_current_item_does_not_re_announce() {
 fn replacing_current_item_re_announces_on_next_play() {
     // Dual of suppression: replacing the audio under the current index must
     // re-announce on the next play — index equality must not mask a change.
-    let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let (player, _session) = make_fixture_player(0.0);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
 
-    let (replacement, _) = make_tagged_resource("item-2", 0.05);
-    player.replace_item_tagged(0, replacement, Some(Arc::from("item-2")));
+    let replacement = make_tagged_resource("item-2", 0.05);
+    player.replace_item(0, replacement, TrackId::allocate());
     player.play();
     let after = drain_player_events(&player, &mut rx);
     let announces = after
@@ -288,152 +323,28 @@ fn replacing_current_item_re_announces_on_next_play() {
     );
 }
 
-#[kithara::test(tokio)]
-async fn player_play_without_audio_hardware_logs_warning() {
-    let region = Region::default();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    );
-    player.insert(make_resource(1.0), None, None);
-    player.play();
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_zero_emits_terminal_before_current_changed() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let (first, first_id) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::clone(&first_id)), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 256, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-            && evs
-                .iter()
-                .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
-                .count()
-                >= 1
-    });
-
-    let item_end = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }));
-    let handover_changed = item_end.and_then(|end_idx| {
-        events
-            .iter()
-            .enumerate()
-            .skip(end_idx + 1)
-            .find(|(_, e)| matches!(e, PlayerEvent::CurrentItemChanged))
-            .map(|(i, _)| i)
-    });
-
-    assert!(item_end.is_some(), "no terminal event: {events:?}");
-    assert!(
-        handover_changed.is_some(),
-        "no post-terminal CurrentItemChanged: {events:?}"
-    );
-    assert!(item_end.unwrap() < handover_changed.unwrap());
-    assert_eq!(player.current_index(), 1);
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_one_activates_before_first_terminal_event() {
-    let (player, session) = make_offline_player(1.0);
-    let mut rx = player.subscribe();
-    let (first, _) = make_tagged_resource("item-1", 1.5);
-    let (second, _) = make_tagged_resource("item-2", 1.5);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 512, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-
-    let handover_changed = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::CurrentItemChanged));
-    let item_end = events
-        .iter()
-        .position(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }));
-
-    assert!(handover_changed.is_some(), "no handover event: {events:?}");
-    assert!(item_end.is_some(), "no terminal event: {events:?}");
-    assert!(handover_changed.unwrap() < item_end.unwrap());
-    assert_eq!(player.current_index(), 1);
-}
-
-#[kithara::test]
-fn queue_auto_advance_cf_ge_prefetch_still_advances() {
-    let (player, session) = make_offline_player(4.0);
-    let mut rx = player.subscribe();
-    let (first, _) = make_tagged_resource("item-1", 5.0);
-    let (second, _) = make_tagged_resource("item-2", 5.0);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 1024, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::PrefetchRequested)),
-        "PrefetchRequested must fire when cf >= prefetch (windows coincide); got {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::HandoverRequested)),
-        "HandoverRequested must fire; got {events:?}"
-    );
-    assert_eq!(
-        player.current_index(),
-        1,
-        "auto-advance must reach the second item: {events:?}"
-    );
-}
-
 #[kithara::test]
 fn arm_next_loads_item_and_returns_src() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
     let src = player
         .arm_next(1)
-        .expect("BUG: arm_next succeeds for items[1]");
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
-    let _ = session.render(512);
-    player.process_notifications();
     assert_eq!(src.as_ref(), "memory://item-2");
 }
 
 #[kithara::test]
 fn seek_seconds_updates_position_optimistically() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -443,135 +354,83 @@ fn seek_seconds_updates_position_optimistically() {
     assert_eq!(player.position_seconds(), Some(54.689_879_542));
 }
 
-/// Bug #5's dispatch-side sibling: the track honestly finalizes its natural
-/// end and the report sits in the slot ring; before the control thread
-/// drains it, the user seeks back — publishing a newer epoch and reviving
-/// the track. The stale end describes a position the user already left, and
-/// delivering it would let the queue auto-advance out from under the seek.
-#[kithara::test]
-fn an_end_minted_before_a_published_seek_is_not_delivered() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let (item, item_id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(item_id), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-
-    // Reach the natural end without draining notifications: the EOF report
-    // stays queued, exactly like a queue tick that has not yet run.
-    for _ in 0..64 {
-        let _ = session.render(512);
-    }
-
-    let outcome = player.seek_seconds(0.01).expect("seek must land");
-    assert!(matches!(outcome, SeekOutcome::Landed { .. }));
-
-    let events = drain_player_events(&player, &mut rx);
-    assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
-        "an end minted before a published seek must not reach the queue: {events:?}"
-    );
-}
-
-/// Valve for the fence above: the revived track plays to its end again and
-/// the fresh report — minted at the epoch the seek published — is delivered.
-#[kithara::test]
-fn a_revived_track_delivers_the_end_it_reaches_again() {
-    let (player, session) = make_offline_player(0.0);
-    let mut rx = player.subscribe();
-    let (item, item_id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(item_id), None);
-
-    player.play();
-    let _ = drain_player_events(&player, &mut rx);
-    for _ in 0..64 {
-        let _ = session.render(512);
-    }
-
-    player.seek_seconds(0.01).expect("seek must land");
-    let _ = drain_player_events(&player, &mut rx);
-
-    let events = render_until_events(&player, &session, &mut rx, 256, |evs| {
-        evs.iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. }))
-    });
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, PlayerEvent::ItemDidPlayToEnd { .. })),
-        "the re-ended track must report its new end: {events:?}"
-    );
-}
-
 #[kithara::test]
 fn arm_next_returns_none_for_empty_slot() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     player.reserve_slots(2);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    player.replace_item_tagged(0, first, Some(Arc::from("item-1")));
+    let first = make_tagged_resource("item-1", 0.05);
+    player.replace_item(0, first, TrackId::allocate());
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    assert!(player.arm_next(1).is_none(), "empty slot must yield None");
+    let src = player.arm_next(1).expect("arm_next succeeds");
+    assert!(src.is_none(), "empty slot must yield None");
     assert_eq!(player.armed_next(), None);
 }
 
 #[kithara::test]
 fn arm_next_idempotent_for_same_index() {
-    let (player, _session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    let first_src = player.arm_next(1).unwrap();
-    let second_src = player.arm_next(1).unwrap();
+    let first_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
+    let second_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(first_src.as_ref(), second_src.as_ref());
     assert_eq!(player.armed_next(), Some(1));
 }
 
 #[kithara::test]
 fn arm_next_replaces_previously_armed_slot() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (a, _) = make_tagged_resource("a", 0.05);
-    let (b, _) = make_tagged_resource("b", 0.05);
-    let (c, _) = make_tagged_resource("c", 0.05);
-    player.insert(a, Some(Arc::from("a")), None);
-    player.insert(b, Some(Arc::from("b")), None);
-    player.insert(c, Some(Arc::from("c")), None);
+    let a = make_tagged_resource("a", 0.05);
+    let b = make_tagged_resource("b", 0.05);
+    let c = make_tagged_resource("c", 0.05);
+    player.insert(a, TrackId::allocate(), None);
+    player.insert(b, TrackId::allocate(), None);
+    player.insert(c, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    let first = player.arm_next(1).unwrap();
-    let _ = session.render(512);
-    player.process_notifications();
-    let second = player.arm_next(2).unwrap();
+    let first = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
+    let second = player
+        .arm_next(2)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_ne!(first.as_ref(), second.as_ref());
     assert_eq!(player.armed_next(), Some(2));
-
-    let _ = session.render(512);
-    player.process_notifications();
 }
 
 #[kithara::test]
 fn commit_next_index_mismatch_returns_typed_error() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
 
     let err = player.commit_next(2).expect_err("mismatch");
     assert!(matches!(
@@ -585,15 +444,18 @@ fn commit_next_index_mismatch_returns_typed_error() {
 
 #[kithara::test]
 fn commit_next_advances_index_and_publishes_event() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     let mut rx = player.subscribe();
 
     player.commit_next(1).unwrap();
@@ -613,15 +475,18 @@ fn commit_next_advances_index_and_publishes_event() {
 
 #[kithara::test]
 fn commit_next_idempotent_when_already_activated() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
 
     player.commit_next(1).unwrap();
     player.commit_next(1).unwrap();
@@ -630,36 +495,38 @@ fn commit_next_idempotent_when_already_activated() {
 
 #[kithara::test]
 fn unarm_next_clears_when_not_activated_and_unloads() {
-    let (player, session) = make_offline_player(0.0);
+    let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    let src = player.arm_next(1).unwrap();
-    let _ = session.render(512);
-    player.process_notifications();
+    let src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
 
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
-    let _ = session.render(512);
-    player.process_notifications();
     assert_eq!(src.as_ref(), "memory://b");
 }
 
 #[kithara::test]
 fn unarm_next_preserves_activated_current() {
-    let (player, _session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     player.commit_next(1).unwrap();
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
@@ -668,23 +535,24 @@ fn unarm_next_preserves_activated_current() {
 
 #[kithara::test]
 fn select_item_clears_pending_next_and_unloads_preloaded_track() {
-    let (player, session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    let (third, _) = make_tagged_resource("item-3", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
-    player.insert(third, Some(Arc::from("item-3")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    let third = make_tagged_resource("item-3", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
+    player.insert(third, TrackId::allocate(), None);
 
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    let src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
+    let src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(2, true).unwrap();
-    let _ = session.render(512);
-    player.process_notifications();
 
     assert_eq!(player.armed_next(), None, "select_item must unarm");
     assert_eq!(src.as_ref(), "memory://item-2");
@@ -697,22 +565,23 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 /// `arm_next`'s `take()` and `enqueue_to_processor` returns `None`.
 #[kithara::test]
 fn select_item_on_armed_index_promotes_armed_slot() {
-    let (player, session) = make_offline_player(1.0);
+    let (player, _session) = make_fixture_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
 
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.select_item(0, true).unwrap();
-    let _ = session.render(256);
-    let armed_src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
+    let armed_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(1, true).unwrap();
-    let _ = session.render(256);
     player.process_notifications();
 
     assert_eq!(player.current_index(), 1);

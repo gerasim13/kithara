@@ -19,8 +19,7 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig},
-    bufpool::{BytePool, PcmPool},
+    audio::{AudioConfig, AudioRead},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -29,6 +28,7 @@ use kithara::{
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
+    play::{PlayWorker, PlayWorkerConfig},
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
@@ -38,18 +38,26 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestHttpServer, auto};
+use kithara_integration_tests::{
+    TestHttpServer, auto,
+    bufpool_ext::{TestPools, pools},
+};
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use tempfile::TempDir;
 use url::Url;
 
 struct Consts;
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
     const HLS_SEGMENT_COUNT: usize = 6;
     const HLS_SEGMENT_SIZE: usize = 96_000;
     const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+}
+
+/// The generated full-length MPEG clip the benchmark server and decoders read.
+fn test_mp3_bytes() -> &'static [u8] {
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn make_runtime() -> Runtime {
@@ -100,7 +108,7 @@ fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(frames).build())
-        .pcm_pool(PcmPool::new(64, frames.saturating_mul(16)))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -135,10 +143,7 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(
-                header::CONTENT_LENGTH,
-                Consts::TEST_MP3_BYTES.len().to_string(),
-            )
+            .header(header::CONTENT_LENGTH, test_mp3_bytes().len().to_string())
             .body(Body::empty())
             .unwrap_or_else(|e| panic!("failed to build head response: {e}"));
     }
@@ -163,18 +168,18 @@ fn serve_mp3_with_range(req: Request) -> Response {
                     s.parse::<usize>().ok()
                 }
             })
-            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
+            .unwrap_or(test_mp3_bytes().len().saturating_sub(1))
+            .min(test_mp3_bytes().len().saturating_sub(1));
 
-        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
-            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
+        if start <= end && start < test_mp3_bytes().len() {
+            let chunk = &test_mp3_bytes()[start..=end];
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "audio/mpeg")
                 .header(header::CONTENT_LENGTH, chunk.len().to_string())
                 .header(
                     header::CONTENT_RANGE,
-                    format!("bytes {start}-{end}/{}", Consts::TEST_MP3_BYTES.len()),
+                    format!("bytes {start}-{end}/{}", test_mp3_bytes().len()),
                 )
                 .body(Body::from(Bytes::from_static(chunk)))
                 .unwrap_or_else(|e| panic!("failed to build partial response: {e}"));
@@ -184,11 +189,8 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(
-            header::CONTENT_LENGTH,
-            Consts::TEST_MP3_BYTES.len().to_string(),
-        )
-        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
+        .header(header::CONTENT_LENGTH, test_mp3_bytes().len().to_string())
+        .body(Body::from(Bytes::from_static(test_mp3_bytes())))
         .unwrap_or_else(|e| panic!("failed to build full response: {e}"))
 }
 
@@ -311,21 +313,27 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             || {
                 let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
                 let file_path = temp_dir.path().join("bench.mp3");
-                fs::write(&file_path, Consts::TEST_MP3_BYTES)
+                fs::write(&file_path, test_mp3_bytes())
                     .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
                 (temp_dir, file_path)
             },
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
+                    let pools = pools();
                     let file_config = FileConfig::for_src(file_path.into())
-                        .store(kithara_integration_tests::memory_asset_store())
+                        .store(
+                            AssetStore::builder(pools.clone())
+                                .backend(StorageBackend::Memory)
+                                .build(),
+                        )
+                        .pools(pools.clone())
                         .build();
-                    let config = AudioConfig::<File>::for_stream(file_config)
-                        .byte_pool(BytePool::default())
-                        .pcm_pool(PcmPool::default())
+                    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
                         .hint(("mp3").to_string())
                         .build();
-                    let mut audio = Audio::<Stream<File>>::new(config)
+                    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+                    let mut audio = worker
+                        .open(config)
                         .await
                         .unwrap_or_else(|e| panic!("audio init failed: {e}"));
 
@@ -370,24 +378,30 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |()| {
                 let url = master_url.clone();
                 rt.block_on(async move {
+                    let pools = pools();
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
-                        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never()))
-                            .build(),
+                        DownloaderConfig::for_client(HttpClient::new(
+                            net,
+                            pools.clone(),
+                            CancelToken::never(),
+                        ))
+                        .build(),
                     );
-                    let store = AssetStore::builder()
+                    let store = AssetStore::builder(pools.clone())
                         .backend(StorageBackend::Memory)
                         .max_bytes(200_000)
                         .build();
                     let config = HlsConfig::for_url(url)
                         .store(store)
+                        .pools(pools)
                         .initial_abr_mode(auto(1))
                         .downloader(downloader)
                         .download_batch_size(3)
                         .look_ahead_bytes(96_000)
                         .build();
 
-                    let mut stream = Stream::<Hls>::new(config)
+                    let mut stream = Stream::<Hls<TestPools>>::new(config)
                         .await
                         .unwrap_or_else(|e| panic!("stream init failed: {e}"));
 

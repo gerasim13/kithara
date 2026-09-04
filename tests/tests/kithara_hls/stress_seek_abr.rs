@@ -1,19 +1,28 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{
         sync::Arc,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, abr_fast, auto,
+    bufpool_ext::{TestPools, pools},
+    mixed_codec_ladder_url, temp_dir,
+};
 use tracing::info;
 
-fn warmup_until_first_frame(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
+fn warmup_until_first_frame(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+) -> u64 {
     let mut warmup_samples = 0u64;
     while warmup_samples == 0 {
         match audio.read(buf) {
@@ -34,7 +43,10 @@ struct SeekStats {
     dead_seeks: u64,
 }
 
-fn run_rapid_random_seeks(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> SeekStats {
+fn run_rapid_random_seeks(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+) -> SeekStats {
     let mut stats = SeekStats::default();
     let positions_secs: Vec<f64> = vec![
         147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0, 80.0,
@@ -83,32 +95,36 @@ fn run_rapid_random_seeks(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> Se
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(3)
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    info!(label, path, "Opening real stream");
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    info!(label, %url, "Opening generated stream");
 
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
 
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
@@ -165,7 +181,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     .await;
 
     match result {
-        Ok(()) => info!(label, path, "Stress test passed"),
+        Ok(()) => info!(label, "Stress test passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }
@@ -181,27 +197,31 @@ async fn stress_seek_during_abr_switch_real_decoder(
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(5)
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
@@ -240,7 +260,7 @@ async fn seek_sequence_from_log_real_stream(
     .await;
 
     match result {
-        Ok(()) => info!(label, path, "seek_sequence_from_log_real_stream passed"),
+        Ok(()) => info!(label, "seek_sequence_from_log_real_stream passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

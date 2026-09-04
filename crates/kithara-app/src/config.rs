@@ -1,20 +1,34 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU32, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, BytePool},
-    audio::analysis::BeatAnalysisConfig,
-    bufpool::PcmPool,
+    analysis::BeatAnalysisConfig,
+    drm::KeyProcessorRegistry,
     hls::SizeProbeMethod,
+    platform::{CancelToken, sync::Arc},
     play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
+    worker::Worker,
 };
-use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use url::Url;
 
-use crate::{baked, theme::Palette};
+#[cfg(feature = "broadcast")]
+use crate::pools::AppPools;
+use crate::{
+    baked,
+    pools::{AppStore, AppWorker},
+    theme::Palette,
+};
+
+#[cfg(feature = "broadcast")]
+/// Feature-selected live broadcast configuration.
+pub type AppBroadcastConfig = kithara::broadcast::BroadcastConfig<AppPools>;
+#[cfg(not(feature = "broadcast"))]
+/// Empty broadcast configuration for builds without the service.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct AppBroadcastConfig;
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -62,15 +76,22 @@ pub struct AppConfig {
     #[builder(default)]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    pub store: AssetStore,
+    pub store: AppStore,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
-    /// App-wide shared byte pool for network and cache buffers.
-    pub byte_pool: BytePool,
+    /// Fixed source duration covered by one progressive analysis chunk.
+    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    pub analysis_chunk_seconds: NonZeroU32,
+    /// One playback worker shared by every deck in this app session.
+    pub worker: AppWorker,
+    /// Optional base runtime shared by playback, analysis, and app-owned
+    /// background dispatchers. Production supplies one; focused consumers may
+    /// let each domain worker own its standalone base.
+    pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
-    /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
+    /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
     pub shutdown: CancelToken,
@@ -79,8 +100,6 @@ pub struct AppConfig {
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
-    /// App-wide shared PCM pool for playback and track analysis.
-    pub pcm_pool: PcmPool,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -97,12 +116,8 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Media duration the broadcast mix tap may run ahead of the packager by.
-    /// The app allocates that ring, so it owns its depth: a longer lead rides
-    /// out a longer packager stall and pays for it in the memory those
-    /// interleaved samples occupy.
-    #[builder(default = Duration::from_secs(2))]
-    pub broadcast_tap_lead: Duration,
+    /// Complete live-broadcast construction config for this app session.
+    pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]
@@ -110,6 +125,12 @@ pub struct AppConfig {
     /// Band count of the EQ layout every deck's player graph is built with.
     #[builder(default = 3)]
     pub eq_bands: usize,
+    /// Where this application reads its UI package from. What is found there
+    /// is laid over the documents this build carries, so the interface can be
+    /// changed without a rebuild. A path that does not exist means no package
+    /// was laid out and the build's own documents draw; `None` means this
+    /// configuration names no package at all.
+    pub ui_package: Option<PathBuf>,
 }
 
 fn default_tracks() -> Vec<String> {
@@ -126,17 +147,21 @@ impl fmt::Debug for AppConfig {
             .field("palette", &self.palette)
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
-            .field("byte_pool", &self.byte_pool)
-            .field("pcm_pool", &self.pcm_pool)
+            .field("worker", &self.worker)
+            .field(
+                "base_worker_cancelled",
+                &self.base_worker.as_ref().map(Worker::is_cancelled),
+            )
             .field(
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
             )
             .field("crossfade_seconds", &self.crossfade_seconds)
-            .field("broadcast_tap_lead", &self.broadcast_tap_lead)
+            .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)
+            .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
     }

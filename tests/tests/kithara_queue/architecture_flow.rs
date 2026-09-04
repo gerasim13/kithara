@@ -5,8 +5,8 @@ use std::env;
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
-    platform::{sync::Arc, time::Duration},
-    play::ResourceConfig,
+    platform::time::Duration,
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::Downloader,
 };
@@ -19,8 +19,11 @@ use kithara_integration_tests::{
     temp_dir,
     waits::wait_for_loader_done_event,
 };
+use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -33,7 +36,7 @@ async fn queue_playback_architecture() {
     let trace_path = env::var_os("ARCHITECTURE_TRACE_PATH").expect("architecture trace path");
     let probes = probe_capture::install();
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("track.mp3");
+    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
     let temp = temp_dir();
     let store = disk_asset_store(temp.path());
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -42,17 +45,19 @@ async fn queue_playback_architecture() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
+    let queue = harness.insert_control(Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
+            .player(harness.take_player())
             .store(store.clone())
             .build(),
-    );
+    ));
     let downloader = create_test_downloader();
     let config = resource_config(url.as_str(), downloader, store);
     let mut events = queue.subscribe();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(config)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(config)))
+        .expect("append local MP3");
     wait_for_loader_done_event(&mut events, &queue, track_id, Duration::from_secs(30))
         .await
         .expect("local MP3 load");
@@ -103,22 +108,20 @@ async fn queue_playback_architecture() {
         TraceRecord::new(7, TraceRecordKind::SpanEnter, "PlayerImpl::play")
             .with_span("playback")
             .with_resource("Track", &resource_id),
-        TraceRecord::new(
-            8,
-            TraceRecordKind::ResourceTransfer,
-            "OfflineSession::render",
-        )
-        .with_parent_span("playback")
-        .with_resource("PCM", &resource_id),
+        TraceRecord::new(8, TraceRecordKind::ResourceTransfer, "Host::render")
+            .with_parent_span("playback")
+            .with_resource("PCM", &resource_id),
     ];
     architecture_trace::write(trace_path.as_ref(), records, &probes)
         .expect("write queue architecture trace");
 }
 
-fn resource_config(url: &str, downloader: Downloader, store: AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid local fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+fn resource_config(
+    url: &str,
+    downloader: Downloader,
+    store: AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid local fixture URL"))
         .downloader(downloader)
         .store(store)
         .decoder(

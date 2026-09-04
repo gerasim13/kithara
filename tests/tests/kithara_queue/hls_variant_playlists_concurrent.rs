@@ -7,23 +7,25 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, DownloaderEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineQueue, temp_dir,
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -54,7 +56,7 @@ async fn build_hls(helper: &TestServerHelper) -> Url {
 /// Queue tick driver, flash-coherent: spawned through the platform chokepoint
 /// so the cadence rides the virtual clock in flash-enabled test runs.
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -66,33 +68,45 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
-    Arc<PlayerImpl>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(Arc::clone(&player))
-            .store(store.clone())
-            .build(),
-    ));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .max_concurrent(Consts::MAX_CONCURRENT)
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    (queue, player, downloader, store, tick_handle)
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .max_concurrent(Consts::MAX_CONCURRENT)
+        .build(),
+    );
+    (queue, downloader, store, tick_handle)
 }
 
 fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
@@ -114,7 +128,7 @@ fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
 
 async fn observe_until_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     master_url: &Url,
 ) -> Result<HashSet<u64>, String> {
@@ -231,26 +245,25 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let url = build_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, player, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut rx = player.bus().subscribe();
+    let mut rx = queue.subscribe();
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
-    )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .downloader(downloader.clone())
-    .store(store)
-    .initial_abr_mode(AbrMode::Auto(None))
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(decoder)
-            .build(),
-    )
-    .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("ResourceSrc::parse"))
+            .downloader(downloader.clone())
+            .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(decoder)
+                    .build(),
+            )
+            .build();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append multivariant HLS track");
     queue.select(track_id, Transition::None).expect("select");
 
     let variant_request_ids = match observe_until_loaded(&mut rx, &queue, track_id, &url).await {

@@ -1,9 +1,11 @@
 use std::num::NonZeroU32;
 
 use kithara::stream::AudioCodec;
+/// Part of the packaged-audio request shape below, owned by the mux that reads
+/// it.
+pub use kithara_test_fixtures::fmp4::GaplessEncoding;
+use kithara_test_fixtures::signal::Wave;
 use serde::{Deserialize, Serialize};
-
-use crate::{signal_pcm::signal, wav::create_wav_header};
 
 /// Serde for [`AudioCodec`] as `snake_case` strings (matches the former
 /// `derive(Serialize)` on the enum).
@@ -55,6 +57,46 @@ mod serde_audio_codec {
     }
 }
 
+/// Serde for [`GaplessEncoding`] as `snake_case` strings. The mux owns the
+/// enum and has no reason to depend on serde; the wire shape belongs here.
+mod serde_gapless_encoding {
+    use kithara_test_fixtures::fmp4::GaplessEncoding;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde with = module requires fn(&T, serializer)"
+    )]
+    pub(super) fn serialize<S>(encoding: &GaplessEncoding, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s: &'static str = match encoding {
+            GaplessEncoding::None => "none",
+            GaplessEncoding::Edts => "edts",
+            GaplessEncoding::ItunSmpb => "itun_smpb",
+            GaplessEncoding::Both => "both",
+        };
+        serializer.serialize_str(s)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<GaplessEncoding, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "none" => Ok(GaplessEncoding::None),
+            "edts" => Ok(GaplessEncoding::Edts),
+            "itun_smpb" => Ok(GaplessEncoding::ItunSmpb),
+            "both" => Ok(GaplessEncoding::Both),
+            _ => Err(DeError::custom(format!(
+                "unknown gapless encoding string: {s}"
+            ))),
+        }
+    }
+}
+
 /// How media segment data is generated.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum DataMode {
@@ -93,12 +135,12 @@ pub enum PcmPattern {
     ShiftedAscending,
 }
 
-impl signal::SignalFn for PcmPattern {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        match self {
-            Self::Ascending => signal::Sawtooth.sample(frame, sample_rate),
-            Self::Descending => signal::SawtoothDescending.sample(frame, sample_rate),
-            Self::ShiftedAscending => signal::SawtoothShifted.sample(frame, sample_rate),
+impl From<PcmPattern> for Wave {
+    fn from(pattern: PcmPattern) -> Self {
+        match pattern {
+            PcmPattern::Ascending => Self::Sawtooth,
+            PcmPattern::Descending => Self::SawtoothDescending,
+            PcmPattern::ShiftedAscending => Self::SawtoothShifted,
         }
     }
 }
@@ -139,39 +181,6 @@ pub enum PackagedSignal {
     Silence,
     Sine { freq_hz: f64 },
     Sweep { start_hz: f64, end_hz: f64 },
-}
-
-/// How the fmp4 mux should encode `encoder_delay` / `trailing_delay` into
-/// the init segment. Decoders can read either path; real-world players rely
-/// on different sources (`AVPlayer` reads `iTunSMPB`, our decoder prefers
-/// `elst`), so fixtures must be able to pin which path is exercised.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum GaplessEncoding {
-    /// Don't write any gapless metadata. Decoders fall back to heuristics or
-    /// pass through the full PCM (priming + trailing included).
-    None,
-    /// Write only an edit list (`edts`/`elst`) inside `trak`.
-    #[default]
-    Edts,
-    /// Write only an iTunes freeform tag (`udta`/`meta`/`ilst`/`----` with
-    /// `iTunSMPB`) inside `moov`.
-    ItunSmpb,
-    /// Write both `edts` and `iTunSMPB`. The decoder contract is that `elst`
-    /// wins over `iTunSMPB` here.
-    Both,
-}
-
-impl GaplessEncoding {
-    #[must_use]
-    pub const fn writes_edts(self) -> bool {
-        matches!(self, Self::Edts | Self::Both)
-    }
-
-    #[must_use]
-    pub const fn writes_itunsmpb(self) -> bool {
-        matches!(self, Self::ItunSmpb | Self::Both)
-    }
 }
 
 /// Per-variant override for packaged audio fixtures.
@@ -234,7 +243,7 @@ mod serde_audio_codec_opt {
 pub struct PackagedAudioRequest {
     #[serde(with = "serde_audio_codec")]
     pub codec: AudioCodec,
-    #[serde(default)]
+    #[serde(default, with = "serde_gapless_encoding")]
     pub gapless_encoding: GaplessEncoding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
@@ -421,15 +430,10 @@ pub fn expected_byte_at_test_pattern(
     }
 }
 
-/// Create a 44-byte WAV init segment header (streaming mode: sizes = 0xFFFFFFFF).
-#[must_use]
-pub fn create_wav_init_header(sample_rate: u32, channels: u16) -> Vec<u8> {
-    create_wav_header(sample_rate, channels, None)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara;
+    use kithara_test_fixtures::signal;
 
     use super::*;
 
@@ -548,7 +552,7 @@ mod tests {
 
     #[kithara::test]
     fn wav_init_header_is_44_bytes() {
-        let header = create_wav_init_header(44100, 2);
+        let header = signal::header(44100, 2, None);
         assert_eq!(header.len(), 44);
         assert!(header.starts_with(b"RIFF"));
     }

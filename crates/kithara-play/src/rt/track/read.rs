@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -11,8 +12,8 @@ use super::{
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
 struct TrackReadContext<'a> {
-    sink: RtSink<'a>,
     range: Range<usize>,
+    sink: RtSink<'a>,
 }
 
 #[derive(Clone, Copy)]
@@ -28,7 +29,7 @@ pub enum TrackReadOutcome {
     Full {
         /// Playback position snapshot after the read (seconds).
         position: f64,
-        /// Real PCM frames copied from the underlying resource/scratch buffer.
+        /// Real audio frames copied from the underlying resource/scratch buffer.
         frames: usize,
         /// Visible duration snapshot in seconds.
         duration: f64,
@@ -49,15 +50,46 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
+    pub(crate) fn render(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        let Some(context) = context else {
+            self.resource.clear_render();
+            return self.read(scratch_bufs, mix_bufs, range, sink);
+        };
+        if context.sample_rate().get() != self.sample_rate {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        }
+        let Some(context) = context.for_output_range(range.clone()) else {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        };
+        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
+            self.resource
+                .publish_render(&context, presentation_frontier(&context, source.frame()));
+        } else {
+            self.resource.clear_render();
+        }
+        self.read(scratch_bufs, mix_bufs, range, sink)
+    }
+
     /// Advance the media clock by `frames` of mixed output.
     ///
-    /// The mix output runs on the output clock; one output frame carries
-    /// `playback_rate` media frames, which is what the stretch slot consumed
-    /// from the source to produce it.
+    /// The mix output runs on the output clock; one output frame carries the
+    /// resource's current effective rate in media frames.
     fn advance_media_clock(&mut self, frames: usize) {
         let output_frames: f64 = AsPrimitive::as_(frames);
+        let playback_rate = self.playback_rate();
         self.served_media_frames =
-            output_frames.mul_add(f64::from(self.playback_rate), self.served_media_frames);
+            output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
     }
 
     fn check_notifications(
@@ -76,7 +108,7 @@ impl PlayerTrack {
         notification_tx
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Failed,
                 seek_epoch: self.seek_epoch,
             })
@@ -162,7 +194,7 @@ impl PlayerTrack {
         notification_tx
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Eof,
                 seek_epoch: self.seek_epoch,
             })
@@ -224,11 +256,11 @@ impl PlayerTrack {
             },
             TrackState::Playing => PlayerNotification::PlaybackStarted {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
             },
             TrackState::Finished => PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Stop,
                 seek_epoch: self.seek_epoch,
             },
@@ -257,8 +289,8 @@ impl PlayerTrack {
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    sink: sink.reborrow(),
                     range,
+                    sink: sink.reborrow(),
                 },
                 read_outcome,
             ),
@@ -266,8 +298,8 @@ impl PlayerTrack {
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    sink: sink.reborrow(),
                     range,
+                    sink: sink.reborrow(),
                 },
                 PartialRead { duration, frames },
             ),
@@ -339,5 +371,41 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
+    PresentationFrontier::builder()
+        .source(source)
+        .output(context.output_frames().start)
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
+
+    use super::presentation_frontier;
+
+    #[kithara::test]
+    fn publication_uses_the_derived_subrange_start() {
+        let context = RenderContext::new(
+            SessionFrame::new(1_000)..SessionFrame::new(1_200),
+            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid")
+        .for_output_range(40..80)
+        .expect("fixture subrange is valid");
+
+        let frontier = presentation_frontier(&context, 8_000);
+
+        assert_eq!(frontier.source(), 8_000);
+        assert_eq!(frontier.output(), SessionFrame::new(1_040));
     }
 }

@@ -1,5 +1,6 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
+use kithara_signal::AudioChunk;
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
@@ -19,6 +20,7 @@ use crate::{
     },
 };
 
+#[kithara::measure(label = "audio.decode.step")]
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(
     core: &mut ActiveDecode,
@@ -51,17 +53,13 @@ pub(crate) fn tick<T: StreamType>(
         }
         if core.active().is_source_exhausted() {
             if core.has_live_incoming() {
-                // Exhausted with the switch still in flight but the output
-                // hold not engaged (frontier unlatched or blender mid-join):
-                // surfacing EOF here would latch AtEof and abort the pending
-                // intent, so park as a transition wait instead.
+                // WHY: Exhausted with the switch still in flight but the output hold not engaged (frontier unlatched or blender mid-join): surfacing
+                // EOF here would latch AtEof and abort the pending intent, so park as a transition wait instead.
                 return transition_hold(core, &ctx);
             }
             if !core.active().is_exhaustion_observed() {
-                // Defer finalization by exactly one tick: the scheduler runs
-                // the transition driver between ticks, so an intent that
-                // raced the last chunk still gets its incoming slot planted
-                // before EOF finalizes and AtEof can latch.
+                // WHY: Defer finalization by exactly one tick: the scheduler runs the transition driver between ticks, so an intent that raced the
+                // last chunk still gets its incoming slot planted before EOF finalizes and AtEof can latch.
                 core.observe_source_exhaustion();
                 return DecodeAction::TransitionPending;
             }
@@ -75,12 +73,6 @@ pub(crate) fn tick<T: StreamType>(
                 detect(ctx.stream, core.active(), ctx.seek_observe)
             {
                 return DecodeAction::StartRecreate(recreate);
-            }
-            if let Some(chunk) = core.next_drain() {
-                return produced(chunk, epoch, &mut ctx);
-            }
-            if let Some(emit) = ctx.emit {
-                emit.enqueue(AudioEvent::EndOfStream.into());
             }
             return DecodeAction::Eof;
         }
@@ -99,7 +91,7 @@ pub(crate) fn tick<T: StreamType>(
                     continue;
                 }
                 hang_reset!();
-                core.track(&chunk, ctx.playhead, ctx.emit);
+                core.track(&chunk, ctx.emit);
                 if let Err(error) = core.push(chunk) {
                     return decode_failed(core, error, &ctx);
                 }
@@ -154,7 +146,7 @@ fn decode_failed<T: StreamType>(
 }
 
 pub(crate) fn produced<T: StreamType>(
-    chunk: PcmChunk,
+    chunk: AudioChunk,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {

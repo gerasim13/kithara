@@ -10,21 +10,21 @@
             Text(
                 id: "track-title",
                 style: TrackTitle,
-                read: Model(id: "mock.track.title"),
+                read: Model(id: "demo.track.title"),
             ),
-            Text(id: "artist", read: Model(id: "mock.track.artist")),
+            Text(id: "artist", read: Model(id: "demo.track.artist")),
             Text(id: "fader-title", style: Section, read: Model(id: "gallery.label.faders")),
             Fader(
                 id: "default",
                 size: (w: Fixed(220.0), h: Fixed(34.0)),
                 label: Some("VOL"),
-                read: Model(id: "mock.volume"),
+                read: Model(id: "demo.volume"),
             ),
             Fader(
                 id: "volume",
                 size: (w: Fixed(120.0), h: Fixed(34.0)),
                 style: Volume,
-                read: Model(id: "mock.volume"),
+                read: Model(id: "demo.volume"),
             ),
             Text(id: "vertical-title", style: Section, label: Some("VERTICAL FADER + VU")),
             Row(
@@ -33,7 +33,7 @@
                     VuVertical(
                         id: "vertical",
                         size: (w: Fixed(18.0), h: Fixed(120.0)),
-                        read: Model(id: "mock.levels"),
+                        read: Model(id: "demo.levels"),
                     ),
                 ],
             ),
@@ -42,7 +42,7 @@
                 id: "scalar",
                 size: (w: Fixed(64.0), h: Fixed(18.0)),
                 format: Percent,
-                read: Model(id: "mock.volume"),
+                read: Model(id: "demo.volume"),
             ),
         ],
     ),

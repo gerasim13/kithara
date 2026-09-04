@@ -116,6 +116,17 @@ pub(super) fn direction_for(
     Ok(Direction::Diverged)
 }
 
+/// The default branch on each side of the bridge.
+///
+/// The two are separate values because the repositories disagree on the name.
+/// Crossing them is silent rather than loud: GitHub answers an unknown base
+/// with an empty pull list, so a swap would leave the bridge idling.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Branches<'a> {
+    pub(super) github: &'a str,
+    pub(super) gitlab: &'a str,
+}
+
 pub(super) fn validate_sha(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

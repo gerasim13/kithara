@@ -1,12 +1,14 @@
 use bytes::Bytes;
-use kithara_drm::UniqueBinaryCipher as RustCipher;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara::{
+    drm::UniqueBinaryCipher as RustCipher,
+    platform::sync::{Arc, Mutex},
+};
 
 use crate::observer::FfiKeyProcessor;
 
 /// Position-dependent symmetric cipher for DRM key decryption.
 ///
-/// Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
+/// Wraps `kithara::drm::UniqueBinaryCipher` for use from Swift/Kotlin.
 /// Also implements `FfiKeyProcessor` so it can be passed directly
 /// to `AudioPlayer.setKeyProcessor()`.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]

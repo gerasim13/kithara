@@ -64,7 +64,7 @@ impl AtomicTaskState {
             2 => TaskState::Running,
             3 => TaskState::RunningNotified,
             4 => TaskState::Done,
-            // Only `TaskState` discriminants are ever stored in the cell.
+            // WHY: Only `TaskState` discriminants are ever stored in the cell.
             _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
         }
     }
@@ -99,11 +99,6 @@ pub(super) enum WakeOutcome {
 /// `active_async=1` and are otherwise indistinguishable in a dump.
 pub(super) struct TaskDiag {
     pub(super) state: AtomicTaskState,
-    polls: AtomicU64,
-    /// Raw [`ThreadKey`] of the thread that entered this task's last poll,
-    /// written lock-free at the gate. Meaningful only once `polls > 0`, which
-    /// publishes it.
-    driver: AtomicU64,
     /// The runtime that drove that last poll polls on exactly ONE thread
     /// (`current_thread`). Then [`driver`](Self::driver) is not merely the last
     /// thread to poll this task but the only thread that can deliver its next
@@ -111,6 +106,11 @@ pub(super) struct TaskDiag {
     /// its turn. Sampled per poll, so it always describes the runtime that owes
     /// the poll, even for a task spawned onto a handle from another runtime.
     sole_poller: AtomicBool,
+    /// Raw [`ThreadKey`] of the thread that entered this task's last poll,
+    /// written lock-free at the gate. Meaningful only once `polls > 0`, which
+    /// publishes it.
+    driver: AtomicU64,
+    polls: AtomicU64,
 }
 
 /// A task is `Runnable` from the moment it is spawned, before its first poll —
@@ -127,10 +127,9 @@ impl Default for TaskDiag {
 }
 
 impl TaskDiag {
-    /// Polls this task has actually entered (claimed at the gate), not polls the
-    /// runtime attempted.
-    pub(super) fn polls(&self) -> u64 {
-        self.polls.load(Ordering::Acquire)
+    /// The thread that entered this task's last poll, once it has been polled.
+    pub(super) fn driver(&self) -> Option<ThreadKey> {
+        (self.polls() > 0).then(|| ThreadKey::from(self.driver.load(Ordering::Relaxed)))
     }
 
     /// Record the thread claiming this poll and whether its runtime has any
@@ -144,9 +143,10 @@ impl TaskDiag {
         self.polls.fetch_add(1, Ordering::Release);
     }
 
-    /// The thread that entered this task's last poll, once it has been polled.
-    pub(super) fn driver(&self) -> Option<ThreadKey> {
-        (self.polls() > 0).then(|| ThreadKey::from(self.driver.load(Ordering::Relaxed)))
+    /// Polls this task has actually entered (claimed at the gate), not polls the
+    /// runtime attempted.
+    pub(super) fn polls(&self) -> u64 {
+        self.polls.load(Ordering::Acquire)
     }
 
     /// True when this task holds its slot as `Runnable` — queued for a poll —

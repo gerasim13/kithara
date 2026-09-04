@@ -6,7 +6,7 @@
         children: [
             Include(
                 id: "a",
-                source: "app-overview-row.kmodule.ron",
+                source: "deck/overview-row.kmodule.ron",
                 with: { "deck": "a", "letter": "A" },
             ),
         ],

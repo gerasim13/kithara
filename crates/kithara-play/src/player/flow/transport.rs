@@ -1,12 +1,15 @@
 use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_bufpool::HasPool;
+use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerStatus, TrackId},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
@@ -20,14 +23,10 @@ pub struct SelectTransition {
     pub crossfade_seconds: f32,
 }
 
-impl PlayerImpl {
-    /// Apply autoplay: resume at the default rate (and move to `Playing`) or
-    /// hold at rate 0 (and move to `Paused`).
-    ///
-    /// Resuming goes through [`Self::set_rate`] rather than a bare value
-    /// store: the default rate has to reach the stretch slot and the
-    /// processor's media clock, or the player reports a rate it is not
-    /// playing at.
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -35,13 +34,8 @@ impl PlayerImpl {
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            self.core.params.set_paused_rate();
             let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
             self.enter_paused();
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::RateChanged { rate: 0.0 });
         }
     }
 
@@ -63,32 +57,26 @@ impl PlayerImpl {
     ///
     /// `false` means the slot held no resource, so nothing reached the
     /// processor and the item is not current.
-    fn load_current_item(&self) -> bool {
+    fn load_current_item(&self) -> Result<bool, PlayError> {
         let index = self.current_index();
-        let Some((src, duration_seconds)) = self.enqueue_to_processor(index) else {
-            return false;
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(false);
         };
         self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback(src);
-        true
+        self.start_playback(item_id);
+        Ok(true)
     }
 
-    /// Pause playback (sets rate to 0.0).
+    /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        self.core.params.set_paused_rate();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
         self.enter_paused();
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!(phase = ?self.phase_kind(), "pause");
     }
 
-    /// Start playback at the configured default rate.
+    /// Start playback from the configured default-rate target.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.params.set_rate_value(rate);
         self.core.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
@@ -102,24 +90,21 @@ impl PlayerImpl {
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        let loaded = self.load_current_item();
+        let loaded = self.load_current_item().unwrap_or_else(|error| {
+            warn!(%error, "failed to allocate track playback buffers");
+            false
+        });
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
-        // Resuming the same item is not a track change; announce gates on it.
-        // An empty slot means the item's load is still in flight: announcing it
-        // would mark the index current, and the select that plants the arriving
-        // resource would then take `select_item_with_crossfade`'s
-        // reselecting-current path and never enqueue it.
+        // WHY: Resuming the same item is not a track change; announce gates on it. An empty slot means the item's load is still in flight:
+        // announcing it would mark the index current, and the select that plants the arriving resource would then take
+        // `select_item_with_crossfade`'s reselecting-current path and never enqueue it.
         if loaded {
             self.announce_current_item(self.current_index());
         }
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate });
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
@@ -138,16 +123,15 @@ impl PlayerImpl {
             return Err(PlayError::SlotNotFound(slot_id));
         };
 
-        // The `fetch_add` inside is the publication: storing the returned value back would let two
-        // concurrent seeks reinstate the older epoch.
+        // WHY: The `fetch_add` inside is the publication: storing the returned value back would let two concurrent seeks reinstate the older
+        // epoch.
         let seek_epoch = playback.next_seek_epoch();
 
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
 
-        // Begin here, on the control thread: minting the source epoch publishes an event and wakes
-        // the decode worker, both of which take locks. The processor's `PlayerCmd::Seek` then only
-        // re-bases the track's own buffers and media clock, lock-free.
+        // WHY: Begin here, on the control thread: minting the source epoch publishes an event and wakes the decode worker, both of which
+        // take locks.
         self.core.engine.begin_slot_seek(slot_id, target);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
@@ -164,8 +148,7 @@ impl PlayerImpl {
             seek_epoch,
             seconds: target_secs,
         }) {
-            // Nothing will carry the re-base now, and the processor holds a
-            // track's natural end while a published seek outranks it.
+            // WHY: Nothing will carry the re-base now, and the processor holds a track's natural end while a published seek outranks it.
             playback.withdraw_seek_epoch(seek_epoch);
             return Err(err);
         }
@@ -214,14 +197,8 @@ impl PlayerImpl {
             });
         }
 
-        // Re-selecting the already-current item: its resource was consumed by
-        // the load that made it current and now lives in the processor (it is
-        // the playing track). Like the armed case, an emptied slot here is
-        // expected, not stale — so the consumed-slot guard must not fire and we
-        // take the no-reload path (no `enqueue_to_processor`, no re-announce).
-        // Gated on `Playlist::last_announced` so it covers only an item
-        // already loaded as current, not a fresh select of the current index whose
-        // resource genuinely still sits in the slot.
+        // WHY: Re-selecting the already-current item: its resource was consumed by the load that made it current and now lives in the
+        // processor (it is the playing track).
         let reselecting_current =
             index == self.core.items.current_index() && self.core.items.is_announced(index);
         let has_resource = self.core.items.has_resource(index);
@@ -231,13 +208,14 @@ impl PlayerImpl {
             .lock()
             .pending()
             .is_some_and(|p| !p.state.activated() && p.index == index);
-        // An armed (or current-and-loaded) item's resource already lives in the
-        // processor; otherwise the slot must still hold one —
-        // `enqueue_to_processor` takes it out, so an emptied slot means the
-        // caller's view of the item is stale. Fail before any bookkeeping so
-        // the UI cannot drift from the audio.
+        // WHY: An armed (or current-and-loaded) item's resource already lives in the processor; otherwise the slot must still hold one -
+        // `enqueue_to_processor` takes it out, so an emptied slot means the caller's view of the item is stale.
         if !armed_for_index && !reselecting_current && !has_resource {
             return Err(PlayError::ItemConsumed { index });
+        }
+
+        if autoplay {
+            self.core.timestretch.set_speed(self.default_rate());
         }
 
         self.ensure_engine_started()?;
@@ -251,7 +229,7 @@ impl PlayerImpl {
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
-            self.load_current_item();
+            self.load_current_item()?;
             self.announce_current_item(index);
         }
 
@@ -259,8 +237,8 @@ impl PlayerImpl {
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, src: Arc<str>) {
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
+    pub(crate) fn start_playback(&self, item_id: TrackId) {
+        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
     }
 }
 
@@ -269,18 +247,34 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::player::PlayerConfig;
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::PlayerConfig,
+        session::testing,
+        test_pools::{TestPools, pools},
+    };
+
+    fn player() -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        )
+    }
 
     #[kithara::test]
     fn seek_seconds_without_slot_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         let err = player.seek_seconds(1.0).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
 
     #[kithara::test]
     fn select_item_out_of_range_returns_typed_error() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         let err = player
             .select_item_with_crossfade(
                 5,
@@ -302,7 +296,7 @@ mod tests {
     /// `CurrentItemChanged` while the old audio keeps playing.
     #[kithara::test]
     fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         player.reserve_slots(2);
         let result = player.select_item_with_crossfade(
             1,

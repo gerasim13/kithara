@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroU64,
-    sync::{Barrier, OnceLock},
+    sync::{Barrier, OnceLock, atomic::Ordering},
     thread,
 };
 
@@ -25,21 +25,26 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
-        InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
+        Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
         SegmentSlotState,
     },
     signal::SizeSignal,
-    stream::HlsSession,
 };
+
+type FetchClaim<P> = crate::segment::FetchClaim<P, crate::test_pools::TestPools>;
+type HlsSession = crate::stream::HlsSession<crate::test_pools::TestPools>;
+type HlsVariant = super::HlsVariant<crate::test_pools::TestPools>;
+type PlanCtx = super::PlanCtx<crate::test_pools::TestPools>;
+type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
-        AssetStore::builder()
+        AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(cancel)
             .build(),
@@ -47,7 +52,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     PlanCtx {
         bus: EventBus::new(8),
         scope: backend
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
                 discriminator: Some("test".to_owned()),
             })
@@ -61,7 +66,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     }
 }
 
-fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
+fn make_init(size: u64, scope: &TestAssetScope) -> Option<Segment> {
     if size == 0 {
         return None;
     }
@@ -78,7 +83,7 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
     }))
 }
 
-fn make_placeholder_init(size: u64, scope: &AssetScope) -> Segment {
+fn make_placeholder_init(size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = scope
         .key(&AssetResource::Url(url.clone()))
@@ -92,7 +97,7 @@ fn make_placeholder_init(size: u64, scope: &AssetScope) -> Segment {
     })
 }
 
-fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
+fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -110,7 +115,7 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     })
 }
 
-fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
+fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -1423,6 +1428,112 @@ fn phase_at_reports_waiting_demand_for_queued_segment() {
     assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
 }
 
+fn claim_segment_zero(v: &Arc<HlsVariant>, ctx: &PlanCtx) -> FetchClaim<Downloading> {
+    v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim")
+}
+
+#[kithara::test]
+fn a_parked_wait_files_demand_on_the_claimed_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let _claim = claim_segment_zero(&v, &ctx);
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "an in-flight fetch nobody waits on must not be escalated"
+    );
+
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    assert!(
+        v.segments()[0].state().is_reader_demanded(),
+        "the wait parking on the claimed segment must escalate its fetch"
+    );
+}
+
+#[kithara::test]
+fn a_phase_query_leaves_demand_unfiled() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a phase query observes the slot; only a parked wait escalates it"
+    );
+}
+
+#[kithara::test]
+fn a_settled_slot_answers_no_demand() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = claim_segment_zero(&v, &ctx);
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    claim.into_missing();
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a settled slot has no in-flight fetch left to escalate"
+    );
+
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "the settle must clear the filing: a fresh claim starts unescalated"
+    );
+}
+
+#[kithara::test]
+fn a_readiness_poll_leaves_demand_unfiled() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::None,
+        NonZeroU64::new(16).expect("non-zero read ahead"),
+    );
+    let preparation = v
+        .prepare_reader(profile, Duration::ZERO)
+        .expect("reader preparation");
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.reader_is_ready(&preparation).expect("readiness poll"),
+        "the claimed segment is not loaded"
+    );
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a readiness poll is not a read; only a parked wait escalates the fetch"
+    );
+}
+
+#[kithara::test]
+fn a_planned_segment_is_owed_not_escalated() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    push_planned(&v, 0);
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a wait parked before the claim must not carry into the fresh fetch: the owed dispatch stamps it High at emit"
+    );
+}
+
 fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     let ctx = test_ctx(3);
     let seek = Arc::new(SeekState::new());
@@ -2165,7 +2276,7 @@ fn wait_range_probes_without_sleeping() {
 
     let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = started.elapsed();
+    let elapsed = Instant::now().saturating_duration_since(started);
 
     assert!(
         matches!(
@@ -2198,7 +2309,7 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = started.elapsed();
+    let elapsed = Instant::now().saturating_duration_since(started);
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
         "flushing seek state must Interrupt the probe, got {interrupted:?}"
@@ -2718,5 +2829,153 @@ fn a_settle_after_the_space_re_mint_applies_immediately() {
         v.segment_byte_offset(2),
         Some(700),
         "a settle after the re-mint keys the fresh frame immediately"
+    );
+}
+
+fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
+    let key = v.segments()[idx as usize].resource_id().clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("acquire segment")
+    else {
+        panic!("segment resource must be pending");
+    };
+    let bytes: Vec<u8> = (0..len).map(|b| b.to_le_bytes()[0]).collect();
+    writer.write_at(0, &bytes).expect("write segment");
+    writer.commit(Some(len)).expect("commit segment");
+}
+
+/// A chunked run over one slot opens its resource once.
+#[kithara::test]
+fn reading_a_segment_in_chunks_opens_its_resource_once() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    for offset in (0..64_u64).step_by(8) {
+        let outcome = v.read_at(offset, &mut buf).expect("chunked segment read");
+        assert!(
+            matches!(outcome, ReadOutcome::Bytes(n) if n.get() == 8),
+            "chunk at {offset} must serve 8 bytes, got {outcome:?}"
+        );
+        assert_eq!(
+            u64::from(buf[0]),
+            offset,
+            "chunk at {offset} must serve that offset's bytes"
+        );
+    }
+
+    assert_eq!(
+        v.segments.opens.load(Ordering::Relaxed),
+        1,
+        "eight chunks over one segment must open its resource once"
+    );
+}
+
+/// A `NotFound` while the fetch is in flight must not be held.
+#[kithara::test]
+fn a_read_before_the_bytes_land_does_not_stick() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let outcome = v.read_at(0, &mut buf).expect("read before the bytes land");
+    assert!(
+        matches!(outcome, ReadOutcome::Pending(_)),
+        "a slot with no bytes yet is pending, got {outcome:?}"
+    );
+
+    write_seg_bytes(&v, &ctx, 0, 64);
+
+    let outcome = v.read_at(0, &mut buf).expect("read after the bytes land");
+    assert!(
+        matches!(outcome, ReadOutcome::Bytes(n) if n.get() == 8),
+        "the same slot must serve once its bytes land, got {outcome:?}"
+    );
+}
+
+/// Eviction takes the bytes away under the reader.
+#[kithara::test]
+fn an_evicted_slot_is_opened_again() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let outcome = v.read_at(0, &mut buf).expect("first read");
+    assert!(
+        matches!(outcome, ReadOutcome::Bytes(_)),
+        "the slot serves before eviction, got {outcome:?}"
+    );
+    let before = v.segments.opens.load(Ordering::Relaxed);
+
+    let key = v.segments()[0].resource_id().clone();
+    assert_eq!(v.on_evict(&key), Some(0), "seg 0 belongs to this variant");
+    let _outcome = v.read_at(0, &mut buf).expect("read after eviction");
+
+    assert!(
+        v.segments.opens.load(Ordering::Relaxed) > before,
+        "a read after eviction must open the resource again"
+    );
+}
+
+fn disk_ctx(root: &std::path::Path) -> PlanCtx {
+    let cancel = CancelToken::never();
+    let backend = Arc::new(
+        AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Disk { root: root.into() })
+            .cancel(cancel)
+            .build(),
+    );
+    PlanCtx {
+        bus: EventBus::new(8),
+        scope: backend
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: Some("disk".to_owned()),
+            })
+            .expect("test asset scope"),
+        seek_epoch: 0,
+        headers: None,
+        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        config: PlanConfig::builder().prefetch_budget(1).build(),
+    }
+}
+
+/// A ready gate over a pending read is a loop with no exit.
+#[kithara::test]
+fn a_ready_gate_never_outruns_the_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let path = {
+        let ctx = disk_ctx(dir.path());
+        let v = make_var(0, 0, &[64], &ctx);
+        write_seg_bytes(&v, &ctx, 0, 64);
+        let key = v.segments()[0].resource_id().clone();
+        ctx.scope.store().checkpoint().expect("persist the index");
+        dir.path()
+            .join(ctx.scope.asset_root())
+            .join(key.rel_path().expect("relative key"))
+    };
+    std::fs::remove_file(&path).expect("prune the cached bytes");
+
+    let ctx = disk_ctx(dir.path());
+    let v = make_var(0, 0, &[64], &ctx);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let read = v.read_at(0, &mut buf).expect("read");
+    let gate = v.wait_range(0..8, Some(Duration::ZERO));
+
+    assert!(
+        !(matches!(gate, Ok(WaitOutcome::Ready)) && matches!(read, ReadOutcome::Pending(_))),
+        "gate and read disagree, so the reader spins with no exit: \
+         gate={gate:?} read={read:?}"
     );
 }

@@ -6,7 +6,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use futures::future::try_join_all;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
 use kithara_events::{
     DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
@@ -27,43 +27,65 @@ use crate::{
 /// Resolves optional provider processing through a [`KeyProcessorRegistry`].
 /// The registry supplies a fully prepared wire request; this type owns only
 /// cache coordination, fetching, validation, and processor execution.
-#[derive(Clone)]
-pub struct KeyStore {
+struct Consts;
+
+impl Consts {
+    const AES_KEY_LEN: usize = 16;
+    const IV_SEQUENCE_OFFSET: usize = 8;
+}
+
+pub struct KeyStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     keys: Arc<DashMap<Url, Bytes>>,
-    scope: AssetScope,
-    /// Byte buffer pool for reading cached key bodies.
-    byte_pool: BytePool,
+    scope: AssetScope<S>,
+    pools: PoolRegion<S>,
     bus: EventBus,
     /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
-    key_peer: KeyPeer,
+    key_peer: KeyPeer<S>,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
 }
 
-impl KeyStore {
-    /// AES-128 key / IV length in bytes.
-    const AES_KEY_LEN: usize = 16;
+impl<S> Clone for KeyStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            keys: Arc::clone(&self.keys),
+            scope: self.scope.clone(),
+            pools: self.pools.clone(),
+            bus: self.bus.clone(),
+            key_peer: self.key_peer.clone(),
+            base_headers: self.base_headers.clone(),
+            key_registry: self.key_registry.clone(),
+        }
+    }
+}
 
-    /// Start offset for sequence number in the 16-byte IV.
-    const IV_SEQUENCE_OFFSET: usize = 8;
-
+impl<S> KeyStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[must_use]
     pub fn new(
         downloader: PeerHandle,
-        scope: AssetScope,
+        scope: AssetScope<S>,
         bus: EventBus,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
-        byte_pool: BytePool,
+        pools: PoolRegion<S>,
     ) -> Self {
         Self {
-            key_peer: KeyPeer::new(downloader, scope.clone(), byte_pool.clone()),
+            key_peer: KeyPeer::new(downloader, scope.clone(), pools.clone()),
             scope,
             bus,
             base_headers,
             key_registry,
-            byte_pool,
+            pools,
             keys: Arc::new(DashMap::new()),
         }
     }
@@ -206,7 +228,7 @@ impl KeyStore {
                 );
                 HlsError::KeyProcessing("key not in cache".to_string())
             })?;
-        let mut buf = self.byte_pool.get();
+        let mut buf = self.pools.get::<u8>();
         let n = res.read_into(&mut buf).map_err(|_e| {
             publish_key_fetch_failed(
                 &self.bus,
@@ -249,7 +271,7 @@ impl KeyStore {
     pub async fn get_raw_key(
         &self,
         url: &Url,
-        _iv: Option<[u8; Self::AES_KEY_LEN]>,
+        _iv: Option<[u8; Consts::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
             tracing::debug!(url = %RedactedUrl::new(url), "key: served from in-memory cache");
@@ -378,11 +400,11 @@ impl KeyStore {
     #[must_use]
     pub fn with_options(
         downloader: PeerHandle,
-        scope: AssetScope,
+        scope: AssetScope<S>,
         bus: EventBus,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
-        byte_pool: BytePool,
+        pools: PoolRegion<S>,
     ) -> Self {
         Self::new(
             downloader,
@@ -390,13 +412,13 @@ impl KeyStore {
             bus,
             base_headers,
             options.key_registry,
-            byte_pool,
+            pools,
         )
     }
 }
 
 fn validate_aes128_key(bytes: &[u8]) -> HlsResult<()> {
-    if bytes.len() == KeyStore::AES_KEY_LEN {
+    if bytes.len() == Consts::AES_KEY_LEN {
         return Ok(());
     }
     Err(invalid_key_length(bytes.len()))
@@ -410,19 +432,19 @@ fn validated_key_bytes(bytes: &[u8]) -> HlsResult<Bytes> {
 fn invalid_key_length(actual: usize) -> HlsError {
     HlsError::KeyProcessing(format!(
         "AES-128 key must be {} bytes, got {actual}",
-        KeyStore::AES_KEY_LEN
+        Consts::AES_KEY_LEN
     ))
 }
 
 pub(crate) fn derive_iv(
     key_info: &crate::playlist::parse::KeyInfo,
     sequence: u64,
-) -> [u8; KeyStore::AES_KEY_LEN] {
+) -> [u8; Consts::AES_KEY_LEN] {
     if let Some(iv) = key_info.iv {
         return iv;
     }
-    let mut iv = [0u8; KeyStore::AES_KEY_LEN];
-    iv[KeyStore::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+    let mut iv = [0u8; Consts::AES_KEY_LEN];
+    iv[Consts::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
     iv
 }
 
@@ -437,15 +459,18 @@ pub(crate) fn derive_iv(
 /// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
 /// - [`HlsError::KeyProcessing`] when the cached key is missing,
 ///   empty, or not 16 bytes (AES-128 size).
-pub(crate) fn resolve_decrypt_ctx(
-    key_store: &KeyStore,
+pub(crate) fn resolve_decrypt_ctx<S>(
+    key_store: &KeyStore<S>,
     key_info: &crate::playlist::parse::KeyInfo,
     segment_url: &Url,
     sequence: u64,
-) -> HlsResult<DecryptContext> {
+) -> HlsResult<DecryptContext>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let key_url = resolve_key_url(key_info, segment_url)?;
     let key_bytes = key_store.get_cached_key(&key_url)?;
-    let key: [u8; KeyStore::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+    let key: [u8; Consts::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
         publish_key_fetch_failed(
             &key_store.bus,
             &key_url,
@@ -461,10 +486,13 @@ pub(crate) fn resolve_decrypt_ctx(
 /// Returns `None` when the playlist has no init segment, when the
 /// init segment carries no key (cleartext), or when key resolution
 /// fails (same fallback policy as media segments).
-pub(crate) fn resolve_init_decrypt_ctx(
-    key_store: &KeyStore,
+pub(crate) fn resolve_init_decrypt_ctx<S>(
+    key_store: &KeyStore<S>,
     playlist: &crate::playlist::parse::MediaPlaylist,
-) -> Option<DecryptContext> {
+) -> Option<DecryptContext>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let init = playlist.init_segment.as_ref()?;
     let key = init.key.as_ref()?;
     if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
@@ -503,11 +531,14 @@ pub(crate) fn resolve_key_url(
     }
 }
 
-fn resolve_segment_decrypt_ctx(
-    key_store: &KeyStore,
+fn resolve_segment_decrypt_ctx<S>(
+    key_store: &KeyStore<S>,
     media_url: &Url,
     segment: &crate::playlist::parse::MediaSegment,
-) -> Option<DecryptContext> {
+) -> Option<DecryptContext>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let key = segment.key.as_ref()?;
     if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
         return None;
@@ -535,10 +566,13 @@ fn resolve_segment_decrypt_ctx(
 /// logged and the segment falls back to `None` — the dispatch path
 /// will surface a decoder error, which is preferable to silently
 /// shipping garbage bytes.
-pub(crate) fn resolve_variant_decrypt_contexts(
-    key_store: &KeyStore,
+pub(crate) fn resolve_variant_decrypt_contexts<S>(
+    key_store: &KeyStore<S>,
     playlist: &crate::playlist::parse::MediaPlaylist,
-) -> Vec<Option<DecryptContext>> {
+) -> Vec<Option<DecryptContext>>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     playlist
         .segments
         .iter()
@@ -618,6 +652,10 @@ mod tests {
     use crate::playlist::parse::parse_media_playlist;
 
     const VALID_KEY: &[u8] = b"0123456789abcdef";
+
+    type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
+    type TestAssetStore = AssetStore<crate::test_pools::TestPools>;
+    type TestKeyStore = KeyStore<crate::test_pools::TestPools>;
 
     struct MockPeer {
         cancel: CancelToken,
@@ -823,17 +861,17 @@ mod tests {
         bus: &EventBus,
         cancel: CancelToken,
         registry: Option<KeyProcessorRegistry>,
-    ) -> KeyStore {
-        let store = AssetStore::builder()
+    ) -> TestKeyStore {
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();
         make_store_with_assets(bus, cancel, registry, &store)
     }
 
-    fn test_scope(store: &AssetStore) -> AssetScope {
+    fn test_scope(store: &TestAssetStore) -> TestAssetScope {
         store
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
                 discriminator: Some("key-test".to_owned()),
             })
@@ -844,11 +882,15 @@ mod tests {
         bus: &EventBus,
         network_cancel: CancelToken,
         registry: Option<KeyProcessorRegistry>,
-        store: &AssetStore,
-    ) -> KeyStore {
+        store: &TestAssetStore,
+    ) -> TestKeyStore {
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), network_cancel))
-                .build(),
+            DownloaderConfig::for_client(HttpClient::new(
+                NetOptions::default(),
+                crate::test_pools::pools(),
+                network_cancel,
+            ))
+            .build(),
         );
         let handle = downloader
             .register(Arc::new(MockPeer {
@@ -861,11 +903,11 @@ mod tests {
             bus.clone(),
             None,
             registry,
-            BytePool::default(),
+            crate::test_pools::pools(),
         )
     }
 
-    fn commit_key(store: &AssetStore, url: &Url, bytes: &[u8]) {
+    fn commit_key(store: &TestAssetStore, url: &Url, bytes: &[u8]) {
         let key = test_scope(store)
             .key(&AssetResource::Url(url.clone()))
             .expect("key resource path");
@@ -883,7 +925,7 @@ mod tests {
     ) {
         let (url, requests, seen, release) = spawn_gated_key_server().await;
         let store_cancel = CancelToken::never();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(store_cancel.clone())
             .build();
@@ -1014,7 +1056,7 @@ mod tests {
     async fn persisted_final_key_does_not_prepare_fresh_request() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let assets = AssetStore::builder()
+        let assets = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1055,7 +1097,7 @@ mod tests {
                 KeyRequest::new(HashMap::new(), Arc::new(Ok::<Bytes, DrmError>))
             }),
         );
-        let reopened_assets = AssetStore::builder()
+        let reopened_assets = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1163,7 +1205,7 @@ mod tests {
     async fn corrupt_persisted_plain_key_is_invalidated_and_refetched_once() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1174,7 +1216,7 @@ mod tests {
         drop(store);
 
         let bus = EventBus::new(8);
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1192,7 +1234,7 @@ mod tests {
         drop(keys);
         drop(store);
 
-        let reopened = AssetStore::builder()
+        let reopened = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -1212,7 +1254,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn processed_key_repair_is_serialized_across_key_stores() {
         let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
             .build();

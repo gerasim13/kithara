@@ -1,13 +1,14 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
-use source_helper::app_track_source;
+pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 
 mod advance_boundary_provenance;
 mod architecture_flow;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
+mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
 mod flac_swallow_fixture;
@@ -17,8 +18,11 @@ mod hls_variant_playlists_concurrent;
 mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
+mod non_leading_track_eof;
+mod non_leading_track_failure;
 mod packaged_drm_seek;
 mod play_before_the_load_lands;
+mod playback_warms_its_own_analysis;
 mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod select_after_eof;

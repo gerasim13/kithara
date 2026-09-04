@@ -1,8 +1,10 @@
 use kithara_decode::{
-    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk,
-    duration_for_frames,
+    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation,
+    GaplessTrimmer,
 };
 use kithara_platform::time::Duration;
+use kithara_signal::AudioChunk;
+use kithara_stream::AudioCodec;
 
 /// Iterator over one pending gapless output batch.
 type GaplessOutputIter = <GaplessOutput as IntoIterator>::IntoIter;
@@ -23,9 +25,13 @@ pub(crate) struct GaplessStage {
 impl GaplessStage {
     /// Builds one per-generation trimmer from immutable decoder facts.
     #[must_use]
-    pub(crate) fn build(profile: GaplessProfile, mode: GaplessMode) -> Self {
-        let from_info =
-            |info| GaplessTrimmer::from(info).with_tail_compensation(profile.tail_compensation());
+    pub(crate) fn build(
+        profile: GaplessProfile,
+        mode: GaplessMode,
+        codec: Option<AudioCodec>,
+    ) -> Self {
+        let tail = tail_compensation(profile, codec);
+        let from_info = |info| GaplessTrimmer::from(info).with_tail_compensation(tail);
         let trimmer = match mode {
             GaplessMode::MediaOnly => profile
                 .gapless()
@@ -59,7 +65,7 @@ impl GaplessStage {
 
     /// Return the next trimmed chunk from the current output batch.
     #[must_use]
-    pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
         let pending = self.pending.as_mut()?;
         let next = pending.next();
         if pending.len() == 0 {
@@ -78,7 +84,7 @@ impl GaplessStage {
     }
 
     /// Feed one decoded chunk into the trimmer.
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push(&mut self, chunk: AudioChunk) {
         let output = self.trimmer.push(chunk);
         self.replace_pending(output);
     }
@@ -93,10 +99,23 @@ impl GaplessStage {
         self.pending = (!output.is_empty()).then(|| output.into_iter());
     }
 
-    pub(crate) fn set_tail_compensation(&mut self, profile: GaplessProfile) {
+    pub(crate) fn set_tail_compensation(
+        &mut self,
+        profile: GaplessProfile,
+        codec: Option<AudioCodec>,
+    ) {
         self.trimmer
-            .set_tail_compensation(profile.tail_compensation());
+            .set_tail_compensation(tail_compensation(profile, codec));
     }
+}
+
+fn tail_compensation(
+    profile: GaplessProfile,
+    codec: Option<AudioCodec>,
+) -> Option<GaplessTailCompensation> {
+    profile
+        .tail_compensation()
+        .filter(|_| !codec.is_some_and(AudioCodec::transform_padded))
 }
 
 fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
@@ -129,6 +148,9 @@ pub(crate) fn visible_duration(
         return Some(raw);
     }
 
-    let trim = duration_for_frames(profile.spec().sample_rate.get(), trim_frames);
+    let trim = profile
+        .spec()
+        .duration_for(trim_frames)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
     Some(raw.saturating_sub(trim))
 }

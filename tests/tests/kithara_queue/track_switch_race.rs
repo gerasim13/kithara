@@ -20,27 +20,28 @@
 //! construction (playlists + size HEADs + the init/header read) is otherwise
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
-
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineQueue, temp_dir,
 };
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -111,36 +112,49 @@ async fn build_hls(
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: Arc<Queue>) {
+async fn run_tick_driver(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -156,24 +170,39 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// `select_item` — never via end-of-track auto-advance. The completion-race
 /// test relies on this to isolate a barge-in (slow stomping the current fast)
 /// from the legitimate end-of-`fast` auto-advance to the next queue entry.
-fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, AssetStore) {
+fn build_queue_no_tick(
+    temp_dir: &TestTempDir,
+) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store)
 }
@@ -215,7 +244,7 @@ where
 /// current status (so an already-terminal track returns immediately), then
 /// blocks on the event stream — no polling.
 async fn wait_for_loader_done(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -261,7 +290,7 @@ async fn wait_for_loader_done(
 /// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
 /// `current()` (catches an already-current track), then blocks on the event.
 async fn wait_for_current_id(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -311,7 +340,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
 /// current status (catches an already-applied transition), then blocks on the
 /// event stream under `deadline` as a hard safety cap.
 async fn wait_for_status(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     expected: TrackStatus,
     deadline: Duration,
@@ -347,7 +376,10 @@ async fn wait_for_status(
 /// barge-in is itself the absence-over-the-window success. Caller must have
 /// already confirmed `fast` is current, so the only future current-change is
 /// the end-of-`fast` auto-advance this races.
-async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), String> {
+async fn assert_no_barge_in(
+    queue: &QueueControl<TestPools>,
+    slow_id: TrackId,
+) -> Result<(), String> {
     let mut rx = queue.subscribe();
     let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,
@@ -365,10 +397,12 @@ async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), Strin
     }
 }
 
-fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+fn mk_cfg(
+    url: &Url,
+    downloader: &Downloader,
+    store: &AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .initial_abr_mode(AbrMode::Auto(None))
@@ -403,16 +437,20 @@ async fn supersede_while_loading_cancels_slow_track() {
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url,
-        &downloader,
-        &store,
-    ))));
-    let slow_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &slow_url,
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url,
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
+    let slow_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &slow_url,
+            &downloader,
+            &store,
+        ))))
+        .expect("append slow track");
 
     // fast is undelayed and ungated → it reaches a terminal loaded state.
     wait_for_loader_done(&queue, fast_id, Consts::LOAD_DEADLINE)
@@ -546,16 +584,20 @@ async fn concurrent_completion_race_does_not_barge_in() {
         // via the loader-completion race we are probing.
         let (queue, downloader, store) = build_queue_no_tick(&temp);
 
-        let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url,
-            &downloader,
-            &store,
-        ))));
-        let slow_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-            &slow_url,
-            &downloader,
-            &store,
-        ))));
+        let fast_id = queue
+            .append(TrackSource::Config(Box::new(mk_cfg(
+                &fast_url,
+                &downloader,
+                &store,
+            ))))
+            .unwrap_or_else(|error| panic!("[iter {iter}] append fast: {error}"));
+        let slow_id = queue
+            .append(TrackSource::Config(Box::new(mk_cfg(
+                &slow_url,
+                &downloader,
+                &store,
+            ))))
+            .unwrap_or_else(|error| panic!("[iter {iter}] append slow: {error}"));
 
         let mut rx = queue.subscribe();
         drain_event_backlog(&mut rx);

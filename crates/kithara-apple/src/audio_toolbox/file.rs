@@ -62,37 +62,6 @@ where
         self.get_property_with_input(property, T::default())
     }
 
-    /// Reads a typed `AudioFile` property, seeding the query with `input`.
-    ///
-    /// Translation properties (e.g. `kAudioFilePropertyPacketToByte`) read
-    /// input fields the caller sets (the packet index) and overwrite the rest
-    /// (the byte offset), so the initial value must carry the request rather
-    /// than being zeroed.
-    ///
-    /// # Errors
-    ///
-    /// Returns the `AudioToolbox` status when the property cannot be read.
-    pub fn get_property_with_input<T>(&self, property: u32, mut value: T) -> Result<T, OSStatus>
-    where
-        T: ApplePod,
-    {
-        let mut size = UInt32::try_from(size_of::<T>()).map_err(|_| PARAM_ERR)?;
-        // SAFETY: self.raw is live; value is writable storage for size bytes.
-        let status = unsafe {
-            audio_file_get_property_raw(
-                self.raw.as_ptr(),
-                property,
-                &mut size,
-                ptr::from_mut(&mut value).cast::<c_void>(),
-            )
-        };
-        if status == NO_ERR {
-            Ok(value)
-        } else {
-            Err(status)
-        }
-    }
-
     /// Reads an `AudioFile` property as raw bytes.
     ///
     /// # Errors
@@ -135,6 +104,37 @@ where
         };
         if status == NO_ERR {
             Ok((size, writable))
+        } else {
+            Err(status)
+        }
+    }
+
+    /// Reads a typed `AudioFile` property, seeding the query with `input`.
+    ///
+    /// Translation properties (e.g. `kAudioFilePropertyPacketToByte`) read
+    /// input fields the caller sets (the packet index) and overwrite the rest
+    /// (the byte offset), so the initial value must carry the request rather
+    /// than being zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `AudioToolbox` status when the property cannot be read.
+    pub fn get_property_with_input<T>(&self, property: u32, mut value: T) -> Result<T, OSStatus>
+    where
+        T: ApplePod,
+    {
+        let mut size = UInt32::try_from(size_of::<T>()).map_err(|_| PARAM_ERR)?;
+        // SAFETY: self.raw is live; value is writable storage for size bytes.
+        let status = unsafe {
+            audio_file_get_property_raw(
+                self.raw.as_ptr(),
+                property,
+                &mut size,
+                ptr::from_mut(&mut value).cast::<c_void>(),
+            )
+        };
+        if status == NO_ERR {
+            Ok(value)
         } else {
             Err(status)
         }

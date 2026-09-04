@@ -3,7 +3,9 @@
 use std::collections::HashSet;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -11,18 +13,20 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio,
+    bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 const TRACK_COUNT: usize = 3;
 const STORM_ROUNDS: usize = 12;
@@ -32,7 +36,7 @@ const SEEK_TOLERANCE_SECS: f64 = 1.0;
 /// swallowed. A positive fact, so no window of "nothing happened" is needed.
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -46,7 +50,11 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 /// `pause` and `play` reach the sink as slot commands, so the snapshot the
 /// queue exposes converges a tick later. Waiting for that convergence is the
 /// command-took-effect fact; never converging is the reported bug.
-async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> Result<(), String> {
+async fn wait_for_playing(
+    queue: &QueueControl<TestPools>,
+    expected: bool,
+    deadline: Duration,
+) -> Result<(), String> {
     time::timeout(deadline, async {
         while queue.playback_view().playing != expected {
             time::sleep(Duration::from_millis(20)).await;
@@ -59,15 +67,13 @@ async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> 
 fn resource_config(
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    temp_dir: &TestTempDir,
+    store: &AssetStore<TestPools>,
     index: usize,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     let url = handle.child_url(&format!("storm-{index}.mp3"));
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store.clone())
         .build()
 }
 
@@ -99,7 +105,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 // Throttled so the storm lands while transfers are still in
@@ -111,19 +117,41 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             })
         })
         .collect();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let ticker = spawn_ticker(Arc::clone(&queue));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let ticker = spawn_ticker(queue.control());
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();
 
@@ -134,11 +162,12 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             queue.append(TrackSource::Config(Box::new(resource_config(
                 handle,
                 &downloader,
-                &temp_dir,
+                &store,
                 index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
     // Only the first track is awaited: the others must still be transferring
     // when the storm starts.
     wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))

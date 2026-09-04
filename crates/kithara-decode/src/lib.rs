@@ -25,10 +25,12 @@ mod factory;
 mod fmp4;
 mod gapless;
 mod mp4;
-mod pcm;
 mod resampled;
+mod retire;
 #[cfg(feature = "symphonia")]
 mod symphonia;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 mod types;
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
@@ -49,15 +51,10 @@ pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
-pub use pcm::{
-    ChunkRetire, DropChunks, Frames, Samples, duration_for_frames, frames_for_duration,
-    sanitize_sample,
-};
+pub use retire::{ChunkRetire, DropChunks};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
-pub use types::{
-    BlenderProfile, DecoderTrackInfo, GaplessProfile, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
-};
+pub use types::{BlenderProfile, DecoderTrackInfo, GaplessProfile, TrackMetadata};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
 pub use webcodecs::probe::spawn_webcodecs_probe;

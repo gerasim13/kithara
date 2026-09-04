@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_platform::time::Duration;
+use kithara_signal::AudioSpec;
 
 use crate::SeekEpoch;
 
@@ -12,32 +13,6 @@ pub enum SeekLifecycleStage {
     SeekApplied,
     DecodeStarted,
     OutputCommitted,
-}
-
-/// Static PCM format descriptor carried by audio events.
-///
-/// Duplicates the shape of `kithara_decode::PcmSpec` intentionally:
-/// keeping the event crate free of a `kithara-decode` dependency
-/// breaks what would otherwise be a
-/// `kithara-events → kithara-decode → kithara-stream → kithara-events`
-/// cycle once `kithara-stream` starts publishing downloader events via
-/// this bus.
-#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
-#[display("{sample_rate} Hz, {channels} channels")]
-#[non_exhaustive]
-pub struct AudioFormat {
-    pub channels: u16,
-    pub sample_rate: u32,
-}
-
-impl AudioFormat {
-    #[must_use]
-    pub const fn new(channels: u16, sample_rate: u32) -> Self {
-        Self {
-            channels,
-            sample_rate,
-        }
-    }
 }
 
 /// Position of a seek target inside the source's variant/segment grid.
@@ -76,9 +51,9 @@ impl SegmentLocation {
 #[non_exhaustive]
 pub enum AudioEvent {
     /// Audio format detected.
-    FormatDetected { spec: AudioFormat },
+    FormatDetected { spec: AudioSpec },
     /// Audio format changed (ABR switch).
-    FormatChanged { old: AudioFormat, new: AudioFormat },
+    FormatChanged { old: AudioSpec, new: AudioSpec },
     /// PCM output progress committed by playback sink.
     PlaybackProgress {
         position_ms: u64,
@@ -143,8 +118,8 @@ pub enum AudioEvent {
         source_sample_rate: u32,
         active: bool,
     },
-    /// Decoding finished (EOF).
-    EndOfStream,
+    /// Decoding finished for one seek epoch.
+    EndOfStream { seek_epoch: SeekEpoch },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

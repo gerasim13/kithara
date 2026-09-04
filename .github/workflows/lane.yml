@@ -1,0 +1,127 @@
+name: Lane
+
+# One declared CI lane, run against a fresh checkout on the self-hosted fleet.
+#
+# A caller names a lane and a pipeline kind; `.config/xtask.toml` and
+# `xtask ci lane` own what that lane actually does. Stating the pinned
+# checkout, the runner labels, and the artifact upload here once means a
+# caller says only which lane to run, for which pipeline, and for how long -
+# never a command of its own.
+#
+# A caller that needs more than one lane - several steps, an environment the
+# lane cannot carry, `continue-on-error` - stays a job of its own. This is the
+# uniform case, not every case.
+on:
+  workflow_call:
+    inputs:
+      lane:
+        description: Name of the declared CI lane to run.
+        required: true
+        type: string
+      kind:
+        description: Pipeline kind the lane runs under, for `xtask ci lane --kind`.
+        required: true
+        type: string
+      timeout-minutes:
+        description: How long the lane may take before the job is killed.
+        required: true
+        type: number
+      fetch-depth:
+        description: >-
+          How much history the lane reads. The tip alone is enough for
+          anything that does not compare against a revision; `0` is the whole
+          history, which a baseline comparison needs.
+        default: 1
+        type: number
+      artifact-name:
+        description: Name of the artifact to upload, when the lane leaves one.
+        default: ''
+        type: string
+      artifact-path:
+        description: Path the artifact is collected from. Empty uploads nothing.
+        default: ''
+        type: string
+      artifact-when:
+        description: >-
+          `always` uploads the artifact regardless of the lane's result;
+          `failure` uploads it only when the lane fails.
+        default: always
+        type: string
+      download:
+        description: >-
+          Name of an artifact this lane downloads before it runs, when it
+          depends on one lane's output. Empty downloads nothing.
+        default: ''
+        type: string
+
+# Not inherited from the caller: a called workflow gets its own environment.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The store the build-time audio assets are read from. A job that finds it
+  # empty regenerates every asset it needs, which is encode work no test should
+  # pay for. The path is the one the Linux executor already mounts, and a
+  # called workflow inherits nothing from its caller, so every workflow that
+  # runs a lane on that fleet says it for itself.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+  # Where the lane builds. Not in the checkout: this runner is ephemeral and
+  # the workspace is deleted before the lane starts, so a build directory
+  # there is empty on every job - 521 crates compiled and every test binary
+  # linked again, which was 8m30s of a 13m45s job whose tests took 4m. The
+  # compiler cache cannot close that; it was already at 98.96% and it caches
+  # compilations, not process spawns, build scripts or links. `/cache` is the
+  # mount that does survive - sccache reports its store as `/cache/sccache`
+  # from inside these jobs - and this is the directory beside it that the
+  # Linux executor names, `build_cache.rs` budgets, and a lane's `{target}`
+  # resolves through. Naming it also gives `hold_target_lease` something to
+  # claim, so the host's hourly reclaim leaves a live build alone. Reports do
+  # not move with it: nextest anchors its store on the workspace root.
+  CARGO_TARGET_DIR: /cache/target
+
+jobs:
+  # Named after the lane, not after this file. A caller reaches this workflow
+  # through `uses:`, and GitHub renders the callee's job name in the run tree,
+  # not the caller's - so without this every lane in a fan-out reads `run` and
+  # the tree says which lanes ran only through the API.
+  run:
+    name: ${{ inputs.lane }}
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+      # The runner image carries the toolchain, so a lane installs no packages.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      # The whole run's artifacts, not only the named ones: every upload below
+      # suffixes its name with the run id and attempt so a re-run cannot collide
+      # with the run it repeats, and a pattern would have to reconstruct that
+      # suffix here. `download` names what this lane reads, and is what decides
+      # whether anything is collected at all.
+      - name: Fetch what this lane reads
+        if: ${{ inputs.download != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+
+      - name: Run the lane
+        run: just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
+
+      # `artifact-when: always` uploads even when the lane failed: a budget
+      # report is most worth reading on the run that broke the budget.
+      # `failure` uploads only on a failed lane, for evidence that exists
+      # solely because something went wrong.
+      #
+      # `if-no-files-found: error` applies to every lane, not only the ones
+      # that expect it: a declared artifact is the lane's own claim that it
+      # will produce that file, and an upload that finds nothing is that
+      # claim broken, not a reason to warn and move on.
+      - name: Upload the lane's report
+        if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: error

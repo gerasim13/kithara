@@ -1,7 +1,9 @@
 use std::{fmt, path::PathBuf};
 
-use kithara_assets::{AssetLayout, AssetResource, AssetSource};
-use kithara_platform::sync::Arc;
+use kithara::{
+    assets::{AssetLayout, AssetResource, AssetSource},
+    platform::sync::Arc,
+};
 use url::Url;
 
 use crate::layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource};
@@ -108,14 +110,19 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_assets::{
-        AcquisitionResult, AssetLayoutRegistry, AssetStore, AssetsError, ReadSide,
-        ResourceAcquisition, StorageBackend, WriteSide,
+    use kithara::assets::{
+        AcquisitionResult, AssetLayoutRegistry, AssetsError, ReadSide, ResourceAcquisition,
+        StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
+    use unimock::{MockFn, Unimock, matching};
     use url::Url;
 
     use super::*;
+    use crate::{
+        layout::FfiAssetLayoutMock,
+        pools::{self, FfiPools, FfiStore},
+    };
 
     fn url(s: &str) -> Url {
         Url::parse(s).expect("valid test URL")
@@ -194,7 +201,7 @@ mod tests {
         );
     }
 
-    fn write_commit(acquisition: ResourceAcquisition, data: &[u8]) {
+    fn write_commit(acquisition: ResourceAcquisition<FfiPools>, data: &[u8]) {
         let AcquisitionResult::Pending(writer) = acquisition else {
             panic!("expected a pending writer");
         };
@@ -227,7 +234,7 @@ mod tests {
 
         let root_calls = Arc::new(AtomicUsize::new(0));
         let path_calls = Arc::new(AtomicUsize::new(0));
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
                 root_calls: Arc::clone(&root_calls),
@@ -297,7 +304,7 @@ mod tests {
         assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
-    #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
     fn foreign_layout_dictates_real_on_disk_root_and_path() {
         struct FixedLayout;
 
@@ -316,7 +323,7 @@ mod tests {
         }
 
         let dir = tempdir().expect("tempdir");
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -340,26 +347,21 @@ mod tests {
         assert!(dir.path().join("foreign-root/custom/audio.mp3").exists());
     }
 
-    #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
     #[case("../escape")]
     #[case("/absolute/path")]
     #[case("")]
     #[case("dir/../escape")]
     fn hostile_foreign_path_is_rejected(#[case] hostile: &'static str) {
-        struct HostileForeign(&'static str);
-
-        impl FfiAssetLayout for HostileForeign {
-            fn root(&self, _source: FfiAssetSource) -> String {
-                "foreign-root".to_string()
-            }
-
-            fn path(&self, _resource: FfiAssetResource) -> String {
-                self.0.to_string()
-            }
-        }
-
-        let layout = layout(HostileForeign(hostile));
-        let store = AssetStore::builder()
+        let layout = layout(Unimock::new((
+            FfiAssetLayoutMock::root
+                .each_call(matching!(_))
+                .returns("foreign-root".to_string()),
+            FfiAssetLayoutMock::path
+                .each_call(matching!(_))
+                .returns(hostile.to_string()),
+        )));
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout))
             .build();
@@ -368,7 +370,7 @@ mod tests {
             url: resource_url.clone(),
             discriminator: None,
         };
-        let scope = store.scope::<HostileForeign>(&source).expect("valid scope");
+        let scope = store.scope::<Unimock>(&source).expect("valid scope");
         let error = scope
             .key(&AssetResource::Url(resource_url))
             .expect_err("hostile path must be rejected");
@@ -382,24 +384,16 @@ mod tests {
     #[case("")]
     #[case("nested/root")]
     fn hostile_foreign_root_is_rejected(#[case] hostile: &'static str) {
-        struct HostileRoot(&'static str);
-
-        impl FfiAssetLayout for HostileRoot {
-            fn root(&self, _source: FfiAssetSource) -> String {
-                self.0.to_string()
-            }
-
-            fn path(&self, _resource: FfiAssetResource) -> String {
-                "resource.bin".to_string()
-            }
-        }
-
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
-            .layouts(AssetLayoutRegistry::new(layout(HostileRoot(hostile))))
+            .layouts(AssetLayoutRegistry::new(layout(Unimock::new(
+                FfiAssetLayoutMock::root
+                    .each_call(matching!(_))
+                    .returns(hostile.to_string()),
+            ))))
             .build();
         let error = store
-            .scope::<HostileRoot>(&AssetSource::Remote {
+            .scope::<Unimock>(&AssetSource::Remote {
                 url: url("https://example.com/audio.mp3"),
                 discriminator: None,
             })
@@ -411,26 +405,16 @@ mod tests {
     #[cfg(unix)]
     #[kithara::test]
     fn non_utf8_local_source_is_rejected_without_lossy_conversion() {
-        struct RejectNonUtf8;
-
-        impl FfiAssetLayout for RejectNonUtf8 {
-            fn root(&self, _source: FfiAssetSource) -> String {
-                panic!("non-UTF-8 path must not reach the foreign delegate");
-            }
-
-            fn path(&self, _resource: FfiAssetResource) -> String {
-                "resource.bin".to_string()
-            }
-        }
-
         let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let source = AssetSource::Local { path };
-        let store = AssetStore::builder()
+        // An unstubbed `Unimock` panics on any call, so reaching the foreign
+        // delegate at all fails the test.
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
-            .layouts(AssetLayoutRegistry::new(layout(RejectNonUtf8)))
+            .layouts(AssetLayoutRegistry::new(layout(Unimock::new(()))))
             .build();
         let error = store
-            .scope::<RejectNonUtf8>(&source)
+            .scope::<Unimock>(&source)
             .expect_err("non-UTF-8 source must be rejected");
 
         assert!(matches!(error, AssetsError::InvalidKey));

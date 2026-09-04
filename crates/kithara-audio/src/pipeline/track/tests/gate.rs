@@ -1,12 +1,20 @@
-use std::ops::Range;
+use std::{
+    io::{Read, SeekFrom},
+    ops::Range,
+};
 
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_stream::{SourcePhase, Stream};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    thread,
+};
+use kithara_stream::{DeferredWake, SourcePhase, Stream};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{TestConfig, TestControl, TestSource, TestStream, media_info};
 use crate::pipeline::{
-    decode::gate::source_phase_for_wait_context, stream::shared::SharedStream, track::WaitContext,
+    decode::gate::{ReadinessGate, source_phase_for_wait_context},
+    stream::shared::SharedStream,
+    track::WaitContext,
 };
 
 async fn shared_with_phase(
@@ -71,6 +79,85 @@ async fn repeated_parked_polls_coalesce_into_one_probe() {
         vec![2000..4096],
         "coalesced flush must file the latest armed window exactly once"
     );
+}
+
+/// RT gate polls answer while a construction read holds the control mutex.
+/// The real off-RT holder is a construction reader parked inside
+/// `Stream::read` → `Source::wait_range(range, None)` with the mutex held;
+/// a gate poll that touched that mutex would block the forbid-blocking
+/// produce core behind the park (RTSan: `sched_yield` in `parking_lot`'s
+/// contended acquire). The regression mode is this test hanging on the
+/// poll until the harness watchdog fires.
+#[kithara::test(tokio)]
+async fn a_readiness_poll_answers_while_a_construction_read_holds_the_mutex() {
+    let wake = Arc::new(DeferredWake::default());
+    let source = TestSource::new(Arc::new(TestControl::new(media_info(0))))
+        .with_peer_wake(Arc::clone(&wake));
+    *source.phase_handle().lock() = SourcePhase::Waiting;
+    let phase = source.phase_handle();
+    let park = source.park_handle();
+    let stream = match Stream::<TestStream>::new(TestConfig { source }).await {
+        Ok(stream) => stream,
+        Err(error) => panic!("test stream construction failed: {error}"),
+    };
+    let shared = SharedStream::new(stream);
+
+    park.arm();
+    let opened = shared.open_initial_reader();
+    let Some(gate) = opened.construction_gate() else {
+        panic!("initial reader must carry a construction gate");
+    };
+    gate.arm();
+    let mut reader = opened.into_inner();
+    let holder = thread::spawn_named("construction-read-holder", move || {
+        let mut buf = [0u8; 64];
+        reader.read(&mut buf)
+    });
+    park.wait_entered();
+
+    assert!(
+        !ReadinessGate::new(None).source_is_ready(&shared),
+        "a waiting source must poll as not-ready without touching the held control mutex"
+    );
+    assert_eq!(
+        source_phase_for_wait_context(&shared, &WaitContext::Playback),
+        SourcePhase::Waiting,
+        "the wait-context poll must answer from the probe while the mutex is held"
+    );
+    assert!(
+        shared.abr_handle().is_none(),
+        "the fixed-at-open ABR handle must answer (None here) while the mutex is held"
+    );
+    assert_eq!(
+        shared.format_change_segment_range().ok(),
+        Some(0..32),
+        "the fixed variant-control handle must serve the mock's format range while the mutex is held"
+    );
+    let pos = match shared.probe_seek(SeekFrom::Start(64)) {
+        Ok(pos) => pos,
+        Err(error) => {
+            panic!("the on-core probe seek must resolve while the mutex is held: {error}")
+        }
+    };
+    assert_eq!(pos, 64);
+    assert_eq!(
+        shared.position(),
+        64,
+        "probe_seek must move the probe cursor"
+    );
+    assert!(
+        wake.flush(),
+        "probe_seek must arm the peer wake for the shell to flush"
+    );
+
+    // Teardown: EOF lets the released construction read return instead of
+    // re-parking on the still-waiting phase.
+    *phase.lock() = SourcePhase::Eof;
+    park.release();
+    holder
+        .join()
+        .expect("holder thread must exit cleanly")
+        .expect("released construction read must complete");
 }
 
 /// A ready poll is a snapshot, not a wait: it must not arm demand, or the

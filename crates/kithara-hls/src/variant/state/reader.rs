@@ -23,6 +23,10 @@ impl ReaderRuntime {
         }
     }
 
+    pub(super) fn clear_wait(&self) {
+        self.wait_end.store(NO_WAIT, Ordering::Release);
+    }
+
     pub(super) fn is_flushing(&self) -> bool {
         self.seek_obs.is_flushing()
     }
@@ -33,10 +37,6 @@ impl ReaderRuntime {
 
     pub(super) fn note_wait(&self, end: u64) {
         self.wait_end.store(end.max(1), Ordering::Release);
-    }
-
-    pub(super) fn clear_wait(&self) {
-        self.wait_end.store(NO_WAIT, Ordering::Release);
     }
 
     pub(super) fn wait_end(&self) -> Option<u64> {

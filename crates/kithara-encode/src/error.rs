@@ -9,6 +9,7 @@ pub(crate) struct BackendMessage(pub(crate) String);
 
 /// Errors that can occur during audio encoding.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EncodeError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -18,6 +19,18 @@ pub enum EncodeError {
 
     #[error("Unsupported container: {0:?}")]
     UnsupportedContainer(ContainerFormat),
+
+    #[error(
+        "{container:?} container limit exceeded: attempted {attempted_bytes} bytes, maximum {max_bytes}"
+    )]
+    ContainerLimitExceeded {
+        /// Container whose hard byte limit was exceeded.
+        container: ContainerFormat,
+        /// Byte length the operation attempted to represent.
+        attempted_bytes: u64,
+        /// Largest byte length representable by `container`.
+        max_bytes: u64,
+    },
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),

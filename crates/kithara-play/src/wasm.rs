@@ -1,15 +1,11 @@
-mod playback;
-mod session;
-
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::thread::assert_main_thread;
-pub use playback::{bridge_duration_secs, bridge_is_playing, bridge_position_secs};
-pub use session::{
-    ensure_main_session, remote_session, tick_and_poll, warm_up_audio, worker_session_channel,
-};
 
 /// Start the main-thread WebCodecs capability probe.
-pub fn spawn_webcodecs_probe(pcm_pool: PcmPool) {
+pub fn spawn_webcodecs_probe<S>(pools: PoolRegion<S>)
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     assert_main_thread("spawn_webcodecs_probe");
-    kithara_decode::spawn_webcodecs_probe(pcm_pool);
+    kithara_decode::spawn_webcodecs_probe(pools);
 }

@@ -1,28 +1,31 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fs::File, io::Write, path::Path};
+use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 
 use kithara::{
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, thread,
         time::{Duration, Instant, timeout},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     offline::OfflinePlayer, temp_dir, test_defaults::Consts as Shared,
 };
 
+use crate::bufpool_ext::{TestPools, pools};
+
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const CHANNELS: u16 = Shared::CHANNELS;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     const PLAY_WINDOW_SECS: f64 = 3.0;
     /// Render warmup burned before the first measurement window so
     /// decoder startup silence (the few hundred ms between `load_and_fadein`
@@ -106,7 +109,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never())).build(),
     )
 }
 
@@ -114,16 +117,14 @@ async fn build_resource(
     url: &str,
     downloader: &Downloader,
     iter_label: &str,
-    store: kithara::assets::AssetStore,
+    store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url)
-            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(url).unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)
@@ -251,7 +252,11 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         let store = kithara_integration_tests::disk_asset_store(temp.path());
         let downloader = fresh_downloader();
 
-        let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
+        let mut player = OfflinePlayer::new(
+            HostConfig::offline(pools())
+                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build(),
+        );
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
@@ -259,7 +264,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             let resource =
                 build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
-            player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
+            player.load_and_fadein(resource);
 
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);

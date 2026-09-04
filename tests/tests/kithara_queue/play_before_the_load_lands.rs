@@ -2,15 +2,19 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    platform::{CancelToken, time::Duration, tokio},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::OfflineSession, temp_dir, waits::wait_for_position_event,
+    TestServerHelper, kithara, offline::OfflineQueue, temp_dir, waits::wait_for_position_event,
 };
+use kithara_test_fixtures::SignalAsset;
+
+use crate::bufpool_ext::pools;
 
 /// `play()` issued before the current track's load has landed must still
 /// start that track once the load completes.
@@ -29,24 +33,33 @@ use kithara_integration_tests::{
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("track.mp3");
+    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let player = Arc::new(PlayerImpl::new(
+    let session_pools = pools();
+    let session = HostConfig::offline(session_pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(session_pools.clone()).build(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -56,20 +69,22 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .downloader(downloader)
-    .store(store)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader)
+        .store(store)
+        .build();
 
     let mut rx = queue.subscribe();
-    queue.append(TrackSource::Config(Box::new(cfg)));
+    queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append play-before-load track");
     queue.play();
 
     let position = wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))

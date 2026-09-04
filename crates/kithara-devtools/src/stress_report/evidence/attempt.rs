@@ -11,16 +11,16 @@ pub(super) enum AttemptOutcome {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct AttemptKey {
-    pub(super) suite: String,
     pub(super) name: String,
+    pub(super) suite: String,
     pub(super) iteration: usize,
 }
 
 #[derive(Debug)]
 pub(super) struct AttemptMetadata {
-    pub(super) display: String,
     pub(super) key: AttemptKey,
     pub(super) run_id: Option<String>,
+    pub(super) display: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,9 +54,9 @@ impl AttemptMetadata {
         }
 
         let key = AttemptKey {
+            iteration,
             suite: binary_id.to_owned(),
             name: test_name.to_owned(),
-            iteration,
         };
         let display = attempt_id.map_or_else(|| render_key(&key), str::to_owned);
 
@@ -104,9 +104,9 @@ pub(super) fn attempt_outcomes(cases: &[CaseTiming]) -> BTreeMap<AttemptKey, Att
             continue;
         };
         let key = AttemptKey {
+            iteration,
             suite: case.suite.clone(),
             name: case.name.clone(),
-            iteration,
         };
         let outcome = if case.failed {
             AttemptOutcome::Failed

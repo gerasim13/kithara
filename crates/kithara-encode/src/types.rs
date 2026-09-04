@@ -1,5 +1,7 @@
+use bon::Builder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
+#[cfg(any(feature = "ffmpeg", feature = "fdk-aac"))]
 use crate::{EncodeError, EncodeResult};
 
 /// PCM source for encoder requests.
@@ -17,6 +19,7 @@ pub enum BytesEncodeTarget {
     Flac,
     Aac,
     M4a,
+    Alac,
 }
 
 impl BytesEncodeTarget {
@@ -26,6 +29,7 @@ impl BytesEncodeTarget {
             Self::Mp3 => AudioCodec::Mp3,
             Self::Flac => AudioCodec::Flac,
             Self::Aac | Self::M4a => AudioCodec::AacLc,
+            Self::Alac => AudioCodec::Alac,
         }
     }
 
@@ -35,7 +39,7 @@ impl BytesEncodeTarget {
             Self::Mp3 => ContainerFormat::MpegAudio,
             Self::Flac => ContainerFormat::Flac,
             Self::Aac => ContainerFormat::Adts,
-            Self::M4a => ContainerFormat::Mp4,
+            Self::M4a | Self::Alac => ContainerFormat::Mp4,
         }
     }
 
@@ -44,7 +48,7 @@ impl BytesEncodeTarget {
         const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
         match self {
             Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
-            Self::Flac => None,
+            Self::Flac | Self::Alac => None,
         }
     }
 
@@ -54,7 +58,7 @@ impl BytesEncodeTarget {
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Aac => "aac",
-            Self::M4a => "m4a",
+            Self::M4a | Self::Alac => "m4a",
         }
     }
 
@@ -85,6 +89,8 @@ impl BytesEncodeRequest<'_> {
 }
 
 /// Packaged encode request producing compressed access units for muxing.
+#[derive(Builder)]
+#[non_exhaustive]
 pub struct PackagedEncodeRequest<'a> {
     pub pcm: &'a dyn PcmSource,
     pub media_info: MediaInfo,
@@ -103,6 +109,7 @@ impl PackagedEncodeRequest<'_> {
     ///
     /// Returns [`EncodeError::InvalidInput`] for a zero timescale, a zero
     /// `packets_per_segment`, or a PCM source without a finite length.
+    #[cfg(any(feature = "ffmpeg", feature = "fdk-aac"))]
     pub(crate) fn validate(&self) -> EncodeResult<()> {
         if self.timescale == 0 {
             return Err(EncodeError::InvalidInput(

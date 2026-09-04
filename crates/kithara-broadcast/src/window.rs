@@ -28,13 +28,12 @@ impl PlaylistSnapshot {
 /// Owner of the live playlist window and grace retention.
 #[derive(Debug)]
 pub struct LiveWindow {
-    window: usize,
-    retention: usize,
-    timescale: u32,
-    target_seconds: u64,
-    discontinuity_sequence: u64,
     segments: VecDeque<Segment>,
     finished: bool,
+    discontinuity_sequence: u64,
+    target_seconds: u64,
+    retention: usize,
+    window: usize,
 }
 
 impl LiveWindow {
@@ -43,18 +42,22 @@ impl LiveWindow {
     /// # Errors
     ///
     /// Returns an error when the configuration cannot form a valid window.
-    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+    pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
 
         Ok(Self {
             window: config.window,
             retention: config.window + config.grace,
-            timescale: config.sample_rate,
             target_seconds: config.target_seconds()?,
             discontinuity_sequence: 0,
             segments: VecDeque::with_capacity(config.window + config.grace),
             finished: false,
         })
+    }
+
+    /// End the stream: the playlist gains `EXT-X-ENDLIST`.
+    pub fn finish(&mut self) {
+        self.finished = true;
     }
 
     /// Append a closed segment, evicting whatever falls past the retention.
@@ -69,21 +72,6 @@ impl LiveWindow {
         }
         while self.segments.len() > self.retention {
             self.segments.pop_front();
-        }
-    }
-
-    /// End the stream: the playlist gains `EXT-X-ENDLIST`.
-    pub fn finish(&mut self) {
-        self.finished = true;
-    }
-
-    /// Snapshot the playlist and retained segments.
-    #[must_use]
-    pub fn snapshot(&self) -> PlaylistSnapshot {
-        PlaylistSnapshot {
-            playlist: Arc::from(self.render()),
-            segments: self.segments.iter().cloned().collect(),
-            is_finished: self.finished,
         }
     }
 
@@ -105,7 +93,7 @@ impl LiveWindow {
             if segment.discontinuity {
                 playlist.push_str("#EXT-X-DISCONTINUITY\n");
             }
-            let seconds = f64::from(segment.duration_ts) / f64::from(self.timescale);
+            let seconds = f64::from(segment.duration_ts) / f64::from(segment.timescale);
             playlist.push_str(&format!("#EXTINF:{seconds:.3},\nseg/{}.aac\n", segment.seq));
         }
         if self.finished {
@@ -113,13 +101,25 @@ impl LiveWindow {
         }
         playlist
     }
+
+    /// Snapshot the playlist and retained segments.
+    #[must_use]
+    pub fn snapshot(&self) -> PlaylistSnapshot {
+        PlaylistSnapshot {
+            playlist: Arc::from(self.render()),
+            segments: self.segments.iter().cloned().collect(),
+            is_finished: self.finished,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::LiveWindow;
     use crate::{config::BroadcastConfig, segment::Segment};
@@ -131,12 +131,16 @@ mod tests {
         const TIMESCALE: u32 = 48_000;
     }
 
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
+    }
+
     fn listed_window() -> usize {
-        BroadcastConfig::builder().build().window
+        config().window
     }
 
     fn window() -> LiveWindow {
-        LiveWindow::new(&BroadcastConfig::builder().build()).expect("window")
+        LiveWindow::new(&config()).expect("window")
     }
 
     fn segment(seq: u64, discontinuity: bool) -> Segment {
@@ -145,6 +149,7 @@ mod tests {
             bytes: Bytes::from(vec![u8::try_from(seq % 256).expect("fits"); 8]),
             duration_ts: Consts::DURATION_TS,
             discontinuity,
+            timescale: Consts::TIMESCALE,
         }
     }
 
@@ -359,16 +364,15 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_window_the_playlist_rules_reject_is_refused() {
-        assert!(LiveWindow::new(&BroadcastConfig::builder().window(0).build()).is_err());
-        assert!(LiveWindow::new(&BroadcastConfig::builder().sample_rate(0).build()).is_err());
-        assert!(
-            LiveWindow::new(
-                &BroadcastConfig::builder()
-                    .segment_target(Duration::from_millis(500))
-                    .window(5)
-                    .build()
-            )
-            .is_err()
-        );
+        let mut config = config();
+        config.window = 0;
+        assert!(LiveWindow::new(&config).is_err());
+        config.window = 6;
+        config.sample_rate = 0;
+        assert!(LiveWindow::new(&config).is_err());
+        config.sample_rate = 48_000;
+        config.segment_target = Duration::from_millis(500);
+        config.window = 5;
+        assert!(LiveWindow::new(&config).is_err());
     }
 }

@@ -29,24 +29,6 @@ pub trait DriverIo: Send + Sync + 'static {
     /// truncation or read-only reopen fails).
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
-    /// Finalize the written bytes without publishing a committed snapshot.
-    ///
-    /// For a caller that is about to replace this resource anyway — the
-    /// atomic-chunked commit renames the file and reopens on the canonical
-    /// path — publishing here would map a file that is discarded a moment
-    /// later. Sealing flushes the bytes and leaves the active mapping in
-    /// place, so readers that already hold a view keep serving from it until
-    /// the replacement lands.
-    ///
-    /// Drivers that cannot separate the two fall back to [`Self::commit`].
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the written bytes cannot be flushed.
-    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.commit(final_len)
-    }
-
     /// Length of the published committed snapshot, if any.
     ///
     /// Returns `Some(n)` iff an immutable committed snapshot of length `n`
@@ -93,6 +75,24 @@ pub trait DriverIo: Send + Sync + 'static {
     ///
     /// Returns error only on a genuine backing-store read failure.
     fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>>;
+
+    /// Finalize the written bytes without publishing a committed snapshot.
+    ///
+    /// For a caller that is about to replace this resource anyway — the
+    /// atomic-chunked commit renames the file and reopens on the canonical
+    /// path — publishing here would map a file that is discarded a moment
+    /// later. Sealing flushes the bytes and leaves the active mapping in
+    /// place, so readers that already hold a view keep serving from it until
+    /// the replacement lands.
+    ///
+    /// Drivers that cannot separate the two fall back to [`Self::commit`].
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the written bytes cannot be flushed.
+    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.commit(final_len)
+    }
 
     /// Physical storage length (for `read_at` clamping).
     fn storage_len(&self) -> u64;

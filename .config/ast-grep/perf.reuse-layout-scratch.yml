@@ -1,0 +1,97 @@
+id: perf.reuse-layout-scratch
+message: |
+  Allocating a primitive `Vec` in a crate whose work is a layout or a draw
+  pass. These run for every frame that resizes a document, and a flow is
+  measured once per branch of the tree it stands in, so a list built here is
+  built again thousands of times a second.
+
+  Reuse storage that already outlives the pass:
+
+    - a retained widget keeps its own scratch field and refills it in place;
+    - an immediate widget keeps it in the state its tree holds for it;
+    - short-lived draw commands, path verbs, and paint text come from the
+      `DrawBuffers` family the compiled document carries.
+
+  A list that is only walked once is not a list: take an iterator instead.
+
+  The rule names the primitive type: `Vec<usize>`, `Vec<f32>`, `vec![true; n]`
+  and their turbofish forms. A `collect::<Vec<_>>()` of some other type is not
+  covered here, unlike the streaming crates that `perf.prefer-primitive-pool`
+  reads, because in a UI crate most of them collect widgets, brushes, or nodes.
+  A buffer that leaves the function as an `Arc<[T]>`, `Rc<[T]>` or `Box<[T]>`
+  is not scratch and is not covered: no pool can own storage that escapes.
+severity: error
+language: Rust
+files:
+  - crates/kithara-ui/src/**/*.rs
+  - crates/kithara-app/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/benches/**"
+rule:
+  all:
+    - any:
+        - all:
+            - any:
+                - pattern: "let $NAME: Vec<$TYPE> = $ALLOC;"
+                - pattern: "let mut $NAME: Vec<$TYPE> = $ALLOC;"
+            - not:
+                inside:
+                  all:
+                    - kind: function_item
+                    - has:
+                        any:
+                          - pattern: "Arc::from($NAME)"
+                          - pattern: "Rc::from($NAME)"
+                          - pattern: "Box::from($NAME)"
+                        stopBy: end
+                  stopBy: end
+        - pattern: "Vec::<$TYPE>::new()"
+        - pattern: "Vec::<$TYPE>::default()"
+        - pattern: "Vec::<$TYPE>::with_capacity($CAPACITY)"
+        - pattern: "$ITER.collect::<Vec<$TYPE>>()"
+        - all:
+            - pattern: "vec![$ELEMENT; $CAPACITY]"
+            - not:
+                inside:
+                  any:
+                    - pattern: "let $NAME: Vec<$TYPE> = $_;"
+                    - pattern: "let mut $NAME: Vec<$TYPE> = $_;"
+                  stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+constraints:
+  TYPE:
+    regex: '^(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)$'
+  ALLOC:
+    regex: '(?s)(?:^vec!\s*\[|^Vec(?:::\s*<[^>]+>)?::(?:new|default|with_capacity|from)\s*\(|^Default::default\s*\(|\.(?:collect(?:\s*::\s*<[^>]+>)?|to_vec|repeat)\s*\()'
+  ELEMENT:
+    any:
+      - kind: integer_literal
+      - kind: float_literal
+      - kind: boolean_literal
+      - kind: char_literal

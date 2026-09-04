@@ -1,7 +1,6 @@
 //! Per-track load-attempt contracts around user selection: promotion of
 //! a parked `Pending` track past a hung background lane, single download
 //! session per track, and lane release on a superseded selection.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -10,25 +9,27 @@ use std::{num::NonZeroUsize, sync::Arc};
 use kithara::{
     assets::AssetStore,
     events::{TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio,
-    kithara,
-    offline::OfflineSession,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
+    offline::OfflineQueue,
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -69,7 +70,7 @@ fn register_hung(helper: &TestServerHelper) -> BehaviorHandle {
 fn register_fast_mp3(helper: &TestServerHelper) -> BehaviorHandle {
     helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -81,7 +82,7 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -94,52 +95,66 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
-    ));
+    );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .max_concurrent_loads(cap)
-            .store(store.clone())
-            .player(player)
-            .build(),
-    ));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .max_concurrent_loads(cap)
+                .store(store.clone())
+                .player(player)
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
-fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+fn mk_cfg(
+    url: &Url,
+    downloader: &Downloader,
+    store: &AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
 }
 
-fn status_of(queue: &Queue, id: TrackId) -> Option<TrackStatus> {
+fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> Option<TrackStatus> {
     queue.track(id).map(|e| e.status)
 }
 
 #[kithara::flash(true)]
 async fn wait_for_status_matching(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
     what: &str,
@@ -172,11 +187,13 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
 
-    let hung_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &hung.url(),
-        &downloader,
-        &store,
-    ))));
+    let hung_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &hung.url(),
+            &downloader,
+            &store,
+        ))))
+        .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
@@ -184,11 +201,13 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
     // Parked: the background lane is saturated by the hung load.
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url(&fast),
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url(&fast),
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
 
     queue
         .select(fast_id, Transition::None)
@@ -225,22 +244,26 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
     let mut events = queue.subscribe();
 
-    let hung_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &hung.url(),
-        &downloader,
-        &store,
-    ))));
+    let hung_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &hung.url(),
+            &downloader,
+            &store,
+        ))))
+        .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
     .await
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url(&fast),
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url(&fast),
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
 
     // The user clicks the stuck track, then gives up and clicks another.
     queue
@@ -279,7 +302,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
 /// Setup invariant: the hung track must still be mid-load when the fast
 /// track resolves, otherwise the scenario did not actually exercise lane
 /// isolation.
-fn assert_hung_still_loading(queue: &Queue, hung_id: TrackId) {
+fn assert_hung_still_loading(queue: &QueueControl<TestPools>, hung_id: TrackId) {
     assert!(
         matches!(status_of(queue, hung_id), Some(TrackStatus::Loading)),
         "setup invariant broken: hung track should still be Loading (last={:?})",

@@ -3,12 +3,14 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
     rt_cancel, temp_dir,
@@ -42,13 +44,20 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
 
     let url = server.url("/master.m3u8");
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
 
     spawn_blocking(move || {
         let mut buf = [0u8; 64 * 1024];

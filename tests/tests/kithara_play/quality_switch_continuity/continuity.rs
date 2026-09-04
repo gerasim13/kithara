@@ -1,7 +1,7 @@
 use std::{array, fmt};
 
 use cochlea_features::{Audio as ProbeAudio, ProbeOpts, SegmentOpts, probe, segment_timeline};
-use kithara_integration_tests::TestServerHelper;
+use kithara_integration_tests::{TestServerHelper, cochlea::percentile_f32};
 use num_traits::ToPrimitive;
 
 use super::*;
@@ -82,13 +82,6 @@ fn format_channels(channels: &[ChannelComparison]) -> String {
         .join("; ")
 }
 
-fn percentile(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
-    assert!(!values.is_empty(), "percentile input must not be empty");
-    values.sort_by(f32::total_cmp);
-    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
-    values[index]
-}
-
 fn channel_metric(samples: &[f32], channel: usize) -> ChannelMetric {
     let channels = usize::from(CHANNELS);
     let frames = samples.len() / channels;
@@ -124,10 +117,10 @@ fn channel_metric(samples: &[f32], channel: usize) -> ChannelMetric {
     ChannelMetric {
         peak_step,
         peak_step_frame,
-        background_step: percentile(&mut steps, 999, 1_000),
+        background_step: percentile_f32(&mut steps, 999, 1_000),
         peak_residual,
         peak_residual_frame,
-        background_residual: percentile(&mut residuals, 999, 1_000),
+        background_residual: percentile_f32(&mut residuals, 999, 1_000),
     }
 }
 
@@ -211,10 +204,10 @@ fn time_aligned_excess_metric(
     ChannelMetric {
         peak_step,
         peak_step_frame,
-        background_step: percentile(&mut steps, 999, 1_000),
+        background_step: percentile_f32(&mut steps, 999, 1_000),
         peak_residual,
         peak_residual_frame,
-        background_residual: percentile(&mut residuals, 999, 1_000),
+        background_residual: percentile_f32(&mut residuals, 999, 1_000),
     }
 }
 

@@ -10,12 +10,12 @@ pub(crate) struct TestArgs {
     /// the lexical body-only time-call rewrite + sets the per-test ambient gate;
     /// `false` sets ambient off and does NOT rewrite (the body runs REAL).
     pub(crate) flash: Option<bool>,
-    pub(crate) timeout: Option<Expr>,
-    pub(crate) tracing_filter: Option<String>,
     /// `hang_timeout_secs(N)`: the liveness budget `#[kithara::hang_watchdog]`
     /// arms with inside this test. Shortens the REAL wait a watchdog park costs
     /// on the flash-off lane, where the ambient budget is spent in wall time.
     pub(crate) hang_timeout_secs: Option<u64>,
+    pub(crate) timeout: Option<Expr>,
+    pub(crate) tracing_filter: Option<String>,
     /// Substring patterns for soft-fail: if a panic message contains any of
     /// these (case-insensitive), the test prints a warning instead of failing.
     pub(crate) soft_fail_patterns: Vec<String>,

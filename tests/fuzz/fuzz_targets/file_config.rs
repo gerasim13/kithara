@@ -5,13 +5,15 @@ use std::{path::PathBuf, sync::LazyLock};
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    bufpool::testing::{Pools, TestPools, pools},
     file::{FileConfig, FileSrc},
 };
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
-static STORE: LazyLock<AssetStore> = LazyLock::new(|| {
-    AssetStore::builder()
+static POOLS: LazyLock<Pools> = LazyLock::new(pools);
+static STORE: LazyLock<AssetStore<TestPools>> = LazyLock::new(|| {
+    AssetStore::builder(POOLS.clone())
         .backend(StorageBackend::Memory)
         .build()
 });
@@ -51,6 +53,7 @@ fuzz_target!(|input: Input| {
     let name = String::from_utf8_lossy(&input.name);
     let cfg = FileConfig::for_src(src)
         .store(STORE.clone())
+        .pools(POOLS.clone())
         .discriminator(name.as_ref())
         .build();
 

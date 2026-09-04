@@ -2,9 +2,9 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -12,12 +12,16 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
+use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineQueue};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
 /// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
@@ -54,42 +58,53 @@ const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
 
 struct Ctx {
     config: AppConfig,
-    queue: Arc<Queue>,
+    queue: OfflineQueue<AppPools>,
     cache: TestTempDir,
 }
 
 async fn build_ctx() -> Ctx {
+    let pools = app_pools().expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools)
+            .cancel(shutdown.child())
+            .build(),
+    );
+    let session_pools = worker.pools().clone();
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker.clone())
         .store(store)
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let session_config = HostConfig::offline(session_pools)
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session_config.sample_rate())
+            .worker(worker)
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    );
+    let queue = OfflineQueue::new(
+        session_config,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
 
-    let q = Arc::clone(&queue);
+    let q = queue.control();
     tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
@@ -104,11 +119,11 @@ async fn build_ctx() -> Ctx {
     }
 }
 
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource {
+fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
     super::app_track_source(
         url,
         &ctx.config,
-        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,
@@ -117,7 +132,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
 
 async fn wait_for_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -234,7 +249,7 @@ enum AdvanceTrigger {
 }
 
 struct ScrubObservation<'a> {
-    queue: &'a Queue,
+    queue: &'a Queue<AppPools>,
     rx: &'a mut EventReceiver,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,
@@ -312,13 +327,13 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let Event::Player(PlayerEvent::ItemDidFail { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);
                 }
-                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);
                 }
@@ -394,13 +409,16 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend));
+        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend))
+        .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(build_track_source(TARGET_TRACK, &ctx, backend));
+        .append(build_track_source(TARGET_TRACK, &ctx, backend))
+        .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_AFTER, &ctx, backend));
+        .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
+        .expect("append trailing sentinel");
 
     wait_for_loaded(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
         .await

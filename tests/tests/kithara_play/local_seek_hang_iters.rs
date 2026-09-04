@@ -1,16 +1,19 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     decode::DecoderBackend,
     events::{AbrMode, AudioEvent, Event, EventReceiver},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{self, Duration, Instant, timeout},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -18,12 +21,15 @@ use kithara_integration_tests::{
 };
 use url::Url;
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    common::test_defaults::Consts as Shared,
+};
 
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     /// Produced-audio horizon for the event-driven warmup: the warmup
     /// drives the render pull until `PlaybackProgress` advances past this
     /// position, proving the decode worker primed the pipeline before the
@@ -219,16 +225,15 @@ async fn build_resource(
     url: &Url,
     downloader: &Downloader,
     iter_label: &str,
-    store: kithara::assets::AssetStore,
+    store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str())
-            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(url.as_str())
+            .unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)
@@ -296,19 +301,24 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
+                pools(),
                 CancelToken::never(),
             ))
             .build(),
         );
 
-        let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
+        let mut player = OfflinePlayer::new(
+            HostConfig::offline(pools())
+                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build(),
+        );
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         let resource = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
         let mut events = resource.subscribe();
-        player.load_and_fadein(resource, &format!("{iter_label}|local-hls"));
+        player.load_and_fadein(resource);
 
         // Event-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),

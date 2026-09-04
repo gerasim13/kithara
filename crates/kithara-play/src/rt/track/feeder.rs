@@ -1,18 +1,19 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
-use kithara_audio::ServiceClass;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::Frames;
+use kithara_audio::{SourceEnd, SourceSpan};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_signal::FrameCount;
+use kithara_warp::{PresentationFrontier, RenderContext};
 
 #[rustfmt::skip]
 use crate::resource::Resource;
-use crate::bridge::RtMetrics;
+use crate::{bridge::RtMetrics, worker::ServiceClass};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
 /// Wraps a [`Resource`] and maintains per-channel scratch buffers
-/// that are filled from the underlying `PcmReader`. The audio thread
+/// that are filled from the underlying `AudioReader`. The audio thread
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 #[derive(fieldwork::Fieldwork)]
@@ -21,11 +22,47 @@ pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
     resource: WasmSend<Resource>,
-    channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
+    channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
+    source_spans: VecDeque<SourceWindow>,
+    last_source_end: Option<SourceEnd>,
+}
+
+#[derive(Clone, Copy)]
+struct SourceWindow {
+    frames: usize,
+    source: Option<SourceSpan>,
+}
+
+impl SourceWindow {
+    fn take(&mut self, frames: usize) -> Option<SourceEnd> {
+        let source_end = match self.source {
+            Some(source) if frames >= self.frames => {
+                self.source = None;
+                Some(SourceEnd::new(source.end(), source.sample_rate()))
+            }
+            Some(source) => {
+                let split = partial_source_end(source, frames, self.frames);
+                self.source = split
+                    .and_then(|split| SourceSpan::new(split, source.end(), source.sample_rate()));
+                split.map(|split| SourceEnd::new(split, source.sample_rate()))
+            }
+            None => None,
+        };
+        self.frames = self.frames.saturating_sub(frames);
+        source_end
+    }
+}
+
+fn partial_source_end(source: SourceSpan, frames: usize, span_frames: usize) -> Option<u64> {
+    let source_frames = source.end().checked_sub(source.start())?;
+    let numerator = u128::from(source_frames).checked_mul(u128::try_from(frames).ok()?)?;
+    let denominator = u128::try_from(span_frames).ok()?;
+    let consumed = u64::try_from(numerator.checked_div(denominator)?).ok()?;
+    source.start().checked_add(consumed)
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -33,7 +70,7 @@ pub struct PlayerResource {
 pub enum ReadOutcome {
     /// The requested range was filled completely.
     ///
-    /// `frames` counts real PCM frames copied out of the wrapped reader or
+    /// `frames` counts real audio frames copied out of the wrapped reader or
     /// scratch buffer. The remainder may be zero-filled during a non-terminal
     /// underrun and must not advance playback position.
     Full { frames: usize },
@@ -60,37 +97,37 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    const fn scratch_frames(sample_rate: u32) -> Frames {
-        Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two per-channel scratch buffers from the given PCM pool, each holding
-    /// [`Self::scratch_frames`] frames.
-    #[must_use]
-    pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
+    /// Allocates two per-channel scratch buffers through the given pool facade,
+    /// each holding [`Self::scratch_frames`] frames.
+    pub fn new<S>(
+        resource: Resource,
+        src: Arc<str>,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
+        let left = pools.get_with_len::<f32>(buffer_frames)?;
+        let right = pools.get_with_len::<f32>(buffer_frames)?;
 
-        let channel_buffers = std::array::from_fn(|_| {
-            pool.get_with(|b: &mut Vec<f32>| {
-                let cap = b.capacity();
-                if cap < buffer_frames {
-                    b.reserve(buffer_frames - cap);
-                }
-                b.resize(buffer_frames, 0.0);
-            })
-        });
-
-        Self {
-            channel_buffers,
+        Ok(Self {
+            channel_buffers: [left, right],
+            source_spans: VecDeque::with_capacity(buffer_frames),
             src,
             resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
+            last_source_end: None,
             eof_seen: false,
             failed: false,
-        }
+        })
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no
@@ -122,34 +159,32 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let n = match self.resource.get_mut().read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
+            let (n, source) = match self.resource.get_mut().read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames {
+                    count, source_span, ..
+                }) => (count.get(), source_span),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, None),
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
                     self.eof_seen = true;
                     eof_reached = true;
-                    0
+                    (0, None)
                 }
                 Err(_) => {
                     metrics.record_decode_error();
                     self.failed = true;
-                    0
+                    (0, None)
                 }
             };
             if n == 0 {
                 break;
             }
+            self.source_spans
+                .push_back(SourceWindow { frames: n, source });
             self.write_len += n;
             self.write_pos += n;
         }
 
         eof_reached
-    }
-
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
@@ -161,7 +196,43 @@ impl PlayerResource {
         self.eof_seen.then_some(self.write_len)
     }
 
-    /// Read PCM frames into the output buffers for the given range.
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
+    }
+
+    fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
+    }
+
+    fn consume_source(&mut self, mut frames: usize) {
+        let mut source_end = self.last_source_end;
+        while frames > 0 {
+            let Some(mut span) = self.source_spans.pop_front() else {
+                break;
+            };
+            let consumed = frames.min(span.frames);
+            source_end = span.take(consumed);
+            frames -= consumed;
+            if span.frames > 0 {
+                self.source_spans.push_front(span);
+            }
+        }
+        if frames > 0 {
+            source_end = None;
+        }
+        self.last_source_end = source_end;
+    }
+
+    pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
+        let source_end = self.last_source_end?;
+        (source_end.sample_rate() == sample_rate
+            && source_end.sample_rate() == self.resource.get().spec().sample_rate)
+            .then_some(source_end)
+    }
+
+    /// Read audio frames into the output buffers for the given range.
     ///
     /// Fills internal scratch buffers from the underlying resource as needed,
     /// then copies the requested frames into `output`. Shifts any remaining
@@ -199,6 +270,8 @@ impl PlayerResource {
                 output[1][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
+
+            self.consume_source(frames_to_write);
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -250,8 +323,15 @@ impl PlayerResource {
         self.resource.get_mut().sync_seek();
         self.write_len = 0;
         self.write_pos = 0;
+        self.source_spans.clear();
+        self.last_source_end = None;
+        self.resource.get().clear_render();
         self.eof_seen = false;
         self.failed = false;
+    }
+
+    const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
 
     /// Control-plane handle used to begin a seek off the audio thread.
@@ -268,18 +348,21 @@ impl PlayerResource {
             pub fn duration(&self) -> f64;
             /// Set the target sample rate of the audio host.
             pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub(crate) fn set_playback_rate(&self, rate: f32);
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
+            pub(crate) fn clear_render(&self);
+            pub(crate) fn publish_render(
+                &self,
+                context: &RenderContext,
+                frontier: PresentationFrontier,
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
+    use kithara_signal::{AudioSpec, SampleCount};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -291,15 +374,30 @@ mod tests {
     fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expected: usize) {
         assert_eq!(
             PlayerResource::scratch_frames(sample_rate),
-            Frames::new(expected)
+            FrameCount::new(expected)
         );
     }
 
     #[kithara::test]
     fn an_interleaved_length_is_not_a_frame_count() {
-        const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
-
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate is non-zero"));
         let frames = PlayerResource::scratch_frames(48_000);
-        assert_eq!(frames.samples(STEREO).get(), frames.get() * 2);
+        assert_eq!(
+            spec.sample_count(frames),
+            Ok(SampleCount::new(frames.get() * 2))
+        );
+    }
+
+    #[kithara::test]
+    fn partial_scratch_consumption_advances_the_exact_source_span() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let mut span = SourceWindow {
+            frames: 10,
+            source: SourceSpan::new(100, 130, rate),
+        };
+
+        assert_eq!(span.take(4), Some(SourceEnd::new(112, rate)));
+        assert_eq!(span.source.map(|source| source.start()), Some(112));
+        assert_eq!(span.take(6), Some(SourceEnd::new(130, rate)));
     }
 }

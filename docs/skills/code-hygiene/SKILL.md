@@ -181,14 +181,24 @@ Flag new short, opaque names.
 ## Workflow
 
 1. Build the diff (scope above), extract `+` lines with `file:line`.
-1. Run the detectors from rules 2/4/8 (mechanical grep) plus a judgment pass for
-  rules 1/3/5/6/7/9. Judge comments (1/3/5) under the removal default.
+1. Run the checks that already own these rules, scoped to the touched files.
+  `--path` takes a directory or a single file:
+
+```
+just lint style --check comment_hygiene --path <path>
+just lint typos <path>
+just lint ast-grep <path>
+```
+
+1. Add a judgment pass for what no check can decide: rules 3/6/7/9, and the
+  comments `comment_hygiene` refused to touch. Judge comments (1/3/5) under the
+  removal default.
 1. Group findings by category; for each give `file:line` and a short "why".
 1. Split into:
 
 - **Mechanical** (ASCII/English rule 4, "what"/label comment rule 1, status
-  markers rule 2, ASCII-art rule 5) - propose an autofix; apply via Edit after
-  a "yes".
+  markers rule 2, ASCII-art rule 5) - apply with `--fix` on the same scope, then
+  show the diff. Hand-edit only what the autofix declined.
 - **Judgment** (bloated doc rule 3, visibility rule 6, surface/protocol leak
   rule 7, names rule 9) - list them for a decision, **do not edit silently**.
 
@@ -200,7 +210,8 @@ Flag new short, opaque names.
 
 ```
 cargo build --workspace
-just lint fast          # fast policy checks (style, idioms, arch, ast-grep)
+just lint fast          # commit gate; it does not run the style ratchets
+just lint style         # the comment, ordering, and document ratchets
 just test all           # nextest + doctests
 ```
 

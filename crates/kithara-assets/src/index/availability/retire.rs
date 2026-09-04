@@ -29,8 +29,8 @@ use super::core::{AssetTree, Availability};
 /// minutes of HLS playback). Bounding it needs the reader to stop taking
 /// ownership per read - see `a_read_burst_never_leaks_a_generation`.
 pub(super) struct Retired {
-    trees: ArrayQueue<Arc<AssetTree>>,
     availabilities: ArrayQueue<Arc<Availability>>,
+    trees: ArrayQueue<Arc<AssetTree>>,
     overflowed: AtomicBool,
 }
 
@@ -56,20 +56,6 @@ impl Retired {
         }
     }
 
-    pub(super) fn retire_tree(&self, tree: Arc<AssetTree>) {
-        if let Err(tree) = self.trees.push(tree) {
-            self.overflowed.store(true, Ordering::Release);
-            mem::forget(tree);
-        }
-    }
-
-    pub(super) fn retire_availability(&self, availability: Arc<Availability>) {
-        if let Err(availability) = self.availabilities.push(availability) {
-            self.overflowed.store(true, Ordering::Release);
-            mem::forget(availability);
-        }
-    }
-
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.trees.is_empty() && self.availabilities.is_empty()
@@ -79,5 +65,19 @@ impl Retired {
     #[cfg(test)]
     pub(super) fn overflowed(&self) -> bool {
         self.overflowed.load(Ordering::Acquire)
+    }
+
+    pub(super) fn retire_availability(&self, availability: Arc<Availability>) {
+        if let Err(availability) = self.availabilities.push(availability) {
+            self.overflowed.store(true, Ordering::Release);
+            mem::forget(availability);
+        }
+    }
+
+    pub(super) fn retire_tree(&self, tree: Arc<AssetTree>) {
+        if let Err(tree) = self.trees.push(tree) {
+            self.overflowed.store(true, Ordering::Release);
+            mem::forget(tree);
+        }
     }
 }

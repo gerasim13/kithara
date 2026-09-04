@@ -4,12 +4,16 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{TestServerHelper, auto, flash_pace::virtual_pace};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
+    flash_pace::virtual_pace,
+};
 use tracing::info;
 
 struct Consts;
@@ -23,6 +27,13 @@ impl Consts {
     /// a hot-refetch livelock parks the reader forever and trips the test
     /// timeout instead.
     const DRAIN_CHUNKS: usize = 400;
+    /// The ladder the drain runs over: two variants, since the reader opens
+    /// in `auto` mode and a single one leaves it nothing to weigh, and 60 s
+    /// of media so the drain budget above runs out before the track does.
+    /// Measured: the drain ends on its 400th chunk with EOF still ahead.
+    const VARIANTS: usize = 2;
+    const SEGMENTS: usize = 20;
+    const SEGMENT_SECS: f64 = 3.0;
 }
 
 #[kithara::test(
@@ -33,29 +44,38 @@ impl Consts {
 )]
 async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANTS)
+                .segments_per_variant(Consts::SEGMENTS)
+                .segment_duration_secs(Consts::SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the drain runs over");
+    let url = created.master_url();
 
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
 
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     // The blocking read phase must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread
@@ -66,7 +86,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
         let mut chunks_read = 0usize;
         while chunks_read < Consts::WARMUP_CHUNKS {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
@@ -80,7 +100,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         let mut drained = 0usize;
         let mut reached_eof = false;
         while drained < Consts::DRAIN_CHUNKS && !reached_eof {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so

@@ -2,16 +2,35 @@
 
 Contracts and invariants for the kithara-app crate; the README is the overview.
 
+## Buffer-pool ownership
+
+`pools::AppPools` is the desktop composition schema. `main` builds one
+`PoolRegion<AppPools>` and gives the same facade to the asset store, HTTP
+client, playback worker, queues, and analysis cache. Its `u8` and `f32` slots
+compete under one 256 MiB hard cap; startup allocation is declared in the
+schema configuration rather than warmed later by a component.
+
+## Recording asset adapter
+
+`AssetPartSink` is the application composition seam between storage-neutral
+`kithara-record` and the canonical `AssetStore`. It acquires one phase-typed
+writer, maps random-access container writes directly to that writer, and
+publishes only through consuming `commit(final_len)`. Abort first closes the
+writer and then removes that exact relative resource through AssetStore's
+canonical deletion channel; a cancelled or failed recording must not leave an
+active partial asset. Encoding and recording crates never receive a filesystem
+path or an AssetStore.
+
 ## Broadcast service
 
-The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
-stays `Requested` until the session exposes its measured output rate, which configures both the ring and the
-encoder and arms the single mix tap. App-root cancellation ends the origin and encoder; dropping the running
-phase releases the tap.
+The crate owns only the service wiring; `main` builds the complete `BroadcastConfig` with the app's shared worker, pools, and cancellation parent. Packaging, the bounded intake, and the origin belong to `kithara-broadcast`. A request
+stays `Requested` until the Host exposes its measured output rate, which replaces only the configured sample
+rate before `BroadcastOutput` is installed in the single Host `OutputGroup`. App-root cancellation ends the origin and encoder; stopping the
+running phase releases the output group before the encoder drains.
 
-Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves the handle
+Stopping blocks - it closes the bounded intake and waits for the encoder tail - so the toggle moves the handle
 into an iced task and marks the service `Stopping`; only that task's completion message makes it `Off`. The GUI
-tick polls `BroadcastHandle::status`, so a producer released by a device-rate change reaches `Off` the same way.
+tick polls `BroadcastHandle::status`, so an output released by a device-rate change reaches `Off` the same way.
 
 The canon puts this control in the app menu and a recorder module and the app has neither, so its REC cell sits
 in the bar beside the CPU cell.
@@ -23,6 +42,47 @@ endpoint the documents may bind, `AppUi::new` compiles both layout documents aga
 `UiDocError`, and a unit test compiles both, so a compile failure is a build defect rather than a runtime
 condition. `compile_ui` merges `builtin::text_doc()` with `assets/ui/app-en.ktext.ron` before every compile;
 that catalog holds only the window-manager menu words canon has no key for.
+
+### Where the UI package is read from
+
+`AppConfig.ui_package` names the folder holding the UI package. `main` defaults it to `assets/ui` beside the
+executable, which is where a release lays its documents out, and `--ui-package` overrides it. `AppUi::new`
+reads that folder over what the build embeds, so changing a document on disk changes the interface at the next
+start without a rebuild.
+
+A path that does not exist means no package was laid out and the build's own documents draw; that is what a
+developer running from a build directory sees. Anything else that stops the folder being read - a permission,
+a manifest that fails the `kithara-ui` contract - stops the application rather than quietly drawing the
+built-in one. This is the one place the application accepts a missing input as an answer, and it is a
+user-facing default rather than a state-resolution fallback: the package is optional configuration, and its
+absence is not evidence of a broken contract.
+
+`gui::ui::package::Package` is the single owner of one loaded package: the resolver it is read through, the
+screens it answered for, and the skin and catalog it dresses them in. Both hosts read from that one value -
+the iced host paints with `Package::skin`, and the retained host builds its window `Config` from the same
+resolver and catalog rather than loading a second copy. Two packages drawing one application is the failure
+this shape exists to prevent.
+
+The application asks the package for `deck-single` and `deck-dual` by role, and `Package` resolves both once.
+A manifest may also name a skin document and a caption catalog; naming a skin is what lets a package change
+how the application looks without a rebuild. A manifest that names neither wears the built-in skin and the
+built-in words, which is a package carrying pages and nothing else - declared optionality, not a fallback.
+
+`Package::REQUIRED` is the whole of what a package must answer for, checked once each screen compiles:
+
+- `deck-a/play` - the only path that starts and stops playback. A screen without it draws a player that
+  cannot play.
+- `deck-a/wave` - the only path that moves the position within a track. A screen without it can start a
+  track and never move inside it.
+
+Everything else a screen offers is the package's own business. The minimum is checked rather than assumed
+because a screen missing a path still compiles and still draws; only the paths it answers on say whether the
+application can reach it, and a press that lands nowhere reads as a dead button rather than as a package
+defect.
+
+Reading the package from disk costs 1.7 ms once at start: 10.1 ms against 8.4 ms for the same documents
+embedded, 17 files and 62 KiB, measured on this laptop under `test-release`. Compilation dominates both, which
+is why the resolver caches what it read rather than indexing what it might read.
 
 ### Deck addressing
 
@@ -37,6 +97,10 @@ the session bounds the letter, so one past the last deck resolves to nothing rat
 One position indexes every list a deck appears in: `Decks` is built from `DeckSet::decks()` in session order and
 `ViewCache::refresh` resizes against `Decks`, so the address tree joins them by position alone. Changing the
 session's deck list means rebuilding the view model with it; no key survives them drifting apart.
+
+Each `Deck` owns one cancellation token below the app shutdown token. Its player and queue receive independent
+children; its state controller and analysis listener share a third child. Dropping a deck cancels that subtree
+without cancelling the app root or a sibling deck.
 
 The first segment of a control path names a layout instance and `gui::ui::events::route` is the host's own list
 of them, held against the documents by unit test, so an instance the documents mint cannot go unanswered.
@@ -65,7 +129,11 @@ reaches it. `ViewCache` owns focus next to hover, both naming a deck by position
   answers `deck.stream.quality_hidden` and the cell leaves the row. The app supplies the rungs and owns the open
   flag per deck; a pick becomes `DeckMsg::SetQuality`, which sets the ABR mode on the deck's own
   `current_abr_handle` and mirrors it in the deck state.
-- The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
+- The mixer channel keeps the EQ; `GainDb` carries the knob's dB travel.
+
+The deck module is retained-hosted, but the tempo surface stays on iced: the engine observes each decoded event first,
+and an unanswered wheel event reaches the same child unchanged. The Hero Wave and five transport buttons have engine
+descriptors; the tempo row deliberately does not.
 
 `Kithara` owns one EQ mode for the whole app; every deck keeps only its own desired gains in `UiState`.
 Right-clicking either knob bank opens its host-owned pointer popover in `ViewCache`, which owns no product
@@ -92,7 +160,15 @@ answers only its own addresses, so no type carries the whole vocabulary, and `Wa
 endpoint key into a walk over it. A binding scope (`@deck=a`) selects an instance rather than naming a path
 segment: the node owning the instances spends it. `ViewCache` owns what the renderer borrows but the model does
 not hold: converted waveform columns, formatted strings, per-deck zoom and quality-menu flag, collapsed modules,
-the hovered and focused deck, and the deck layout.
+the hovered and focused deck, and the deck layout. Four smaller views sit beside them, one owner each:
+`MenuState` (which menu group is open), `Modules` (which pane the menu switched off), `WindowState` (what the
+single window reports), `LibraryView` (the library's own query and scope) and `StageView` (the tempo-map window
+edges and the visualisation preset, answered by `TempoNode`/`VisNode`). A view is read through `ReadRoot` and
+written only by `ui::events`; nothing else holds a second copy.
+
+`AppUi` carries the compiled document set and a `Clock`. The clock is what answers `ui.clock.seconds`, so a frame is
+reproducible from the state that produced it: `update` steps it once per tick and both hosts read the same value, rather
+than each sampling a wall clock of its own.
 
 ### Layout switching
 
@@ -132,40 +208,47 @@ band edge — a `WindowDrag` below it, the wave above — so the window stays mo
 cell arriving beside the wave narrows it rather than taking it away.
 
 `CompiledUi::min` is that bar's own `compiled_min`, since it is the only cell standing in the room the root
-split settles on; `AppUi::window_min`
-takes the larger of the two layouts' and `frontend::window_settings` hands it to `iced` as `min_size`.
+split settles on; `AppUi::window_min` takes the larger of the two layouts' and `frontend::window_settings` hands
+it to `iced` as `min_size`.
 
 ## Track analysis cache
 
-Source analysis is an expensive whole-track decode deriving the coloured waveform and an optional beat grid /
-BPM estimate in one pass, so the combined result is memoized (`wave_cache.rs`). Each deck's `StateController`
-spawns one `analysis::listen` task owning one `AnalysisController` and one `TrackAnalysisCache`, so the cache
-needs no synchronization. Two identity spaces are kept separate on purpose:
+Progressive source analysis derives the coloured waveform and an optional beat grid / BPM estimate from decoded
+ranges, so each deck's `StateController` owns one `AnalysisController` and one in-memory
+`TrackAnalysisCache`. The GUI frontend creates one app-wide `AnalysisPersistence` actor and clones its handle
+into every controller. The actor serializes a bounded stream of writes through `AssetStore`; controllers never
+write analysis resources themselves. Two identity spaces are kept separate on purpose:
 
 - **`TrackId`** (session-scoped, from `kithara-events` via the queue) — stale guard for an in-flight run and the
   "still current" check at publish. Never persisted.
 - **`AnalysisTarget`** (the track's `AssetStore` plus the `ResourceKey` derived by `ResourceConfig::asset_key`)
   — cross-session cache identity. `is_same` compares key *and* store, so one key in two stores is two entries.
 
-`plan_analysis` returns `Skip` when the target is already displayed, `Serve` on a cache hit, and `Decode` only
-on a genuine miss; only a `Decode` on the current track wipes the visible analysis first. `pump` refuses to
-start a second run while one is in flight and clears the pending queue outright when the runner has no
-analyzers. `on_track_changed` puts the current track at the front and preempts an in-flight background run;
-`pending_order` is current-track-first, then list order. `AnalysisController::commit` caches the finished run
-under its target and only then publishes it if the run's `TrackId` is still current — a stale run still lands in
-the cache. A track whose source yields no `ResourceConfig` is skipped, and so is a source whose layout rejects the derived
-key — after clearing the visible analysis when it is the current track. The `Option<AnalysisTarget>` seam means
-an unkeyable run is decoded only while its track is current and is never cached.
+`plan_analysis` returns `Serve` for a memory or disk hit and `Decode` for a genuine miss. A resumable or
+configuration-incomplete hit is served immediately and then refilled from its missing ranges; only a current
+track without a served result clears the visible analysis. `pump` starts no second run while the controller is
+active and clears the pending queue when the runner has no analyzers. `on_track_changed` puts the current track
+first and preempts a different running pass. The old pass stays in `Running` until its result channel closes,
+then its last checkpoint is cached and published if still current. The controller enters `Committing` and does
+not start the next pass until durable persistence acknowledges that checkpoint. Intermediate checkpoints update
+memory and the current deck immediately and are offered to persistence without blocking; a full queue may drop
+only that intermediate write.
+
+`pending_order` is current-track-first, then list order. A track whose source yields no `ResourceConfig` is
+skipped, and so is a source whose layout rejects the derived key. The `Option<AnalysisTarget>` seam means an
+unkeyable run is decoded only while its track is current and is never cached or persisted.
 
 The memory tier is bounded by `Consts::MAX_MEM_ENTRIES` (64) in insertion order; evicted entries are still
-served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier — it would
-otherwise be served forever as emptiness. Disk reads probe `AssetStore::resource_state` first, because opening a
-missing key would create it. The disk tier stores one blob per track as a resource of the track's asset scope
-(`analysis/track.analysis`), so the artifact is evicted, moved and deleted together with the cached audio bytes.
+served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier. Disk reads probe
+`AssetStore::resource_state` first, because opening a missing key would create it. The disk tier stores one
+progressive `AnalysisFile` per track in the track's asset scope (`analysis/track.analysis`), so the artifact is
+evicted, moved and deleted with the cached audio bytes. Its fixed header and completion index identify covered
+chunks, while each committed generation replaces the current payload. Restore validates the analyzer
+fingerprint, source rate, extent, and configured chunk duration before resuming only missing ranges.
 
-Invalidation has two levers. `Consts::ANALYSIS_BYTES_VERSION` must be bumped whenever the blob framing or the
-waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
-into every blob and a mismatch is a miss, so `WAVEFORM_MAX_BUCKETS` and runtime beat-analysis tuning re-analyse
+Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
+or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
+into every blob and a mismatch is a miss, so `waveform_max_buckets` and runtime beat-analysis tuning re-analyse
 on their own. Because the identity is the source location and not the bytes, a file overwritten in place keeps
 its entry until the version is bumped — acceptable for a library of stable files.
 

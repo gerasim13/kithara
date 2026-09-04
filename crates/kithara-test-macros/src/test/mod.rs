@@ -1,4 +1,4 @@
-mod case;
+pub(crate) mod case;
 mod entry;
 mod expand_async;
 mod expand_sync;

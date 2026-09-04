@@ -2,8 +2,17 @@ use std::mem::size_of;
 
 use crate::PcmSource;
 
-const SAWTOOTH_PERIOD: u32 = 65_536;
-const SAWTOOTH_CENTER: i32 = 32_768;
+/// One saw period. [`TestPcm::sawtooth`] advances by one `i16` unit per frame,
+/// so a period is the number of distinct `i16` values.
+///
+/// `kithara-test-fixtures` states the same fact as `signal::SAW_PERIOD`, but it
+/// reaches this crate through a build-dependency. That edge cannot run the other
+/// way, so both sides derive the number from the type instead of sharing a
+/// constant.
+const SAWTOOTH_PERIOD: u32 = 1 << u16::BITS;
+/// Offset from the unsigned phase onto the signed sample it renders.
+const SAWTOOTH_CENTER: i32 = 1 << (i16::BITS - 1);
+/// Full-scale `i16` magnitude: the divisor that maps a sample onto `[-1, 1]`.
 const I16_SCALE: f32 = 32_768.0;
 
 pub(crate) struct TestPcm {
@@ -13,6 +22,15 @@ pub(crate) struct TestPcm {
 }
 
 impl TestPcm {
+    #[cfg(feature = "ffmpeg")]
+    pub(crate) fn from_bytes(bytes: Vec<u8>, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            bytes,
+            channels,
+            sample_rate,
+        }
+    }
+
     #[cfg(feature = "ffmpeg")]
     pub(crate) fn from_samples(samples: &[i16], sample_rate: u32, channels: u16) -> Self {
         Self::from_bytes(
@@ -25,13 +43,11 @@ impl TestPcm {
         )
     }
 
-    #[cfg(feature = "ffmpeg")]
-    pub(crate) fn from_bytes(bytes: Vec<u8>, sample_rate: u32, channels: u16) -> Self {
-        Self {
-            bytes,
-            channels,
-            sample_rate,
-        }
+    pub(crate) fn samples_f32(&self) -> Vec<f32> {
+        self.bytes
+            .chunks_exact(size_of::<i16>())
+            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE)
+            .collect()
     }
 
     pub(crate) fn sawtooth(frames: usize, sample_rate: u32, channels: u16) -> Self {
@@ -49,13 +65,6 @@ impl TestPcm {
             channels,
             sample_rate,
         }
-    }
-
-    pub(crate) fn samples_f32(&self) -> Vec<f32> {
-        self.bytes
-            .chunks_exact(size_of::<i16>())
-            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE)
-            .collect()
     }
 }
 

@@ -7,6 +7,7 @@ use pin_project_lite::pin_project;
 
 pub use crate::{
     backend::time::{Duration, SystemTime, TimeoutError},
+    common::time::WallInstant,
     flash::Instant,
 };
 
@@ -65,7 +66,7 @@ impl<F: Future> Future for FlashTimeout<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        // The future is polled FIRST, so a ready result wins a tie with the
+        // WHY: The future is polled FIRST, so a ready result wins a tie with the
         if let Poll::Ready(out) = this.future.poll(cx) {
             return Poll::Ready(Ok(out));
         }

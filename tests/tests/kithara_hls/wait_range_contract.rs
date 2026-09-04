@@ -11,6 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 
@@ -44,16 +45,20 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
             root: temp_dir.path().into(),
         }
     };
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(backend)
         .cache_capacity(NonZeroUsize::new(256).unwrap())
         .build();
     let config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(CancelToken::never())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
+    let mut stream = Stream::<Hls<TestPools>>::new(config)
+        .await
+        .expect("create stream");
 
     let total_bytes = server.total_bytes();
     assert!(
@@ -153,16 +158,20 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let url = server.url("/master.m3u8");
     let total_bytes = server.total_bytes();
 
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
         .build();
     let config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(CancelToken::never())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
+    let mut stream = Stream::<Hls<TestPools>>::new(config)
+        .await
+        .expect("create stream");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0u8; 8192];

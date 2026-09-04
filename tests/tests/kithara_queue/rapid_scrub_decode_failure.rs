@@ -2,27 +2,30 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{
         AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
     },
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
@@ -52,7 +55,7 @@ const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 #[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
     budget: Duration,
@@ -100,7 +103,7 @@ enum ScrubOutcome {
 /// bug), or `budget` elapses.
 #[kithara::flash(true)]
 async fn observe_scrub_outcome(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     rx: &mut EventReceiver,
     target_src: &str,
     seek_target: f64,
@@ -125,11 +128,11 @@ async fn observe_scrub_outcome(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Player(PlayerEvent::ItemDidFail { src, .. })))
-                if src.as_ref() == target_src =>
+            Ok(Ok(Event::Player(PlayerEvent::ItemDidFail { item })))
+                if item.track().src.as_ref() == target_src =>
             {
                 return ScrubOutcome::ItemDidFail {
-                    src: src.to_string(),
+                    src: item.track().src.to_string(),
                 };
             }
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
@@ -175,14 +178,14 @@ async fn wait_for_playback_progress(
 }
 
 struct Harness {
-    queue: Arc<Queue>,
+    queue: OfflineQueue<TestPools>,
     rx: EventReceiver,
     master_url: String,
     tick: tokio::task::JoinHandle<()>,
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -244,35 +247,48 @@ impl Harness {
         let master = created.master_url();
         let master_url = master.as_str().to_string();
 
+        let pools = pools();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
+                pools.clone(),
                 CancelToken::never(),
             ))
             .build(),
         );
-        let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-        let player = Arc::new(PlayerImpl::new(
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build();
+        let session = HostConfig::offline(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build();
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .session(OfflineSession::arc_auto())
+                .sample_rate(session.sample_rate())
+                .worker(PlayWorker::new(
+                    PlayWorkerConfig::builder(pools.clone()).build(),
+                ))
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+        );
+        let queue = OfflineQueue::new(
+            session,
+            Queue::new(QueueConfig::builder().player(player).build()),
+        )
+        .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+        let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
 
-        let cfg =
-            ResourceConfig::for_src(ResourceConfig::parse_src(master.as_str()).expect("valid URL"))
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .downloader(downloader)
-                .store(store)
-                .initial_abr_mode(AbrMode::Auto(None))
-                .build();
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
+            .downloader(downloader)
+            .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
+            .build();
         let mut rx = queue.subscribe();
-        let id = queue.append(TrackSource::Config(Box::new(cfg)));
+        let id = queue
+            .append(TrackSource::Config(Box::new(cfg)))
+            .expect("append rapid-scrub track");
 
         wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
             .await

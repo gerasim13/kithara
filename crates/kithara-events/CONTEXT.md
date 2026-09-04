@@ -48,7 +48,8 @@ selection to `kithara-net` through weak (`?`) refs, so enabling one never force-
   `usize::MAX`, `Auto(Some(v))` → `usize::MAX - 1 - v`. Values at or above `usize::MAX / 2` decode as
   `Auto`.
 - `Duration` → `MediaTime` (`From`) and `&MediaTime` → `Duration` (`TryFrom`, rejecting invalid and
-  indefinite times); `Display` on `FileError`, `HlsError`, `AudioFormat`, `VariantIndex`, `TrackId`.
+  indefinite times); `Display` on `FileError`, `HlsError`, the canonical `AudioSpec` event payload,
+  `VariantIndex`, and `TrackId`.
 - `FileError` covers only local/non-network failures and `FileEvent` variants are reader-side facts;
   network failures and request lifecycle arrive as `DownloaderEvent` (with a typed
   `kithara_net::NetError`) on the same bus scope.

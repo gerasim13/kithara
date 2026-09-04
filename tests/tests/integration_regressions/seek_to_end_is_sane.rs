@@ -1,15 +1,21 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, PlayerEvent},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
+    platform::{CancelToken, time::Duration},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineQueue,
+    temp_dir,
     waits::wait_for_loader_done_event,
 };
 
@@ -38,8 +44,8 @@ struct SeekEvents {
     seek_rejected: bool,
 }
 
-fn render_and_tick(session: &OfflineSession, queue: &Queue) {
-    let _ = session.render(BLOCK_FRAMES);
+fn render_and_tick(queue: &OfflineQueue<TestPools>) {
+    let _ = queue.render(BLOCK_FRAMES);
     queue.tick().expect("tick queue");
 }
 
@@ -56,7 +62,7 @@ fn drain_seek_events(rx: &mut kithara::events::EventReceiver, observation: &mut 
         match envelope.event {
             Event::Audio(AudioEvent::SeekComplete { .. }) => observation.seek_complete = true,
             Event::Audio(AudioEvent::SeekRejected { .. }) => observation.seek_rejected = true,
-            Event::Audio(AudioEvent::EndOfStream) => observation.end_of_stream = true,
+            Event::Audio(AudioEvent::EndOfStream { .. }) => observation.end_of_stream = true,
             Event::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => observation.item_ended = true,
             _ => {}
         }
@@ -80,31 +86,58 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .await
         .expect("create HLS fixture");
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let sample_rate =
+        std::num::NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate must be non-zero");
+    let block_frames = std::num::NonZeroU32::new(
+        u32::try_from(BLOCK_FRAMES).expect("fixture block size fits u32"),
+    )
+    .expect("fixture block size must be non-zero");
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(sample_rate)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let session = Arc::new(OfflineSession::new_manual());
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(SAMPLE_RATE)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .sample_rate(sample_rate)
+            .max_block_frames(block_frames)
             .build(),
-    ));
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(fixture.master_url().as_str()).expect("valid HLS URL"),
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .expect("create product offline queue");
+    let cfg = ResourceConfig::for_src(
+        ResourceSrc::parse(fixture.master_url().as_str()).expect("valid HLS URL"),
+    )
     .downloader(downloader)
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .store(store)
     .build();
 
     let mut rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append HLS track");
     queue
         .select(id, Transition::None)
         .expect("select HLS track");
@@ -114,7 +147,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
 
     let mut warmup_position = None;
     for _ in 0..WARMUP_BLOCKS {
-        render_and_tick(&session, &queue);
+        render_and_tick(&queue);
         drain_warmup(&mut rx, &mut warmup_position);
         if warmup_position.is_some_and(|position| position >= MIN_WARMUP_SECS)
             && queue.playback_view().duration.is_some()
@@ -167,7 +200,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
 
     let mut observation = SeekEvents::default();
     for _ in 0..SEEK_BLOCKS {
-        render_and_tick(&session, &queue);
+        render_and_tick(&queue);
         drain_seek_events(&mut rx, &mut observation);
         let reached_outcome = match target_kind {
             Target::NearEnd => {

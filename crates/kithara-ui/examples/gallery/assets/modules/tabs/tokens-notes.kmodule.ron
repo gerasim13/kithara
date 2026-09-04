@@ -4,6 +4,8 @@
     id: "gallery-tokens-notes",
     chrome: Plain,
     root: Column(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         gap: Some(5.0),
         pad: Some(18.0),
         children: [

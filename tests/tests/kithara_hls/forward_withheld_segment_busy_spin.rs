@@ -34,7 +34,6 @@
 //! the gate's in-process counter, measures the spin RATE off the probe (a
 //! real metric, not a sleep that masks a hang), then releases. No real-time
 //! pacing, no codec timers.
-
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicBool, Ordering},
@@ -42,7 +41,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -51,15 +50,18 @@ use kithara::{
         tokio,
         tokio::task::spawn_blocking,
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
+
+use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -98,16 +100,13 @@ fn count_decode_steps(recorder: &Recorder) -> usize {
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn forward_into_withheld_segment_parks_without_busy_spin() {
-    let init_segment = Arc::new(create_wav_header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            SAMPLE_RATE,
-            CHANNELS,
-            Finite::from_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        )
-        .into_vec(),
-    );
+    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
+    let pcm = Arc::new(Vec::from(Pcm::new(
+        SAMPLE_RATE,
+        CHANNELS,
+        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
+        Wave::Sawtooth,
+    )));
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     let config = HlsTestServerConfig {
@@ -124,28 +123,35 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     // Withhold the BODY of GATED_SEGMENT; its HEAD (size) stays open so the
     // up-front layout is complete and the worker reaches the boundary.
     let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
-    let store = AssetStore::builder()
+    let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .cancel(CancelToken::never())
+        .pools(pools)
+        .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
 
     let recorder = install_recorder();
 
-    let mut audio = Audio::<Stream<Hls>>::new(audio_config)
+    let mut audio = worker
+        .open(audio_config)
         .await
         .expect("audio creation (segment 0 not withheld)");
 

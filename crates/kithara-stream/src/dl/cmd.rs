@@ -32,6 +32,13 @@ pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&Headers>, Option<&NetError>)
 /// same point that publishes [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow).
 pub type OnSlowFn = Box<dyn FnOnce() + Send>;
 
+/// Per-command live demand probe: does a reader currently block on this
+/// command's bytes? The scheduler re-polls it on every loop pass and
+/// treats `true` as [`RequestPriority::High`]. It runs on the download
+/// loop, so it must be a lock-free read and must not re-enter the
+/// downloader.
+pub type DemandFn = Box<dyn Fn() -> bool + Send>;
+
 /// Optional response-header validator for a single `FetchCmd`.
 ///
 /// Invoked with the response headers after a successful HTTP response.
@@ -55,6 +62,8 @@ pub struct FetchCmd {
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
     pub(crate) cancel: Option<CancelToken>,
+    /// Live demand probe; `None` when the peer cannot tell.
+    pub(crate) demand: Option<DemandFn>,
     /// Additional HTTP headers for this request.
     pub(crate) headers: Option<Headers>,
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
@@ -82,6 +91,12 @@ pub struct FetchCmd {
 }
 
 impl FetchCmd {
+    /// Epoch cancel token carried by this command, if any.
+    #[must_use]
+    pub const fn cancel(&self) -> Option<&CancelToken> {
+        self.cancel.as_ref()
+    }
+
     /// Builder for an HTTP GET command targeting the given URL.
     pub fn get(url: Url) -> FetchCmdBuilder<fetch_cmd_builder::SetMethod> {
         Self::builder(url).method(RequestMethod::Get)
@@ -92,11 +107,10 @@ impl FetchCmd {
         Self::builder(url).method(RequestMethod::Head)
     }
 
-    /// Escalate an already-built command's scheduling priority (e.g. a
-    /// decoder-blocking init/segment fetch promoted after the peer decides
-    /// it is owed urgent service).
-    pub const fn set_priority(&mut self, priority: RequestPriority) {
-        self.priority = Some(priority);
+    /// Whether a reader currently blocks on this command's bytes, per the
+    /// live [`DemandFn`] probe. `false` when no probe was attached.
+    pub(crate) fn is_demanded(&self) -> bool {
+        self.demand.as_ref().is_some_and(|probe| probe())
     }
 
     /// Scheduling priority for proactive peer fetches.
@@ -105,16 +119,16 @@ impl FetchCmd {
         self.priority
     }
 
-    /// URL this command fetches.
-    #[must_use]
-    pub const fn url(&self) -> &Url {
-        &self.url
+    /// Escalate an already-built command's scheduling priority (e.g. a
+    /// decoder-blocking init/segment fetch promoted after the peer decides
+    /// it is owed urgent service).
+    pub const fn set_priority(&mut self, priority: RequestPriority) {
+        self.priority = Some(priority);
     }
 
-    /// Epoch cancel token carried by this command, if any.
-    #[must_use]
-    pub const fn cancel(&self) -> Option<&CancelToken> {
-        self.cancel.as_ref()
+    /// Take the streaming-path completion handler, leaving `None` in its place.
+    pub fn take_on_complete(&mut self) -> Option<OnCompleteFn> {
+        self.on_complete.take()
     }
 
     /// Take the streaming-path body writer, leaving `None` in its place.
@@ -122,9 +136,10 @@ impl FetchCmd {
         self.writer.take()
     }
 
-    /// Take the streaming-path completion handler, leaving `None` in its place.
-    pub fn take_on_complete(&mut self) -> Option<OnCompleteFn> {
-        self.on_complete.take()
+    /// URL this command fetches.
+    #[must_use]
+    pub const fn url(&self) -> &Url {
+        &self.url
     }
 }
 

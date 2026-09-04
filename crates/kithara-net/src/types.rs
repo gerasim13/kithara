@@ -2,10 +2,12 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
-use kithara_bufpool::BytePool;
-use kithara_platform::{time::Duration, traits::FromWithParams};
+use kithara_platform::time::Duration;
 
-use crate::observe::Observer;
+use crate::{
+    error::{NetError, Retryability},
+    observe::Observer,
+};
 
 bitflags! {
     /// HTTP codings auto-decoded for whole-body native requests.
@@ -27,7 +29,7 @@ pub(crate) enum AcceptEncodingPolicy {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn accept_encoding_value(compression: Compression) -> String {
-    let mut codings = Vec::new();
+    let mut codings: Vec<&'static str> = Vec::new();
     if compression.contains(Compression::GZIP) {
         codings.push("gzip");
     }
@@ -134,15 +136,21 @@ impl RetryPolicy {
         let exponential_delay = self.base_delay * BACKOFF_BASE.pow(attempt.saturating_sub(1));
         min(exponential_delay, self.max_delay)
     }
+
+    /// Whether `attempt` may be retried: budget left and the error is transient.
+    #[must_use]
+    pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
+        if attempt >= self.max_retries {
+            return false;
+        }
+
+        error.retryability() == Retryability::Transient
+    }
 }
 
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
-    /// Shared byte buffer pool used by backends that must copy platform-owned
-    /// response buffers before handing bytes to Rust consumers.
-    #[builder(default = BytePool::default())]
-    pub byte_pool: BytePool,
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
@@ -165,6 +173,15 @@ pub struct NetOptions {
     /// speed", and a 10s cap raced real fixtures.
     #[builder(default = Duration::from_secs(30))]
     pub inactivity_timeout: Duration,
+    /// How long a pooled connection may sit idle before it is dropped.
+    /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
+    /// caps how many idle connections survive, this caps how long. The
+    /// default matches the keep-alive window CDNs commonly advertise, so a
+    /// segment burst reuses connections while a paused player does not hold
+    /// sockets open. Ignored by the Apple backend, whose `URLSession`
+    /// configuration exposes no idle-pool timeout.
+    #[builder(default = Duration::from_secs(5))]
+    pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
@@ -192,15 +209,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    /// How long a pooled connection may sit idle before it is dropped.
-    /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
-    /// caps how many idle connections survive, this caps how long. The
-    /// default matches the keep-alive window CDNs commonly advertise, so a
-    /// segment burst reuses connections while a paused player does not hold
-    /// sockets open. Ignored by the Apple backend, whose `URLSession`
-    /// configuration exposes no idle-pool timeout.
-    #[builder(default = Duration::from_secs(5))]
-    pub pool_idle_timeout: Duration,
 }
 
 impl NetOptions {
@@ -214,7 +222,6 @@ impl NetOptions {
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
         let Self {
-            byte_pool,
             compression,
             inactivity_timeout,
             impersonate,
@@ -228,7 +235,6 @@ impl NetOptions {
         } = self.clone();
 
         Self::builder()
-            .byte_pool(byte_pool)
             .compression(compression)
             .inactivity_timeout(inactivity_timeout)
             .impersonate(impersonate)
@@ -246,15 +252,6 @@ impl NetOptions {
 impl Default for NetOptions {
     fn default() -> Self {
         Self::builder().build()
-    }
-}
-
-impl FromWithParams<Self, BytePool> for NetOptions {
-    fn build(options: Self, byte_pool: BytePool) -> Self {
-        Self {
-            byte_pool,
-            ..options
-        }
     }
 }
 

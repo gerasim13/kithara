@@ -6,25 +6,28 @@ use std::fmt::Write;
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 /// Reproduces the bug the user keeps hitting manually: play track A, switch
 /// to B, then switch back to A. The second `select(A)` finds the track in
@@ -38,7 +41,7 @@ use url::Url;
 ///
 /// The DRM case adds the second moving piece: `ProcessedResource` has a
 /// `ReadinessGate` per resource that has to be re-armed for every fresh
-/// `Audio::new`. If the shortcut bypasses re-arming, the new read path
+/// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
 
 struct Consts;
@@ -104,16 +107,16 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     build_queue_with_tick_cf(temp_dir, 0.0)
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -126,37 +129,50 @@ fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
 ) -> (
-    Arc<Queue>,
+    OfflineQueue<TestPools>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .crossfade_duration(crossfade_seconds)
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    );
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
 #[kithara::flash(true)]
 async fn wait_for_loader_done(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
@@ -221,17 +237,19 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
             .build()
     };
 
-    let id_a = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_a))));
-    let id_b = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_b))));
+    let id_a = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .expect("append track A");
+    let id_b = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .expect("append track B");
 
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
@@ -260,7 +278,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let status = result.unwrap_or_else(|e| {
         panic!(
             "REGRESSION [{mode:?}]: track A failed to reload after switching B → A: {e}\n\
-             This is the dispatch/asset-store contract bug: a second `Audio::new` \
+             This is the dispatch/asset-store contract bug: a second `PlayWorker::open` \
              on a cache-hot URL short-circuits via `resource_already_committed` \
              without emitting fetches the new read path waits on."
         )
@@ -278,7 +296,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 /// playing the old track".
 #[kithara::flash(true)]
 async fn wait_for_position(
-    queue: &Queue,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
     label: &str,
     pred: impl Fn(f64) -> bool,
@@ -309,7 +327,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     #[case] transition: Transition,
 ) {
     let helper = TestServerHelper::new().await;
-    let url_a = helper.asset("track.mp3");
+    let url_a = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
     // 16 × 4 s = 64 s: long enough that B is still mid-play when we switch
     // back, and far from the mp3's 162 s so the duration marker is unambiguous.
     let url_b = helper
@@ -329,17 +347,19 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         build_queue_with_tick_cf(&temp, crossfade_seconds);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
             .build()
     };
 
-    let id_a = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_a))));
-    let id_b = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_b))));
+    let id_a = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .expect("append track A");
+    let id_b = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .expect("append track B");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
         .expect("initial load A");
@@ -349,12 +369,12 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     // The engine duration snapshot is written from the arena's sounding
     // track, so it discriminates the two fixtures: mp3 ≈ 162 s, HLS = 64 s.
-    let sounds_like_a = |queue: &Queue| {
+    let sounds_like_a = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 162.0).abs() < 20.0)
     };
-    let sounds_like_b = |queue: &Queue| {
+    let sounds_like_b = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 64.0).abs() < 20.0)
@@ -402,7 +422,12 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
 #[kithara::flash(true)]
-async fn wait_for(queue: &Queue, deadline: Duration, label: &str, pred: &dyn Fn(&Queue) -> bool) {
+async fn wait_for(
+    queue: &QueueControl<TestPools>,
+    deadline: Duration,
+    label: &str,
+    pred: &dyn Fn(&QueueControl<TestPools>) -> bool,
+) {
     let start = time::Instant::now();
     while !pred(queue) {
         assert!(

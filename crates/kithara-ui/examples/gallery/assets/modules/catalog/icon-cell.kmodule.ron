@@ -1,0 +1,15 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-icon-cell",
+    parameters: ["icon", "label"],
+    root: Column(
+        gap: Some(6.0),
+        align: Center,
+        size: (w: Fill, h: Fixed(52.0)),
+        children: [
+            Glyph(id: "mark", icon: "$icon", size: (w: Fill, h: Fixed(22.0))),
+            Text(id: "name", style: MicroLabel, align: Center, label: "$label", size: (w: Fill, h: Fixed(24.0))),
+        ],
+    ),
+)

@@ -1,11 +1,13 @@
 use arc_swap::ArcSwap;
-use kithara_decode::{ChunkRetire, PcmChunk};
+use kithara_decode::ChunkRetire;
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
+use kithara_signal::AudioChunk;
 use kithara_stream::{
     Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
     StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
+use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
 
 pub(crate) use crate::pipeline::{
@@ -29,7 +31,7 @@ use crate::{
             self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
+    traits::AudioSource,
 };
 
 /// Audio source for Stream with format change detection.
@@ -56,7 +58,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
-    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
+    /// flushes via [`finish_deferred`](AudioSource::finish_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
@@ -72,8 +74,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
     /// so resuming at `committed` would re-emit them and rewind content. Stored
     /// as an exact frame plus the sample rate of that produced chunk, then
-    /// converted back with `duration_for_frames`; the demuxer quantizes the
-    /// seek landing to a sample and `frame_offset_for` rounds to the nearest
+    /// converted back with `AudioSpec::duration_for`; the demuxer quantizes the
+    /// seek landing to a sample and `AudioSpec::frame_at` rounds to the nearest
     /// frame, so the rebuilt decoder relabels its first chunk at this point. See
     /// `execute_recreation`.
     pub(crate) resume: ResumeCursor,
@@ -89,7 +91,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
     /// Decode generations displaced on the produce core. They are dropped
-    /// from `flush_deferred`, outside the forbid-blocking region.
+    /// from `finish_deferred`, outside the forbid-blocking region.
     pub(crate) retired: Retired,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
@@ -115,10 +117,10 @@ fn initial_promotion_frontier(transition: VariantTransition) -> OutgoingFrontier
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
+    const CHUNK_RETIRE_CAPACITY: usize = 64;
+
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
-
-    const CHUNK_RETIRE_CAPACITY: usize = 64;
 
     pub(crate) fn new(shared_stream: SharedStream<T>, parts: SourceParts<T>) -> Self {
         let SourceParts {
@@ -190,15 +192,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
     fn drop(&mut self) {
-        // A failed node can be removed before another deferred pass.
+        // WHY: A failed node can be removed before another deferred pass.
         if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
             self.progress_variant_transition();
         }
-        // The scheduler's post-pass recycle normally publishes lifecycle events
-        // before terminal-slot removal. Keep a teardown flush for cancellation,
-        // unregistration, or partial setup that drops the source without a
-        // completed produce pass. Drop runs in the unchecked shell, off the
-        // forbid path.
+        // WHY: The scheduler's post-pass recycle normally publishes lifecycle events before terminal-slot removal. Keep a teardown flush for
+        // cancellation, unregistration, or partial setup that drops the source without a completed produce pass.
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
@@ -217,23 +216,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) {
         self.discard_local_incoming();
         let _ = control.abort_variant(transition);
-    }
-
-    /// Hang classification for a transition-pending decode tick: a pending
-    /// transition whose incoming byte is serviced by an in-flight fetch is
-    /// upstream work (`WaitingDemand`, watchdog-quiet); one with nothing in
-    /// flight stays `Waiting` so a wedged switch still surfaces as a hang.
-    pub(crate) fn transition_wait_reason(&self) -> WaitingReason {
-        let demand_backed = self
-            .variant_control
-            .as_deref()
-            .zip(self.decode.incoming_transition())
-            .is_some_and(|(control, transition)| control.transition_demand_in_flight(transition));
-        if demand_backed {
-            WaitingReason::WaitingDemand
-        } else {
-            WaitingReason::Waiting
-        }
     }
 
     fn discard_local_incoming(&mut self) {
@@ -305,11 +287,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn progress_variant_transition(&mut self) {
-        // A reader starved on the outgoing variant keeps advancing an already
-        // requested transition. The transition itself owns whether that source
-        // remains part of the promotion proof. The seek and recreate phases
-        // stay excluded: they are about to replace the decoder a promotion
-        // would install into.
+        // WHY: A reader starved on the outgoing variant keeps advancing an already requested transition. The transition itself owns whether
+        // that source remains part of the promotion proof.
         match &self.state {
             CurrentFsm::Decoding(_) => {}
             CurrentFsm::WaitingForSource(track) => {
@@ -322,11 +301,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.variant_control.clone(),
                     self.decode.incoming_transition(),
                 ) {
-                    // This abort also discards the pending variant intent, and
-                    // no tick source re-derives it afterwards. The fields
-                    // separate "incoming never primed" from "staged span never
-                    // reached the frontier" from "landing minted behind the
-                    // frontier" when a switch dies against the outgoing EOF.
+                    // WHY: This abort also discards the pending variant intent, and no tick source re-derives it afterwards. The fields separate
+                    // "incoming never primed" from "staged span never reached the frontier" from "landing minted behind the frontier" when a switch dies
+                    // against the outgoing EOF.
                     debug!(
                         at_eof = matches!(self.state, CurrentFsm::AtEof(_)),
                         latched_frontier = ?self.decode.incoming_frontier(),
@@ -355,15 +332,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             .map_or(landing_frontier, |transition| {
                 promotion_frontier_for(transition, landing_frontier)
             });
-        // Priming is bounded per pass and may mint the overlap proof consumed
-        // immediately below. A publication lock leaves both generations intact
-        // and the next pass extends the staged range to the newer frontier.
+        // WHY: Priming is bounded per pass and may mint the overlap proof consumed immediately below. A publication lock leaves both
+        // generations intact and the next pass extends the staged range to the newer frontier.
         let prime = self.decode.prime_incoming(observed_frontier);
         if let Some(incoming) = self.decode.incoming_transition() {
-            // The frontier and the prime outcome together are the only thing
-            // that separates "the incoming is still staging" from "the splice
-            // has nothing to land against": both look identical from outside as
-            // a switch that simply never commits.
+            // WHY: The frontier and the prime outcome together are the only thing that separates "the incoming is still staging" from "the
+            // splice has nothing to land against": both look identical from outside as a switch that simply never commits.
             trace!(
                 ?landing_frontier,
                 ?observed_frontier,
@@ -556,6 +530,23 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         }
     }
+
+    /// Hang classification for a transition-pending decode tick: a pending
+    /// transition whose incoming byte is serviced by an in-flight fetch is
+    /// upstream work (`WaitingDemand`, watchdog-quiet); one with nothing in
+    /// flight stays `Waiting` so a wedged switch still surfaces as a hang.
+    pub(crate) fn transition_wait_reason(&self) -> WaitingReason {
+        let demand_backed = self
+            .variant_control
+            .as_deref()
+            .zip(self.decode.incoming_transition())
+            .is_some_and(|(control, transition)| control.transition_demand_in_flight(transition));
+        if demand_backed {
+            WaitingReason::WaitingDemand
+        } else {
+            WaitingReason::Waiting
+        }
+    }
 }
 
 fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
@@ -564,49 +555,45 @@ fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
     }
 }
 
-impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
-    type Chunk = PcmChunk;
+impl<T: StreamType> AudioSource for StreamAudioSource<T> {
+    type Chunk = AudioChunk;
+
+    fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.resume.commit_source_end(source_end, epoch);
+    }
 
     fn decode_epoch(&self) -> u64 {
-        // The epoch the current decode belongs to — stored when a seek is
-        // applied (`ApplyingSeek` / `try_apply_seek`), and the same value
-        // stamped on produced chunks (`decode_one_step`). It LAGS
-        // `timeline().seek_epoch()`, which the consumer bumps the instant it
-        // requests a seek, long before the worker applies it. A terminal
-        // marker (EOF / failure) must carry this decode epoch so a stale
-        // end-of-stream produced for a superseded seek is discarded by the
-        // consumer's validator rather than mistaken for the new seek's
-        // terminal (the oversubscription false-EOF race).
+        // WHY: The epoch the current decode belongs to - stored when a seek is applied (`ApplyingSeek` / `try_apply_seek`), and the same
+        // value stamped on produced chunks (`decode_one_step`).
         self.seek_engine.epoch()
     }
 
-    fn flush_deferred(&mut self) {
+    fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
+        Some(self.decode.discontinuity())
+    }
+
+    /// Flushes operations deferred from the non-blocking produce core.
+    fn finish_deferred(&mut self) {
+        self.retired.drain();
+        self.rebuild.submit();
+        if let Some(ref emit) = self.emit {
+            emit.flush();
+        }
+        self.readiness.flush_peer_wake();
+        self.shared_stream.flush_demand();
+    }
+
+    fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         self.decode.flush_reader_signals();
         if let Some(chunk) = self.decode.take_rejected_chunk() {
             ChunkRetire::retire(&self.retired, chunk);
         }
         self.route_build_completions();
         self.progress_variant_transition();
-        self.retired.drain();
-        self.rebuild.submit();
-        // Publish the FSM lifecycle events the produce core enqueued this pass,
-        // off the forbid path (the `broadcast::send` is a `kevent`).
-        if let Some(ref emit) = self.emit {
-            emit.flush();
-        }
-        // Deliver the peer wake the produce core armed this pass (a blocked
-        // `probe_read`, a seek-apply / finalize). The `notify_one` is a
-        // cross-thread `kevent` the forbid-blocking core must not make, so it
-        // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
-        // and the FSM arm, so one flush covers both. `None` for file streams.
-        self.readiness.flush_peer_wake();
-        // File the demand window a parked gate poll armed this pass. The
-        // filing (`Source::wait_range`) locks source state, so it too stays
-        // off the forbid-blocking core.
-        self.shared_stream.flush_demand();
+        Some(self.decode.active().blender_profile().spec())
     }
 
-    fn retire_chunk(&self, chunk: PcmChunk) {
+    fn retire_chunk(&self, chunk: AudioChunk) {
         ChunkRetire::retire(&self.retired, chunk);
     }
 
@@ -614,23 +601,14 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         Arc::clone(&self.seek_obs)
     }
 
-    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+    #[kithara::measure(label = "audio.track.step")]
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
         track::dispatch(self)
     }
 
     fn warm_up(&mut self) {
-        // The storage committed-read fast path (`MemDriver::committed_len` /
-        // `read_committed` behind an `arc_swap::ArcSwapOption`) lazily
-        // `Box`-allocates this thread's `arc_swap` debt node on its FIRST load.
-        // Left to the produce core, that one-time alloc lands inside the
-        // forbid-blocking region (the first committed `len`/`contains_range`/
-        // read after the resource opens). The debt node is process-global per
-        // thread and shared by every `ArcSwap` regardless of payload type, so a
-        // throwaway load here — in the scheduler shell, before any checked
-        // `tick` — allocates it off the RT path and warms every real storage
-        // read. It is resource-independent, so it works even before this
-        // source's resource has been opened (the `len()` path only reaches
-        // `committed_len` once the resource is live).
+        // WHY: The storage committed-read fast path (`MemDriver::committed_len` / `read_committed` behind an `arc_swap::ArcSwapOption`)
+        // lazily `Box`-allocates this thread's `arc_swap` debt node on its FIRST load.
         let warm = ArcSwap::from_pointee(());
         let _ = warm.load();
         let _ = self.shared_stream.len();

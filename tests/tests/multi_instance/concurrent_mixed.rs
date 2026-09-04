@@ -1,5 +1,6 @@
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -8,13 +9,16 @@ use kithara::{
         time::Duration,
         tokio::task::{JoinHandle, spawn_blocking},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -44,17 +48,22 @@ async fn spawn_file_instance(
     url: url::Url,
     temp_path: &std::path::Path,
 ) -> JoinHandle<InstanceResult> {
+    let pools = pools();
     let file_config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_path))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_path.into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(("mp3").to_string())
         .build();
-    let mut audio = Audio::<Stream<File>>::new(config)
-        .await
-        .expect("create File audio");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker.open(config).await.expect("create File audio");
 
     spawn_blocking(move || {
         let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
@@ -83,9 +92,17 @@ async fn spawn_hls_instance(
 
     let url = server.url("/master.m3u8");
     let cancel = CancelToken::never();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_path))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_path.into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -94,15 +111,12 @@ async fn spawn_hls_instance(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create HLS audio");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker.open(config).await.expect("create HLS audio");
 
     let handle = spawn_blocking(move || {
         let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
@@ -127,7 +141,12 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
 
     for i in 0..file_count {
         let temp = TestTempDir::new();
-        let h = spawn_file_instance(i, file_server.asset("test.mp3"), temp.path()).await;
+        let h = spawn_file_instance(
+            i,
+            file_server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
+            temp.path(),
+        )
+        .await;
         temps.push(temp);
         handles.push(h);
     }

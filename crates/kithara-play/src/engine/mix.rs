@@ -14,11 +14,12 @@ use crate::{error::PlayError, player::PlayerImpl, session::PlayerLevel};
 /// Returns [`PlayError`] on validation failure ([`PlayError::MixLevel`],
 /// [`PlayError::MixForeignSession`], [`PlayError::MixDuplicatePlayer`]) or on
 /// dispatch failure.
-pub fn apply_mix<'a, I>(inputs: I) -> Result<(), PlayError>
+pub fn apply_mix<'a, I, S>(inputs: I) -> Result<(), PlayError>
 where
-    I: IntoIterator<Item = (&'a PlayerImpl, f32)>,
+    I: IntoIterator<Item = (&'a PlayerImpl<S>, f32)>,
+    S: 'a,
 {
-    let inputs: Vec<(&EngineImpl, f32)> = inputs
+    let inputs: Vec<(&EngineImpl<S>, f32)> = inputs
         .into_iter()
         .map(|(player, level)| (&player.core.engine, level))
         .collect();
@@ -26,7 +27,7 @@ where
         return Ok(());
     };
     let session = first.session_handle();
-    let dispatcher = session.dispatcher();
+    let dispatcher = session.dispatcher()?;
 
     for &(_, level) in &inputs {
         if !level.is_finite() || !(0.0..=1.0).contains(&level) {
@@ -34,7 +35,7 @@ where
         }
     }
     for &(engine, _) in &inputs {
-        if !Arc::ptr_eq(&engine.session_handle().dispatcher(), &dispatcher) {
+        if !Arc::ptr_eq(&engine.session_handle().dispatcher()?, &dispatcher) {
             return Err(PlayError::MixForeignSession);
         }
     }
@@ -48,7 +49,7 @@ where
     }
 
     // Stable address order: two batches sharing players cannot deadlock.
-    let mut ordered: Vec<&EngineImpl> = inputs.iter().map(|&(engine, _)| engine).collect();
+    let mut ordered: Vec<&EngineImpl<S>> = inputs.iter().map(|&(engine, _)| engine).collect();
     ordered.sort_by_key(|engine| std::ptr::from_ref(*engine).addr());
     let _guards: Vec<_> = ordered
         .iter()
@@ -57,12 +58,12 @@ where
 
     let levels: Vec<PlayerLevel> = inputs
         .iter()
-        .filter_map(|&(engine, level)| {
+        .map(|&(engine, level)| {
             engine
-                .registered_player_id()
+                .ensure_player_id()
                 .map(|id| PlayerLevel::new(id, level))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     session.set_player_master_volumes(levels)?;
 
@@ -79,15 +80,26 @@ mod tests {
 
     use super::*;
     use crate::{
+        PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
-        session::{Cmd, Reply, SessionDispatcher, testing::test_session},
+        session::{
+            Cmd, Reply, SessionDispatcher, SessionSampleRate,
+            testing::{self, test_session},
+        },
+        test_pools::{TestPools, pools},
     };
 
     struct ForeignSession;
 
-    impl SessionDispatcher for ForeignSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
+    impl SessionDispatcher<TestPools> for ForeignSession {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
+                    None,
+                    testing::TEST_SAMPLE_RATE.get(),
+                ))),
+                _ => Ok(Reply::Ok),
+            }
         }
 
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -95,8 +107,15 @@ mod tests {
         }
     }
 
-    fn player(session: Arc<dyn SessionDispatcher>) -> PlayerImpl {
-        PlayerImpl::new(PlayerConfig::test_builder().session(session).build())
+    fn player(session: Arc<dyn SessionDispatcher<TestPools>>) -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker)
+                .session(session)
+                .build(),
+        )
     }
 
     #[kithara::test]
@@ -141,7 +160,7 @@ mod tests {
         let session = test_session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher>);
+        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher<TestPools>>);
 
         let err = apply_mix([(&a, 0.5), (&foreign, 0.5)]).unwrap_err();
         assert!(matches!(err, PlayError::MixForeignSession));
@@ -182,7 +201,7 @@ mod tests {
         let session = test_session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let empty: [(&PlayerImpl, f32); 0] = [];
+        let empty: [(&PlayerImpl<TestPools>, f32); 0] = [];
         apply_mix(empty).unwrap();
         assert_eq!(a.core.engine.master_volume(), 1.0);
     }

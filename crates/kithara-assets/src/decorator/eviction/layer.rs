@@ -16,7 +16,7 @@ use crate::{
 };
 
 mod kithara {
-    pub(crate) use kithara_test_macros::{mock, probe};
+    pub(crate) use kithara_test_macros::probe;
 }
 
 #[derive(Clone, Default)]
@@ -52,7 +52,6 @@ impl EvictionEvents {
 }
 
 /// Trait for recording asset bytes for eviction tracking.
-#[kithara::mock(api = ByteRecorderMock)]
 pub(crate) trait ByteRecorder: Send + Sync {
     /// Record asset bytes and check if eviction is needed.
     fn record_bytes(&self, asset_root: &str, bytes: u64);
@@ -324,17 +323,5 @@ fn log_eviction_outcome(asset_root: &str, result: AssetsResult<()>) {
     match result {
         Ok(()) => tracing::debug!(%asset_root, "Asset deleted successfully"),
         Err(error) => tracing::debug!(%asset_root, %error, "Failed to delete asset"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn byte_recorder_mock_api_is_generated() {
-        let _ = ByteRecorderMock::record_bytes;
     }
 }

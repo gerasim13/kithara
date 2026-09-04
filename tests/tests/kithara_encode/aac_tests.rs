@@ -1,9 +1,10 @@
 use kithara::{
     self,
+    encode::{EncoderFactory, PackagedEncodeRequest},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
-use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
+use kithara_integration_tests::bufpool_ext::pools;
+use kithara_test_fixtures::signal::{Pcm, Wave};
 
 #[kithara::test]
 fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
@@ -13,21 +14,25 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
         .expect("BUG: AacLc must be supported by the packaged encoder");
     let total_frames = 4 * frame_samples;
-    let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, total_frames, Wave::Sawtooth);
     let media_info = MediaInfo::builder()
         .codec(AudioCodec::AacLc)
         .container(ContainerFormat::Fmp4)
         .build();
 
-    let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-        media_info,
-        pcm: &pcm,
-        timescale: SAMPLE_RATE,
-        bit_rate: 128_000,
-        packets_per_segment: 2,
-        encoder_delay: 0,
-        trailing_delay: 0,
-    })
+    let pools = pools();
+    let encoded = EncoderFactory::encode_packaged(
+        &pools,
+        &PackagedEncodeRequest::builder()
+            .media_info(media_info)
+            .pcm(&pcm)
+            .timescale(SAMPLE_RATE)
+            .bit_rate(128_000)
+            .packets_per_segment(2)
+            .encoder_delay(0)
+            .trailing_delay(0)
+            .build(),
+    )
     .unwrap_or_else(|error| panic!("encode_packaged(AacLc) failed: {error}"));
 
     assert_eq!(encoded.media_info.codec, Some(AudioCodec::AacLc));
@@ -64,4 +69,84 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
         }
         expected_pts = Some(unit.pts + u64::from(unit.duration));
     }
+}
+
+#[kithara::test]
+fn encode_packaged_aac_he_reuses_injected_byte_pool() {
+    const SAMPLE_RATE: u32 = 48_000;
+    const CHANNELS: u16 = 2;
+
+    let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacHe)
+        .expect("BUG: AacHe must be supported by the packaged encoder");
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * frame_samples, Wave::Sawtooth);
+    let pools = pools();
+    let encode = || {
+        EncoderFactory::encode_packaged(
+            &pools,
+            &PackagedEncodeRequest::builder()
+                .pcm(&pcm)
+                .media_info(
+                    MediaInfo::builder()
+                        .codec(AudioCodec::AacHe)
+                        .container(ContainerFormat::Fmp4)
+                        .build(),
+                )
+                .timescale(SAMPLE_RATE)
+                .bit_rate(64_000)
+                .packets_per_segment(2)
+                .encoder_delay(0)
+                .trailing_delay(0)
+                .build(),
+        )
+        .unwrap_or_else(|error| panic!("encode_packaged(AacHe) failed: {error}"))
+    };
+
+    let first = encode();
+    let after_first = pools.stats().allocated_bytes;
+    let second = encode();
+    let after_second = pools.stats().allocated_bytes;
+
+    assert!(!first.access_units.is_empty());
+    assert!(!second.access_units.is_empty());
+    assert_eq!(after_second, after_first);
+}
+
+#[kithara::test]
+fn encode_packaged_aac_lc_reuses_injected_conversion_pools() {
+    const SAMPLE_RATE: u32 = 48_000;
+    const CHANNELS: u16 = 2;
+
+    let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
+        .expect("BUG: AacLc must be supported by the packaged encoder");
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * frame_samples, Wave::Sawtooth);
+    let pools = pools();
+    let encode = || {
+        EncoderFactory::encode_packaged(
+            &pools,
+            &PackagedEncodeRequest::builder()
+                .pcm(&pcm)
+                .media_info(
+                    MediaInfo::builder()
+                        .codec(AudioCodec::AacLc)
+                        .container(ContainerFormat::Fmp4)
+                        .build(),
+                )
+                .timescale(SAMPLE_RATE)
+                .bit_rate(128_000)
+                .packets_per_segment(2)
+                .encoder_delay(0)
+                .trailing_delay(0)
+                .build(),
+        )
+        .unwrap_or_else(|error| panic!("encode_packaged(AacLc) failed: {error}"))
+    };
+
+    let first = encode();
+    let after_first = pools.stats().allocated_bytes;
+    let second = encode();
+    let after_second = pools.stats().allocated_bytes;
+
+    assert!(!first.access_units.is_empty());
+    assert!(!second.access_units.is_empty());
+    assert_eq!(after_second, after_first);
 }

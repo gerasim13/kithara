@@ -7,6 +7,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -32,10 +33,10 @@ type AttachProbe = Arc<dyn Fn() + Send + Sync>;
 /// `u64::MAX`.
 pub(crate) struct DemandEntry {
     read_pos: Arc<AtomicU64>,
-    look_ahead: Option<u64>,
     requested_end: AtomicU64,
     peer_waker: Mutex<Option<Waker>>,
     reader_waker: Mutex<Option<Waker>>,
+    look_ahead: Option<u64>,
 }
 
 impl DemandEntry {
@@ -47,34 +48,6 @@ impl DemandEntry {
             peer_waker: Mutex::new(None),
             reader_waker: Mutex::new(None),
         }
-    }
-
-    /// Per-entry watermark: how far this consumer wants bytes fetched.
-    pub(super) fn watermark(&self) -> u64 {
-        let prefetch = self.look_ahead.map_or(u64::MAX, |la| {
-            self.read_pos.load(Ordering::Acquire).saturating_add(la)
-        });
-        prefetch.max(self.requested_end.load(Ordering::Acquire))
-    }
-
-    pub(super) fn request_until(&self, end: u64) -> bool {
-        self.requested_end.fetch_max(end, Ordering::AcqRel) < end
-    }
-
-    pub(super) fn take_peer_waker(&self) -> Option<Waker> {
-        self.peer_waker.lock().take()
-    }
-
-    pub(super) fn take_reader_waker(&self) -> Option<Waker> {
-        self.reader_waker.lock().take()
-    }
-
-    pub(super) fn register_peer_waker(&self, waker: &Waker) {
-        register_waker(&self.peer_waker, waker);
-    }
-
-    pub(super) fn register_reader_waker(&self, waker: &Waker) {
-        register_waker(&self.reader_waker, waker);
     }
 
     pub(super) fn clear_peer_waker(&self, waker: &Waker) {
@@ -90,6 +63,34 @@ impl DemandEntry {
             }
         };
         drop(old);
+    }
+
+    pub(super) fn register_peer_waker(&self, waker: &Waker) {
+        register_waker(&self.peer_waker, waker);
+    }
+
+    pub(super) fn register_reader_waker(&self, waker: &Waker) {
+        register_waker(&self.reader_waker, waker);
+    }
+
+    pub(super) fn request_until(&self, end: u64) -> bool {
+        self.requested_end.fetch_max(end, Ordering::AcqRel) < end
+    }
+
+    pub(super) fn take_peer_waker(&self) -> Option<Waker> {
+        self.peer_waker.lock().take()
+    }
+
+    pub(super) fn take_reader_waker(&self) -> Option<Waker> {
+        self.reader_waker.lock().take()
+    }
+
+    /// Per-entry watermark: how far this consumer wants bytes fetched.
+    pub(super) fn watermark(&self) -> u64 {
+        let prefetch = self.look_ahead.map_or(u64::MAX, |la| {
+            self.read_pos.load(Ordering::Acquire).saturating_add(la)
+        });
+        prefetch.max(self.requested_end.load(Ordering::Acquire))
     }
 }
 
@@ -110,10 +111,10 @@ fn register_waker(slot: &Mutex<Option<Waker>>, waker: &Waker) {
     drop(unused);
 }
 
-pub(super) struct PendingResourceInner {
+pub(super) struct PendingResourceInner<S> {
     /// Parent of every slot's `writer_cancel` (the store cancel).
     pub(super) cancel: CancelToken,
-    pub(super) slots: DashMap<ResourceKey, Arc<PendingResource>>,
+    pub(super) slots: DashMap<ResourceKey, Arc<PendingResource<S>>>,
     #[cfg(test)]
     attach_probe: Mutex<Option<AttachProbe>>,
 }
@@ -122,12 +123,22 @@ pub(super) struct PendingResourceInner {
 ///
 /// Cheap to [`Clone`] (one `Arc` bump); all clones share the same slot
 /// map, so consumer demand aggregates across `AssetStore` clones automatically.
-#[derive(Clone)]
-pub(crate) struct PendingResourceIndex {
-    inner: Arc<PendingResourceInner>,
+pub(crate) struct PendingResourceIndex<S> {
+    inner: Arc<PendingResourceInner<S>>,
 }
 
-impl PendingResourceIndex {
+impl<S> Clone for PendingResourceIndex<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<S> PendingResourceIndex<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Create an empty index. `cancel` is the store cancel; each slot's
     /// `writer_cancel` is a child of it.
     pub(crate) fn new(cancel: CancelToken) -> Self {
@@ -145,10 +156,10 @@ impl PendingResourceIndex {
         &self,
         key: &ResourceKey,
         entry: Arc<DemandEntry>,
-        store: AssetStore,
+        store: AssetStore<S>,
         remove: RemoveResource,
-        acquire: impl FnOnce() -> AssetsResult<ResourceAcquisition>,
-    ) -> AssetsResult<AcquisitionResult<ResourceAttachment, AssetReader>> {
+        acquire: impl FnOnce() -> AssetsResult<ResourceAcquisition<S>>,
+    ) -> AssetsResult<AcquisitionResult<ResourceAttachment<S>, AssetReader<S>>> {
         let (slot, epoch, reader, peer_waker) = match self.inner.slots.entry(key.clone()) {
             Entry::Occupied(occupied) => {
                 let slot = Arc::clone(occupied.get());
@@ -224,16 +235,16 @@ impl PendingResourceIndex {
     }
 
     #[cfg(test)]
-    fn set_attach_probe_for_test(&self, probe: impl Fn() + Send + Sync + 'static) {
-        *self.inner.attach_probe.lock() = Some(Arc::new(probe));
-    }
-
-    #[cfg(test)]
     fn run_attach_probe_for_test(&self) {
         let probe = self.inner.attach_probe.lock().take();
         if let Some(probe) = probe {
             probe();
         }
+    }
+
+    #[cfg(test)]
+    fn set_attach_probe_for_test(&self, probe: impl Fn() + Send + Sync + 'static) {
+        *self.inner.attach_probe.lock() = Some(Arc::new(probe));
     }
 
     #[cfg(test)]
@@ -244,7 +255,7 @@ impl PendingResourceIndex {
     }
 }
 
-impl fmt::Debug for PendingResourceIndex {
+impl<S> fmt::Debug for PendingResourceIndex<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PendingResourceIndex")
             .field("tracked_resources", &self.inner.slots.len())

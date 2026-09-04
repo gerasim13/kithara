@@ -11,10 +11,14 @@
 //!
 //! The engine-start window is a session gate here, so the interleaving is a
 //! rendezvous rather than a timing window.
-
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::ConsumerWakeMode,
     events::{Event, QueueEvent},
     platform::{
@@ -22,53 +26,79 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher},
+    play::{
+        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
+        ResourceSrc, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq, SlotId,
+        player::PlayerControlSource, slot_channels,
+    },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    TestTempDir, audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara, temp_dir,
+    test_defaults::Consts as Shared,
     waits::wait_for_event,
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 const TRACK_COUNT: usize = 2;
 
 /// Holds the first `StartPlayer` until the test releases it, standing in for
 /// the audio-device stream start that makes the window wide on a real device.
 struct StartGatedSession {
-    inner: Arc<dyn SessionDispatcher>,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    next_player: AtomicU64,
+    next_slot: AtomicU64,
+    nodes: Mutex<Vec<NodeInputs>>,
 }
 
 impl StartGatedSession {
-    fn new(
-        inner: Arc<dyn SessionDispatcher>,
-        entered: mpsc::Sender<()>,
-        release: mpsc::Receiver<()>,
-    ) -> Self {
+    fn new(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
         Self {
-            inner,
             gate: Mutex::new(Some((entered, release))),
+            next_player: AtomicU64::new(1),
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
         }
     }
 }
 
-impl SessionDispatcher for StartGatedSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        if matches!(cmd, Cmd::StartPlayer { .. })
-            && let Some((entered, release)) = self.gate.lock().take()
-        {
-            entered.send(()).expect("test holds the entered receiver");
-            release.recv().expect("test holds the release sender");
-        }
-        self.inner.exec(cmd)
+impl SessionDispatcher<TestPools> for StartGatedSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+        let reply = match cmd {
+            Cmd::StartPlayer { .. } => {
+                if let Some((entered, release)) = self.gate.lock().take() {
+                    entered.send(()).expect("test holds the entered receiver");
+                    release.recv().expect("test holds the release sender");
+                }
+                Reply::Ok
+            }
+            Cmd::RegisterPlayer { .. } => {
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+            }
+            Cmd::AllocateSlot { .. } => {
+                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+                let (inputs, control) = slot_channels(SharedEq::new(10));
+                self.nodes.lock().push(inputs);
+                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+            }
+            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
+                None,
+                Shared::NON_ZERO_SAMPLE_RATE.get(),
+            )),
+            Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
+            _ => Reply::Ok,
+        };
+        Ok(reply)
     }
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        self.inner.consumer_wake_mode()
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -84,18 +114,20 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 /// the ordering — so it stays off the shared test server.
 fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
     let path = temp_dir.path().join(format!("gated-{index}.mp3"));
-    fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("fixture must be writable");
+    fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("fixture must be writable");
     path
 }
 
-fn resource_config(temp_dir: &TestTempDir, index: usize) -> ResourceConfig {
+fn resource_config(
+    temp_dir: &TestTempDir,
+    store: &AssetStore<TestPools>,
+    index: usize,
+) -> ResourceConfig<TestPools> {
     ResourceConfig::for_src(
-        ResourceConfig::parse_src(fixture_path(temp_dir, index).to_string_lossy())
+        ResourceSrc::parse(fixture_path(temp_dir, index).to_string_lossy())
             .expect("absolute fixture path"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .store(store.clone())
     .build()
 }
 
@@ -103,20 +135,28 @@ fn resource_config(temp_dir: &TestTempDir, index: usize) -> ResourceConfig {
 async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTempDir) {
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let session = Arc::new(StartGatedSession::new(
-        OfflineSession::arc_auto(),
-        entered_tx,
-        release_rx,
-    ));
-    let player = Arc::new(PlayerImpl::new(
+    let session = Arc::new(StartGatedSession::new(entered_tx, release_rx));
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
+            ))
             .session(session)
             .build(),
-    ));
+    );
+    let player_control = player.control();
     let queue = Arc::new(Queue::new(
-        QueueConfig::builder().player(Arc::clone(&player)).build(),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();
@@ -124,10 +164,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     let ids: Vec<_> = (0..TRACK_COUNT)
         .map(|index| {
             queue.append(TrackSource::Config(Box::new(resource_config(
-                &temp_dir, index,
+                &temp_dir, &store, index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
 
     // `play` is issued while every track is still loading, exactly as the iOS
     // surface does, and parks inside the engine start.
@@ -159,7 +200,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     playing.await.expect("play must join");
 
     assert!(
-        !player.item_has_resource(0),
+        !player_control.item_has_resource(0),
         "precondition: play did not consume the load that landed inside the engine \
          start, so the reported window was never opened"
     );

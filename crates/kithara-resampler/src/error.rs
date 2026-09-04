@@ -31,8 +31,8 @@ pub enum ResamplerError {
     #[error("invalid resampler buffer: {detail}")]
     InvalidBuffer { detail: &'static str },
 
-    #[error("resampler scratch buffer budget exhausted")]
-    BudgetExhausted(#[from] kithara_bufpool::BudgetExhausted),
+    #[error("resampler sample buffer allocation failed: {0}")]
+    Pool(#[from] kithara_bufpool::PoolError),
 
     #[error("resampler backend failed during {op}: {detail}")]
     Backend { op: &'static str, detail: String },

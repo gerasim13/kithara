@@ -1,7 +1,11 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+};
 
 use bon::{Builder, bon};
-use kithara_assets::AssetResource;
+use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -9,7 +13,8 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
+use kithara_storage::ResourceStatus;
+use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
 
 use super::{
     cas_anchor::CasAnchorCell,
@@ -20,9 +25,9 @@ use super::{
     seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
-    HlsResult,
-    config::{HlsConfig, SizeProbeMethod},
-    playlist::{PlaylistAccess, PlaylistState},
+    HlsError, HlsResult,
+    config::{DEFAULT_ACQUIRE_ATTEMPT_BUDGET, DEFAULT_DOWNLOAD_BATCH_SIZE, SizeProbeMethod},
+    playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
@@ -60,16 +65,19 @@ pub(crate) struct PlanConfig {
     pub(crate) size_probe_method: SizeProbeMethod,
     /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
     /// may emit.
-    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub(crate) prefetch_budget: usize,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
-    #[builder(default = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,
 }
 
-pub(crate) struct PlanCtx {
-    pub(crate) scope: kithara_assets::AssetScope,
+pub(crate) struct PlanCtx<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) scope: kithara_assets::AssetScope<S>,
     pub(crate) bus: EventBus,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -84,7 +92,10 @@ pub(crate) struct PlanCtx {
     pub(crate) seek_epoch: u64,
 }
 
-pub(crate) struct HlsVariant {
+pub(crate) struct HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) cache_complete_emitted: AtomicBool,
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
@@ -94,7 +105,7 @@ pub(crate) struct HlsVariant {
     pub(super) flow: VariantFlow,
     pub(super) profile: VariantProfile,
     pub(super) seek: VariantSeek,
-    pub(super) segments: VariantSegments,
+    pub(super) segments: VariantSegments<S>,
     pub(super) variant: usize,
 }
 
@@ -163,14 +174,21 @@ pub(super) struct VariantSeek {
 }
 
 #[derive(derive_more::Deref)]
-pub(super) struct VariantSegments {
+pub(super) struct VariantSegments<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Per-track asset store. The single source-of-truth clone: each vended
     /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
     /// acquires *writable* resources via the same clone in `PlanCtx::scope`.
     /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
     /// `init_handle`); the produce-core's disk read and acquire flow through
     /// that handle, and it is the home for the `WS5d` held-resource lease.
-    pub(super) scope: kithara_assets::AssetScope,
+    pub(super) scope: kithara_assets::AssetScope<S>,
+    held: HeldReaders<S>,
+    /// Store opens the read path performed.
+    #[cfg(test)]
+    pub(super) opens: std::sync::atomic::AtomicUsize,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the known byte size
@@ -182,18 +200,105 @@ pub(super) struct VariantSegments {
     entries: Vec<Segment>,
 }
 
-impl VariantSegments {
-    const fn new(
-        scope: kithara_assets::AssetScope,
+impl<S> VariantSegments<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn new(
+        scope: kithara_assets::AssetScope<S>,
         init: Option<Segment>,
         entries: Vec<Segment>,
     ) -> Self {
         Self {
             scope,
+            held: HeldReaders {
+                init: Mutex::default(),
+                media: Mutex::default(),
+            },
+            #[cfg(test)]
+            opens: std::sync::atomic::AtomicUsize::new(0),
             init,
             entries,
         }
     }
+
+    /// Copy `range` of `seg` into `dst`. `Ok(None)` means the bytes are not on
+    /// disk yet.
+    pub(super) fn read_at(
+        &self,
+        seg: &Segment,
+        range: Range<u64>,
+        dst: &mut [u8],
+    ) -> StreamResult<Option<usize>> {
+        let Some(reader) = self.reader(seg)? else {
+            return Ok(None);
+        };
+        reader
+            .wait_range(range.clone())
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        let n = reader
+            .read_at(range.start, dst)
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        Ok(Some(n))
+    }
+
+    /// Drop the held resource for `key`, so the next read opens it again.
+    pub(super) fn release(&self, key: &ResourceKey) {
+        for slot in [&self.held.init, &self.held.media] {
+            let mut held = slot.lock();
+            if held.as_ref().is_some_and(|h| h.key == *key) {
+                *held = None;
+            }
+        }
+    }
+
+    /// The slot's open resource, opened and held on first use.
+    fn reader(&self, seg: &Segment) -> StreamResult<Option<AssetReader<S>>> {
+        let mut held = match seg {
+            Segment::Init(_) => self.held.init.lock(),
+            Segment::Media(_) => self.held.media.lock(),
+        };
+        let key = seg.resource_id();
+        if let Some(hit) = held.as_ref().filter(|h| h.key == *key && serves(&h.reader)) {
+            return Ok(Some(hit.reader.clone()));
+        }
+        *held = None;
+
+        #[cfg(test)]
+        self.opens.fetch_add(1, Ordering::Relaxed);
+        let Some(reader) = seg.resource(&self.scope).open()? else {
+            return Ok(None);
+        };
+        *held = Some(Held {
+            key: key.clone(),
+            reader: reader.clone(),
+        });
+        drop(held);
+        Ok(Some(reader))
+    }
+}
+
+/// One slot for the init prefix and one for the media segment, which is what a
+/// single [`read_at`](HlsVariant::read_at) walks. A held reader pins its asset,
+/// so the count is bounded on purpose.
+struct HeldReaders<S> {
+    init: Mutex<Option<Held<S>>>,
+    media: Mutex<Option<Held<S>>>,
+}
+
+struct Held<S> {
+    key: ResourceKey,
+    reader: AssetReader<S>,
+}
+
+fn serves<S>(reader: &AssetReader<S>) -> bool
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    !matches!(
+        reader.status(),
+        ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+    )
 }
 
 impl VariantFlow {
@@ -274,11 +379,14 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
 }
 
 #[bon]
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[builder]
     pub(crate) fn try_build<'a>(
         #[builder(start_fn)] playlist_state: &Arc<PlaylistState>,
-        ctx: &'a PlanCtx,
+        ctx: &'a PlanCtx<S>,
         decrypt_contexts: &'a [Option<DecryptContext>],
         seek_obs: Arc<dyn SeekObserve>,
         #[builder(required)] init_decrypt_ctx: Option<DecryptContext>,
@@ -308,7 +416,10 @@ impl HlsVariant {
 impl VariantParts {
     /// Bare assembly used by unit tests inside this module.
     #[must_use]
-    pub(crate) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
+    pub(crate) fn into_variant<S>(self, variant: usize, ctx: &PlanCtx<S>) -> Arc<HlsVariant<S>>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         let Self {
             init,
             codec,
@@ -328,14 +439,17 @@ impl VariantParts {
                 headers: ctx.headers.clone(),
                 bus: ctx.bus.clone(),
             },
-            seek: VariantSeek::new(HlsVariant::NO_SEEK_TAIL),
+            seek: VariantSeek::new(HlsVariant::<S>::NO_SEEK_TAIL),
             segments: VariantSegments::new(ctx.scope.clone(), init, segments),
             cache_complete_emitted: AtomicBool::new(false),
         })
     }
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) const NO_SEEK_TAIL: u32 = u32::MAX;
 
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact
@@ -346,7 +460,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
     ) -> HlsResult<Vec<Segment>> {
         let scope = &ctx.scope;
         let Some(num) = playlist_state.num_segments(variant_idx) else {
@@ -354,7 +468,7 @@ impl HlsVariant {
         };
         let bandwidth_bps = playlist_state.variant_bandwidth_bps(variant_idx);
         let mut decode_time = Duration::ZERO;
-        let mut entries = Vec::with_capacity(num);
+        let mut entries: Vec<Segment> = Vec::with_capacity(num);
         for seg_idx in 0..num {
             let Some(url) = playlist_state.segment_url(variant_idx, seg_idx) else {
                 break;

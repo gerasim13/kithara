@@ -130,8 +130,7 @@ impl Frame {
         let start = self.served_from as usize;
         let end = (self.served_until as usize).min(segments.len());
         if start >= end {
-            // No served media segments (init-only / empty): the offset table
-            // alone bounds the stream; treat as complete.
+            // WHY: No served media segments (init-only / empty): the offset table alone bounds the stream; treat as complete.
             return true;
         }
         segments[start..end].iter().all(|s| s.size().is_exact())
@@ -322,12 +321,6 @@ impl Layout {
         self.finish_publication();
     }
 
-    /// Reclaim quiesced retirees, then park the live frame ahead of the swap.
-    fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
-        retired.retain(|frame| Arc::strong_count(frame) > 1);
-        retired.push(frame.load_full());
-    }
-
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
         self.frame.load().offsets.get(idx).copied()
     }
@@ -357,6 +350,12 @@ impl Layout {
             frame.init_seed = 0;
             frame.recompute(init_size, segments);
         });
+    }
+
+    /// Reclaim quiesced retirees, then park the live frame ahead of the swap.
+    fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
+        retired.retain(|frame| Arc::strong_count(frame) > 1);
+        retired.push(frame.load_full());
     }
 
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`

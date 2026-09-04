@@ -1,13 +1,19 @@
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
-    decode::PcmSpec,
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioSpec,
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64,
+    bufpool_ext::{TestPools, pools},
+};
+use kithara_test_fixtures::signal;
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -22,10 +28,10 @@ struct SeekStats {
 }
 
 fn run_seek_iterations(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
     seek_positions: &[f64],
-    spec: PcmSpec,
+    spec: AudioSpec,
 ) -> SeekStats {
     let SeekStats {
         mut successful_reads,
@@ -102,7 +108,7 @@ fn run_seek_iterations(
 }
 
 fn read_final_tail(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
     final_seek_secs: f64,
 ) -> (u64, bool) {
@@ -150,7 +156,7 @@ async fn stress_random_seek_read_synthetic_wav() {
     const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS_INT as usize;
     const SEEK_ITERATIONS: usize = 1000;
 
-    let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
+    let wav_data = signal::wav(44100, 2, SAMPLE_COUNT, signal::TONE);
     let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
     info!(
         samples = SAMPLE_COUNT,
@@ -167,17 +173,22 @@ async fn stress_random_seek_read_synthetic_wav() {
     .expect("write WAV data");
 
     let cache = TestTempDir::new();
+    let pools = pools();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
-        .store(kithara_integration_tests::disk_asset_store(cache.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache.path().into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())
         .build();
-    let mut audio = Audio::<Stream<File>>::new(config)
-        .await
-        .expect("create audio pipeline");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker.open(config).await.expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();

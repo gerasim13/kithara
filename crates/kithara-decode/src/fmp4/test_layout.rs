@@ -48,10 +48,12 @@ impl ByteMap for FakeSegmented {
 }
 
 pub(crate) fn read_fixture(name: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/hls")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    let route = format!("/hls/{name}");
+    let resource = kithara_test_fixtures::hls::long_plain()
+        .get(&route)
+        .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+    std::fs::read(resource.path())
+        .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
 }
 
 #[derive(Clone, Copy)]

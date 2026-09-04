@@ -1,5 +1,6 @@
 use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -8,12 +9,18 @@ use kithara_stream::{
 
 use super::{HlsSession, pending};
 
-pub(in crate::stream) struct HlsSessionReader {
-    session: Arc<HlsSession>,
+pub(in crate::stream) struct HlsSessionReader<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    session: Arc<HlsSession<S>>,
 }
 
-impl HlsSessionReader {
-    pub(in crate::stream) const fn new(session: Arc<HlsSession>) -> Self {
+impl<S> HlsSessionReader<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(in crate::stream) const fn new(session: Arc<HlsSession<S>>) -> Self {
         Self { session }
     }
 
@@ -51,7 +58,10 @@ impl HlsSessionReader {
     }
 }
 
-impl Read for HlsSessionReader {
+impl<S> Read for HlsSessionReader<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -112,7 +122,10 @@ impl Read for HlsSessionReader {
     }
 }
 
-impl Seek for HlsSessionReader {
+impl<S> Seek for HlsSessionReader<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn seek(&mut self, seek: SeekFrom) -> io::Result<u64> {
         self.session.check_live()?;
         let position = self.resolve_seek(seek)?;

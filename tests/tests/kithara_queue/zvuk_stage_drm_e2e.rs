@@ -2,9 +2,9 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -13,13 +13,17 @@ use kithara::{
         tokio,
         tokio::sync::OnceCell,
     },
-    play::{PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
+    TestTempDir, kithara, offline::OfflineQueue, waits::wait_for_position_at_least,
 };
 
 /// Staging zvq.me DRM track — `zvuk-stage` provider in `app.yaml`.
@@ -31,7 +35,7 @@ const STAGE_TRACK: &str = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745
 
 struct Ctx {
     config: AppConfig,
-    queue: Arc<Queue>,
+    queue: OfflineQueue<AppPools>,
     cache: TestTempDir,
 }
 
@@ -39,37 +43,48 @@ static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
+        let pools = app_pools().expect("build app pool region");
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+                .build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
-        let byte_pool = BytePool::default();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(pools.clone())
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
-            .pool(byte_pool.clone())
             .flush_hub(flush_hub)
             .layouts(baked::build_baked_asset_layouts())
             .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools)
+                .cancel(shutdown.child())
+                .build(),
+        );
+        let session_pools = worker.pools().clone();
         let config = AppConfig::builder()
             .downloader(downloader)
             .shutdown(shutdown)
-            .byte_pool(byte_pool)
-            .pcm_pool(PcmPool::default())
+            .worker(worker.clone())
             .store(store)
             .build();
-        let player = Arc::new(PlayerImpl::new(
+        let session_config = HostConfig::offline(session_pools)
+            .pacing(Duration::from_millis(10))
+            .build();
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
-                .session(OfflineSession::arc_auto())
+                .sample_rate(session_config.sample_rate())
+                .worker(worker)
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+        );
+        let queue = OfflineQueue::new(
+            session_config,
+            Queue::new(QueueConfig::builder().player(player).build()),
+        )
+        .expect("create product offline queue");
 
-        let q = Arc::clone(&queue);
+        let q = queue.control();
         tokio::task::spawn(async move {
             loop {
                 sleep(Duration::from_millis(50)).await;
@@ -86,11 +101,11 @@ async fn shared_ctx() -> &'static Ctx {
     .await
 }
 
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource {
+fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
     super::app_track_source(
         url,
         &ctx.config,
-        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,
@@ -99,7 +114,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
 
 async fn wait_for_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -155,7 +170,7 @@ async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = shared_ctx().await;
     let source = build_track_source(STAGE_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx.queue.append(source).expect("append stage DRM track");
 
     wait_for_loaded(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await

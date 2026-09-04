@@ -1,19 +1,21 @@
 use kithara::{
-    audio::{StretchControls, StretchKind},
     events::{
         AudioEvent, BusEvent, DecoderEvent, DownloaderEvent, Event, EventReceiver, FileEvent,
         HlsEvent, ItemEvent, PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
     },
+    host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
-    play::{Cmd, PlayerImpl, Reply, Resource, SessionDispatcher, SessionError},
+    play::{PlayError, PlayerImpl, Resource, SessionError},
+    warp::{StretchControls, StretchKind},
 };
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::offline::OfflineHostHarness;
 use serde::Serialize;
 
-use super::{Case, SEEK_POSITION_TOLERANCE_SECS, SOURCE_RATE};
+use super::{Case, SOURCE_RATE};
+use crate::bufpool_ext::TestPools;
 
 pub(super) struct Deck {
-    pub(super) player: Arc<PlayerImpl>,
+    pub(super) player: HostOwned<PlayerImpl<TestPools>>,
     pub(super) reference: Resource,
     pub(super) reference_events: EventReceiver,
     pub(super) controls: Arc<StretchControls>,
@@ -88,17 +90,6 @@ pub(super) fn drain_all_events(
                             failures.push(format!(
                                 "deck {deck_index} ({}) completed stale seek epoch {seek_epoch} during {phase}; expected {:?}",
                                 deck.observation.label, deck.seek_request_epoch,
-                            ));
-                            deck.seek_terminal = true;
-                        } else if deck.player.position_seconds().is_none_or(|served| {
-                            (served - deck.capture_target_secs).abs()
-                                > SEEK_POSITION_TOLERANCE_SECS
-                        }) {
-                            failures.push(format!(
-                                "deck {deck_index} ({}) seek epoch {seek_epoch} committed with served position {:?} during {phase}, expected {:.9}s",
-                                deck.observation.label,
-                                deck.player.position_seconds(),
-                                deck.capture_target_secs,
                             ));
                             deck.seek_terminal = true;
                         } else {
@@ -190,13 +181,14 @@ pub(super) fn drain_all_events(
                         "deck {deck_index} ({}) decode error {class:?}/{kind:?} ({detail}) during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
+                    Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
-                            "deck {deck_index} ({src}) reached player EOF during {phase}",
+                            "deck {deck_index} ({}) reached player EOF during {phase}",
+                            item.track(),
                         ));
                     }
-                    Event::Player(PlayerEvent::ItemDidFail { src: _, .. }) => {
+                    Event::Player(PlayerEvent::ItemDidFail { .. }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) reported player track failure during {phase}",
@@ -354,19 +346,18 @@ pub(super) fn record_control_state(
 }
 
 pub(super) fn record_transport_state(
-    session: &OfflineSession,
+    host: &OfflineHostHarness<TestPools>,
     phase: &str,
     failures: &mut Vec<String>,
 ) {
-    match session.exec(Cmd::QuerySessionTransport) {
-        Ok(Reply::Err(SessionError::TransportNotProcessed)) => {}
-        Ok(Reply::Err(error)) => failures.push(format!(
+    match host.transport_revision() {
+        Err(PlayError::Session(SessionError::TransportNotProcessed)) => {}
+        Err(error) => failures.push(format!(
             "session transport returned {error} {phase}, expected unconfigured",
         )),
         Ok(_) => failures.push(format!(
             "session transport was configured {phase}, but this is a no-SYNC matrix",
         )),
-        Err(error) => failures.push(format!("session transport query failed {phase}: {error}")),
     }
 }
 

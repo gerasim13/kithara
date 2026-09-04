@@ -16,7 +16,7 @@ extension IntegrationRegressionsIOS {
 
         let fixture = try await TestServerFixture.registerBehavior(
             .init(
-                content: .asset(name: "test.mp3"),
+                content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
                 delivery: .stallAfter(afterBytes: prefix)
             )
         )
@@ -29,7 +29,7 @@ extension IntegrationRegressionsIOS {
 
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
-            url: fixture.childURL("test.mp3").absoluteString
+            url: fixture.childURL("signal_mp3_track_sine440_187s.mp3").absoluteString
         )
         defer {
             player.stop()

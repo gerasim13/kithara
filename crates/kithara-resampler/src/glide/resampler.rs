@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
@@ -20,24 +20,27 @@ pub struct GlideResampler {
     channels: NonZeroUsize,
     mode: ResamplerMode,
     options: ResamplerOptions,
-    previous: SmallVec<[PcmBuf; 8]>,
+    previous: SmallVec<[SampleBuffer; 8]>,
     current_ratio: f64,
     cursor: f64,
     input_frames: usize,
 }
 
 impl GlideResampler {
-    pub(super) fn new(
+    pub(super) fn new<S>(
         backend: &'static str,
         config: GlideConfig,
-        settings: &ResamplerSettings,
-    ) -> Result<Self, ResamplerBuildError> {
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         let ratio = initial_ratio(settings.mode);
         validate_ratio_bounds(backend, settings.options, ratio)?;
         let glide = initial_glide(backend, settings.mode, settings.options, ratio)?;
-        let previous = previous_buffers(&settings.pcm_pool, settings.channels, backend)?;
+        let previous = previous_buffers(&settings.pools, settings.channels, backend)?;
         let engine = GlideEngine::new(
-            &settings.pcm_pool,
+            &settings.pools,
             settings.channels,
             settings.options.chunk_size,
             settings.options.max_ratio_adjustment,
@@ -310,14 +313,17 @@ fn initial_ratio(mode: ResamplerMode) -> f64 {
     }
 }
 
-fn previous_buffers(
-    pool: &PcmPool,
+fn previous_buffers<S>(
+    pools: &PoolRegion<S>,
     channels: NonZeroUsize,
     backend: &'static str,
-) -> Result<SmallVec<[PcmBuf; 8]>, ResamplerBuildError> {
+) -> Result<SmallVec<[SampleBuffer; 8]>, ResamplerBuildError>
+where
+    S: HasPool<f32>,
+{
     let mut buffers = SmallVec::new();
     for _ in 0..channels.get() {
-        let mut buffer = pool.get();
+        let mut buffer = pools.get::<f32>();
         buffer
             .ensure_len(1)
             .map_err(|err| ResamplerBuildError::BackendBuild {

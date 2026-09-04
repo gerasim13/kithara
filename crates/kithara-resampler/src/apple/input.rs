@@ -5,14 +5,14 @@ use kithara_apple::{
         OSStatus, PARAM_ERR,
     },
 };
-use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use smallvec::SmallVec;
 
 use crate::ResamplerError;
 
 #[derive(fieldwork::Fieldwork)]
 pub(super) struct AppleResamplerInputState {
-    staged: SmallVec<[PcmBuf; 8]>,
+    staged: SmallVec<[SampleBuffer; 8]>,
     eos: bool,
     channels: usize,
     #[field(get(copy, vis = "pub(super)"))]
@@ -22,14 +22,17 @@ pub(super) struct AppleResamplerInputState {
 }
 
 impl AppleResamplerInputState {
-    pub(super) fn new(
+    pub(super) fn new<S>(
         channels: usize,
         chunk_size: usize,
-        pcm_pool: &PcmPool,
-    ) -> Result<Self, BudgetExhausted> {
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let mut staged = SmallVec::new();
         for _ in 0..channels {
-            let mut buffer = pcm_pool.get();
+            let mut buffer = pools.get::<f32>();
             buffer.ensure_len(chunk_size)?;
             buffer.clear();
             staged.push(buffer);

@@ -3,28 +3,30 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{
-    AudioDecoderConfig, AudioWorkerHandle, ConsumerWakeMode, EngineLoad, StretchControls,
-};
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
+use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use portable_atomic::AtomicF32;
+use kithara_warp::StretchControls;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
+use crate::{EngineLoad, PlayWorker};
 
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// Unified configuration for opening an audio resource.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
-pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
+pub struct ResourceConfig<S, B: Default = PlaybackResamplerBackend>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Audio resource source (URL or local path).
     #[builder(start_fn)]
     pub(crate) src: ResourceSrc,
@@ -32,13 +34,11 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
     /// Shared asset store used by playback and derived resources.
-    pub(crate) store: AssetStore,
+    pub(crate) store: AssetStore<S>,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    pub(crate) byte_pool: BytePool,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
@@ -69,22 +69,29 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Shared playback rate atomic for the audio pipeline resampler in the
-    /// non-tempo (no-`stretch`) chain.
-    pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
-    /// tempo mode; the same `Arc` must flow to every track so live changes
-    /// reach the running effect chain. `None` keeps the resampler-first chain.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
-    /// Shared audio worker handle for cooperative multi-track decoding.
-    pub(crate) worker: Option<AudioWorkerHandle>,
-    /// Session-owned PCM consumer wake capability. This is populated by
-    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
-    /// does not become a second public source of session policy.
-    #[builder(skip)]
+    /// Live time-stretch controls shared with the resident Warp chain.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
+    /// Explicit playback worker. Player preparation fills this field; direct
+    /// Resource callers must configure it themselves.
+    pub(crate) worker: Option<PlayWorker<S>>,
+    /// Audio-consumer wake capability for this resource's reader. The default
+    /// is safe for a consumer on the real-time render callback.
+    /// `PlayerImpl::prepare_config` always overwrites it with the session
+    /// policy, so a player-managed resource cannot carry a second source of
+    /// that policy. A direct reader off the real-time thread opts into
+    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
+    /// and inline reader-event delivery. Never declare `ImmediateOffRt` on a
+    /// resource headed into a player without `prepare_config`: its reads would
+    /// then publish inline on the render callback.
+    #[builder(default)]
     pub(crate) consumer_wake_mode: ConsumerWakeMode,
-    /// Shared PCM pool for temporary buffers.
-    pub(crate) pcm_pool: PcmPool,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself.
+    /// Never set on a resource consumed by a real-time callback.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
@@ -94,6 +101,39 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Maximum peak bitrate in bits per second for ABR variant selection.
     #[builder(default = 0.0)]
     pub(crate) preferred_peak_bitrate: f64,
+}
+
+impl<S, B> Clone for ResourceConfig<S, B>
+where
+    B: Clone + Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            src: self.src.clone(),
+            initial_abr_mode: self.initial_abr_mode,
+            store: self.store.clone(),
+            decoder: self.decoder.clone(),
+            keys: self.keys.clone(),
+            preload_chunks: self.preload_chunks,
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            discriminator: self.discriminator.clone(),
+            downloader: self.downloader.clone(),
+            engine_load: self.engine_load.clone(),
+            headers: self.headers.clone(),
+            hint: self.hint.clone(),
+            hls_base_url: self.hls_base_url.clone(),
+            host_sample_rate: self.host_sample_rate,
+            look_ahead_bytes: self.look_ahead_bytes,
+            stretch: Arc::clone(&self.stretch),
+            worker: self.worker.clone(),
+            consumer_wake_mode: self.consumer_wake_mode,
+            block_on_underrun: self.block_on_underrun,
+            size_probe_method: self.size_probe_method,
+            preferred_peak_bitrate: self.preferred_peak_bitrate,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,22 +146,36 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::resource::source::parse_src;
+    use crate::{
+        PlayWorkerConfig,
+        test_pools::{TestPools, pools},
+    };
 
-    fn store() -> AssetStore {
-        AssetStore::builder().build()
+    fn store() -> AssetStore<TestPools> {
+        AssetStore::builder(pools()).build()
     }
 
     fn valid_src(input: &str) -> ResourceSrc {
-        parse_src(input).expect("valid test source")
+        ResourceSrc::parse(input).expect("valid test source")
     }
 
-    fn test_config<S: AsRef<str>>(input: S) -> Result<ResourceConfig, DecodeError> {
-        Ok(ResourceConfig::for_src(parse_src(input)?)
+    fn test_config<S: AsRef<str>>(input: S) -> Result<ResourceConfig<TestPools>, DecodeError> {
+        Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build())
+    }
+
+    #[kithara::test]
+    fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
+        let config = test_config("https://example.com/track.mp3").expect("valid config");
+        assert_eq!(
+            config.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
+    }
+
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]
@@ -132,18 +186,20 @@ mod tests {
 
     #[kithara::test]
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
+        let worker = worker();
         let config = test_config("https://example.com/audio/get-mp3/song.MP3?sign=test")
             .unwrap()
-            .build_file_config();
+            .build_file_config(&worker, None);
 
         assert_eq!(config.hint(), Some("mp3"));
     }
 
     #[kithara::test]
     fn config_file_url_without_extension_does_not_derive_hint() {
+        let worker = worker();
         let config = test_config("https://example.com/get-mp3/42?sign=test")
             .unwrap()
-            .build_file_config();
+            .build_file_config(&worker, None);
 
         assert_eq!(config.hint(), None);
     }
@@ -169,11 +225,9 @@ mod tests {
     #[case(false)]
     #[case(true)]
     fn config_bus_presence(#[case] with_events: bool) {
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .maybe_events(with_events.then(|| EventBus::new(32)))
                 .build();
         assert_eq!(config.bus.is_some(), with_events);
@@ -181,32 +235,31 @@ mod tests {
 
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
-        let config: ResourceConfig =
+        let worker = worker();
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_file_config();
+        let audio_config = config.build_file_config(&worker, None);
         assert!(audio_config.stream().bus.is_some());
     }
 
     #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
-        let config: ResourceConfig =
+        let worker = worker();
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_hls_config().unwrap();
+        let audio_config = config.build_hls_config(&worker, None).unwrap();
         assert!(audio_config.stream().bus.is_some());
     }
 
     #[kithara::test]
     fn config_resampler_options_propagate_to_file_config() {
+        let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
@@ -215,14 +268,12 @@ mod tests {
                     .build(),
             )
             .build();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_file_config();
+        let audio_config = config.build_file_config(&worker, None);
 
         assert_eq!(
             audio_config
@@ -237,6 +288,7 @@ mod tests {
 
     #[kithara::test]
     fn config_explicit_resampler_backend_propagates_to_hls_config() {
+        let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
@@ -244,14 +296,12 @@ mod tests {
                     .build(),
             )
             .build();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_hls_config().unwrap();
+        let audio_config = config.build_hls_config(&worker, None).unwrap();
 
         assert_eq!(
             audio_config
@@ -268,11 +318,9 @@ mod tests {
     fn config_with_headers() {
         let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer test");
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .headers(headers)
                 .build();
 
@@ -285,11 +333,9 @@ mod tests {
 
     #[kithara::test]
     fn config_builder_chain() {
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
@@ -309,14 +355,13 @@ mod tests {
 
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
-        let config: ResourceConfig =
+        let worker = worker();
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .preferred_peak_bitrate(512_000.0)
                 .build();
-        let _audio_config = config.build_hls_config().unwrap();
+        let _audio_config = config.build_hls_config(&worker, None).unwrap();
     }
 
     #[kithara::test]
@@ -326,53 +371,28 @@ mod tests {
     }
 
     #[kithara::test]
+    fn config_stretch_defaults_to_unity() {
+        let config = test_config("https://example.com/song.mp3").unwrap();
+        assert!((config.stretch.speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
     fn config_with_worker_sets_field() {
-        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-        let config: ResourceConfig =
+        let worker = worker();
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .worker(worker.clone())
                 .build();
-        assert!(config.worker.is_some());
-        worker.shutdown();
-    }
-
-    #[kithara::test]
-    fn config_worker_propagates_to_file_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-        let config: ResourceConfig =
-            ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
-                .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
-                .worker(worker.clone())
-                .build();
-        let audio_config = config.build_file_config();
-        assert!(audio_config.worker().is_some());
-        worker.shutdown();
-    }
-
-    #[kithara::test]
-    fn config_worker_propagates_to_hls_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-        let config: ResourceConfig =
-            ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .store(store())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
-                .worker(worker.clone())
-                .build();
-        let audio_config = config.build_hls_config().unwrap();
-        assert!(audio_config.worker().is_some());
-        worker.shutdown();
+        let configured = config.worker.as_ref().expect("worker must be configured");
+        assert!(std::ptr::eq(configured.pools(), worker.pools()));
     }
 
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
+        let worker = worker();
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
-        let audio_config = config.build_file_config();
+        let audio_config = config.build_file_config(&worker, None);
         assert_eq!(
             audio_config.hint(),
             None,
@@ -387,8 +407,9 @@ mod tests {
     #[case("https://example.com/track/streamhq?id=123", None)]
     #[case("https://example.com/audio", None)]
     fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
+        let worker = worker();
         let config = test_config(url).unwrap();
-        let audio_config = config.build_file_config();
+        let audio_config = config.build_file_config(&worker, None);
         assert_eq!(
             audio_config.hint(),
             expected,

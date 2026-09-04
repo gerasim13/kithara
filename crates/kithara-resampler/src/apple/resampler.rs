@@ -5,60 +5,17 @@ use kithara_apple::audio_toolbox::{
     AudioStreamBasicDescription, AudioToolboxError, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE,
     FLOAT32_PLANAR_FLAGS, NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
-use super::{AudioConverterFactory, input::AppleResamplerInputState};
+use super::input::AppleResamplerInputState;
 use crate::{
     Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
-    ResamplerProcess, ResamplerSettings,
+    ResamplerProcess,
 };
 
 const BACKEND_APPLE: &str = "apple-audio-converter";
-
-/// Factory for `CoreAudio` PCM converters used by the resampler Apple backend.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct AudioToolboxConverterFactory {
-    _private: (),
-}
-
-impl AudioToolboxConverterFactory {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { _private: () }
-    }
-}
-
-impl AudioConverterFactory for AudioToolboxConverterFactory {
-    type Resampler = AppleResampler;
-
-    fn build_resampler(
-        &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Self::Resampler, ResamplerBuildError> {
-        let ResamplerMode::FixedRatio {
-            source_sample_rate,
-            target_sample_rate,
-        } = settings.mode
-        else {
-            return Err(ResamplerBuildError::UnsupportedMode {
-                backend: BACKEND_APPLE,
-                mode: settings.mode.label(),
-            });
-        };
-
-        let resampler = AppleResampler::new(
-            source_sample_rate.get(),
-            target_sample_rate.get(),
-            settings.channels.get(),
-            settings.options.chunk_size,
-            &settings.pcm_pool,
-        )?;
-        Ok(resampler)
-    }
-}
 
 pub struct AppleResampler {
     converter: AudioConverter,
@@ -76,13 +33,16 @@ impl AppleResampler {
     ///
     /// Returns [`ResamplerBuildError`] if the fixed shape is invalid or
     /// `audio_converter_new` rejects the planar PCM ASBD pair.
-    pub(crate) fn new(
+    pub(crate) fn new<S>(
         source_rate: u32,
         target_rate: u32,
         channels: usize,
         chunk_size: usize,
-        pcm_pool: &PcmPool,
-    ) -> Result<Self, ResamplerBuildError> {
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = NonZeroUsize::new(channels)
             .ok_or_else(|| apple_build_config("channel count must be non-zero"))?;
         if chunk_size == 0 {
@@ -105,7 +65,7 @@ impl AppleResampler {
             .map_err(|err| apple_build_status("AudioConverterNew", err_status(&err)))?;
 
         let input_state = Box::new(
-            AppleResamplerInputState::new(channels.get(), chunk_size, pcm_pool).map_err(|err| {
+            AppleResamplerInputState::new(channels.get(), chunk_size, pools).map_err(|err| {
                 ResamplerBuildError::BackendBuild {
                     backend: BACKEND_APPLE,
                     detail: err.to_string(),
@@ -340,17 +300,16 @@ const fn err_status(err: &AudioToolboxError) -> OSStatus {
 mod tests {
     use std::f32::consts::TAU;
 
-    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
-    use super::AudioToolboxConverterFactory;
     use crate::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings,
         apple::AppleAudioConverterBackend,
         create_resampler,
         rubato::{RubatoBackend, RubatoResampler},
+        test_pools::{TestPools, pools},
     };
 
     mod test_consts {
@@ -514,9 +473,7 @@ mod tests {
     ) -> super::AppleResampler {
         let settings = test_settings(source_rate, target_rate, channels, frames);
         let config = ResamplerConfig::builder()
-            .backend(AppleAudioConverterBackend::with_config(
-                AudioToolboxConverterFactory::new().into(),
-            ))
+            .backend(AppleAudioConverterBackend::new())
             .settings(settings)
             .build();
         create_resampler(&config)
@@ -543,7 +500,7 @@ mod tests {
         target_rate: u32,
         channels: usize,
         frames: usize,
-    ) -> ResamplerSettings {
+    ) -> ResamplerSettings<TestPools> {
         ResamplerSettings::builder()
             .channels(std::num::NonZeroUsize::new(channels).expect("test channels"))
             .mode(ResamplerMode::FixedRatio {
@@ -554,10 +511,7 @@ mod tests {
             })
             .quality(ResamplerQuality::High)
             .options(ResamplerOptions::builder().chunk_size(frames).build())
-            .pcm_pool(PcmPool::new(
-                4,
-                frames.saturating_mul(channels).saturating_mul(4),
-            ))
+            .pools(pools())
             .build()
     }
 

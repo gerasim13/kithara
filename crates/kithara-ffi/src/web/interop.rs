@@ -35,7 +35,7 @@ const SALT_LEN: usize = 16;
 pub(crate) fn generate_salt() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-    let mut bytes = vec![0u8; SALT_LEN];
+    let mut bytes = [0u8; SALT_LEN];
     if !fill_random(&mut bytes) {
         let seed = next_request_id();
         for (i, b) in bytes.iter_mut().enumerate() {

@@ -15,10 +15,14 @@ use crate::{Ctx, common::project::CiReportConfig};
 /// `.config/xtask.toml` under `[ci_report]`.
 struct Consts;
 impl Consts {
+    const ASSESSMENT_DIRECTORY: &'static str = "quality-assessment";
+    const ASSESSMENT_MANIFEST: &'static str = "manifest.json";
     const CRAP_DIRECTORY: &'static str = "cargo-crap";
     const CRAP_REPORT: &'static str = "report.md";
     const HEALTH_REPORT: &'static str = "health-report.md";
     const METRICS: &'static str = "metrics.json";
+    const SIMILARITY_ARTIFACT: &'static str = "similarity-report";
+    const SIMILARITY_REPORT: &'static str = "report.md";
     /// Where the health report stops being a verdict and starts being logs.
     const STAGE_DETAILS: &'static str = "## Stage details";
 }
@@ -31,15 +35,80 @@ pub struct CiReportArgs {
 }
 
 pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
-    print!("{}", render(&args.artifacts, &ctx.config.ci_report)?);
+    let report = render(&args.artifacts, &ctx.config.ci_report)?;
+    let target = ctx.root.join("target");
+    fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
+    let output = target.join("consolidated-quality-report.md");
+    fs::write(&output, &report).with_context(|| format!("write {}", output.display()))?;
+    print!("{report}");
     Ok(())
 }
 
+/// Every producer in the run, in the order a reader wants them: the verdict
+/// first, then what the verdict was drawn from.
+///
+/// The assessment and the duplication report were archived by the run and read
+/// by nobody - the collector waited for three of the five jobs and rendered
+/// what those three left. A measurement taken, uploaded and never opened is
+/// the same cost as one that was never taken.
 fn render(artifacts: &Path, config: &CiReportConfig) -> Result<String> {
     let mut out = String::new();
+    out.push_str(&assessment(artifacts)?);
     out.push_str(&health(artifacts)?);
     out.push_str(&coverage_risk(artifacts, config.crap_rows)?);
     out.push_str(&architecture(artifacts, config.top_contours)?);
+    out.push_str(&duplication(artifacts, config.similarity_rows)?);
+    Ok(out)
+}
+
+/// The assessment's own headline, read from the manifest it publishes for
+/// exactly this purpose. The document behind it is far too long for a step
+/// summary, so this says where it is rather than carrying it.
+fn assessment(artifacts: &Path) -> Result<String> {
+    let Some(manifest) = find(artifacts, &|path| {
+        named(path, Consts::ASSESSMENT_MANIFEST) && under(path, Consts::ASSESSMENT_DIRECTORY)
+    })?
+    else {
+        return Ok(missing("Repository assessment", "quality-assessment"));
+    };
+    let text = read(&manifest)?;
+    let value: Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", manifest.display()))?;
+    let mut out = String::from("\n## Repository assessment\n\n");
+    for (label, name) in [
+        ("Verdict", "verdict"),
+        ("Status", "status"),
+        ("Scope", "scope"),
+        ("Profile", "profile"),
+        ("Depth", "depth"),
+        ("Revision", "revision"),
+    ] {
+        let _ = writeln!(out, "- {label}: {}", field(&value, name));
+    }
+    out.push_str(
+        "\nThe assessed document is `assessment.md` in the `quality-assessment` artifact.\n",
+    );
+    Ok(out)
+}
+
+fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
+    let Some(report) = find(artifacts, &|path| {
+        named(path, Consts::SIMILARITY_REPORT) && under(path, Consts::SIMILARITY_ARTIFACT)
+    })?
+    else {
+        return Ok(missing("Duplication", "similarity-report"));
+    };
+    let text = read(&report)?;
+    let mut out = String::from("\n## Duplication\n\n");
+    for line in text.lines().take(rows) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if text.lines().count() > rows {
+        out.push_str(
+            "\nTruncated here; the whole report is in the `similarity-report` artifact.\n",
+        );
+    }
     Ok(out)
 }
 
@@ -51,7 +120,11 @@ fn health(artifacts: &Path) -> Result<String> {
     let summary = text
         .split_once(Consts::STAGE_DETAILS)
         .map_or(text.as_str(), |(before, _)| before);
-    Ok(format!("{}\n", summary.trim_end()))
+    let (title, body) = summary.split_once('\n').unwrap_or((summary, ""));
+    if !title.starts_with("# ") || !title.ends_with(" health report") {
+        anyhow::bail!("{} has an unexpected title {title:?}", report.display());
+    }
+    Ok(format!("\n## Workspace health\n\n{}\n", body.trim()))
 }
 
 fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
@@ -120,6 +193,16 @@ fn missing(section: &str, artifact: &str) -> String {
     format!("\n## {section}\n\nNo `{artifact}` artifact in this run.\n")
 }
 
+/// A manifest field as a reader sees it: a string as itself, anything else as
+/// the JSON it is, and an absent one named rather than skipped.
+fn field(value: &Value, name: &str) -> String {
+    match value.get(name) {
+        None => "unavailable".to_owned(),
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
 fn index(value: &Value, field: &str) -> String {
     value
         .get(field)
@@ -140,6 +223,19 @@ fn read(path: &Path) -> Result<String> {
 
 fn named(path: &Path, name: &str) -> bool {
     path.file_name().is_some_and(|found| found == name)
+}
+
+/// Whether the artifact this file came from is the one named. Downloads keep
+/// the run id and attempt suffix added by the uploader.
+fn under(path: &Path, name: &str) -> bool {
+    path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|found| {
+            found == name
+                || found
+                    .strip_prefix(name)
+                    .is_some_and(|suffix| suffix.starts_with('-'))
+        })
+    })
 }
 
 fn parent_named(path: &Path, name: &str) -> bool {
@@ -178,12 +274,32 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::common::project::ProjectConfig;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create artifact directory");
         }
         fs::write(path, contents).expect("write artifact");
+    }
+
+    #[test]
+    fn run_writes_the_consolidated_report_with_numeric_crap_metrics() {
+        let temp = tempdir().expect("tempdir");
+        let artifacts = temp.path().join("artifacts");
+        write(
+            &artifacts.join("coverage-risk/cargo-crap/report.md"),
+            "## 3 function(s) exceed CRAP threshold 30\n\n| | CRAP | CC | Cov % | Function | Location |\n|---|---:|---:|---:|---|---|\n| high | 35.48 | 28 | 78.79 | prepare_planned_variant_reader | prepare.rs:22 |\n",
+        );
+        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
+
+        run(&CiReportArgs { artifacts }, &ctx).expect("write consolidated report");
+
+        let report = fs::read_to_string(temp.path().join("target/consolidated-quality-report.md"))
+            .expect("read consolidated report");
+        assert!(report.contains("## Coverage risk (CRAP)"), "{report}");
+        assert!(report.contains("| | CRAP | CC | Cov % |"), "{report}");
+        assert!(report.contains("| high | 35.48 | 28 | 78.79 |"), "{report}");
     }
 
     #[test]
@@ -204,12 +320,26 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         write(
             &temp.path().join("health-report/health-report.md"),
-            "# health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
+            "# musicbox health report\n\n## Summary\n\n| 1 | orphans | FAIL |\n\n## Stage details\n\nlog tail\n",
         );
 
         let report = health(temp.path()).expect("health section");
 
+        assert!(report.contains("## Workspace health"));
         assert!(report.contains("| 1 | orphans | FAIL |"));
+    }
+
+    #[test]
+    fn health_section_rejects_an_unexpected_title() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("health-report/health-report.md"),
+            "# unrelated report\n",
+        );
+
+        let error = health(temp.path()).expect_err("unexpected title");
+
+        assert!(error.to_string().contains("unexpected title"), "{error:#}");
     }
 
     #[test]
@@ -308,5 +438,83 @@ mod tests {
     #[test]
     fn the_default_configuration_carries_contours() {
         assert!(CiReportConfig::default().top_contours > 0);
+    }
+
+    #[test]
+    fn the_default_configuration_carries_similarity_rows() {
+        assert!(CiReportConfig::default().similarity_rows > 0);
+    }
+
+    #[test]
+    fn assessment_section_states_the_verdict() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp
+                .path()
+                .join("quality-assessment-shallow/quality-assessment/abc123def456/standard-shallow/manifest.json"),
+            r#"{"verdict": "healthy", "status": "complete", "revision": "abc1234"}"#,
+        );
+
+        let report = assessment(temp.path()).expect("assessment section");
+
+        assert!(report.contains("Verdict: healthy"), "{report}");
+        assert!(report.contains("Revision: abc1234"), "{report}");
+    }
+
+    #[test]
+    fn assessment_section_names_a_field_the_manifest_omits() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp
+                .path()
+                .join("quality-assessment-deep/quality-assessment/abc123def456/complete-deep/manifest.json"),
+            r#"{"verdict": "healthy"}"#,
+        );
+
+        let report = assessment(temp.path()).expect("assessment section");
+
+        assert!(report.contains("Depth: unavailable"), "{report}");
+    }
+
+    #[test]
+    fn duplication_section_reads_the_report_under_its_revision() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report-42-1/abc1234/report.md"),
+            "# duplication\n\n| pair | score |\n",
+        );
+
+        let report = duplication(temp.path(), 10).expect("duplication section");
+
+        assert!(report.contains("| pair | score |"), "{report}");
+    }
+
+    #[test]
+    fn duplication_section_does_not_read_the_crap_report() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("coverage-risk/cargo-crap/report.md"),
+            "coverage risk\n",
+        );
+
+        let report = duplication(temp.path(), 10).expect("duplication section");
+
+        assert!(
+            report.contains("No `similarity-report` artifact"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn duplication_section_points_at_the_artifact_when_capped() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report/abc1234/report.md"),
+            "one\ntwo\nthree\n",
+        );
+
+        let report = duplication(temp.path(), 2).expect("duplication section");
+
+        assert!(report.contains("Truncated here"), "{report}");
     }
 }

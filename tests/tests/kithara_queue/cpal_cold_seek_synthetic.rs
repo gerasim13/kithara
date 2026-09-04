@@ -3,9 +3,10 @@
 use kithara::{
     decode::DecoderBackend,
     events::{AudioEvent, Event},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    platform::{CancelToken, time::Duration, tokio},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -13,10 +14,13 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::DelayRule,
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
+
+use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -50,20 +54,29 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    );
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools())
+            .pacing(Duration::from_millis(10))
+            .build(),
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
 
-    let queue_for_tick = Arc::clone(&queue);
+    let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(16)).await;
@@ -73,22 +86,19 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         }
     });
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .downloader(downloader.clone())
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
     let source = TrackSource::Config(Box::new(cfg));
 
-    let id = queue.append(source);
+    let id = queue.append(source).expect("append synthetic HLS track");
     wait_for_loader_done(&queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load: {e}"));

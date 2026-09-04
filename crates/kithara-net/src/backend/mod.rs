@@ -10,9 +10,7 @@ compile_error!(
     "kithara-net: enable at least one HTTP client backend; wasm32 requires `client-reqwest`"
 );
 
-// The reqwest backend reaches for TLS through reqwest, so a build without one
-// fails deep inside that crate rather than here. `client-wreq` carries its own
-// and on wasm32 the browser owns it.
+// WHY: The reqwest backend reaches for TLS through reqwest, so a build without one fails deep inside that crate rather than here.
 #[cfg(all(
     feature = "client-reqwest",
     not(target_arch = "wasm32"),

@@ -10,8 +10,8 @@ use kithara::platform::time;
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
-    decode::{DecoderBackend, PcmChunk},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    decode::DecoderBackend,
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
     platform::{
@@ -20,10 +20,14 @@ use kithara::{
         tokio,
         tokio::{sync::broadcast::error::RecvError, task::spawn},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioChunk,
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto, temp_dir,
+    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,
+    bufpool_ext::{Pools, TestPools, pools},
+    mixed_codec_ladder_url, temp_dir,
 };
 use tracing::info;
 
@@ -181,36 +185,38 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
 }
 
 async fn build_live_audio(
+    worker: &PlayWorker<TestPools>,
+    pools: &Pools,
     server: &TestServerHelper,
-    path: &str,
+    encrypted: bool,
     cache_capacity: usize,
-) -> Audio<Stream<Hls>> {
-    let url = server.asset(path);
-    let store = AssetStore::builder()
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+    let url = mixed_codec_ladder_url(server, encrypted).await;
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
-    Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .block_on_underrun(true)
-            .build(),
-    )
-    .await
-    .expect("audio creation")
+    worker
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation")
 }
 
 fn spawn_live_stats_task(
-    audio: &mut Audio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
 ) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
+    let mut events = audio.event_bus().subscribe();
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
@@ -266,7 +272,7 @@ fn spawn_live_stats_task(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn warmup_until_variant_switch(
-    audio: &mut Audio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     stats: &Arc<Mutex<LiveStats>>,
     stage_prefix: &str,
 ) {
@@ -282,9 +288,12 @@ fn warmup_until_variant_switch(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
+fn next_chunk(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -296,9 +305,12 @@ fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
 
 #[cfg(target_arch = "wasm32")]
 #[kithara::flash(true)]
-async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
+async fn next_chunk(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -318,28 +330,30 @@ async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmCh
 )]
 async fn live_real_drm_playback_smoke() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("drm/master.m3u8");
+    let url = mixed_codec_ladder_url(&server, true).await;
     info!(%url, "starting real DRM playback smoke");
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .block_on_underrun(true)
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = worker
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation");
     info!("audio created");
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
@@ -390,18 +404,18 @@ async fn live_real_drm_playback_smoke() {
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
-#[case::hls_sw("hls/master.m3u8", "HLS", DecoderBackend::Symphonia)]
+#[case::hls_sw(false, "HLS", DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_hw("hls/master.m3u8", "HLS", DecoderBackend::Apple)
+    case::hls_hw(false, "HLS", DecoderBackend::Apple)
 )]
-#[case::drm_sw("drm/master.m3u8", "DRM", DecoderBackend::Symphonia)]
+#[case::drm_sw(true, "DRM", DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_hw("drm/master.m3u8", "DRM", DecoderBackend::Apple)
+    case::drm_hw(true, "DRM", DecoderBackend::Apple)
 )]
 async fn live_ephemeral_revisit_sequence_regression(
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     #[case] backend: DecoderBackend,
     _abr_fast: kithara::abr::AbrSettings,
@@ -410,20 +424,21 @@ async fn live_ephemeral_revisit_sequence_regression(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = AssetStore::builder()
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -431,15 +446,13 @@ async fn live_ephemeral_revisit_sequence_regression(
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
+    let mut events = audio.event_bus().subscribe();
     let events_task = spawn(async move {
         loop {
             let event = match events.recv().await {
@@ -636,15 +649,17 @@ async fn live_ephemeral_revisit_sequence_regression(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn live_real_stream_fixed_seek_window_regression(
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let mut audio = build_live_audio(&server, path, 24).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut audio = build_live_audio(&worker, &pools, &server, encrypted, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -688,15 +703,17 @@ async fn live_real_stream_fixed_seek_window_regression(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn live_real_stream_random_seek_prefix_regression(
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let mut audio = build_live_audio(&server, path, 24).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut audio = build_live_audio(&worker, &pools, &server, encrypted, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -738,30 +755,32 @@ async fn live_real_stream_random_seek_prefix_regression(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
-async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: &str) {
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
+async fn live_real_stream_seek_resume_native(#[case] encrypted: bool, #[case] label: &str) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = AssetStore::builder()
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .block_on_underrun(true)
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = worker
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation");
 
     spawn_blocking(move || {
         let _ = audio.preload();
@@ -771,7 +790,7 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
         }
 
         for (seek_idx, seek_secs) in [30.0, 60.0, 10.0].into_iter().enumerate() {
-            info!(seek_idx, seek_secs, %path, label, "seeking real stream");
+            info!(seek_idx, seek_secs, label, "seeking real stream");
             audio
                 .seek(Duration::from_secs_f64(seek_secs))
                 .expect("seek must succeed");
@@ -793,11 +812,11 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
 
             assert!(
                 resumed_chunks > 0,
-                "expected playback to resume after {label} seek #{seek_idx} to {seek_secs}s ({path})"
+                "expected playback to resume after {label} seek #{seek_idx} to {seek_secs}s"
             );
             assert!(
                 seek_applied,
-                "expected {label} seek #{seek_idx} to land near {seek_secs}s on {path}, got {:.3}s",
+                "expected {label} seek #{seek_idx} to land near {seek_secs}s, got {:.3}s",
                 audio.position().as_secs_f64()
             );
         }
@@ -814,18 +833,12 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
-#[case::hls_ephemeral("hls/master.m3u8", "HLS", true)]
-#[case::drm_ephemeral("drm/master.m3u8", "DRM", true)]
-#[cfg_attr(
-    not(target_arch = "wasm32"),
-    case::hls_mmap("hls/master.m3u8", "HLS", false)
-)]
-#[cfg_attr(
-    not(target_arch = "wasm32"),
-    case::drm_mmap("drm/master.m3u8", "DRM", false)
-)]
+#[case::hls_ephemeral(false, "HLS", true)]
+#[case::drm_ephemeral(true, "DRM", true)]
+#[cfg_attr(not(target_arch = "wasm32"), case::hls_mmap(false, "HLS", false))]
+#[cfg_attr(not(target_arch = "wasm32"), case::drm_mmap(true, "DRM", false))]
 async fn live_stress_real_stream_seek_read_cache(
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
@@ -833,7 +846,7 @@ async fn live_stress_real_stream_seek_read_cache(
 ) {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, label, ephemeral, temp_dir);
+        let _ = (encrypted, label, ephemeral, temp_dir);
         info!("browser seek stress is covered by selenium/trunk tests");
         return;
     }
@@ -841,36 +854,42 @@ async fn live_stress_real_stream_seek_read_cache(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let server = TestServerHelper::new().await;
-        let url = server.asset(path);
+        let url = mixed_codec_ladder_url(&server, encrypted).await;
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let store = if ephemeral {
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
                 .build()
         } else {
-            kithara_integration_tests::disk_asset_store(temp_dir.path())
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build()
         };
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
+            .pools(pools.clone())
             .initial_abr_mode(auto(0))
             .build();
 
-        let mut audio = Audio::<Stream<Hls>>::new(
-            AudioConfig::<Hls>::for_stream(hls_config)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .block_on_underrun(true)
-                .build(),
-        )
-        .await
-        .expect("audio creation");
+        let mut audio = worker
+            .open(
+                AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                    .block_on_underrun(true)
+                    .build(),
+            )
+            .await
+            .expect("audio creation");
         #[cfg(target_arch = "wasm32")]
         let _ = audio.preload();
 
         let stats = Arc::new(Mutex::new(LiveStats::default()));
         let stats_bg = Arc::clone(&stats);
-        let mut events = audio.events();
+        let mut events = audio.event_bus().subscribe();
         let events_task = spawn(async move {
             loop {
                 let event = match events.recv().await {
@@ -922,7 +941,7 @@ async fn live_stress_real_stream_seek_read_cache(
             }
         });
 
-        info!(ephemeral, %path, label, "Phase 1: warmup until ABR switch");
+        info!(ephemeral, label, "Phase 1: warmup until ABR switch");
         let stats_read = Arc::clone(&stats);
         let (audio, before_revisit, after_revisit, variant_match_checks, variant_match_hits) =
             spawn_blocking(move || {
@@ -1161,34 +1180,39 @@ async fn live_stress_real_stream_seek_read_cache(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
-async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: &str) {
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
+async fn live_ephemeral_small_cache_playback(#[case] encrypted: bool, #[case] label: &str) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    let store = AssetStore::builder()
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .block_on_underrun(true)
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = worker
+        .open(
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation");
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
-    info!(%path, label, "Reading audio chunks to EOF with small ephemeral cache");
+    info!(
+        label,
+        "Reading audio chunks to EOF with small ephemeral cache"
+    );
 
     #[cfg(not(target_arch = "wasm32"))]
     let chunks_read = spawn_blocking(move || {
@@ -1216,7 +1240,7 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
 
     assert!(
         chunks_read > 100,
-        "expected substantial {label} audio output from {path}, got only {chunks_read} chunks"
+        "expected substantial {label} audio output, got only {chunks_read} chunks"
     );
     info!(chunks_read, "Ephemeral small-cache playback completed");
 }
@@ -1237,24 +1261,24 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls_sw("hls/master.m3u8", "HLS", DecoderBackend::Symphonia)]
+#[case::hls_sw(false, "HLS", DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_hw("hls/master.m3u8", "HLS", DecoderBackend::Apple)
+    case::hls_hw(false, "HLS", DecoderBackend::Apple)
 )]
-#[case::drm_sw("drm/master.m3u8", "DRM", DecoderBackend::Symphonia)]
+#[case::drm_sw(true, "DRM", DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_hw("drm/master.m3u8", "DRM", DecoderBackend::Apple)
+    case::drm_hw(true, "DRM", DecoderBackend::Apple)
 )]
 async fn live_ephemeral_small_cache_seek_stress(
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     #[case] backend: DecoderBackend,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, label, backend);
+        let _ = (encrypted, label, backend);
         info!("browser seek stress is covered by selenium/trunk tests");
         return;
     }
@@ -1262,20 +1286,21 @@ async fn live_ephemeral_small_cache_seek_stress(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let server = TestServerHelper::new().await;
-        let url = server.asset(path);
-        let store = AssetStore::builder()
+        let url = mixed_codec_ladder_url(&server, encrypted).await;
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+        let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .build();
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
+            .pools(pools.clone())
             .initial_abr_mode(auto(0))
             .build();
 
-        let config = AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)
@@ -1283,10 +1308,8 @@ async fn live_ephemeral_small_cache_seek_stress(
             )
             .block_on_underrun(true)
             .build();
-        let mut audio = Audio::<Stream<Hls>>::new(config)
-            .await
-            .expect("audio creation");
-        info!(%path, label, "Warmup: reading initial chunks");
+        let mut audio = worker.open(config).await.expect("audio creation");
+        info!(label, "Warmup: reading initial chunks");
         spawn_blocking(move || {
             let _ = audio.preload();
             for i in 0..Consts::browser_usize(
@@ -1339,11 +1362,11 @@ async fn live_ephemeral_small_cache_seek_stress(
 
             assert!(
                 seeks_done >= 5,
-                "expected at least 5 {label} seeks on {path}, got {seeks_done}"
+                "expected at least 5 {label} seeks, got {seeks_done}"
             );
             assert!(
                 total_chunks > 20,
-                "expected substantial {label} audio after seeks on {path}, got only \
+                "expected substantial {label} audio after seeks, got only \
                  {total_chunks} chunks"
             );
             info!(

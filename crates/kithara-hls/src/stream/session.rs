@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -29,9 +30,12 @@ use crate::{
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct HlsSession {
+pub(crate) struct HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     seek: Arc<dyn SeekObserve>,
-    variant: Arc<HlsVariant>,
+    variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
     construction_gate: ConstructionGate,
@@ -58,7 +62,10 @@ struct SessionPosition {
     byte: u64,
 }
 
-impl HlsSession {
+impl<S> HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn activate(&self) {
         self.active.store(true, Ordering::Release);
     }
@@ -68,7 +75,7 @@ impl HlsSession {
         seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         variant_index: usize,
-        variant: Arc<HlsVariant>,
+        variant: Arc<HlsVariant<S>>,
         position: u64,
     ) -> Self {
         Self {
@@ -154,7 +161,7 @@ impl HlsSession {
     /// same way the audible session is bounded.
     pub(crate) fn dispatch(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         self.dispatch_capped(ctx, budget, None)
@@ -162,7 +169,7 @@ impl HlsSession {
 
     fn dispatch_capped(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         construction_segment_end: Option<u32>,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
@@ -192,7 +199,7 @@ impl HlsSession {
     /// splice.
     pub(crate) fn dispatch_owed(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         latch: Duration,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
@@ -224,7 +231,7 @@ impl HlsSession {
     /// outgoing frontier it is chasing walks away for good.
     pub(crate) fn dispatch_constructing(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         let cap = match &self.readiness {
@@ -242,7 +249,7 @@ impl HlsSession {
         seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         transition: VariantTransition,
-        variant: Arc<HlsVariant>,
+        variant: Arc<HlsVariant<S>>,
         content_time: Duration,
     ) -> StreamResult<Self> {
         let preparation = variant.prepare_reader(profile, content_time)?;
@@ -360,7 +367,7 @@ impl HlsSession {
             .take_prefetch_resume_at(self.position.load(Ordering::Acquire))
     }
 
-    pub(crate) fn variant(&self) -> Arc<HlsVariant> {
+    pub(crate) fn variant(&self) -> Arc<HlsVariant<S>> {
         Arc::clone(&self.variant)
     }
 
@@ -384,7 +391,7 @@ impl HlsSession {
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => HlsCoord::wait_range_blocking(&self.signal, &self.cancel.root, || {
+            None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,
@@ -406,7 +413,10 @@ impl HlsSession {
     }
 }
 
-impl ByteMap for HlsSession {
+impl<S> ByteMap for HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         self.prepare_at(position).map(Some)
     }

@@ -2,15 +2,20 @@ use iced::{
     Task, window,
     window::{Direction, Mode},
 };
-use kithara::audio::{EqBandConfig, effects::eq::GainDb};
-use kithara_ui::render::{WindowCommand, WindowEdge};
+use kithara::{
+    platform::time::Duration,
+    play::effects::eq::{EqBandConfig, GainDb},
+    ui::render::{WindowCommand, WindowEdge},
+};
 use tracing::{error, warn};
 
 use super::{
     app::Kithara,
     deck::{self, DeckMsg},
     message::Message,
-    mix, ui,
+    mix,
+    subscription::subscription_config,
+    ui,
 };
 use crate::{
     catalog,
@@ -19,18 +24,18 @@ use crate::{
 };
 
 struct EqModeChange<'a> {
-    id: DeckId,
     controller: &'a StateController,
-    previous: Vec<EqBandConfig>,
-    next: Vec<EqBandConfig>,
+    id: DeckId,
     gains: Vec<GainDb>,
+    next: Vec<EqBandConfig>,
+    previous: Vec<EqBandConfig>,
 }
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
         Message::BroadcastToggle => state
             .broadcast
-            .toggle()
+            .toggle(state.session.host())
             .map_or_else(Task::none, stop_broadcast),
         Message::BroadcastStopped(duration) => {
             state.broadcast.complete_stop();
@@ -176,7 +181,7 @@ fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
         return;
     }
 
-    let mut changes = Vec::new();
+    let mut changes: Vec<EqModeChange<'_>> = Vec::new();
     for deck in state.decks.iter() {
         let current = deck
             .controller
@@ -258,7 +263,11 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
-    state.broadcast.poll();
+    let playing = state.decks.iter().any(|deck| deck.ui.playing);
+    state.ui.advance(Duration::from_millis(
+        subscription_config(playing).tick_interval_ms,
+    ));
+    state.broadcast.poll(state.session.host());
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();

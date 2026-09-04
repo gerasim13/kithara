@@ -1,3 +1,17 @@
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
+
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-ui.svg)](https://crates.io/crates/kithara-ui)
+[![docs.rs](https://docs.rs/kithara-ui/badge.svg)](https://docs.rs/kithara-ui)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
+
+</div>
+
 # kithara-ui
 
 Serializable modular UI model for kithara: skin, layout, and module documents, registries, and a
@@ -16,3 +30,7 @@ compiler producing a normalized UI tree for renderers.
   `CompiledUi`. The optional `render` feature converts the skin to iced-facing colors and adds
   shared fonts, icons, events, and read-model contracts. Built-in presets and the complete
   default skin live in `assets/`.
+- `render::document` is the toolkit-neutral document fold. The iced render tree implements it for
+  the existing app, while the optional `masonry` feature mounts the same compiled document and
+  neutral solver into retained Masonry widgets with a public custom-content seam, typed actions,
+  portable pointer capture, and native popover/window layers.

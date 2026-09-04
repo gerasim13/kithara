@@ -7,6 +7,7 @@ plugins {
 val repoRoot = rootProject.projectDir.parentFile
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffi/kotlin")
 val generatedJniDir = layout.buildDirectory.dir("generated/jniLibs")
+val generatedTestAssetsDir = layout.buildDirectory.dir("generated/testAssets")
 val releaseAarOutputDir = layout.buildDirectory.dir("outputs/aar")
 val releaseBuild = providers.gradleProperty("kithara.release").map { it == "true" }.orElse(false)
 
@@ -68,6 +69,31 @@ val generateKitharaFfi by tasks.registering(Exec::class) {
     outputs.dir(generatedJniDir)
 }
 
+// The instrumented offline capture reads an MPEG file out of its own APK. The
+// body is generated rather than committed, and the store it lands in is
+// content-addressed under a build fingerprint, so Gradle asks the generator for
+// a copy at a path it chooses itself.
+val exportTestFixtures by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Export generated audio fixtures the instrumented tests read."
+    workingDir = repoRoot
+    inputs.dir(repoRoot.resolve("crates/kithara-test-fixtures/src"))
+    inputs.file(repoRoot.resolve("crates/kithara-test-fixtures/build.rs"))
+    outputs.dir(generatedTestAssetsDir)
+    commandLine(
+        cargoExecutable(),
+        "run",
+        "--quiet",
+        "--package",
+        "kithara-test-fixtures",
+        "--bin",
+        "kithara-fixture-export",
+        "--",
+        "signal_mp3_track_sine440_187s",
+        generatedTestAssetsDir.get().asFile.resolve("test.mp3").absolutePath,
+    )
+}
+
 android {
     namespace = "com.kithara"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -90,6 +116,10 @@ android {
     sourceSets.named("main") {
         kotlin.directories.addAll(listOf("src/main/kotlin", generatedKotlinDir.get().asFile.path))
         jniLibs.directories.add(generatedJniDir.get().asFile.path)
+    }
+
+    sourceSets.named("androidTest") {
+        assets.directories.add(generatedTestAssetsDir.get().asFile.path)
     }
 }
 
@@ -122,4 +152,11 @@ val exportReleaseAars by tasks.registering(Copy::class) {
 
 tasks.named("preBuild") {
     dependsOn(generateKitharaFfi)
+}
+
+// The variant tasks AGP creates for the instrumentation APK do not exist yet
+// while this script is evaluated, so the export is attached to the assets merge
+// by name as it appears.
+tasks.matching { it.name.endsWith("AndroidTestAssets") }.configureEach {
+    dependsOn(exportTestFixtures)
 }

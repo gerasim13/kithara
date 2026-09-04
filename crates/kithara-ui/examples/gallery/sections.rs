@@ -1,171 +1,127 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Tab {
-    Atoms,
-    Buttons,
-    Faders,
-    Modules,
-    Typography,
-    Cells,
-    Sizes,
-    Tokens,
-    Micro,
-    Mixer,
-    Vis,
-    Chrome,
-    Titlebars,
-    Tracklist,
-    Tree,
-    Library2,
-    Stress,
-    Menu,
-    Clock,
-    Pivot,
+//! Which pages the gallery offers, taken from the screen it ships.
+//!
+//! A page is added by writing it into the screen's tabs and giving it a nav
+//! item. Nothing here lists the pages, so the list cannot disagree with the
+//! document that shows them.
+
+use std::sync::LazyLock;
+
+use kithara_ui::{
+    builtin,
+    compile::{CompiledUi, compile},
+    source::UiConfig,
+    view::ViewState,
+};
+
+use crate::fixture;
+
+/// What a page's nav item, the screen's tabs and a photograph of it call it.
+pub(super) type Page = &'static str;
+
+/// The page whose demos the modules list offers.
+pub(super) const MODULES: Page = "modules";
+/// The state the nav turns. It is named at the top of the screen, so the nav
+/// item in one module turns the tabs in another.
+pub(super) const PAGE: &str = "page";
+/// The state the modules page turns between its demos.
+pub(super) const MODULE: &str = "module";
+
+/// What the gallery's package calls the screen this module reads.
+struct Consts;
+
+impl Consts {
+    /// The one screen the package declares, which every page lives in.
+    const SCREEN: &'static str = "gallery";
 }
 
-impl Tab {
-    pub(super) const ALL: [Self; 20] = [
-        Self::Atoms,
-        Self::Buttons,
-        Self::Faders,
-        Self::Modules,
-        Self::Typography,
-        Self::Cells,
-        Self::Sizes,
-        Self::Tokens,
-        Self::Micro,
-        Self::Mixer,
-        Self::Vis,
-        Self::Chrome,
-        Self::Titlebars,
-        Self::Tracklist,
-        Self::Tree,
-        Self::Library2,
-        Self::Stress,
-        Self::Menu,
-        Self::Clock,
-        Self::Pivot,
-    ];
-
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Atoms => "gallery-atoms.klayout.ron",
-            Self::Buttons => "gallery-buttons.klayout.ron",
-            Self::Faders => "gallery-faders.klayout.ron",
-            Self::Modules => "gallery-modules.klayout.ron",
-            Self::Typography => "gallery-typography.klayout.ron",
-            Self::Cells => "gallery-cells.klayout.ron",
-            Self::Sizes => "gallery-sizes.klayout.ron",
-            Self::Tokens => "gallery-tokens.klayout.ron",
-            Self::Micro => "gallery-micro.klayout.ron",
-            Self::Mixer => "gallery-mixer.klayout.ron",
-            Self::Vis => "gallery-vis.klayout.ron",
-            Self::Chrome => "gallery-chrome.klayout.ron",
-            Self::Titlebars => "gallery-titlebars.klayout.ron",
-            Self::Tracklist => "gallery-tracklist.klayout.ron",
-            Self::Tree => "gallery-tree.klayout.ron",
-            Self::Library2 => "gallery-library2.klayout.ron",
-            Self::Stress => "gallery-stress.klayout.ron",
-            Self::Menu => "gallery-menu.klayout.ron",
-            Self::Clock => "gallery-clock.klayout.ron",
-            Self::Pivot => "gallery-pivot.klayout.ron",
-        }
-    }
-
-    pub(super) const fn index(self) -> usize {
-        match self {
-            Self::Atoms => 0,
-            Self::Buttons => 1,
-            Self::Faders => 2,
-            Self::Modules => 3,
-            Self::Typography => 4,
-            Self::Cells => 5,
-            Self::Sizes => 6,
-            Self::Tokens => 7,
-            Self::Micro => 8,
-            Self::Mixer => 9,
-            Self::Vis => 10,
-            Self::Chrome => 11,
-            Self::Titlebars => 12,
-            Self::Tracklist => 13,
-            Self::Tree => 14,
-            Self::Library2 => 15,
-            Self::Stress => 16,
-            Self::Menu => 17,
-            Self::Clock => 18,
-            Self::Pivot => 19,
-        }
-    }
+/// The file the package puts behind the gallery's screen.
+pub(super) fn entry() -> &'static str {
+    fixture::document(Consts::SCREEN)
 }
 
-impl TryFrom<&str> for Tab {
-    type Error = ();
-
-    fn try_from(path: &str) -> Result<Self, ()> {
-        let slug = path
-            .strip_prefix("gallery/")
-            .and_then(|rest| rest.strip_suffix("/item"))
-            .ok_or(())?;
-        match slug {
-            "atoms" => Ok(Self::Atoms),
-            "buttons" => Ok(Self::Buttons),
-            "faders" => Ok(Self::Faders),
-            "modules" => Ok(Self::Modules),
-            "typography" => Ok(Self::Typography),
-            "cells" => Ok(Self::Cells),
-            "sizes" => Ok(Self::Sizes),
-            "tokens" => Ok(Self::Tokens),
-            "micro" => Ok(Self::Micro),
-            "mixer" => Ok(Self::Mixer),
-            "vis" => Ok(Self::Vis),
-            "chrome" => Ok(Self::Chrome),
-            "titlebars" => Ok(Self::Titlebars),
-            "tracklist" => Ok(Self::Tracklist),
-            "tree" => Ok(Self::Tree),
-            "library2" => Ok(Self::Library2),
-            "stress" => Ok(Self::Stress),
-            "menu" => Ok(Self::Menu),
-            "clock" => Ok(Self::Clock),
-            "pivot" => Ok(Self::Pivot),
-            _ => Err(()),
-        }
-    }
+/// The page the gallery opens on, which is the one its screen calls initial.
+pub(super) fn first() -> Page {
+    declared().first
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ModuleDemo {
-    Deck,
-    DeckMicro,
-    GlobalBar,
-    Telemetry,
-    Layout,
+/// Every page the nav lists, in the order the screen offers them.
+pub(super) fn pages() -> &'static [Page] {
+    &declared().pages
 }
 
-impl ModuleDemo {
-    pub(super) const ALL: [Self; 5] = [
-        Self::Deck,
-        Self::DeckMicro,
-        Self::GlobalBar,
-        Self::Telemetry,
-        Self::Layout,
-    ];
+/// The demos the modules page offers.
+pub(super) fn modules() -> &'static [Page] {
+    &declared().modules
+}
 
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Deck => "gallery-modules.klayout.ron",
-            Self::DeckMicro => "gallery-modules-deck-micro.klayout.ron",
-            Self::GlobalBar => "gallery-modules-global-bar.klayout.ron",
-            Self::Telemetry => "gallery-modules-telemetry.klayout.ron",
-            Self::Layout => "gallery-modules-layout.klayout.ron",
-        }
-    }
+/// The page named `slug`, or nothing when the screen offers no such page.
+pub(super) fn named(slug: &str) -> Option<Page> {
+    pages().iter().copied().find(|page| *page == slug)
+}
 
-    pub(super) const fn index(self) -> usize {
-        match self {
-            Self::Deck => 0,
-            Self::DeckMicro => 1,
-            Self::GlobalBar => 2,
-            Self::Telemetry => 3,
-            Self::Layout => 4,
+/// What the shipped screen says about its own pages.
+struct Declared {
+    first: Page,
+    modules: Vec<Page>,
+    pages: Vec<Page>,
+}
+
+/// The pages the screen offers, read off the screen itself.
+///
+/// A screen compiles the page it stands at and no other, so opening it names
+/// every page while building only the first, and standing it at the modules
+/// page names that page's demos while building only the demo it opens on.
+///
+/// # Panics
+/// Panics when the shipped screen does not compile or offers no pages, which
+/// is a broken checkout rather than a runtime condition.
+fn declared() -> &'static Declared {
+    static DECLARED: LazyLock<Declared> = LazyLock::new(|| {
+        let opened = screen(&ViewState::default());
+        let mut at = ViewState::default();
+        at.stand(PAGE, MODULES);
+        Declared {
+            first: leak(standing(&opened, PAGE).initial.clone()),
+            modules: offered(&screen(&at), MODULE),
+            pages: offered(&opened, PAGE),
         }
-    }
+    });
+
+    &DECLARED
+}
+
+/// The gallery's screen as it stands for `view`.
+fn screen(view: &ViewState) -> CompiledUi {
+    compile(
+        entry(),
+        &fixture::resolver(),
+        &crate::demo::registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        view,
+    )
+    .unwrap_or_else(|error| panic!("the gallery screen must compile: {error}"))
+}
+
+fn offered(ui: &CompiledUi, state: &str) -> Vec<Page> {
+    standing(ui, state)
+        .offered
+        .iter()
+        .cloned()
+        .map(leak)
+        .collect()
+}
+
+fn standing<'a>(ui: &'a CompiledUi, state: &str) -> &'a kithara_ui::view::PageStanding {
+    ui.views()
+        .pages()
+        .get(state)
+        .unwrap_or_else(|| panic!("the gallery screen turns a state {state}"))
+}
+
+/// The page list is read once and lives as long as the program, which is what
+/// lets a page stay the name every harness passes around by value.
+fn leak(page: String) -> Page {
+    page.leak()
 }

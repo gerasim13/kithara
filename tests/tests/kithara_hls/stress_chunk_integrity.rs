@@ -2,8 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
-    decode::{PcmChunk, PcmMeta},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -16,19 +15,22 @@ use kithara::{
         // expires while the run is still seconds of real work from a switch.
         time::{Duration, Instant, Instant as RealInstant, sleep},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    signal::{AudioChunk, AudioChunkInfo},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, auto, detect_direction,
+    TestTempDir, Xorshift64, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
+};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
 };
 use tracing::{info, warn};
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -42,13 +44,13 @@ impl Consts {
     const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 }
 
-fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
+fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;
     detect_direction(&chunk.samples, channels)
 }
 
 /// Format chunk metadata for diagnostic output.
-fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
+fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
         meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.epoch
@@ -57,7 +59,7 @@ fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
 
 /// Check saw-tooth continuity within a single chunk.
 /// Returns the number of breaks found.
-fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
+fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     let channels = chunk.meta.spec.channels as usize;
     let frames = chunk.frames();
     if frames < 2 {
@@ -66,10 +68,10 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
 
     let mut breaks = 0;
     for f in 1..frames {
-        let prev_phase = phase_from_f32(chunk.samples[(f - 1) * channels]);
-        let curr_phase = phase_from_f32(chunk.samples[f * channels]);
-        let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-        let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+        let prev_phase = signal::phase::units(chunk.samples[(f - 1) * channels]);
+        let curr_phase = signal::phase::units(chunk.samples[f * channels]);
+        let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+        let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
             breaks += 1;
         }
@@ -77,14 +79,14 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     breaks
 }
 
-async fn next_chunk_with_timeout(
-    audio: &mut Audio<Stream<Hls>>,
+async fn next_chunk_with_timeout<R: AudioRead>(
+    audio: &mut R,
     timeout: Duration,
     stage: &str,
-) -> Option<PcmChunk> {
+) -> Option<AudioChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -108,37 +110,31 @@ async fn next_chunk_with_timeout(
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
-    let init_segment = Arc::new(create_wav_header(
+    let init_segment = Arc::new(signal::header(
         Consts::D.sample_rate,
         Consts::D.channels,
         None,
     ));
-    let v0_pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            Consts::D.sample_rate,
+    let v0_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
-    let v1_pcm = Arc::new(
-        SignalPcm::new(
-            signal::SawtoothDescending,
-            Consts::D.sample_rate,
+        ),
+        Wave::Sawtooth,
+    )));
+    let v1_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
+        ),
+        Wave::SawtoothDescending,
+    )));
 
     info!(
         init_size = init_segment.len(),
@@ -174,18 +170,29 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -194,12 +201,11 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
@@ -381,7 +387,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         });
         audio.preload().expect("preload must succeed");
 
-        let mut prev_chunk_meta: Option<(PcmMeta, usize)> = None;
+        let mut prev_chunk_meta: Option<(AudioChunkInfo, usize)> = None;
         let mut prev_last_sample: Option<f32> = None;
 
         for c in 0..Consts::CHUNKS_PER_SEEK {
@@ -464,10 +470,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 && !chunk.samples.is_empty()
             {
                 let curr_first = chunk.samples[0];
-                let prev_phase = phase_from_f32(prev_last);
-                let curr_phase = phase_from_f32(curr_first);
-                let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-                let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let prev_phase = signal::phase::units(prev_last);
+                let curr_phase = signal::phase::units(curr_first);
+                let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+                let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {

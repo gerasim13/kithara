@@ -13,7 +13,14 @@
                 source: "deck.kmodule.ron",
                 with: { "deck": "$deck" },
             )),
-            Reveal(from: 494.0, child: Include(id: "library", source: "library.kmodule.ron")),
+            Reveal(from: 494.0, child: Include(
+                id: "library",
+                source: "library.kmodule.ron",
+                with: {
+                    "read": "library.visible_tracks",
+                    "columns": "[(id: \"title\", label: \"@track_list.column.title\", style: Primary, width: 180.0, flexible: true), (id: \"artist\", label: \"@track_list.column.artist\", style: Secondary, width: 200.0), (id: \"time\", label: \"@track_list.column.time\", style: Time, width: 70.0)]",
+                },
+            )),
         ],
     ),
 )

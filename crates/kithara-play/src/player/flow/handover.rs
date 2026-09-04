@@ -1,46 +1,56 @@
 use std::ops::Deref;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, time::Duration};
 
+#[cfg(test)]
+use super::super::core::PlayerImpl;
 use super::super::{
-    core::PlayerImpl,
+    core::PlayerRuntime,
     state::{PendingNext, PendingNextState},
 };
-use crate::{api::EngineEvent, bridge::PlayerCmd, error::PlayError};
+use crate::{
+    api::{EngineEvent, TrackId},
+    bridge::PlayerCmd,
+    error::PlayError,
+};
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
 /// outside the lock to avoid holding it across `send_to_slot`.
 enum ArmDecision {
     /// The same index is already armed; return its src verbatim.
     AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous src.
-    Clear(Option<Arc<str>>),
+    /// The slot was cleared; optionally unload the previous item.
+    Clear(Option<TrackId>),
 }
 
 struct ActivatedPending {
-    src: Arc<str>,
+    item_id: TrackId,
     duration_seconds: f64,
 }
 
-struct Handover<'a> {
-    player: &'a PlayerImpl,
+struct Handover<'a, S> {
+    player: &'a PlayerRuntime<S>,
 }
 
-impl<'a> Handover<'a> {
-    const fn new(player: &'a PlayerImpl) -> Self {
+impl<'a, S> Handover<'a, S> {
+    const fn new(player: &'a PlayerRuntime<S>) -> Self {
         Self { player }
     }
 }
 
-impl Deref for Handover<'_> {
-    type Target = PlayerImpl;
+impl<S> Deref for Handover<'_, S> {
+    type Target = PlayerRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
         self.player
     }
 }
 
-impl Handover<'_> {
+impl<S> Handover<'_, S>
+where
+    S: HasPool<f32>,
+{
     /// Mark the armed-next slot at `index` activated under a short lock,
     /// returning its src. `Ok(None)` when it was already activated.
     fn activate_pending(&self, index: usize) -> Result<Option<ActivatedPending>, PlayError> {
@@ -58,11 +68,11 @@ impl Handover<'_> {
         let outcome = if pending.state.activated() {
             None
         } else {
-            let src = Arc::clone(&pending.src);
+            let item_id = pending.item_id;
             let duration_seconds = pending.duration_seconds;
             pending.state = PendingNextState::ActivatedReady;
             Some(ActivatedPending {
-                src,
+                item_id,
                 duration_seconds,
             })
         };
@@ -78,15 +88,14 @@ impl Handover<'_> {
     /// Idempotent for the same index. Returns `Some(src)` on success;
     /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
     /// `index` is out of range.
-    fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+    fn arm_next(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
         let current_index = self.current_index();
         if index >= self.item_count() {
-            return None;
+            return Ok(None);
         }
 
-        // Resolve any already-armed slot under a short phase lock: either the
-        // same index is already armed (return early), or it must be cleared
-        // and possibly unloaded outside the lock.
+        // WHY: Resolve any already-armed slot under a short phase lock: either the same index is already armed (return early), or it must be
+        // cleared and possibly unloaded outside the lock.
         let mut phase = self.phase.lock();
         let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
         let decision = match existing {
@@ -95,7 +104,7 @@ impl Handover<'_> {
             }
             Some(existing) => {
                 let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then(|| existing.src.clone());
+                    .then_some(existing.item_id);
                 if let Some(slot) = phase.pending_mut() {
                     *slot = None;
                 }
@@ -106,23 +115,26 @@ impl Handover<'_> {
         drop(phase);
 
         let to_unload = match decision {
-            ArmDecision::AlreadyArmed(src) => return Some(src),
+            ArmDecision::AlreadyArmed(src) => return Ok(Some(src)),
             ArmDecision::Clear(unload) => unload,
         };
-        if let Some(prev_src) = to_unload {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: prev_src });
+        if let Some(item_id) = to_unload {
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
         }
 
-        let (src, duration_seconds) = self.enqueue_to_processor(index)?;
+        let Some((item_id, src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(None);
+        };
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id,
                 index,
                 duration_seconds,
                 src: src.clone(),
                 state: PendingNextState::Armed,
             });
         }
-        Some(src)
+        Ok(Some(src))
     }
 
     /// Snapshot of the armed-next index. `None` when no slot is armed
@@ -146,12 +158,12 @@ impl Handover<'_> {
     /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
     fn commit_next(&self, index: usize) -> Result<(), PlayError> {
-        // `None` ⇒ the slot was already activated (idempotent no-op).
+        // WHY: `None` ⇒ the slot was already activated (idempotent no-op).
         let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
         };
 
-        self.start_playback(Arc::clone(&activated.src));
+        self.start_playback(activated.item_id);
         self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
@@ -178,7 +190,7 @@ impl Handover<'_> {
 
     /// Drop the armed next slot without committing.
     ///
-    /// Sends `UnloadTrack` to the audio thread for the armed src and
+    /// Sends `UnloadTrack` to the audio thread for the armed item and
     /// clears the pending slot. Skips the unload if the armed slot has
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
@@ -200,13 +212,18 @@ impl Handover<'_> {
                     .bus()
                     .publish(EngineEvent::CrossfadeCancelled);
             }
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
+                item_id: pending.item_id,
+            });
         }
     }
 }
 
-impl PlayerImpl {
-    pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
+    pub fn arm_next(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
         Handover::new(self).arm_next(index)
     }
 
@@ -234,11 +251,26 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{player::PlayerConfig, session::testing};
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::PlayerConfig,
+        session::testing,
+        test_pools::{TestPools, pools},
+    };
+
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
+    }
 
     #[kithara::test]
     fn commit_next_without_arm_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
@@ -246,7 +278,9 @@ mod tests {
     #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
-            PlayerConfig::test_builder()
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
                 .session(testing::test_session())
                 .build(),
         );
@@ -258,6 +292,7 @@ mod tests {
 
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
                 src: Arc::from("next.mp3"),
                 state: PendingNextState::Armed,
                 index: 1,

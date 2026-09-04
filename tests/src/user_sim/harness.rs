@@ -2,27 +2,35 @@ use std::path::Path;
 
 use kithara::{
     abr::AbrHandle,
-    assets::AssetStore,
+    assets::{AssetStore, StorageBackend},
+    bufpool::HasPool,
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
         TrackId, TrackStatus,
     },
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
-        tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
+        SeekOutcome,
+    },
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
 
-use crate::{kithara, offline::OfflineSession, user_sim::actions::Action};
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineQueue,
+    user_sim::actions::Action,
+};
 
 /// Worst-case wall-clock budget for any single action. Anything longer
 /// is treated as a hang — matches the "no hang" invariant from the
@@ -46,9 +54,6 @@ const STAGNATION_TICKS: u32 = 75;
 /// Producer-tick wakes a quality switch is given to land before the harness
 /// stops waiting for it.
 const SWITCH_PROGRESS_TICKS: u32 = 200;
-const RENDER_BLOCK_FRAMES: usize = 512;
-const RENDER_BATCH_BLOCKS: usize = 16;
-const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 
 /// Periodic queue tick driver, run as a spawned task. `#[kithara::flash(true)]`
 /// makes the body flash-ACTIVE under an ambient (flash) test, so its
@@ -63,7 +68,7 @@ const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 /// watchdog false-fires. Off the `flash` feature the macro is a no-op, so
 /// the driver is a plain real-time tick exactly as before.
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: Arc<Queue>) {
+async fn run_tick_driver(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -77,11 +82,11 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// plus a tokio tick task; callers drive it with `Action`s and the
 /// harness asserts the per-action invariants from the plan.
 pub struct SimHarness {
-    queue: Arc<Queue>,
-    session: Arc<OfflineSession>,
+    queue: QueueControl<TestPools>,
+    queue_owner: OfflineQueue<TestPools>,
     tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
-    _store: AssetStore,
+    _store: AssetStore<TestPools>,
     track_ids: Vec<TrackId>,
     /// Captured codec of the currently-playing variant. Updated by
     /// `enter_track` and on each successful quality switch; the
@@ -127,16 +132,34 @@ impl SimHarness {
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
-        let session = Arc::new(OfflineSession::new());
-        let player = Arc::new(PlayerImpl::new(
+        let pools = pools();
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: cache_path.into(),
+            })
+            .build();
+        let session_config = HostConfig::offline(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
-                .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+                .sample_rate(session_config.sample_rate())
+                .worker(worker)
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-        let queue_for_tick = Arc::clone(&queue);
+        );
+        let queue_owner = OfflineQueue::new(
+            session_config,
+            Queue::new(
+                QueueConfig::builder()
+                    .player(player)
+                    .store(store.clone())
+                    .build(),
+            ),
+        )
+        .expect("create product offline queue");
+        let queue = queue_owner.control();
+        let queue_for_tick = queue.clone();
         // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
         // flash this installs the quiescence poll-wrapper + ambient gate so the
         // driver participates in the virtual clock. The active flag that makes
@@ -148,19 +171,17 @@ impl SimHarness {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
+                pools,
                 CancelToken::never(),
             ))
             .build(),
         );
-        let store = crate::disk_asset_store(cache_path);
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
             let cfg = ResourceConfig::for_src(
-                ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+                ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
             )
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .decoder(
@@ -170,13 +191,15 @@ impl SimHarness {
             )
             .initial_abr_mode(spec.abr_mode)
             .build();
-            let id = queue.append(TrackSource::Config(Box::new(cfg)));
+            let id = queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("queue is open while the harness is being built");
             track_ids.push(id);
         }
 
         Self {
             queue,
-            session,
+            queue_owner,
             tick,
             _downloader: downloader,
             _store: store,
@@ -185,7 +208,7 @@ impl SimHarness {
         }
     }
 
-    pub const fn queue(&self) -> &Arc<Queue> {
+    pub const fn queue(&self) -> &QueueControl<TestPools> {
         &self.queue
     }
 
@@ -232,8 +255,7 @@ impl SimHarness {
             Action::QualityAuto => self.do_quality_auto().await,
             Action::Pause => self.do_pause(),
             Action::Resume => self.do_resume(),
-            Action::PlayFor(d) => self.do_play_for(d).await,
-            Action::RenderFor(d) => self.do_render_for(d).await,
+            Action::PlayFor(d) | Action::RenderFor(d) => self.do_play_for(d).await,
         }
     }
 
@@ -244,7 +266,7 @@ impl SimHarness {
         self.tick.abort();
         let _ = self.tick.await;
         drop(self.queue);
-        drop(self.session);
+        drop(self.queue_owner);
         drop(self._downloader);
     }
 
@@ -470,7 +492,12 @@ impl SimHarness {
 
     async fn do_select_prev(&mut self) {
         let mut rx = self.queue.subscribe();
-        if self.queue.return_to_previous(Transition::None).is_some() {
+        if self
+            .queue
+            .return_to_previous(Transition::None)
+            .expect("queue stays open during the scenario")
+            .is_some()
+        {
             self.await_current_changed(&mut rx).await;
             self.last_known_codec = self.current_codec();
         }
@@ -481,6 +508,7 @@ impl SimHarness {
         if self
             .queue
             .advance_to_next(Transition::None, AdvanceReason::UserNext)
+            .expect("queue stays open during the scenario")
             .is_some()
         {
             self.await_current_changed(&mut rx).await;
@@ -818,146 +846,6 @@ impl SimHarness {
             }
         }
     }
-
-    async fn do_render_for(&mut self, at_least: Duration) {
-        let started = Instant::now();
-        let mut pre_pos = self.position();
-        let pre_track = self.current_track_id();
-        let duration = self.duration();
-        let target = at_least.as_secs_f64();
-        let mut last_pos = pre_pos;
-        let mut last_progress_at = started;
-        let mut last_progress_block: usize = 0;
-        let mut progress_events: usize = 0;
-        let mut rendered_blocks: usize = 0;
-        let mut rx = self.queue.subscribe();
-
-        while started.elapsed() < ACTION_BUDGET {
-            if let Some(id) = pre_track
-                && let Some(entry) = self.queue.track(id)
-                && let TrackStatus::Failed(err) = &entry.status
-            {
-                panic!(
-                    "[RenderFor({}ms)] track Failed mid-render: {err}",
-                    at_least.as_millis()
-                );
-            }
-
-            let cur = self.position();
-            if cur + 1.0 < pre_pos {
-                pre_pos = cur;
-                last_pos = cur;
-                last_progress_at = Instant::now();
-            }
-            if cur > last_pos + 0.05 {
-                last_pos = cur;
-                last_progress_at = Instant::now();
-                last_progress_block = rendered_blocks;
-            }
-            if self.is_playing() {
-                if cur - pre_pos >= target * 0.9 {
-                    return;
-                }
-                if duration > 0.0 && (duration - cur).abs() < 0.5 {
-                    return;
-                }
-                if last_progress_at.elapsed() >= RENDER_STALL_BUDGET
-                    && (duration <= 0.0 || (duration - cur).abs() >= NATURAL_EOF_WINDOW_S)
-                {
-                    panic!(
-                        "[RenderFor({}ms)] SILENT HANG: position stuck at {cur:.3}s for \
-                         {stall:?} \
-                         (pre={pre_pos:.3}s, target_advance={target:.3}s, dur={duration:.3}s, \
-                         wall={wall:?}, rendered_blocks={rendered_blocks}, \
-                         last_progress_block={last_progress_block}, progress_events={progress_events}, \
-                         playing={playing}, player_status={player_status:?}, track_status={track_status:?}, \
-                         engine_load={engine_load:?})",
-                        at_least.as_millis(),
-                        stall = RENDER_STALL_BUDGET,
-                        wall = started.elapsed(),
-                        playing = self.is_playing(),
-                        player_status = self.queue.status(),
-                        track_status = pre_track
-                            .and_then(|id| self.queue.track(id))
-                            .map(|entry| entry.status),
-                        engine_load = self.queue.engine_load(),
-                    );
-                }
-            }
-
-            for _ in 0..RENDER_BATCH_BLOCKS {
-                let _ = self.session.render(RENDER_BLOCK_FRAMES);
-            }
-            rendered_blocks = rendered_blocks.saturating_add(RENDER_BATCH_BLOCKS);
-            let _ = self.queue.tick();
-            let post_render = self.position();
-            let saw_progress = drain_playback_progress(&mut rx);
-            if saw_progress || post_render > last_pos + 0.05 {
-                last_pos = last_pos.max(post_render);
-                last_progress_at = Instant::now();
-                last_progress_block = rendered_blocks;
-                progress_events = progress_events.saturating_add(1);
-                tokio::task::yield_now().await;
-            } else {
-                sleep(POLL_INTERVAL).await;
-            }
-        }
-
-        let post = self.position();
-        let advance = post - pre_pos;
-        let reached_eof = duration > 0.0 && (duration - post).abs() < 0.5;
-        if !reached_eof && advance < target * 0.5 {
-            panic!(
-                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s in {wall_budget:?} \
-                 (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, dur={duration:.3}s, \
-                 wall={wall:?}, last_progress={last_pos:.3}s@block#{last_progress_block}, \
-                 blocks_since_progress={blocks_since_progress}, progress_events={progress_events}, \
-                 playing={playing}, player_status={player_status:?}, track_status={track_status:?}, \
-                 engine_load={engine_load:?})",
-                at_least.as_millis(),
-                wall_budget = ACTION_BUDGET,
-                wall = started.elapsed(),
-                blocks_since_progress = rendered_blocks.saturating_sub(last_progress_block),
-                playing = self.is_playing(),
-                player_status = self.queue.status(),
-                track_status = pre_track
-                    .and_then(|id| self.queue.track(id))
-                    .map(|entry| entry.status),
-                engine_load = self.queue.engine_load(),
-            );
-        }
-
-        if let Some(pre_id) = pre_track
-            && self.current_track_id() != Some(pre_id)
-        {
-            let pre_entry = self.queue.track(pre_id);
-            let expected_advance = at_least.as_secs_f64();
-            let advanced = post - pre_pos;
-            if advanced < expected_advance - NATURAL_EOF_WINDOW_S {
-                panic!(
-                    "[RenderFor({}ms)] SPURIOUS AUTO-ADVANCE: track flipped from \
-                     {pre_id:?} to {:?} at position {post:.2}s after only \
-                     {advanced:.2}s of playback (requested {expected_advance:.2}s). \
-                     pre_status={:?}",
-                    at_least.as_millis(),
-                    self.current_track_id(),
-                    pre_entry.map(|e| e.status)
-                );
-            }
-        }
-    }
-}
-
-fn drain_playback_progress(rx: &mut EventReceiver) -> bool {
-    let mut saw_progress = false;
-    loop {
-        match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Audio(AudioEvent::PlaybackProgress { .. })) => saw_progress = true,
-            Ok(_) => {}
-            Err(TryRecvError::Lagged(_)) => continue,
-            Err(TryRecvError::Empty | TryRecvError::Closed) => return saw_progress,
-        }
-    }
 }
 
 /// Drain `recv()` once, mapping the broadcast lag/closed errors to a
@@ -997,12 +885,15 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// virtual clock, so the engine is free to advance time, run the tick
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
-async fn await_progress(
+async fn await_progress<S>(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     // The current cached position may already satisfy the predicate
     // (the tick driver updated it before we subscribed) — check before
     // blocking so a no-op wait returns immediately.
@@ -1033,7 +924,14 @@ async fn await_progress(
     }
 }
 
-pub async fn wait_for_loaded(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
+pub async fn wait_for_loaded<S>(
+    queue: &QueueControl<S>,
+    id: TrackId,
+    deadline: Duration,
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     if let Some(entry) = queue.track(id) {
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
@@ -1076,11 +974,14 @@ pub async fn wait_for_loaded(queue: &Queue, id: TrackId, deadline: Duration) -> 
     }
 }
 
-pub async fn wait_for_position_at_least(
-    queue: &Queue,
+pub async fn wait_for_position_at_least<S>(
+    queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut rx = queue.subscribe();
     await_progress(&mut rx, queue, |p| p >= min_secs, deadline)
         .await

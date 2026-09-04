@@ -4,8 +4,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -15,9 +14,12 @@ use kithara::{
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::traits::Producer;
+
+use crate::bufpool_ext::pools;
 
 struct Consts;
 
@@ -45,8 +47,8 @@ fn non_zero(value: u32, label: &str) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or_else(|| panic!("{label} must be non-zero"))
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(
+fn spec() -> AudioSpec {
+    AudioSpec::new(
         Consts::CHANNELS,
         non_zero(Consts::SAMPLE_RATE, "sample rate"),
     )
@@ -58,10 +60,7 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(block_frames, "block frames"),
     };
-    (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
-        control,
-    )
+    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
 fn send(control: &mut SlotControl, cmd: PlayerCmd) {
@@ -75,13 +74,18 @@ fn load_tracks(
     control: &mut SlotControl,
     count: usize,
 ) -> f32 {
-    let pool = PcmPool::default();
-    let sources: Vec<Arc<str>> = (0..count)
-        .map(|idx| Arc::from(format!("no-sync-deadline-track-{idx}").as_str()))
+    let pools = pools();
+    let tracks: Vec<(Arc<str>, TrackId)> = (0..count)
+        .map(|idx| {
+            (
+                Arc::from(format!("no-sync-deadline-track-{idx}").as_str()),
+                TrackId::allocate(),
+            )
+        })
         .collect();
     let mut expected_sample = 0.0;
 
-    for (idx, src) in sources.iter().enumerate() {
+    for (idx, (src, item_id)) in tracks.iter().enumerate() {
         let value = f32::from(u16::try_from(idx + 1).expect("track index fits u16")) * 0.02;
         expected_sample += value;
         let resource = Resource::from_reader(
@@ -91,16 +95,19 @@ fn load_tracks(
         send(
             control,
             PlayerCmd::LoadTrack {
-                resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: None,
+                resource: Box::new(
+                    PlayerResource::new(resource, Arc::clone(src), &pools)
+                        .expect("player resource fits the test pool budget"),
+                ),
+                item_id: *item_id,
             },
         );
     }
     send(control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
 
-    for src in &sources {
-        match processor.track_mut(src) {
+    for (src, item_id) in &tracks {
+        match processor.track_mut(*item_id) {
             Some(track) => track.play(),
             None => panic!("no-SYNC deadline track {src} did not reach the processor"),
         }

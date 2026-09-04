@@ -1,12 +1,17 @@
+use kithara_bufpool::HasPool;
 use kithara_events::TrackStatus;
+use kithara_play::{PlayError, SeekOutcome};
 
 use super::{
-    Queue,
+    QueueControl,
     types::{CachedPosition, PendingSelect, PlaybackView, Transition},
 };
 use crate::error::QueueError;
 
-impl Queue {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn freeze_cached_position(&self) {
         if let Some(t) = self.player.position_seconds() {
             self.write_cached_position(CachedPosition::known(t));
@@ -15,14 +20,11 @@ impl Queue {
 
     /// Whether the user has paused playback.
     ///
-    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
-    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
-    /// A natural end-of-track leaves the rate untouched, so this stays
-    /// distinct from `is_playing()` (which drops to `false` once the arena
-    /// drains at EOF). Auto-advance gates on this so a paused head freezes
-    /// without blocking the genuine end-of-track advance.
+    /// Reads the Player's explicit paused phase, not its effective rate or
+    /// live output state: both become inactive at natural EOF without turning
+    /// that EOF into a user pause.
     pub(super) fn is_paused(&self) -> bool {
-        self.player.rate() <= 0.0
+        self.player.is_paused()
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the
@@ -63,43 +65,25 @@ impl Queue {
     /// Returns [`QueueError`] when the underlying player cannot restart
     /// the active audio route.
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
-        self.player.invalidate_audio_route(reason)?;
+        self.with_open_result(|queue| queue.player.invalidate_audio_route(reason))?;
         Ok(())
     }
 
     /// Pause playback and freeze the queue-visible head position.
     pub fn pause(&self) {
-        self.player.pause();
-        self.freeze_cached_position();
+        self.command(|queue| {
+            queue.player.pause();
+            queue.freeze_cached_position();
+        });
     }
 
-    /// Start playback. The player consumes the current slot's resource
-    /// (`items[i].take()`), so the current `Loaded` track is marked
-    /// `Consumed` to keep the status truthful: a later re-select must go
-    /// through the loader-respawn path, not select an emptied slot.
-    ///
-    /// Which item was consumed is read back from the player rather than
-    /// inferred from a status snapshot taken beforehand. `play()` starts the
-    /// audio engine before it loads, and a load completing inside that window
-    /// (130-400 ms against a real device) fills the slot and is picked up by
-    /// the same call — a track that was not yet `Loaded` when the snapshot was
-    /// taken. Recording nothing then leaves `Loaded` standing over an emptied
-    /// slot, and every later select of that track is rejected with
-    /// `PlayError::ItemConsumed`.
-    ///
-    /// When the load has *not* landed yet the slot is empty, the player
-    /// planted nothing, and the request would otherwise be lost. `play()` is
-    /// the intent "start this track", so it is recorded as a pending select on
-    /// the loading track: `spawn_apply_after_load` applies it the moment the
-    /// resource arrives. Without this the window in which `play()` wins the
-    /// race is silent forever — and that window is the normal case, because
-    /// only the process's very first `play()` is slowed by starting the output
-    /// stream.
-    ///
-    /// The reconciliation runs under the selection lock so a concurrent
-    /// `spawn_apply_after_load` cannot publish `Loaded` on top of the slot
-    /// this call just emptied.
+    /// Starts playback, marking a consumed slot or retaining the selection until loading finishes.
+    /// Reconciliation is serialized with load completion.
     pub fn play(&self) {
+        self.command(Self::play_inner);
+    }
+
+    fn play_inner(&self) {
         self.player.play();
 
         let _apply = self.lock_select_apply();
@@ -148,39 +132,13 @@ impl Queue {
         view
     }
 
-    /// Latest monotonic playback position for the current track in
-    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-    /// samples the engine produces on pause/resume so downstream UIs
-    /// see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position().into()
+    pub(super) fn seek_player(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+        self.with_open_result(|queue| queue.seek_player_inner(seconds))
     }
 
-    /// Seek within the currently-playing track.
-    ///
-    /// Seek-hang detection is not handled here: the audio pipeline's
-    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-    /// `Stream::read`, `decode_next_chunk`) already panics with a
-    /// stacktrace and context dump when no progress is observed. Adding
-    /// a second Queue-level watchdog would just duplicate those panics.
-    ///
-    /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
-    /// `Landed` with the requested target (the actual landed position is
-    /// reconciled by the worker after applying the seek; this call returns
-    /// the optimistic outcome) or `PastEof` if the target is beyond the
-    /// known track duration.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] if the player reports a seek failure.
-    pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
-        // Superpowered-style resume after end-of-queue: once the last track
-        // played to natural EOF the nav cursor ran off the end (`current()` is
-        // `None`). Re-park the cursor to the last navigation-owned item and
-        // re-announce it (`CurrentTrackChanged`) so `current()` and every
-        // event-mirrored consumer (wasm/FFI/app "now playing") un-latch from
-        // the ended state before the seek revives playback. During normal
-        // mid-track playback `current()` is `Some`, so this is a no-op.
+    fn seek_player_inner(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+        // WHY: Superpowered-style resume after end-of-queue: once the last track played to natural EOF the nav cursor ran off the end
+        // (`current()` is `None`).
         if self.current().is_none() {
             let idx = { self.lock_navigation().last_selected_index() };
             if let Some(idx) = idx
@@ -190,24 +148,18 @@ impl Queue {
                 self.handle_current_item_changed();
             }
         }
-        let outcome = self
-            .player
-            .seek_seconds(seconds)
-            .map_err(QueueError::from)?;
-        if let kithara_play::SeekOutcome::Landed { landed_at, .. } = outcome {
+        let outcome = self.player.seek_seconds(seconds)?;
+        if let SeekOutcome::Landed { landed_at, .. } = outcome {
             self.write_cached_position(CachedPosition::known(landed_at.as_secs_f64()));
         }
         Ok(outcome)
     }
 
-    /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-    /// events to act on `ItemDidPlayToEnd` (filtered) and forward
-    /// `CurrentItemChanged` as
-    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from `PlayerImpl::tick`.
-    pub fn tick(&self) -> Result<(), QueueError> {
+    pub(super) fn tick_player(&self) -> Result<(), PlayError> {
+        self.with_open_result(Self::tick_player_inner)
+    }
+
+    fn tick_player_inner(&self) -> Result<(), PlayError> {
         self.player.tick()?;
         self.player.process_notifications();
         self.drain_player_events();
@@ -235,11 +187,55 @@ impl Queue {
         }
         self.write_cached_position(CachedPosition::known(t));
     }
+
+    delegate::delegate! {
+        to self {
+            /// Latest monotonic playback position for the current track in
+            /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+            /// samples the engine produces on pause/resume so downstream UIs
+            /// see stable values.
+            #[must_use]
+            #[into]
+            #[call(read_cached_position)]
+            pub fn position_seconds(&self) -> Option<f64>;
+
+            /// Seek within the currently-playing track.
+            ///
+            /// Seek-hang detection is not handled here: the audio pipeline's
+            /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
+            /// `Stream::read`, `decode_next_chunk`) already panics with a
+            /// stacktrace and context dump when no progress is observed. Adding
+            /// a second Queue-level watchdog would just duplicate those panics.
+            ///
+            /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
+            /// `Landed` with the requested target (the actual landed position is
+            /// reconciled by the worker after applying the seek; this call returns
+            /// the optimistic outcome) or `PastEof` if the target is beyond the
+            /// known track duration.
+            ///
+            /// # Errors
+            /// Returns [`QueueError::Play`] if the player reports a seek failure.
+            #[expr($.map_err(QueueError::from))]
+            #[call(seek_player)]
+            pub fn seek(&self, seconds: f64) -> Result<SeekOutcome, QueueError>;
+
+            /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
+            /// events to act on `ItemDidPlayToEnd` (filtered) and forward
+            /// `CurrentItemChanged` as
+            /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+            ///
+            /// # Errors
+            /// Forwards `PlayError` from `PlayerImpl::tick`.
+            #[expr($.map_err(QueueError::from))]
+            #[call(tick_player)]
+            pub fn tick(&self) -> Result<(), QueueError>;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, PlayerEvent, QueueEvent, TrackId};
+    use kithara_events::{Event, ItemRole, PlayerEvent, QueueEvent, SlotId, TrackId, TrackRef};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -258,8 +254,11 @@ mod tests {
             .player
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src: Arc::from(""),
-                item_id: None,
+                item: ItemRole::Leading(TrackRef::new(
+                    TrackId::allocate(),
+                    SlotId::new(0),
+                    Arc::from(""),
+                )),
             }));
 
         queue
@@ -273,8 +272,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
         let queue = make_queue();
-        let _a = queue.register_for_test();
-        let b = queue.register_for_test();
+        let _a = queue.probe_register();
+        let b = queue.probe_register();
         queue.lock_navigation_mut().select(1);
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();
@@ -283,8 +282,11 @@ mod tests {
             .player
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src: Arc::from(format!("test://memory/{}", b.as_u64())),
-                item_id: None,
+                item: ItemRole::Leading(TrackRef::new(
+                    b,
+                    SlotId::new(0),
+                    Arc::from(format!("test://memory/{}", b.as_u64())),
+                )),
             }));
 
         queue

@@ -1,21 +1,22 @@
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::{ByteBuffer, SampleBuffer};
+use kithara_platform::sync::{Arc, mpsc};
 
 pub(crate) enum HostCmd {
     Open {
         id: u64,
-        reply_tx: kithara_platform::sync::mpsc::Sender<HostOut>,
+        reply_tx: mpsc::Sender<HostOut>,
     },
     Configure {
         decoder_id: u64,
         codec_string: String,
-        description: Option<Vec<u8>>,
+        description: Option<Arc<[u8]>>,
         sample_rate: u32,
         channels: u16,
         generation: u64,
     },
     Decode {
         decoder_id: u64,
-        data: Vec<u8>,
+        data: ByteBuffer,
         pts_us: u64,
         key: bool,
         generation: u64,
@@ -36,7 +37,7 @@ pub(crate) enum HostCmd {
 #[derive(Debug)]
 pub(crate) enum HostOut {
     Pcm {
-        interleaved: PcmBuf,
+        interleaved: SampleBuffer,
         frames: u32,
         sample_rate: u32,
         channels: u16,

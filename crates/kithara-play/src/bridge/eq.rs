@@ -1,11 +1,10 @@
 use core::{fmt, sync::atomic::Ordering};
 
 use arc_swap::ArcSwap;
-use kithara_audio::effects::eq::GainDb;
 use kithara_platform::sync::Arc;
 use portable_atomic::AtomicF32;
 
-use crate::error::PlayError;
+use crate::{effects::eq::GainDb, error::PlayError};
 
 #[derive(Clone)]
 pub struct SharedEq {
@@ -30,13 +29,9 @@ impl SharedEq {
         }
     }
 
-    delegate::delegate! {
-        to self.gains.load() {
-            #[expr($.map(load_gain))]
-            #[call(get)]
-            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
-            pub(crate) fn len(&self) -> usize;
-        }
+    /// Replaces the complete control-plane band layout atomically.
+    pub fn replace(&self, gains: &[GainDb]) {
+        self.gains.store(Arc::new(band_array(gains)));
     }
 
     pub(crate) fn reset(&self) {
@@ -57,12 +52,19 @@ impl SharedEq {
         Ok(())
     }
 
-    pub(crate) fn snapshot(&self) -> Vec<f32> {
+    /// Returns one control-plane copy of the current band gains.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<f32> {
         self.gains.load().iter().map(load_gain).collect()
     }
 
-    pub(crate) fn replace(&self, gains: &[GainDb]) {
-        self.gains.store(Arc::new(band_array(gains)));
+    delegate::delegate! {
+        to self.gains.load() {
+            #[expr($.map(load_gain))]
+            #[call(get)]
+            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
+            pub(crate) fn len(&self) -> usize;
+        }
     }
 }
 

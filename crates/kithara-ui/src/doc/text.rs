@@ -13,23 +13,13 @@ use crate::{
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TextDoc {
+    pub entries: BTreeMap<String, String>,
     pub id: DocId,
     pub schema: String,
     pub version: u32,
-    pub entries: BTreeMap<String, String>,
 }
 
 impl TextDoc {
-    delegate::delegate! {
-        to self.entries {
-            #[must_use]
-            #[expr($.map(String::as_str))]
-            pub fn get(&self, key: &str) -> Option<&str>;
-            #[expr($.map(String::as_str))]
-            pub fn keys(&self) -> impl Iterator<Item = &str>;
-        }
-    }
-
     /// Combines this catalog with `other`.
     ///
     /// # Errors
@@ -46,11 +36,21 @@ impl TextDoc {
             entries.insert(key.clone(), value.clone());
         }
         Ok(Self {
+            entries,
             id: self.id.clone(),
             schema: self.schema.clone(),
             version: self.version,
-            entries,
         })
+    }
+
+    delegate::delegate! {
+        to self.entries {
+            #[must_use]
+            #[expr($.map(String::as_str))]
+            pub fn get(&self, key: &str) -> Option<&str>;
+            #[expr($.map(String::as_str))]
+            pub fn keys(&self) -> impl Iterator<Item = &str>;
+        }
     }
 }
 

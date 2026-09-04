@@ -1,6 +1,10 @@
 use kithara_assets::{AssetResource, AssetSource};
 use url::Url;
 
+pub(crate) mod pools;
+
+pub(crate) use pools::pools;
+
 pub(crate) struct Test;
 
 pub(crate) fn source(identity: &str) -> AssetSource {

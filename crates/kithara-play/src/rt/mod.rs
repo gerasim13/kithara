@@ -1,17 +1,17 @@
 mod command;
+mod context;
 mod eq;
-mod limiter;
 mod node;
 mod processor;
 mod render;
 mod slots;
-mod tap;
 pub mod track;
 
-pub(crate) use eq::MasterEqNode;
-pub(crate) use limiter::LimiterNode;
+pub use context::{
+    install_render_context, invalidate_render_context, publish_render_context, read_render_context,
+};
+pub use eq::MasterEqNode;
 pub use node::PlayerNode;
 pub use processor::{PlayerNodeProcessor, StreamShape};
 pub(crate) use render::{RenderPass, RenderTargets};
 pub(crate) use slots::{TrackSlot, TrackSlots};
-pub(crate) use tap::TapNode;

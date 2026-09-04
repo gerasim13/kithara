@@ -17,7 +17,7 @@ use kithara::{
 };
 #[cfg(target_arch = "wasm32")]
 use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
-use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
+use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, cancel_token, temp_dir};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;
@@ -32,7 +32,7 @@ fn open_test_resource(temp_dir: &TestTempDir, name: &str, cancel: CancelToken) -
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (temp_dir, name);
-        MemResource::new(cancel)
+        MemResource::new(cancel, pools().get::<u8>())
     }
 }
 
@@ -60,10 +60,12 @@ fn open_mmap_at(
 
 /// Helper to read bytes from resource into a new Vec.
 fn read_bytes<R: ResourceRead>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; len];
+    let pools = pools();
+    let mut buf = pools
+        .get_with_len::<u8>(len)
+        .expect("read buffer fits the test pool budget");
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf.truncate(n);
-    buf
+    buf[..n].to_vec()
 }
 
 fn assert_wait_times_out<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
@@ -105,7 +107,7 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancelTok
 
     #[cfg(target_arch = "wasm32")]
     {
-        let streaming = MemResource::new(cancel_token);
+        let streaming = MemResource::new(cancel_token, pools().get::<u8>());
         assert_eq!(streaming.path(), None);
 
         streaming

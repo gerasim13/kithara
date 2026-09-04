@@ -1,10 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
-    sync::mpsc::{self, RecvTimeoutError, TryRecvError},
+    sync::{
+        Arc,
+        mpsc::{self, RecvTimeoutError, TryRecvError},
+    },
     time::{Duration, Instant},
 };
+use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
 use super::protocol::{HostCmd, HostOut};
@@ -12,7 +16,7 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::{DecoderTrackInfo, PcmSpec},
+    types::{DecoderTrackInfo, checked_audio_spec},
 };
 
 struct Consts;
@@ -21,6 +25,7 @@ static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Consts {
     const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+    const FLAC_DESCRIPTION_LEN: usize = 42;
     const FLAC_STREAMINFO_LEN: u8 = 34;
     const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
 }
@@ -47,13 +52,13 @@ enum WebCodecsError {
 
 struct CodecConfig {
     codec_string: &'static str,
-    description: Option<Vec<u8>>,
+    description: Option<Arc<[u8]>>,
     channels: u16,
     sample_rate: u32,
 }
 
 struct PcmOut {
-    interleaved: PcmBuf,
+    interleaved: SampleBuffer,
     channels: u16,
     frames: u32,
     sample_rate: u32,
@@ -61,11 +66,12 @@ struct PcmOut {
     pts_us: u64,
 }
 
-pub(crate) struct WebCodecsCodec {
+pub(crate) struct WebCodecsCodec<S> {
+    pools: PoolRegion<S>,
     config: CodecConfig,
     track_info: DecoderTrackInfo,
     decoded_pts: Duration,
-    spec: PcmSpec,
+    spec: AudioSpec,
     out: mpsc::Receiver<HostOut>,
     cmd: mpsc::Sender<HostCmd>,
     eof_draining: bool,
@@ -74,8 +80,11 @@ pub(crate) struct WebCodecsCodec {
     generation: u64,
 }
 
-impl WebCodecsCodec {
-    fn drain_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+impl<S> WebCodecsCodec<S>
+where
+    S: HasPool<u8>,
+{
+    fn drain_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
         let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
         loop {
             let output = match self.out.recv_timeout(deadline) {
@@ -130,7 +139,7 @@ impl WebCodecsCodec {
                     generation,
                 } if generation == self.generation => {
                     self.spec =
-                        PcmSpec::checked(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                        checked_audio_spec(channels, sample_rate, "webcodecs.output.sample_rate")?;
                 }
                 HostOut::Pcm { generation, .. }
                 | HostOut::Configured { generation, .. }
@@ -146,9 +155,13 @@ impl WebCodecsCodec {
         }
     }
 
-    pub(crate) fn open(track: &TrackInfo, gapless_enabled: bool) -> DecodeResult<Self> {
+    pub(crate) fn open(
+        track: &TrackInfo,
+        gapless_enabled: bool,
+        pools: PoolRegion<S>,
+    ) -> DecodeResult<Self> {
         let config = codec_config(track)?;
-        let spec = PcmSpec::checked(
+        let spec = checked_audio_spec(
             track.channels,
             track.sample_rate,
             "webcodecs.track.sample_rate",
@@ -163,6 +176,7 @@ impl WebCodecsCodec {
         })
         .map_err(|_| channel_disconnected("command"))?;
         let codec = Self {
+            pools,
             decoder_id,
             cmd,
             out,
@@ -187,7 +201,7 @@ impl WebCodecsCodec {
         Ok(codec)
     }
 
-    fn poll_output(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+    fn poll_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
         let first = match self
             .out
             .recv_timeout(Instant::now() + Consts::OUTPUT_TIMEOUT)
@@ -245,7 +259,7 @@ impl WebCodecsCodec {
                     generation,
                 } if generation == self.generation => {
                     self.spec =
-                        PcmSpec::checked(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                        checked_audio_spec(channels, sample_rate, "webcodecs.output.sample_rate")?;
                     out.clear();
                     return Ok(0);
                 }
@@ -272,12 +286,7 @@ impl WebCodecsCodec {
         }
     }
 
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        codec_string(codec).is_some() && super::probe::supported(codec)
-    }
-
-    fn write_pcm(&mut self, out: &mut PcmBuf, pcm: PcmOut) -> DecodeResult<u32> {
+    fn write_pcm(&mut self, out: &mut SampleBuffer, pcm: PcmOut) -> DecodeResult<u32> {
         let PcmOut {
             interleaved,
             channels,
@@ -311,13 +320,16 @@ impl WebCodecsCodec {
     }
 }
 
-impl FrameCodec for WebCodecsCodec {
+impl<S> FrameCodec for WebCodecsCodec<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
         pts: Duration,
         _packet_desc: &[u8],
-        out: &mut PcmBuf,
+        out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
             if self.eof_flushed {
@@ -337,10 +349,12 @@ impl FrameCodec for WebCodecsCodec {
         self.eof_draining = false;
         self.eof_flushed = false;
         let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
+        let mut data = self.pools.get_with_len::<u8>(frame_data.len())?;
+        data.copy_from_slice(frame_data);
         self.send(HostCmd::Decode {
             pts_us,
             decoder_id: self.decoder_id,
-            data: frame_data.to_vec(),
+            data,
             key: true,
             generation: self.generation,
         })?;
@@ -374,7 +388,7 @@ impl FrameCodec for WebCodecsCodec {
         true
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -383,7 +397,7 @@ impl FrameCodec for WebCodecsCodec {
     }
 }
 
-impl Drop for WebCodecsCodec {
+impl<S> Drop for WebCodecsCodec<S> {
     fn drop(&mut self) {
         self.cmd
             .send(HostCmd::Close {
@@ -393,7 +407,7 @@ impl Drop for WebCodecsCodec {
     }
 }
 
-impl WebCodecsCodec {
+impl<S> WebCodecsCodec<S> {
     fn send(&self, command: HostCmd) -> DecodeResult<()> {
         self.cmd
             .send(command)
@@ -412,10 +426,15 @@ impl WebCodecsCodec {
     }
 }
 
+#[must_use]
+pub(crate) fn supports(codec: AudioCodec) -> bool {
+    codec_string(codec).is_some() && super::probe::supported(codec)
+}
+
 fn codec_config(track: &TrackInfo) -> DecodeResult<CodecConfig> {
     let description = match track.codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            Some(track.extra_data.clone())
+            Some(Arc::from(track.extra_data.as_slice()))
         }
         AudioCodec::Mp3 => None,
         AudioCodec::Flac => Some(flac_description(&track.extra_data)?),
@@ -441,17 +460,17 @@ pub(super) const fn codec_string(codec: AudioCodec) -> Option<&'static str> {
     }
 }
 
-fn flac_description(streaminfo: &[u8]) -> DecodeResult<Vec<u8>> {
+fn flac_description(streaminfo: &[u8]) -> DecodeResult<Arc<[u8]>> {
     if streaminfo.len() != usize::from(Consts::FLAC_STREAMINFO_LEN) {
         return Err(DecodeError::InvalidData {
             detail: "WebCodecs FLAC description requires a 34-byte STREAMINFO payload",
         });
     }
-    let mut description = Vec::with_capacity(4 + 4 + streaminfo.len());
-    description.extend_from_slice(b"fLaC");
-    description.extend_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
-    description.extend_from_slice(streaminfo);
-    Ok(description)
+    let mut description = [0; Consts::FLAC_DESCRIPTION_LEN];
+    description[..4].copy_from_slice(b"fLaC");
+    description[4..8].copy_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
+    description[8..].copy_from_slice(streaminfo);
+    Ok(Arc::from(description))
 }
 
 fn channel_disconnected(channel: &'static str) -> DecodeError {

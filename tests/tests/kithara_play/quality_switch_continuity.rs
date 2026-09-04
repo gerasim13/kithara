@@ -10,6 +10,8 @@ mod timeline;
 #[path = "quality_switch_continuity/underrun.rs"]
 mod underrun;
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::{AbrHandle, AbrMode},
     decode::DecoderBackend,
@@ -17,11 +19,12 @@ use kithara::{
         AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
         Event, EventBus, EventReceiver,
     },
+    host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -33,6 +36,8 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use num_traits::ToPrimitive;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -275,12 +280,11 @@ async fn prepare_player(
     let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
-    let config: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
+    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
             .backend(backend)
@@ -295,8 +299,12 @@ async fn prepare_player(
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    let mut player = OfflinePlayer::new(SAMPLE_RATE);
-    player.load_and_fadein(resource, label);
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and

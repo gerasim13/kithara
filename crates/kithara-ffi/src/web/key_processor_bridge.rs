@@ -1,10 +1,12 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use kithara_drm::{DrmError, KeyProcessResult, KeyProcessor};
-use kithara_platform::{
-    sync::{Arc, Mutex, mpsc},
-    time::{Duration, Instant},
+use kithara::{
+    drm::{DrmError, KeyProcessResult, KeyProcessor},
+    platform::{
+        sync::{Arc, Mutex, mpsc},
+        time::{Duration, Instant},
+    },
 };
 
 use crate::observer::FfiKeyProcessor;

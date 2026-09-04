@@ -4,12 +4,12 @@
 use std::fmt::Write;
 
 use kithara::{
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     events::AbrMode,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl},
+    platform::{CancelToken, time::Duration, tokio},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::{
         AudioCodec,
@@ -18,8 +18,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::EncryptionRequest, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineQueue, temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 use super::{
@@ -27,6 +28,7 @@ use super::{
     harness::{SimHarness, TrackSpec},
     scenarios,
 };
+use crate::bufpool_ext::pools;
 
 /// AES-128 key+IV pair shared across the integration suite. Mirrors
 /// `track_replay_after_switch.rs::Consts::AES_KEY` and the
@@ -80,8 +82,8 @@ async fn build_spec(
     backend: DecoderBackend,
 ) -> TrackSpec {
     let url = match kind {
-        TrackKind::Mp3File => helper.asset("track.mp3"),
-        TrackKind::Mp3StreamHq => helper.streamhq("track.mp3"),
+        TrackKind::Mp3File => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        TrackKind::Mp3StreamHq => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
         TrackKind::HlsAacLcAbr4 => build_hls_aac_abr(helper, false).await,
         TrackKind::HlsMixedCodecAbr4 => build_hls_mixed_codec_abr(helper).await,
         TrackKind::HlsAacLcDrmAbr4 => build_hls_aac_abr(helper, true).await,
@@ -397,16 +399,21 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .await;
     let temp = temp_dir();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let cfg = kithara::play::ResourceConfig::for_src(
-        kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+        kithara::play::ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
     )
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker.clone())
     .downloader(downloader.clone())
     .store(store)
     .decoder(
@@ -416,15 +423,21 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let player = Arc::new(PlayerImpl::new(
+    let session_config = HostConfig::offline(pools)
+        .pacing(Duration::from_millis(10))
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session_config.sample_rate())
+            .worker(worker)
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let q_for_tick = Arc::clone(&queue);
+    );
+    let queue = OfflineQueue::new(
+        session_config,
+        Queue::new(QueueConfig::builder().player(player).build()),
+    )
+    .expect("create product offline queue");
+    let q_for_tick = queue.control();
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
     // this makes the tick driver a quiescence participant with a
     // virtual `sleep`, so the virtual clock cannot race past the ticks
@@ -437,7 +450,9 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             }
         }
     });
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append immediate-seek track");
 
     use super::harness::wait_for_loaded;
     wait_for_loaded(&queue, track_id, Duration::from_secs(30))

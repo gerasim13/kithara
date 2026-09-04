@@ -3,7 +3,6 @@
 
 //! Proves a forward seek is served by a range request from the seek target
 //! instead of waiting for the sequential fetch to walk the skipped span.
-
 use std::{
     convert::Infallible,
     io::{Read, Seek, SeekFrom},
@@ -30,7 +29,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::TestHttpServer;
+use kithara_integration_tests::{
+    TestHttpServer,
+    bufpool_ext::{TestPools, pools},
+};
 
 const TOTAL: usize = 4096;
 /// Bytes the stalled head fetch delivers before it goes quiet forever.
@@ -52,17 +54,25 @@ struct RangeState {
     first_range_start: Arc<AtomicU64>,
 }
 
-fn range_start(headers: &HeaderMap) -> Option<u64> {
+/// `bytes=start-end` bounds, the inclusive end absent for an open-ended range.
+fn range_bounds(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
     let value = headers.get(header::RANGE)?.to_str().ok()?;
-    let (start, _) = value.strip_prefix("bytes=")?.split_once('-')?;
-    start.parse().ok()
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    let end = if end.is_empty() {
+        None
+    } else {
+        Some(end.parse().ok()?)
+    };
+    Some((start.parse().ok()?, end))
 }
 
 /// The head request stalls after a short prefix and never completes, so the
-/// only way to serve a forward seek is a second, ranged request.
+/// only way to serve a forward seek is a second, ranged request. A ranged
+/// request is served exactly as bounded: the backfill of the skipped span asks
+/// for a closed range, and the client rejects a `206` that overshoots it.
 async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response {
     let bytes = body();
-    let Some(start) = range_start(&headers).filter(|start| *start > 0) else {
+    let Some((start, end)) = range_bounds(&headers).filter(|(start, _)| *start > 0) else {
         let prefix = Bytes::copy_from_slice(&bytes[..HEAD_PREFIX]);
         let body = Body::from_stream(
             stream::iter(vec![Ok::<_, Infallible>(prefix)]).chain(stream::pending()),
@@ -82,16 +92,21 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
         Ordering::SeqCst,
     );
     let start = usize::try_from(start).expect("range start fits usize");
-    let tail = &bytes[start..];
+    let end = end.map_or(TOTAL - 1, |end| {
+        usize::try_from(end)
+            .expect("range end fits usize")
+            .min(TOTAL - 1)
+    });
+    let span = &bytes[start..=end];
     Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_LENGTH, tail.len().to_string())
+        .header(header::CONTENT_LENGTH, span.len().to_string())
         .header(
             header::CONTENT_RANGE,
-            format!("bytes {start}-{}/{TOTAL}", TOTAL - 1),
+            format!("bytes {start}-{end}/{TOTAL}"),
         )
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .body(Body::from(Bytes::copy_from_slice(tail)))
+        .body(Body::from(Bytes::copy_from_slice(span)))
         .expect("ranged response")
 }
 
@@ -110,15 +125,19 @@ async fn a_forward_seek_is_served_by_a_range_request() {
             first_range_start: Arc::clone(&first_range_start),
         });
     let server = TestHttpServer::new(app).await;
+    let pools = pools();
 
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .build();
-    let mut stream = Stream::<File>::new(config).await.expect("remote stream");
+    let mut stream = Stream::<File<TestPools>>::new(config)
+        .await
+        .expect("remote stream");
 
     let seeked = spawn_blocking(move || {
         let mut head = [0u8; 16];

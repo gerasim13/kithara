@@ -3,16 +3,18 @@ use std::num::NonZeroUsize;
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
-    stream::{AudioCodec, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::AudioCodec,
 };
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
 use kithara_integration_tests::auto;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
 use tracing::{info, warn};
@@ -160,32 +162,38 @@ async fn run_case_paced(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"))
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
+            .build()
     };
     let initial_mode = scenario.first().map_or(AbrMode::default(), |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(store)
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
     // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
     // not through the blocking read watchdog's wall-clock budget.
-    let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(audio_config)
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker
+        .open(audio_config)
         .await
         .expect("create Audio<Stream<Hls>>");
     audio.preload().expect("preload HLS phase scanner");

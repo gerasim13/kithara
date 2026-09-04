@@ -5,13 +5,14 @@ use std::sync::LazyLock;
 use arbitrary::Arbitrary;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    bufpool::{BytePool, PcmPool},
-    play::{PlaybackResamplerBackend, ResourceConfig},
+    bufpool::testing::{Pools, TestPools, pools},
+    play::{ResourceConfig, ResourceSrc},
 };
 use libfuzzer_sys::fuzz_target;
 
-static STORE: LazyLock<AssetStore> = LazyLock::new(|| {
-    AssetStore::builder()
+static POOLS: LazyLock<Pools> = LazyLock::new(pools);
+static STORE: LazyLock<AssetStore<TestPools>> = LazyLock::new(|| {
+    AssetStore::builder(POOLS.clone())
         .backend(StorageBackend::Memory)
         .build()
 });
@@ -26,11 +27,9 @@ fuzz_target!(|input: Input| {
     raw.truncate(4 * 1024);
 
     let text = String::from_utf8_lossy(&raw);
-    let _ = ResourceConfig::parse_src(text.as_ref()).map(|src| {
-        ResourceConfig::<PlaybackResamplerBackend>::for_src(src)
+    let _ = ResourceSrc::parse(text.as_ref()).map(|src| {
+        ResourceConfig::<TestPools>::for_src(src)
             .store(STORE.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build()
     });
 });

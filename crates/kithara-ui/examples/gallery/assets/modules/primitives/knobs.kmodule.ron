@@ -14,22 +14,22 @@
                     Knob(
                         id: "size-26",
                         size: (w: Fixed(26.0), h: Fixed(37.0)),
-                        read: Model(id: "mock.knob.26"),
+                        read: Model(id: "demo.knob.26"),
                     ),
                     Knob(
                         id: "size-28",
                         size: (w: Fixed(28.0), h: Fixed(39.0)),
-                        read: Model(id: "mock.knob.28"),
+                        read: Model(id: "demo.knob.28"),
                     ),
                     Knob(
                         id: "size-34",
                         size: (w: Fixed(34.0), h: Fixed(45.0)),
-                        read: Model(id: "mock.knob.34"),
+                        read: Model(id: "demo.knob.34"),
                     ),
                     Knob(
                         id: "size-38",
                         size: (w: Fixed(38.0), h: Fixed(49.0)),
-                        read: Model(id: "mock.knob.38"),
+                        read: Model(id: "demo.knob.38"),
                     ),
                 ],
             ),

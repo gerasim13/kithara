@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_assets::{AssetResource, AssetScope, ResourceKey};
+use kithara_bufpool::HasPool;
 use url::Url;
 
 use super::{parse::ParsedMaster, playlist_cache::PlaylistCache};
@@ -8,15 +9,21 @@ use crate::HlsResult;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct MasterPlaylist {
-    cache: PlaylistCache,
+pub(crate) struct MasterPlaylist<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    cache: PlaylistCache<S>,
     #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
     url: Url,
 }
 
-impl MasterPlaylist {
-    pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> HlsResult<Self> {
+impl<S> MasterPlaylist<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) fn new(cache: PlaylistCache<S>, scope: &AssetScope<S>, url: Url) -> HlsResult<Self> {
         let key = scope.key(&AssetResource::Url(url.clone()))?;
         Ok(Self { cache, key, url })
     }

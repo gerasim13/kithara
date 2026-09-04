@@ -2,17 +2,25 @@ use std::io::Cursor;
 
 use kithara::{
     self,
-    decode::{DecodeError, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecodeError, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    resampler::NoResamplerBackend,
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    decode_ext::DecoderChunkOutcomeTestExt,
+};
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+use kithara_test_fixtures::signal;
 
 #[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
 #[case(None)]
 fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
-    let wav_data = create_test_wav(100, 44100, 2);
+    let wav_data = signal::wav(44100, 2, 100, signal::TONE);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -21,9 +29,8 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+        TestDecoderConfig::builder()
+            .pools(pools())
             .hint("wav")
             .build(),
     );
@@ -36,7 +43,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
 
 #[kithara::test]
 fn test_next_chunk_returns_data() {
-    let wav_data = create_test_wav(100, 44100, 2);
+    let wav_data = signal::wav(44100, 2, 100, signal::TONE);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -45,17 +52,14 @@ fn test_next_chunk_returns_data() {
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("BUG: decoder");
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
-    let chunk = PcmChunk::try_from(outcome).unwrap();
+    let chunk = AudioChunk::try_from(outcome).unwrap();
     assert_eq!(chunk.spec().sample_rate.get(), 44100);
     assert_eq!(chunk.spec().channels, 2);
     assert!(!chunk.samples.is_empty());
@@ -63,7 +67,7 @@ fn test_next_chunk_returns_data() {
 
 #[kithara::test]
 fn test_next_chunk_eof() {
-    let wav_data = create_test_wav(10, 44100, 2);
+    let wav_data = signal::wav(44100, 2, 10, signal::TONE);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -72,10 +76,7 @@ fn test_next_chunk_eof() {
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("BUG: decoder");
 
@@ -87,7 +88,7 @@ fn test_next_chunk_eof() {
 
 #[kithara::test]
 fn test_seek_to_beginning() {
-    let wav_data = create_test_wav(10000, 44100, 2);
+    let wav_data = signal::wav(44100, 2, 10000, signal::TONE);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -96,10 +97,7 @@ fn test_seek_to_beginning() {
     let mut decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("BUG: decoder");
 
@@ -114,7 +112,7 @@ fn test_seek_to_beginning() {
 
 #[kithara::test]
 fn test_duration_available() {
-    let wav_data = create_test_wav(44100, 44100, 2);
+    let wav_data = signal::wav(44100, 2, 44100, signal::TONE);
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -123,10 +121,7 @@ fn test_duration_available() {
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("BUG: decoder");
 
@@ -149,10 +144,7 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     let result = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     );
     assert!(result.is_err());
 }
@@ -168,10 +160,7 @@ fn test_unsupported_container_returns_error() {
     let result = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     );
     assert!(matches!(
         result,

@@ -1,5 +1,5 @@
 use js_sys::{Object, Reflect};
-use kithara_events::TrackId;
+use kithara::events::TrackId;
 use wasm_bindgen::JsValue;
 
 pub(crate) const KIND: &str = "kind";

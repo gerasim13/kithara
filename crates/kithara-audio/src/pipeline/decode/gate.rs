@@ -209,13 +209,8 @@ pub(crate) fn source_phase_for_wait_context<T: StreamType>(
                 } => source_phase_for_seek_landing(stream, byte),
                 SeekMode::Direct { target_byte: None } => stream.phase(),
             };
-            // `Seeking` here means the landing bytes are absent while the
-            // source flushes — and the flush is this very seek's, so it says
-            // nothing about progress. Reads stay interrupted until the range
-            // lands; resuming on `Seeking` re-drives `decode.seek` into the
-            // same interrupt microseconds later, and the repeated half-read
-            // seek scans are what desynchronize the demuxer by one frame.
-            // Park as the byte wait it really is.
+            // WHY: `Seeking` here means the landing bytes are absent while the source flushes - and the flush is this very seek's, so it says
+            // nothing about progress.
             if phase == SourcePhase::Seeking {
                 SourcePhase::Waiting
             } else {

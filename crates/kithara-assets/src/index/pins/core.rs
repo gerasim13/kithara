@@ -257,7 +257,6 @@ impl PinsInner {
 mod tests {
     use std::fs;
 
-    use kithara_bufpool::BytePool;
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
@@ -266,10 +265,14 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn empty_index_has_no_pins() {
+        let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path.clone(),
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        );
         assert!(idx.snapshot().is_empty());
         assert!(
             !path.exists(),
@@ -278,10 +281,11 @@ mod tests {
     }
 
     fn disk_index(path: &std::path::Path) -> PinsIndex {
+        let pools = crate::test_pools::pools();
         PinsIndex::with_persist_at(
             path.to_path_buf(),
             CancelToken::never(),
-            &BytePool::default(),
+            crate::test_pools::byte_buffer(&pools),
         )
     }
 
@@ -437,11 +441,16 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn invalid_data_is_treated_as_empty() {
+        let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        );
         assert!(idx.snapshot().is_empty());
     }
 
@@ -454,9 +463,14 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn clone_shares_state() {
+        let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        );
         let idx2 = idx.clone();
 
         idx.add("from_first", PinDurability::Durable).unwrap();

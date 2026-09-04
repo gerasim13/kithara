@@ -1,6 +1,6 @@
 use std::mem;
 
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 use kithara_stream::StreamType;
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -31,7 +31,10 @@ impl TrackPhase for RecreatingDecoder {
 }
 
 impl Track<RecreatingDecoder> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let recreate = self.into_inner();
         if !src
             .readiness
@@ -66,7 +69,10 @@ impl TrackPhase for RebuildingDecoder {
 }
 
 impl Track<RebuildingDecoder> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let mut rebuild = self.into_inner();
         rebuild.record_seek_preempt(src.seek_obs.as_ref(), src.seek_engine.epoch());
         if let Some(complete) = src.rebuild.take_replacement(rebuild.build) {

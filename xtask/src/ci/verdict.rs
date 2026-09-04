@@ -8,8 +8,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use fs4::FileExt;
-use kithara_devtools::junit::{CaseTiming, parse_junit};
+use kithara_devtools::{
+    junit::{CaseTiming, parse_junit},
+    lock::FileLock,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -103,8 +105,7 @@ impl JournalFile {
     }
 
     fn load(&self) -> Result<Journal> {
-        let lock = self.open_lock()?;
-        FileExt::lock_shared(&lock).with_context(|| {
+        let _lock = FileLock::shared(self.open_lock()?).with_context(|| {
             format!(
                 "locking verdict journal {} for reading",
                 self.path.display()
@@ -114,8 +115,7 @@ impl JournalFile {
     }
 
     fn update<T>(&self, operation: impl FnOnce(&mut Journal) -> Result<T>) -> Result<T> {
-        let lock = self.open_lock()?;
-        FileExt::lock(&lock).with_context(|| {
+        let _lock = FileLock::exclusive(self.open_lock()?).with_context(|| {
             format!("locking verdict journal {} for update", self.path.display())
         })?;
         let mut journal = Journal::load(&self.path)?;
@@ -249,7 +249,7 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// request.
 pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     match lane {
-        "apple-test" | "linux-test" | "windows-arm64" | "windows-x64" => {
+        "apple-test" | "linux-test-simulated-clock" | "windows-arm64" | "windows-x64" => {
             Some("target/nextest/ci/junit.xml")
         }
         "apple-test-flash-off" => Some("target-flash-off/nextest/ci/junit.xml"),
@@ -783,10 +783,9 @@ mod tests {
 
         let contender = JournalFile::new(path.clone()).open_lock().unwrap();
         assert!(matches!(
-            FileExt::try_lock(&contender),
+            FileLock::try_exclusive(contender),
             Err(fs4::TryLockError::WouldBlock)
         ));
-        drop(contender);
 
         let second = thread::spawn(move || {
             second_store

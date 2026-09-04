@@ -31,6 +31,8 @@ impl Consts {
         8_000, 7_350,
     ];
 
+    /// Maximum ADTS frame size encoded by its 13-bit frame-length field.
+    const MAX_ADTS_FRAME_BYTES: usize = 0x1fff;
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
     const MAX_SAMPLES: usize = 8192;
@@ -199,6 +201,7 @@ pub(crate) struct AacDecoder {
     /// files).
     transport: Transport,
     pcm: [i16; Consts::MAX_SAMPLES],
+    adts: [u8; Consts::MAX_ADTS_FRAME_BYTES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
@@ -290,6 +293,7 @@ impl AacDecoder {
             buf,
             transport,
             codec_params: params.clone(),
+            adts: [0; Consts::MAX_ADTS_FRAME_BYTES],
             pcm: [0; Consts::MAX_SAMPLES],
             delay_remaining: 0,
             metadata_validated: false,
@@ -320,11 +324,16 @@ impl AudioDecoder for AacDecoder {
             }
             Transport::Adts => {
                 let header = build_adts_header(self.config, payload.len());
-                let mut frame = Vec::with_capacity(header.len() + payload.len());
-                frame.extend_from_slice(&header);
-                frame.extend_from_slice(payload);
+                let frame_len = header
+                    .len()
+                    .checked_add(payload.len())
+                    .filter(|length| *length <= Consts::MAX_ADTS_FRAME_BYTES)
+                    .ok_or(Error::DecodeError("aac: ADTS frame exceeds 13-bit length"))?;
+                let (header_out, payload_out) = self.adts[..frame_len].split_at_mut(header.len());
+                header_out.copy_from_slice(&header);
+                payload_out.copy_from_slice(payload);
                 self.decoder
-                    .fill(&frame)
+                    .fill(&self.adts[..frame_len])
                     .map_err(|e| Error::DecodeError(e.message()))?;
             }
         }
@@ -377,14 +386,7 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn reset(&mut self) {
-        // Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add
-        // state returns to cold (zero). The C handle exposes no mid-stream
-        // flush, so resetting only `delay_remaining` / `metadata_validated`
-        // would leave the prior overlap tail in place and let the first
-        // post-seek access unit decode against stale state — emitting a
-        // ~2-AU phase-shifted (or contaminated) first chunk that races on
-        // pre-seek decode depth. Rebuild keeps it deterministic; the 2-AU
-        // seek pre-roll back-off re-warms it for mid-stream seeks.
+        // WHY: Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add state returns to cold (zero).
         match Self::build_decoder(self.transport, &self.codec_params) {
             Ok(decoder) => self.decoder = decoder,
             Err(e) => tracing::warn!(

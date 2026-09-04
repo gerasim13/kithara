@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use kithara_assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -35,7 +37,7 @@ impl QueryIdentityRule {
             .into_iter()
             .map(|domain| DomainPattern::parse(domain.as_ref()))
             .collect();
-        let mut unique_keys = Vec::new();
+        let mut unique_keys: Vec<String> = Vec::new();
         for key in keys {
             let key = key.as_ref();
             if !unique_keys.iter().any(|existing| existing == key) {
@@ -49,7 +51,7 @@ impl QueryIdentityRule {
     }
 
     fn filtered_url(&self, url: &Url) -> Url {
-        let pairs: Vec<_> = url.query_pairs().collect();
+        let pairs: Vec<(Cow<'_, str>, Cow<'_, str>)> = url.query_pairs().collect();
         let mut filtered = url.clone();
         filtered.set_query(None);
         filtered.set_fragment(None);
@@ -73,7 +75,7 @@ impl QueryIdentityRule {
     }
 
     fn identity(&self, url: &Url) -> Option<String> {
-        let pairs: Vec<_> = url.query_pairs().collect();
+        let pairs: Vec<(Cow<'_, str>, Cow<'_, str>)> = url.query_pairs().collect();
         let selected = pairs
             .iter()
             .any(|(name, _)| self.keys.iter().any(|key| key == name.as_ref()));

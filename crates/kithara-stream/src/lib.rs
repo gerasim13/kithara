@@ -40,11 +40,11 @@ pub use reader::{
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,
-    SourcePhase, SourceSeekAnchor, VariantControl,
+    SourcePhase, SourceProbe, SourceSeekAnchor, VariantControl,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
-    VariantChangeError,
+    VariantChangeError, format_change_segment_range, resolve_seek_target,
 };
 pub use transition::{
     OutgoingDisposition, VariantPromotion, VariantTransition, VariantTransitionId,

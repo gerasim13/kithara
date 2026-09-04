@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use kithara_assets::{AssetScope, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::StreamResult;
 use url::Url;
 
 use crate::{
@@ -31,16 +31,18 @@ impl From<Option<DecryptContext>> for SegmentContent {
 /// One cache slot in the variant's content domain. The shared-but-distinct
 /// kinds — a separately fetched `#EXT-X-MAP` init prefix vs a media segment —
 /// are folded under one enum (req 6): callers treat any slot uniformly through
-/// the cascade methods (`state` / `size` / `resource` / `read_at` / `contains`
-/// / `len` / `url`), and the few media-only queries (`decode_time` / `duration`)
+/// the cascade methods (`state` / `size` / `resource` / `contains` / `len`
+/// / `url`), and the few media-only queries (`decode_time` / `duration`)
 /// live on [`MediaSegment`].
 ///
 /// Each cascade method dispatches DOWN into the arm, reproducing exactly the
 /// per-kind code path the variant's `read_at` / `range_ready` /
-/// `media_descriptor` / `init_descriptor_at` ran before the fold. `read_at` /
-/// `contains` route through the segment's [`ResourceHandle`] — the same handle
+/// `media_descriptor` / `init_descriptor_at` ran before the fold. `contains`
+/// routes through the segment's [`ResourceHandle`] — the same handle
 /// `segment_handle` / `init_handle` vended — built from the passed scope plus
-/// the arm's `resource_id` + `url`.
+/// the arm's `resource_id` + `url`. Reads go through
+/// [`VariantSegments`](crate::variant::VariantSegments), which holds the open
+/// resource across them.
 #[derive(Debug)]
 pub(crate) enum Segment {
     Init(InitSegment),
@@ -59,7 +61,10 @@ impl Segment {
     }
 
     /// Whether every byte in `range` is already present on disk for this slot.
-    pub(crate) fn contains(&self, scope: &AssetScope, range: Range<u64>) -> bool {
+    pub(crate) fn contains<S>(&self, scope: &AssetScope<S>, range: Range<u64>) -> bool
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.resource(scope).contains(range)
     }
 
@@ -71,19 +76,10 @@ impl Segment {
         }
     }
 
-    /// Open the slot's resource and copy `range` into `dst`. Routes through the
-    /// slot's [`ResourceHandle`] — `Ok(None)` means the bytes are not on disk
-    /// yet.
-    pub(crate) fn read_at(
-        &self,
-        scope: &AssetScope,
-        range: Range<u64>,
-        dst: &mut [u8],
-    ) -> StreamResult<Option<usize>> {
-        self.resource(scope).read_at(range, dst)
-    }
-
-    pub(crate) const fn resource<'a>(&'a self, scope: &'a AssetScope) -> ResourceHandle<'a> {
+    pub(crate) const fn resource<'a, S>(&'a self, scope: &'a AssetScope<S>) -> ResourceHandle<'a, S>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         ResourceHandle::new(scope, self.resource_id(), self.url())
     }
 

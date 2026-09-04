@@ -1,5 +1,12 @@
 allow-unwrap-in-tests = true
-doc-valid-idents = ["YouTube", "GitHub", "OpenDAL", "DocC", "WebAssembly"]
+doc-valid-idents = [
+  "YouTube",
+  "GitHub",
+  "GitLab",
+  "OpenDAL",
+  "DocC",
+  "WebAssembly",
+]
 
 # Complexity thresholds
 # Matches production/main; raised from 20 → 35 on the gapless port (player.rs

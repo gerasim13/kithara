@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-stretch.svg)](https://crates.io/crates/kithara-stretch)
 [![docs.rs](https://docs.rs/kithara-stretch/badge.svg)](https://docs.rs/kithara-stretch)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -16,21 +16,23 @@
 
 Pure time-stretch DSP contracts and backend adapters for Kithara.
 
-This crate owns the `StretchBackend` trait for the streaming stretch slot, the
-`ElasticEngine` / `ElasticPriming` traits for exact-span rendering, the backend
-selector and factory, and the native C++ adapters that implement them. Backend
-features depend downward on `kithara-bufpool` for scratch storage, and native
-builds include `kithara-workspace-hack`; audio graph plumbing, region planning,
-chunk metadata, and resampler routing stay in `kithara-audio`.
+This crate owns the `ElasticEngine` exact-span and stream-lifecycle contract,
+the backend selector and factory, and the native C++ adapters that implement it.
+Backend features depend downward on `kithara-bufpool` for scratch storage, and
+native builds include `kithara-workspace-hack`. `kithara-warp` owns the
+synchronous renderer and temporal controls, `kithara-play` supplies the shared
+pool region and composes post-Warp effects, decoded-audio values and audio-chunk
+metadata belong to `kithara-signal`, and decoder sample-rate conversion remains
+in the decode/audio seam.
 
-Every compiled-in engine runs the same exact-span conformance suite, and each
-declares its own rate window and latency through `ElasticCapabilities`, so
-callers plan against capabilities rather than against a named library.
+Every compiled-in engine runs the same exact-span conformance suite and reports
+its prepared frame limits and latency through `ElasticCapabilities`, so callers
+plan against capabilities rather than against a named library.
 
 Feature flags select the compiled backends:
 
 - `stretch-signalsmith` enables `signalsmith-stretch` and is the default.
-- `stretch-bungee` enables `bungee-rs` as an opt-in backend.
+- `stretch-bungee` enables the private `bungee-sys` adapter as an opt-in backend.
 
 Both current backends are native-only. See [CONTEXT.md](CONTEXT.md) for the
 backend contract, wasm notes, and the future pure-Rust backend recipe.

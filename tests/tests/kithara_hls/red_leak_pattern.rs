@@ -8,6 +8,7 @@ use std::{
 
 use kithara::{
     abr::Abr,
+    assets::{AssetStore, StorageBackend},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -21,7 +22,12 @@ use kithara::{
         dl::{Downloader, DownloaderConfig, FetchCmd, Peer},
     },
 };
-use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
+use kithara_integration_tests::{
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    hls_server::TestServer,
+    temp_dir,
+};
 
 /// Settle window / hang budget for [`wait_thread_count_quiesced`].
 const SETTLE_WINDOW: usize = 4;
@@ -94,10 +100,15 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancelToken::never();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(cancel.clone())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .cancel(cancel.clone())
+        .build(),
     );
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
@@ -132,7 +143,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 }
 
 /// HLS-side RED test — exercises the same defect through a real
-/// `Stream::<Hls>`. After the source is dropped, the `HlsPeer` should
+/// `Stream::<Hls<TestPools>>`. After the source is dropped, the `HlsPeer` should
 /// be released. This test creates many streams against a single
 /// shared Downloader and asserts that the OS thread count does not
 /// grow proportionally.
@@ -144,17 +155,28 @@ async fn red_hls_source_drop_leaks_peer(
 
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
+    let pools = pools();
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(CancelToken::never())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .cancel(CancelToken::never())
+        .build(),
     );
 
     {
-        let stream = Stream::<Hls>::new(
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build();
+        let stream = Stream::<Hls<TestPools>>::new(
             HlsConfig::for_url(url.clone())
-                .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+                .store(store)
+                .pools(pools.clone())
                 .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
@@ -168,9 +190,15 @@ async fn red_hls_source_drop_leaks_peer(
     let threads_baseline = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
 
     for i in 0..ITERATIONS {
-        let stream = Stream::<Hls>::new(
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build();
+        let stream = Stream::<Hls<TestPools>>::new(
             HlsConfig::for_url(url.clone())
-                .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+                .store(store)
+                .pools(pools.clone())
                 .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),

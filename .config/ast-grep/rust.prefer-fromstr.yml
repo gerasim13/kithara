@@ -41,19 +41,25 @@ ignores:
   - "**/*_tests.rs"
   - "**/tests.rs"
 rule:
-  any:
-    - pattern: |
-        fn $NAME($ARG: &str) -> $RET {
-            $$$BODY
-        }
-    - pattern: |
-        pub fn $NAME($ARG: &str) -> $RET {
-            $$$BODY
-        }
-    - pattern: |
-        pub(crate) fn $NAME($ARG: &str) -> $RET {
-            $$$BODY
-        }
+  all:
+    - any:
+        - pattern: |
+            fn $NAME($ARG: &str) -> $RET {
+                $$$BODY
+            }
+        - pattern: |
+            pub fn $NAME($ARG: &str) -> $RET {
+                $$$BODY
+            }
+        - pattern: |
+            pub(crate) fn $NAME($ARG: &str) -> $RET {
+                $$$BODY
+            }
+    # A method a trait dictates the signature of is that trait, not a
+    # hand-rolled stand-in for one — `fn from_str` inside `impl FromStr`
+    # is the very shape this rule asks for.
+    - not:
+        inside: { pattern: "impl $TRAIT for $TYPE { $$$ }", stopBy: end }
 constraints:
   NAME:
     regex: "^from_[a-z][a-z0-9_]*$"

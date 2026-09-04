@@ -1,14 +1,15 @@
-use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_events::RouteDescription;
 
-use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
+    bridge::PlayerCmd,
+    effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
 };
 
-impl PlayerImpl {
+impl<S> PlayerRuntime<S> {
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -60,14 +61,15 @@ impl PlayerImpl {
     }
 
     /// Set the playback rate used by `play()` and `select_item()`, and apply it
-    /// to playback that is already running.
+    /// as a target to playback that is already running.
     ///
     /// While paused the live rate is 0.0 and must stay there — a rate change is
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
-        self.core.params.set_default_rate(rate);
+        let target = self.core.params.set_default_rate(rate);
+        self.core.timestretch.set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
-            self.set_rate(rate);
+            self.set_rate(target);
         }
     }
 
@@ -84,20 +86,6 @@ impl PlayerImpl {
         self.core
             .engine
             .set_master_eq_gain(band, f32::from(gain_db))
-    }
-
-    delegate::delegate! {
-        to self.core.engine {
-            /// Replaces the master EQ layout and gains without releasing the running slot.
-            ///
-            /// # Errors
-            /// Returns a session graph error when a running player's EQ node cannot be
-            /// replaced.
-            #[call(set_master_eq_layout)]
-            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
-            /// Pump audio backend/runtime state.
-            pub fn tick(&self) -> Result<(), PlayError>;
-        }
     }
 
     /// Set muted state.
@@ -123,18 +111,12 @@ impl PlayerImpl {
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
-    /// Set playback rate.
-    ///
-    /// Stores the speed in the shared time-stretch controls (the single source
-    /// of truth, read each chunk by the effect chain) and propagates it via
-    /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
+    /// Set the requested rate target, clamped to
+    /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.params.set_rate(
-            rate,
-            &self.core.timestretch,
-            |cmd| self.send_to_slot(cmd),
-            self.core.engine.bus(),
-        );
+        self.core.timestretch.set_speed(rate);
+        let target = self.core.timestretch.speed();
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
@@ -146,5 +128,19 @@ impl PlayerImpl {
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
         );
+    }
+
+    delegate::delegate! {
+        to self.core.engine {
+            /// Replaces the master EQ layout and gains without releasing the running slot.
+            ///
+            /// # Errors
+            /// Returns a session graph error when a running player's EQ node cannot be
+            /// replaced.
+            #[call(set_master_eq_layout)]
+            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
+            /// Pump audio backend/runtime state.
+            pub fn tick(&self) -> Result<(), PlayError>;
+        }
     }
 }

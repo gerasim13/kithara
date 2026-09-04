@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-test-macros.svg)](https://crates.io/crates/kithara-test-macros)
 [![docs.rs](https://docs.rs/kithara-test-macros/badge.svg)](https://docs.rs/kithara-test-macros)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -19,43 +19,7 @@ Proc-macro crate providing unified test attributes (`#[kithara::test]`,
 and mock emissions are gated behind `cfg(any(test, feature = "probe"))` and
 `cfg(any(test, feature = "mock"))`; flash is gated by the `flash` feature.
 
-## Macros
-
-Attribute macros:
-
-- `#[kithara::test(...)]` — unified async/wasm test attribute (see flags below)
-- `#[kithara::fixture]` — rstest-style fixture helper
-- `#[kithara::probe(...)]` — USDT probe-point emitter consumed by `kithara-test-utils::probes`
-- `#[kithara::mock(...)]` — wraps trait or impl with `unimock` mock generation
-- `#[kithara::hang_watchdog(...)]` — wraps test bodies with the hang-detector watchdog
-- `#[kithara::flash]` / `#[kithara::flash(true|false)]` — dynamic-flash guard for production functions
-- `#[kithara::facade_flash]` — facade-path variant of `flash`, re-exported by the `kithara` crate
-- `#[kithara::rtsan_forbid_blocking]` — mark a function as an RTSan nonblocking entry point
-- `#[kithara::rtsan_allow_blocking]` — permit a blocking function inside an RTSan nonblocking context
-
-Derive macros:
-
-- `#[derive(Probe)]` — generate probe glue for an enum
-- `#[derive(IntoProbeArg)]` — generate the conversion required to pass a value as a probe argument
-
-## `#[kithara::test]` flags
-
-A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
-(e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
-include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
-`hang_timeout_secs(N)`,
-`tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
-`loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
-opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
-without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
-fixture injection. See [CONTEXT.md](CONTEXT.md) for per-flag semantics and the
-Flash/Loom debugging rules.
-
-## `#[kithara::probe(...)]` arguments
-
-A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthesized forms record parameter idents, computed `name = expr` values, an opt-in `caller`, or `probe_return`, up to the 6-arg USDT ceiling. See [CONTEXT.md](CONTEXT.md) for the full argument contract.
-
-## Example
+## Usage
 
 ```rust
 #[kithara::test(tokio, browser, timeout(std::time::Duration::from_secs(30)))]
@@ -68,6 +32,43 @@ fn temp_playlist() -> String {
     "http://127.0.0.1:3444/assets/hls/master.m3u8".to_string()
 }
 ```
+
+## Key Types
+
+Attribute macros:
+
+- `#[kithara::test(...)]` — unified async/wasm test attribute (see flags below)
+- `#[kithara::fixture]` — rstest-style fixture helper
+- `#[kithara::probe(...)]` — USDT probe-point emitter consumed by `kithara-test-utils::probes`
+- `#[kithara::mock(...)]` — wraps trait or impl with `unimock` mock generation
+- `#[kithara::hang_watchdog(...)]` — wraps test bodies with the hang-detector watchdog
+- `#[kithara::measure(...)]` — `hotpath` measurement gated by the caller's `perf` feature
+- `#[kithara::flash]` / `#[kithara::flash(true|false)]` — dynamic-flash guard for production functions
+- `#[kithara::facade_flash]` — facade-path variant of `flash`, re-exported by the `kithara` crate
+- `#[kithara::rtsan_forbid_blocking]` — mark a function as an RTSan nonblocking entry point
+- `#[kithara::rtsan_allow_blocking]` — permit a blocking function inside an RTSan nonblocking context
+
+Derive macros:
+
+- `#[derive(Probe)]` — generate probe glue for an enum
+- `#[derive(IntoProbeArg)]` — generate the conversion required to pass a value as a probe argument
+
+### `#[kithara::test]` flags
+
+A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
+(e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
+include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
+`hang_timeout_secs(N)`,
+`tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
+`loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
+opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
+without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
+fixture injection. See [CONTEXT.md](CONTEXT.md) for per-flag semantics and the
+Flash/Loom debugging rules.
+
+### `#[kithara::probe(...)]` arguments
+
+A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthesized forms record parameter idents, computed `name = expr` values, an opt-in `caller`, or `probe_return`, up to the 6-arg USDT ceiling. See [CONTEXT.md](CONTEXT.md) for the full argument contract.
 
 ## Integration
 

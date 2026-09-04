@@ -8,11 +8,15 @@ mod error;
 mod loader;
 mod navigation;
 mod queue;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod track;
 
 pub use config::QueueConfig;
 pub use error::QueueError;
 pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
 pub use navigation::{NavigationState, RepeatMode};
-pub use queue::{PlaybackView, Queue, Transition};
+#[cfg(any(test, feature = "probe"))]
+pub use queue::test_utils;
+pub use queue::{PlaybackView, Queue, QueueControl, Transition};
 pub use track::{TrackEntry, TrackSource};

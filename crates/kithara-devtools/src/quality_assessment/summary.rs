@@ -24,21 +24,17 @@ struct CrapReport {
 
 #[derive(Deserialize)]
 struct CrapEntry {
+    coverage: Option<f64>,
     file: String,
     function: String,
-    line: u64,
-    cyclomatic: f64,
-    coverage: Option<f64>,
     crap: f64,
+    cyclomatic: f64,
+    line: u64,
 }
 
 /// Arguments for rendering an existing quality assessment.
 #[derive(Debug, Args)]
 pub struct SummaryArgs {
-    /// Read the assessment in this directory.
-    #[arg(long)]
-    directory: Option<PathBuf>,
-
     /// Select the standard or deep assessment artifact.
     #[arg(long, value_enum, default_value_t)]
     depth: AssessmentDepth,
@@ -46,6 +42,10 @@ pub struct SummaryArgs {
     /// Select the product or complete assessment artifact.
     #[arg(long, value_enum, default_value_t)]
     profile: AssessmentProfile,
+
+    /// Read the assessment in this directory.
+    #[arg(long)]
+    directory: Option<PathBuf>,
 }
 
 pub(crate) fn run(args: &SummaryArgs, ctx: &Ctx) -> Result<()> {

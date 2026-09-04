@@ -66,6 +66,19 @@ underran worker re-ticks the instant bytes land); sources whose data is always
 resident have neither. `take_reader_event_sink` must return a **fresh** sink on
 every call — decoder recreation (ABR / format change) needs a clean state cursor.
 
+`probe` is the narrow byte-space handle (`SourceProbe`): phase, cursor
+(`position`/`set_position`), `len`, and `byte_map` behind an `Arc`, so a caller
+that keeps `Stream` behind a mutex (the audio worker's shared stream) serves its
+real-time polls and cursor moves without that lock — an off-thread holder parked
+in a blocking `read`/`seek` would otherwise turn the poll into a wait.
+Implementations answer from self-synchronizing state (HLS: the coord; file: the
+shared inner) and must not take locks a reader wait can hold — the file probe's
+`phase_at` and `len` may take the storage gate lock on the uncommitted path, a
+short acquire the storage wait releases before parking, never one held across a
+wait. `resolve_seek_target` is the shared cursor math: `Stream::seek` and the
+probe-side `probe_seek` resolve a `SeekFrom` against the same position/length
+answers.
+
 ## End-of-stream contract
 
 `Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` proving
@@ -114,6 +127,21 @@ makes it for commands still queued when the downloader is cancelled. That callba
 releases the command's claim — the HLS segment slot and the non-`Clone` `AssetWriter` both ride
 in it — so a dropped closure strands a `<canonical>.tmp` that no one will ever write.
 Imperative `execute`/`batch` commands carry no claim: their oneshot is the completion signal.
+
+Scheduling routes each queued command into a 2×2 priority slot map keyed by
+`(peer.priority(), command priority)`; the urgent slots (`High` peer or command)
+drain fully before the demand slots each loop pass. A command's stamped priority
+reflects the reader position at *emit* time, so `FetchCmd` also carries an
+optional `DemandFn` — a live probe answering whether a reader currently blocks
+on this command's bytes. `Registry::reschedule` (every loop pass) re-asks both
+the peer priority and the demand probe, and an escalation moves the command to
+the *front* of its more urgent slot: a prefetch the playhead caught up with
+overtakes work stamped more urgent after it, instead of starving behind an
+entire construction window while a reader waits (the UrgentDownSwitch hang).
+Demand probes must be cheap, lock-free reads — they run on the download loop.
+`reschedule` rebuilds every slot in one pass rather than patching by index, since a
+slot can be both source and destination of the same pass. `RequestEnqueued` carries
+the stamped priority; an escalation is a `reschedule` trace line, not a bus event.
 
 `DownloaderConfig::for_client(client)` carries `abr_settings` for the shared ABR
 controller, `demand_throttle`, `soft_timeout` (2s — publishes

@@ -3,8 +3,11 @@ use kithara_apple::foundation::{
     ns::{NSData, NSError, NSInteger, NSURLResponse},
     urlsession::{self, DataCompletion, ResponseParts},
 };
-use kithara_bufpool::{BudgetExhausted, BytePool, PooledOwned};
-use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
+use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    tokio::sync::oneshot,
+};
 use url::Url;
 
 use crate::{
@@ -27,18 +30,38 @@ pub(super) struct StreamHead {
 }
 
 struct PooledBytes {
-    bytes: PooledOwned<32, Vec<u8>>,
+    bytes: ByteBuffer,
 }
 
 impl AsRef<[u8]> for PooledBytes {
     fn as_ref(&self) -> &[u8] {
-        self.bytes.as_slice()
+        &self.bytes
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ByteBuffers {
+    get_with_len: Arc<dyn Fn(usize) -> Result<ByteBuffer, PoolError> + Send + Sync>,
+}
+
+impl ByteBuffers {
+    pub(super) fn new<S>(pools: PoolRegion<S>) -> Self
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
+        Self {
+            get_with_len: Arc::new(move |len| pools.get_with_len::<u8>(len)),
+        }
+    }
+
+    fn get_with_len(&self, len: usize) -> Result<ByteBuffer, PoolError> {
+        (self.get_with_len)(len)
     }
 }
 
 pub(super) fn completion_result(
     completion: &DataCompletion<'_>,
-    byte_pool: &BytePool,
+    buffers: &ByteBuffers,
     accept_encoding: AcceptEncodingPolicy,
     url: &Url,
 ) -> Result<AppleDataResponse, NetError> {
@@ -52,7 +75,7 @@ pub(super) fn completion_result(
     };
     let body = completion
         .data()
-        .map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, byte_pool))?;
+        .map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, buffers))?;
     Ok(AppleDataResponse {
         body,
         headers,
@@ -70,23 +93,19 @@ pub(super) fn http_parts(
         .transpose()
 }
 
-pub(super) fn copy_data(data: &NSData, byte_pool: &BytePool) -> Result<Bytes, NetError> {
+pub(super) fn copy_data(data: &NSData, buffers: &ByteBuffers) -> Result<Bytes, NetError> {
     let len = data.len();
     if len == 0 {
         return Ok(Bytes::new());
     }
 
-    let mut bytes = byte_pool.get();
-    bytes.ensure_len(len).map_err(byte_budget_error)?;
-    bytes.truncate(len);
-    bytes
-        .as_mut_slice()
-        .copy_from_slice(urlsession::data_bytes(data));
+    let mut bytes = buffers.get_with_len(len).map_err(pool_error)?;
+    bytes.copy_from_slice(urlsession::data_bytes(data));
     Ok(Bytes::from_owner(PooledBytes { bytes }))
 }
 
-fn byte_budget_error(_error: BudgetExhausted) -> NetError {
-    NetError::Network("byte budget exhausted".to_string())
+fn pool_error(error: PoolError) -> NetError {
+    NetError::Network(error.to_string())
 }
 
 pub(super) fn error_from_nserror(error: &NSError) -> NetError {

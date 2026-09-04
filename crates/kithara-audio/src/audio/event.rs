@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_decode::{
-    DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass, PcmMeta,
-    PcmSpec,
+    DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass,
 };
 use kithara_events::{
     AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
@@ -12,11 +11,13 @@ use kithara_events::{
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, SeekObserve};
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
 use super::{ReadOutcome, ThreadWake, WakeSignal};
+use crate::ConsumerWakeMode;
 
 struct Consts;
 
@@ -25,19 +26,26 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+/// Reader-side event sink.
+///
+/// A `RealtimeDeferred` consumer reads on the audio callback, so its events
+/// go through the lock-free [`DeferredBus`] ring and reach the bus when the
+/// scheduler shell flushes. An `ImmediateOffRt` consumer runs off the
+/// real-time thread and may take the `broadcast::send` lock, so its events
+/// publish inline: everything a read births is on the bus when that read
+/// returns, and the deferred ring keeps the shell as its only flusher.
 pub(super) struct AudioEvents {
-    #[field(get, vis = "pub(super)")]
-    bus: EventBus,
+    emit: Arc<DeferredBus<Event>>,
+    wake_mode: ConsumerWakeMode,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
 }
 
 impl AudioEvents {
-    pub(super) const fn new(bus: EventBus) -> Self {
+    pub(super) const fn new(emit: Arc<DeferredBus<Event>>, wake_mode: ConsumerWakeMode) -> Self {
         Self {
-            bus,
+            emit,
+            wake_mode,
             last_progress_emit: None,
             underrun_active: false,
         }
@@ -99,7 +107,7 @@ impl AudioEvents {
         &self,
         seek: &dyn SeekObserve,
         epoch: u64,
-        meta: Option<PcmMeta>,
+        meta: Option<AudioChunkInfo>,
         position: Duration,
     ) {
         let Some(seek_epoch) = seek.pending_epoch() else {
@@ -145,7 +153,10 @@ impl AudioEvents {
     }
 
     pub(super) fn publish(&self, event: AudioEvent) {
-        self.bus.publish(event);
+        match self.wake_mode {
+            ConsumerWakeMode::RealtimeDeferred => self.emit.enqueue(event.into()),
+            ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
+        }
     }
 
     pub(super) const fn reset_underrun(&mut self) {
@@ -154,7 +165,16 @@ impl AudioEvents {
 
     #[cfg(test)]
     pub(super) fn test() -> Self {
-        Self::new(EventBus::new(16))
+        Self::new(
+            Self::deferred(&EventBus::new(16)),
+            ConsumerWakeMode::RealtimeDeferred,
+        )
+    }
+
+    delegate::delegate! {
+        to self.emit {
+            pub(super) fn bus(&self) -> &EventBus;
+        }
     }
 }
 
@@ -307,11 +327,11 @@ fn gapless_span(track_info: &kithara_decode::DecoderTrackInfo) -> Option<Gapless
 #[derive(Clone, Copy)]
 pub(crate) struct DecoderChangedEventData<'a> {
     pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
+    pub(crate) spec: AudioSpec,
     pub(crate) backend: DecodeBackend,
     pub(crate) cause: DecoderChangeCause,
     pub(crate) duration: Option<Duration>,
     pub(crate) media_info: Option<&'a MediaInfo>,
-    pub(crate) spec: PcmSpec,
     pub(crate) base_offset: u64,
     pub(crate) epoch: u64,
 }
@@ -342,7 +362,7 @@ pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> Decode
 
 pub(crate) fn decoder_gapless_event(
     media_info: Option<&MediaInfo>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     track_info: &kithara_decode::DecoderTrackInfo,
     domain: FrameDomain,
 ) -> Option<DecoderEvent> {
@@ -360,7 +380,7 @@ pub(crate) fn decoder_gapless_event(
 
 pub(crate) fn decoder_resampler_event<B>(
     resampler: Option<&DecoderResamplerConfig<B>>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     input_rate: Option<u32>,
 ) -> Option<DecoderEvent>
 where
@@ -396,31 +416,40 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
+    use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{SeekControl, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ring::create_channels};
+    use crate::{
+        audio::{Fetch, ring::create_channels},
+        test_pools::{Pools, pools, sample_buffer},
+    };
 
-    fn empty_chunk() -> PcmChunk {
-        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    fn empty_chunk(pools: &Pools) -> AudioChunk {
+        AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
     }
 
     #[kithara::test]
-    fn post_seek_output_publishes_without_worker_flush() {
+    fn post_seek_output_reaches_the_bus_once_the_shell_flushes() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let events = AudioEvents::new(bus);
+        let emit = AudioEvents::deferred(&bus);
+        let events = AudioEvents::new(Arc::clone(&emit), ConsumerWakeMode::RealtimeDeferred);
         let seek = SeekState::new();
         let position = Duration::from_millis(500);
         let epoch = seek.begin(position);
         seek.mark_pending(epoch);
 
         events.post_seek_output(&seek, epoch, None, position);
+
+        assert!(
+            receiver.try_recv().is_err(),
+            "a read runs on the audio callback, so its events wait for the shell"
+        );
+        emit.flush();
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
@@ -459,13 +488,14 @@ mod tests {
 
     #[kithara::test]
     fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
+        let pools = pools();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let reader_wake = Arc::new(ThreadWake::default());
         let emit = AudioEvents::deferred(&bus);
         let (mut tx, mut rx) = create_channels(2, emit, &reader_wake);
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("first push reaches ring");
         assert!(events.try_recv().is_err());
         tx.flush_wake_signals();
@@ -474,7 +504,7 @@ mod tests {
             Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("second push reaches ring");
         tx.flush_wake_signals();
         assert!(events.try_recv().is_err());
@@ -482,7 +512,7 @@ mod tests {
         assert!(rx.try_pop().is_some());
         assert!(rx.try_pop().is_some());
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(
@@ -522,11 +552,13 @@ mod tests {
     fn underrun_edges_emit_once_per_starvation_window() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let mut events = AudioEvents::new(bus);
+        let emit = AudioEvents::deferred(&bus);
+        let mut events = AudioEvents::new(Arc::clone(&emit), ConsumerWakeMode::RealtimeDeferred);
         let position = Duration::from_millis(321);
 
         events.fill_result(false, true, false, position, 0);
         events.fill_result(false, true, false, position, 0);
+        emit.flush();
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
@@ -538,6 +570,7 @@ mod tests {
         assert!(receiver.try_recv().is_err());
 
         events.fill_result(true, true, false, position, 0);
+        emit.flush();
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
             Ok(Event::Audio(AudioEvent::UnderrunEnded {

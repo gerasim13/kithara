@@ -2,19 +2,20 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, create_wav_exact_bytes,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_distance, phase_from_f32,
-    signal_pcm::signal,
 };
+use kithara_test_fixtures::signal::{self, Wave};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 
@@ -395,11 +396,11 @@ async fn stress_seek_audio_hls(
         .then(|| Consts::expected_duration_secs(segment_count));
     let (url, counter) = match fixture {
         SeekAudioFixture::WavFileLike => {
-            let wav_data = create_wav_exact_bytes(
-                signal::Sawtooth,
+            let wav_data = signal::wav_of_size(
                 Consts::D.sample_rate,
                 Consts::D.channels,
                 Consts::total_bytes(segment_count),
+                Wave::Sawtooth,
             );
             if let Some(expected_dur) = expected_dur {
                 info!(
@@ -455,6 +456,12 @@ async fn stress_seek_audio_hls(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let storage_backend = if ephemeral {
         StorageBackend::Memory
@@ -465,20 +472,19 @@ async fn stress_seek_audio_hls(
     };
     let cache_capacity =
         cache_capacity_override.map(|cap| NonZeroUsize::new(cap).expect("nonzero cache capacity"));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(storage_backend)
         .maybe_cache_capacity(cache_capacity)
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(fixture.media_info())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -489,7 +495,8 @@ async fn stress_seek_audio_hls(
         .build();
     let recorder = install_recorder();
 
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
@@ -597,9 +604,9 @@ async fn stress_seek_audio_hls(
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected_next = (prev_phase + 1) % SawWav::SAW_PERIOD;
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
+                    let expected_next = (prev_phase + 1) % signal::SAW_PERIOD;
                     if curr_phase != expected_next {
                         continuity_errors += 1;
                         if continuity_errors <= 3 {
@@ -621,9 +628,9 @@ async fn stress_seek_audio_hls(
                 (pos_secs * f64::from(spec.sample_rate.get())).round(),
             )
             .unwrap_or(usize::MAX);
-            let expected_phase = expected_frame_idx % SawWav::SAW_PERIOD;
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, expected_phase);
+            let expected_phase = expected_frame_idx % signal::SAW_PERIOD;
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, expected_phase);
             if dist > 1200 {
                 position_errors += 1;
                 if position_error_details.len() < 10 {

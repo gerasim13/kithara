@@ -3,10 +3,14 @@ use std::{
     future::Future,
     ops::BitOr,
     pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
 
-use super::{token::CancelToken, wait::Cancelled};
+use super::{
+    token::{CancelToken, CancelWakerGuard},
+    wait::Cancelled,
+};
 use crate::sync::Arc;
 
 /// OR-combinator for cancellation tokens.
@@ -51,6 +55,32 @@ impl CancelGroup {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.sources.iter().any(CancelToken::is_cancelled)
+    }
+
+    /// Register a synchronous waker that fires at most once when any source is
+    /// cancelled. Retain all returned guards for the registration lifetime; an
+    /// empty group returns no guards.
+    #[must_use = "dropping the guards immediately unregisters the cancel waker"]
+    pub fn on_cancel<F>(&self, waker: F) -> Vec<CancelWakerGuard>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        if self.sources.is_empty() {
+            return Vec::new();
+        }
+
+        let shared = Arc::new((AtomicBool::new(false), waker));
+        self.sources
+            .iter()
+            .map(|source| {
+                let shared = Arc::clone(&shared);
+                source.on_cancel(move || {
+                    if !shared.0.swap(true, Ordering::AcqRel) {
+                        (shared.1)();
+                    }
+                })
+            })
+            .collect()
     }
 }
 
@@ -148,13 +178,27 @@ impl Future for GroupCancelled<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use kithara_test_utils::kithara;
     use tokio::{spawn, task, time as tokio_time};
 
     use super::CancelGroup;
-    use crate::common::cancel::CancelToken;
+    use crate::{common::cancel::CancelToken, sync::Arc};
+
+    fn on_cancel_counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync + 'static) {
+        let count = Arc::new(AtomicUsize::new(0));
+        let callback_count = Arc::clone(&count);
+        (count, move || {
+            callback_count.fetch_add(1, Ordering::SeqCst);
+        })
+    }
 
     #[derive(Clone, Debug)]
     enum Src {
@@ -417,5 +461,81 @@ mod tests {
             .await
             .expect("BUG: cancelled() must resolve once one source has cancelled")
             .expect("BUG: spawned task awaiting cancellation must not panic");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_on_cancel_fires_once_for_each_source() {
+        for [first, second] in [[0, 1], [1, 0]] {
+            let tokens = [CancelToken::never(), CancelToken::never()];
+            let group = CancelGroup::new(tokens.to_vec());
+            let (count, callback) = on_cancel_counter();
+            let _guards = group.on_cancel(callback);
+
+            tokens[first].cancel();
+            tokens[second].cancel();
+            tokens[first].cancel();
+
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_on_cancel_fires_once_for_duplicate_and_pre_cancelled_sources() {
+        let duplicate = CancelToken::never();
+        let duplicate_group = CancelGroup::new(vec![duplicate.clone(), duplicate.clone()]);
+        let (duplicate_count, duplicate_callback) = on_cancel_counter();
+        let _duplicate_guards = duplicate_group.on_cancel(duplicate_callback);
+        duplicate.cancel();
+        assert_eq!(duplicate_count.load(Ordering::SeqCst), 1);
+
+        let pre_cancelled = CancelToken::never();
+        pre_cancelled.cancel();
+        let live = CancelToken::never();
+        let pre_cancelled_group = CancelGroup::new(vec![pre_cancelled, live.clone()]);
+        let (pre_cancelled_count, pre_cancelled_callback) = on_cancel_counter();
+        let _pre_cancelled_guards = pre_cancelled_group.on_cancel(pre_cancelled_callback);
+        assert_eq!(pre_cancelled_count.load(Ordering::SeqCst), 1);
+        live.cancel();
+        assert_eq!(pre_cancelled_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_on_cancel_empty_and_dropped_guards_do_not_fire() {
+        let (empty_count, empty_callback) = on_cancel_counter();
+        let empty_guards = CancelGroup::new(vec![]).on_cancel(empty_callback);
+        assert!(empty_guards.is_empty());
+        assert_eq!(empty_count.load(Ordering::SeqCst), 0);
+
+        let tokens = [CancelToken::never(), CancelToken::never()];
+        let group = CancelGroup::new(tokens.to_vec());
+        let (dropped_count, dropped_callback) = on_cancel_counter();
+        let guards = group.on_cancel(dropped_callback);
+        drop(guards);
+        tokens[0].cancel();
+        tokens[1].cancel();
+        assert_eq!(dropped_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn group_on_cancel_fires_once_when_sources_cancel_concurrently() {
+        let tokens = [CancelToken::never(), CancelToken::never()];
+        let group = CancelGroup::new(tokens.to_vec());
+        let (count, callback) = on_cancel_counter();
+        let _guards = group.on_cancel(callback);
+        let barrier = Arc::new(Barrier::new(3));
+
+        std::thread::scope(|scope| {
+            for token in &tokens {
+                let token = token.clone();
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    token.cancel();
+                });
+            }
+            barrier.wait();
+        });
+
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }

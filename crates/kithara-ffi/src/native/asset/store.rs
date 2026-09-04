@@ -1,10 +1,13 @@
 use std::{fmt, num::NonZeroUsize, path::PathBuf};
 
-use kithara::bufpool::Region;
-use kithara_assets::{AssetLayoutRegistry, AssetStore, StorageBackend};
-use kithara_platform::{CancelScope, sync::Arc};
+use kithara::{
+    assets::{AssetLayoutRegistry, StorageBackend},
+    bufpool::PoolError,
+    platform::{CancelScope, sync::Arc},
+};
 
 use super::FfiAssetLayoutRegistry;
+use crate::pools::{FfiStore, Pools, build as build_pools};
 
 struct Consts;
 
@@ -18,39 +21,47 @@ impl Consts {
 #[fieldwork(opt_in, get)]
 pub struct FfiAssetStore {
     #[field(get = handle, vis = "pub(crate)")]
-    inner: AssetStore,
+    inner: FfiStore,
     shutdown: CancelScope,
     #[field(get, vis = "pub(crate)")]
-    region: Region,
+    pools: Pools,
 }
 
 impl FfiAssetStore {
-    fn build(root: Option<String>, layouts: AssetLayoutRegistry) -> Self {
+    fn build(root: Option<String>, layouts: AssetLayoutRegistry) -> Result<Self, PoolError> {
         let backend = root.map_or_else(StorageBackend::default, |root| StorageBackend::Disk {
             root: PathBuf::from(root),
         });
         Self::build_with_backend(backend, layouts)
     }
 
-    fn build_with_backend(backend: StorageBackend, layouts: AssetLayoutRegistry) -> Self {
-        let region = Region::default();
+    fn build_with_backend(
+        backend: StorageBackend,
+        layouts: AssetLayoutRegistry,
+    ) -> Result<Self, PoolError> {
+        let pools = build_pools()?;
         let shutdown = CancelScope::new(None);
-        let inner = AssetStore::builder()
+        let inner = FfiStore::builder(pools.clone())
             .backend(backend)
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .cancel(shutdown.token())
             .layouts(layouts)
-            .pool(region.byte_pool())
             .build();
-        Self {
+        Ok(Self {
             inner,
             shutdown,
-            region,
-        }
+            pools,
+        })
     }
 
     #[cfg(test)]
-    pub(crate) fn cancel_token(&self) -> kithara_platform::CancelToken {
+    pub(crate) fn for_test() -> Self {
+        Self::build(None, AssetLayoutRegistry::default())
+            .unwrap_or_else(|error| panic!("test FFI asset store initialization failed: {error}"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cancel_token(&self) -> kithara::platform::CancelToken {
         self.shutdown.token()
     }
 }
@@ -58,18 +69,19 @@ impl FfiAssetStore {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl FfiAssetStore {
     /// Create an asset store rooted at `root` with a snapshot of `layouts`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if Kithara's built-in FFI buffer pools cannot be initialized.
     #[must_use]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(root: Option<String>, layouts: Arc<FfiAssetLayoutRegistry>) -> Arc<Self> {
         let snapshot = layouts.snapshot();
         drop(layouts);
-        Arc::new(Self::build(root, snapshot))
-    }
-}
-
-impl Default for FfiAssetStore {
-    fn default() -> Self {
-        Self::build(None, AssetLayoutRegistry::default())
+        Arc::new(
+            Self::build(root, snapshot)
+                .unwrap_or_else(|error| panic!("failed to initialize built-in FFI pools: {error}")),
+        )
     }
 }
 
@@ -91,7 +103,7 @@ impl Drop for FfiAssetStore {
 mod tests {
     use std::sync::Weak;
 
-    use kithara_assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
+    use kithara::assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
     use tempfile::tempdir;
     use url::Url;
 
@@ -99,6 +111,7 @@ mod tests {
     use crate::{
         asset::{FfiAssetLayoutTarget, query_identity_layout},
         layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource, FfiCacheIdentityRule},
+        pools::FfiPools,
     };
 
     struct FixedLayout {
@@ -175,7 +188,7 @@ mod tests {
 
     #[kithara::test]
     fn platform_default_root_is_preserved() {
-        let store = FfiAssetStore::default();
+        let store = FfiAssetStore::for_test();
         let StorageBackend::Disk { root } = StorageBackend::default() else {
             panic!("native storage defaults to disk");
         };
@@ -188,7 +201,8 @@ mod tests {
         let store = FfiAssetStore::build_with_backend(
             StorageBackend::Memory,
             AssetLayoutRegistry::default(),
-        );
+        )
+        .expect("asset store");
 
         assert_eq!(
             store.handle().ephemeral_cache_capacity(),
@@ -210,8 +224,12 @@ mod tests {
         drop(registry);
 
         assert!(lifetime.upgrade().is_some());
-        assert_layout::<kithara::file::File>(&store, "first-root", "first/resource.bin");
-        assert_layout::<kithara::file::File>(&second_store, "second-root", "second/resource.bin");
+        assert_layout::<kithara::file::File<FfiPools>>(&store, "first-root", "first/resource.bin");
+        assert_layout::<kithara::file::File<FfiPools>>(
+            &second_store,
+            "second-root",
+            "second/resource.bin",
+        );
 
         drop(store);
         assert!(lifetime.upgrade().is_none());
@@ -226,8 +244,8 @@ mod tests {
         registry.register(FfiAssetLayoutTarget::Hls, hls);
         let store = FfiAssetStore::new(None, registry);
 
-        assert_layout::<kithara::file::File>(&store, "file-root", "file/resource.bin");
-        assert_layout::<kithara::hls::Hls>(&store, "hls-root", "hls/resource.bin");
+        assert_layout::<kithara::file::File<FfiPools>>(&store, "file-root", "file/resource.bin");
+        assert_layout::<kithara::hls::Hls<FfiPools>>(&store, "hls-root", "hls/resource.bin");
     }
 
     #[kithara::test]
@@ -239,14 +257,18 @@ mod tests {
         registry.register(FfiAssetLayoutTarget::File, second);
         let store = FfiAssetStore::new(None, registry);
 
-        assert_layout::<kithara::file::File>(&store, "second-root", "second/resource.bin");
+        assert_layout::<kithara::file::File<FfiPools>>(
+            &store,
+            "second-root",
+            "second/resource.bin",
+        );
     }
 
     #[kithara::test]
     fn omitted_layout_uses_default_layout() {
         struct TestProtocol;
 
-        let store = FfiAssetStore::default();
+        let store = FfiAssetStore::for_test();
         let source = remote_source();
         let root = DefaultLayout.root(&source);
 
@@ -262,7 +284,8 @@ mod tests {
         }]);
         registry.register(FfiAssetLayoutTarget::File, Arc::clone(&layout));
         registry.register(FfiAssetLayoutTarget::Hls, layout);
-        let store = FfiAssetStore::build_with_backend(StorageBackend::Memory, registry.snapshot());
+        let store = FfiAssetStore::build_with_backend(StorageBackend::Memory, registry.snapshot())
+            .expect("asset store");
         let first = remote_source_for(
             "https://media.example/audio.mp3?content_ref=alpha&edition=studio&signature=one",
         );
@@ -273,12 +296,12 @@ mod tests {
             "https://media.example/audio.mp3?signature=two&edition=studio&content_ref=alpha",
         );
 
-        let first_root = asset_root::<kithara::file::File>(&store, &first);
-        let second_root = asset_root::<kithara::file::File>(&store, &second);
-        let renewed_root = asset_root::<kithara::file::File>(&store, &renewed);
-        let hls_first_root = asset_root::<kithara::hls::Hls>(&store, &first);
-        let hls_second_root = asset_root::<kithara::hls::Hls>(&store, &second);
-        let hls_renewed_root = asset_root::<kithara::hls::Hls>(&store, &renewed);
+        let first_root = asset_root::<kithara::file::File<FfiPools>>(&store, &first);
+        let second_root = asset_root::<kithara::file::File<FfiPools>>(&store, &second);
+        let renewed_root = asset_root::<kithara::file::File<FfiPools>>(&store, &renewed);
+        let hls_first_root = asset_root::<kithara::hls::Hls<FfiPools>>(&store, &first);
+        let hls_second_root = asset_root::<kithara::hls::Hls<FfiPools>>(&store, &second);
+        let hls_renewed_root = asset_root::<kithara::hls::Hls<FfiPools>>(&store, &renewed);
 
         assert_ne!(first_root, second_root);
         assert_eq!(first_root, renewed_root);
@@ -288,7 +311,7 @@ mod tests {
 
     #[kithara::test]
     fn dropping_store_cancels_its_subtree() {
-        let store = Arc::new(FfiAssetStore::default());
+        let store = Arc::new(FfiAssetStore::for_test());
         let cancel = store.cancel_token();
 
         drop(store);

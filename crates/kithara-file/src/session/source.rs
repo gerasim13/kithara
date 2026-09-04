@@ -2,14 +2,17 @@ use std::{num::NonZeroUsize, ops::Range};
 
 use bon::Builder;
 use kithara_assets::{AssetReader, ReadSide};
+use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TotalBytesSource};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
-    Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
-    SourcePhase, StreamError, StreamResult, WorkerWake, dl::PeerHandle,
+    Activity, AudioCodec, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead,
+    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
+    SourceError as StreamSourceError, SourcePhase, SourceProbe, StreamError, StreamResult,
+    WorkerWake, dl::PeerHandle,
 };
+use kithara_test_utils::kithara;
 use tracing::trace;
 use url::Url;
 
@@ -21,8 +24,11 @@ use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 
 /// Inputs for constructing a local/cached file source.
 #[derive(Clone, Builder)]
-pub(crate) struct FileLocalConfig {
-    reader: AssetReader,
+pub(crate) struct FileLocalConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    reader: AssetReader<S>,
     coord: Arc<FileCoord>,
     bus: EventBus,
     cancel: CancelToken,
@@ -36,11 +42,14 @@ pub(crate) struct FileLocalConfig {
 /// by the Downloader through [`FilePeer`](super::FilePeer); `FileSource`
 /// just exposes the cached bytes synchronously to the audio worker.
 #[derive(Clone)]
-pub struct FileSource {
+pub struct FileSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Shared coordination - held next to `inner` so the hot read paths
     /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
-    inner: Arc<FileInner>,
+    inner: Arc<FileInner<S>>,
     /// Peer registration handle returned by `Downloader::register`.
     /// Held here (mirroring `HlsSource::set_peer_handle`) so the peer
     /// stays registered for the source's lifetime - dropping the last
@@ -49,7 +58,10 @@ pub struct FileSource {
     peer_handle: Option<PeerHandle>,
 }
 
-impl FileSource {
+impl<S> FileSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn cancelled_error() -> StreamError {
         StreamError::Source(FileSourceError::Storage(StorageError::Cancelled).into())
     }
@@ -82,18 +94,12 @@ impl FileSource {
         }
     }
 
-    fn known_len(&self) -> Option<u64> {
-        self.coord
-            .total_bytes()
-            .or_else(|| self.inner.asset.reader.len())
-    }
-
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
     /// pulse interrupts any in-flight reads - see
     /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
-    pub(crate) fn local(config: FileLocalConfig) -> Self {
+    pub(crate) fn local(config: FileLocalConfig<S>) -> Self {
         let FileLocalConfig {
             reader,
             coord,
@@ -134,16 +140,6 @@ impl FileSource {
         }
     }
 
-    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
-        let Some(total) = self.known_len() else {
-            return Some(range);
-        };
-        if total > 0 && range.start >= total {
-            return None;
-        }
-        Some(range.start..range.end.min(total))
-    }
-
     /// Pin the Downloader peer registration to this source's lifetime.
     /// Called once after `Downloader::register`; mirrors
     /// `HlsSource::set_peer_handle`. Without this the handle returned by
@@ -166,10 +162,10 @@ impl FileSource {
     }
 
     /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
-    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// inner is created up in `Stream<File<S>>::open` and shared
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
     /// loop, so this constructor does nothing async.
-    pub(crate) const fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+    pub(crate) const fn with_inner(inner: Arc<FileInner<S>>, coord: Arc<FileCoord>) -> Self {
         Self {
             coord,
             inner,
@@ -198,54 +194,127 @@ impl FileSource {
     }
 }
 
-impl kithara_stream::Source for FileSource {
-    fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
-        self.inner.segment_index.get()?;
-        Some(Arc::new(FileByteMap {
-            inner: Arc::clone(&self.inner),
-        }))
+/// Phase snapshots live on the shared inner: it owns the terminal state and
+/// the cached-range view, and (per its own contract) is Mutex-free — so the
+/// narrow [`SourceProbe`] handle the forbid-blocking audio core polls without
+/// the stream's control-plane lock answers from here.
+impl<S> FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) fn phase(&self) -> SourcePhase {
+        let pos = self.source.coord.position();
+        self.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn len(&self) -> Option<u64> {
-        self.known_len()
+    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.source.cancel.is_cancelled() {
+            return SourcePhase::Cancelled;
+        }
+        self.refresh_unmanaged_terminal();
+        if self.terminal_state() == FileTerminalState::Cancelled {
+            return SourcePhase::Cancelled;
+        }
+        let Some(readable) = self.readable_part(range) else {
+            return match self.terminal_state() {
+                FileTerminalState::Committed => SourcePhase::Eof,
+                FileTerminalState::Cancelled => SourcePhase::Cancelled,
+                FileTerminalState::Active | FileTerminalState::Failed => SourcePhase::Waiting,
+            };
+        };
+        let contains = readable.is_empty() || self.asset.reader.contains_range(readable);
+        if contains {
+            return SourcePhase::Ready;
+        }
+
+        if self.source.coord.seek_obs().is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        SourcePhase::Waiting
+    }
+
+    pub(crate) fn known_len(&self) -> Option<u64> {
+        self.source
+            .coord
+            .total_bytes()
+            .or_else(|| self.asset.reader.len())
+    }
+
+    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
+        let Some(total) = self.known_len() else {
+            return Some(range);
+        };
+        if total > 0 && range.start >= total {
+            return None;
+        }
+        Some(range.start..range.end.min(total))
+    }
+}
+
+/// Narrow byte-space handle over the shared inner. Wraps the `Arc` because
+/// vending the byte map needs an owning handle to the inner's lazy segment
+/// index; every answer comes from the inner's Mutex-free state.
+struct FileProbe<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    inner: Arc<FileInner<S>>,
+}
+
+/// Segment-map handle over the shared inner, vended once the lazy segment
+/// index exists — the one body behind `Source::byte_map` and
+/// `SourceProbe::byte_map`.
+fn file_byte_map<S>(inner: &Arc<FileInner<S>>) -> Option<Arc<dyn ByteMap>>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    inner.segment_index.get()?;
+    Some(Arc::new(FileByteMap {
+        inner: Arc::clone(inner),
+    }))
+}
+
+impl<S> SourceProbe for FileProbe<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    delegate::delegate! {
+        to self.inner {
+            fn phase(&self) -> SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            #[call(known_len)]
+            fn len(&self) -> Option<u64>;
+        }
+        to self.inner.source.coord {
+            fn position(&self) -> u64;
+            fn set_position(&self, pos: u64);
+        }
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
+    }
+}
+
+impl<S> kithara_stream::Source for FileSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
         self.inner.content_type_info.get().cloned()
     }
 
-    fn phase(&self) -> SourcePhase {
-        let pos = self.coord.position();
-        self.phase_at(pos..pos.saturating_add(1))
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(FileProbe {
+            inner: Arc::clone(&self.inner),
+        })
     }
 
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if self.inner.source.cancel.is_cancelled() {
-            return SourcePhase::Cancelled;
-        }
-        self.inner.refresh_unmanaged_terminal();
-        if self.inner.terminal_state() == FileTerminalState::Cancelled {
-            return SourcePhase::Cancelled;
-        }
-        let Some(readable) = self.readable_part(range) else {
-            return match self.inner.terminal_state() {
-                FileTerminalState::Committed => SourcePhase::Eof,
-                FileTerminalState::Cancelled => SourcePhase::Cancelled,
-                FileTerminalState::Active | FileTerminalState::Failed => SourcePhase::Waiting,
-            };
-        };
-        let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
-        if contains {
-            return SourcePhase::Ready;
-        }
-
-        if self.coord.seek_obs().is_flushing() {
-            return SourcePhase::Seeking;
-        }
-        SourcePhase::Waiting
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         self.ensure_not_cancelled()?;
         let n = self
@@ -279,7 +348,7 @@ impl kithara_stream::Source for FileSource {
         Some(Box::new(hooks))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn wait_range(
         &mut self,
         range: Range<u64>,
@@ -325,6 +394,12 @@ impl kithara_stream::Source for FileSource {
             fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_position(&self, pos: u64);
         }
+        to self.inner {
+            #[call(known_len)]
+            fn len(&self) -> Option<u64>;
+            fn phase(&self) -> SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+        }
     }
 }
 
@@ -333,17 +408,26 @@ impl kithara_stream::Source for FileSource {
 /// Holds a clone of `FileInner` so the layout survives independently of
 /// the original `FileSource` cursor; segment queries hit the lazy
 /// `OnceLock<FileSegmentIndex>` populated on first call.
-struct FileByteMap {
-    inner: Arc<FileInner>,
+struct FileByteMap<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    inner: Arc<FileInner<S>>,
 }
 
-impl FileByteMap {
+impl<S> FileByteMap<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
         self.inner.segment_index.get()
     }
 }
 
-impl kithara_stream::ByteMap for FileByteMap {
+impl<S> ByteMap for FileByteMap<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate::delegate! {
         to self {
             #[expr($.map_or(0..0, FileSegmentIndex::init_range))]

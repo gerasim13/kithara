@@ -94,17 +94,8 @@ impl SeekState {
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
     #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
-        Self {
-            epoch_commit: Mutex::new(()),
-            seek_epoch: Arc::new(AtomicU64::new(0)),
-            seek_target_ns: AtomicU64::new(Self::NO_SEEK_TARGET),
-            pending_seek_epoch: AtomicU64::new(Self::NO_PENDING_SEEK),
-            flags: AtomicU8::new(TimelineFlags::empty().bits()),
-            seek_preempt_latch: AtomicBool::new(false),
-            decoder_node_seek_latch: AtomicBool::new(false),
-        }
+        Self::default()
     }
 
     /// Run an off-RT commit only while `epoch` is still current. A concurrent
@@ -141,7 +132,15 @@ impl SeekState {
 
 impl Default for SeekState {
     fn default() -> Self {
-        Self::new()
+        Self {
+            epoch_commit: Mutex::new(()),
+            seek_epoch: Arc::new(AtomicU64::new(0)),
+            seek_target_ns: AtomicU64::new(Self::NO_SEEK_TARGET),
+            pending_seek_epoch: AtomicU64::new(Self::NO_PENDING_SEEK),
+            flags: AtomicU8::new(TimelineFlags::empty().bits()),
+            seek_preempt_latch: AtomicBool::new(false),
+            decoder_node_seek_latch: AtomicBool::new(false),
+        }
     }
 }
 

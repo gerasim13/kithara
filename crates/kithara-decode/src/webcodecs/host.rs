@@ -5,7 +5,7 @@ use std::{
 };
 
 use js_sys::{Float32Array, Object, Uint8Array};
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
     sync::mpsc::{self, TryRecvError},
     thread::{assert_not_main_thread, keep_worker_alive, spawn_named},
@@ -51,16 +51,22 @@ enum HostError {
     BufferSize { frames: u32, channels: u32 },
 }
 
-pub(crate) fn spawn_host(pcm_pool: PcmPool) -> mpsc::Sender<HostCmd> {
+pub(crate) fn spawn_host<S>(pools: PoolRegion<S>) -> mpsc::Sender<HostCmd>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     let (cmd, cmd_rx) = mpsc::channel();
     let worker = spawn_named("kithara-webcodecs-host", move || {
-        host_main(cmd_rx, pcm_pool);
+        host_main(cmd_rx, pools);
     });
     std::mem::forget(worker);
     cmd
 }
 
-fn host_main(cmd_rx: mpsc::Receiver<HostCmd>, pcm_pool: PcmPool) {
+fn host_main<S>(cmd_rx: mpsc::Receiver<HostCmd>, pools: PoolRegion<S>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     assert_not_main_thread(concat!(module_path!(), "::host_main"));
     keep_worker_alive();
 
@@ -74,7 +80,7 @@ fn host_main(cmd_rx: mpsc::Receiver<HostCmd>, pcm_pool: PcmPool) {
                 match cmd_rx.try_recv() {
                     Ok(cmd) => {
                         worked = true;
-                        dispatch(cmd, &mut decoders, &pcm_pool).await;
+                        dispatch(cmd, &mut decoders, &pools).await;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(_) => break 'outer,
@@ -90,9 +96,12 @@ fn host_main(cmd_rx: mpsc::Receiver<HostCmd>, pcm_pool: PcmPool) {
     });
 }
 
-async fn dispatch(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>, pcm_pool: &PcmPool) {
+async fn dispatch<S>(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>, pools: &PoolRegion<S>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     match cmd {
-        HostCmd::Open { id, reply_tx } => on_open(id, reply_tx, decoders, pcm_pool),
+        HostCmd::Open { id, reply_tx } => on_open(id, reply_tx, decoders, pools),
         HostCmd::Configure {
             decoder_id,
             codec_string,
@@ -208,12 +217,14 @@ async fn dispatch(cmd: HostCmd, decoders: &mut HashMap<u64, DecoderState>, pcm_p
     }
 }
 
-fn on_open(
+fn on_open<S>(
     decoder_id: u64,
     out_tx: mpsc::Sender<HostOut>,
     decoders: &mut HashMap<u64, DecoderState>,
-    pcm_pool: &PcmPool,
-) {
+    pools: &PoolRegion<S>,
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     if decoders.contains_key(&decoder_id) {
         let err = DecodeError::backend(HostError::Api {
             op: "open",
@@ -229,7 +240,7 @@ fn on_open(
         out_tx.clone(),
         Rc::clone(&generation),
         Rc::clone(&announced_generation),
-        pcm_pool.clone(),
+        pools.clone(),
     ) {
         Ok(host) => {
             decoders.insert(
@@ -260,13 +271,16 @@ fn close_decoder(decoder_id: u64, state: DecoderState) {
 }
 
 impl DecoderHost {
-    fn new(
+    fn new<S>(
         decoder_id: u64,
         out_tx: mpsc::Sender<HostOut>,
         generation: Rc<Cell<u64>>,
         announced_generation: Rc<Cell<Option<u64>>>,
-        pcm_pool: PcmPool,
-    ) -> DecodeResult<Self> {
+        pools: PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<f32> + 'static,
+    {
         let error_tx = out_tx.clone();
         let error_generation = Rc::clone(&generation);
         let error_callback = Closure::new(move |value: JsValue| {
@@ -300,7 +314,7 @@ impl DecoderHost {
                 );
                 return;
             }
-            match copy_audio(&data, output_generation, &pcm_pool) {
+            match copy_audio(&data, output_generation, &pools) {
                 Ok(output) => {
                     if announced_generation.get() != Some(generation)
                         && let HostOut::Pcm {
@@ -385,17 +399,23 @@ impl DecoderHost {
     }
 }
 
-fn copy_audio(data: &AudioData, generation: u64, pcm_pool: &PcmPool) -> DecodeResult<HostOut> {
-    let result = copy_audio_inner(data, generation, pcm_pool);
+fn copy_audio<S>(data: &AudioData, generation: u64, pools: &PoolRegion<S>) -> DecodeResult<HostOut>
+where
+    S: HasPool<f32>,
+{
+    let result = copy_audio_inner(data, generation, pools);
     data.close();
     result
 }
 
-fn copy_audio_inner(
+fn copy_audio_inner<S>(
     data: &AudioData,
     generation: u64,
-    pcm_pool: &PcmPool,
-) -> DecodeResult<HostOut> {
+    pools: &PoolRegion<S>,
+) -> DecodeResult<HostOut>
+where
+    S: HasPool<f32>,
+{
     let frames = data.number_of_frames();
     let channel_count = data.number_of_channels();
     let channels = u16::try_from(channel_count).map_err(|_| {
@@ -436,9 +456,9 @@ fn copy_audio_inner(
             | AudioSampleFormat::S32Planar
             | AudioSampleFormat::F32Planar
     ) {
-        copy_planar(data, frames, channels, sample_count, pcm_pool)?
+        copy_planar(data, frames, channels, sample_count, pools)?
     } else {
-        copy_interleaved(data, sample_count, pcm_pool)?
+        copy_interleaved(data, sample_count, pools)?
     };
 
     Ok(HostOut::Pcm {
@@ -451,11 +471,14 @@ fn copy_audio_inner(
     })
 }
 
-fn copy_interleaved(
+fn copy_interleaved<S>(
     data: &AudioData,
     sample_count: usize,
-    pcm_pool: &PcmPool,
-) -> DecodeResult<PcmBuf> {
+    pools: &PoolRegion<S>,
+) -> DecodeResult<SampleBuffer>
+where
+    S: HasPool<f32>,
+{
     let length = u32::try_from(sample_count).map_err(|_| {
         DecodeError::backend(HostError::BufferSize {
             frames: data.number_of_frames(),
@@ -467,24 +490,24 @@ fn copy_interleaved(
     options.set_format(AudioSampleFormat::F32);
     data.copy_to_with_buffer_source(buffer.as_ref(), &options)
         .map_err(|err| api_error("copyTo", &err))?;
-    let mut interleaved = pcm_pool.get_with(Vec::clear);
-    interleaved.ensure_len(sample_count)?;
+    let mut interleaved = pools.get_with_len::<f32>(sample_count)?;
     buffer.copy_to(&mut interleaved[..]);
     Ok(interleaved)
 }
 
-fn copy_planar(
+fn copy_planar<S>(
     data: &AudioData,
     frames: u32,
     channels: u16,
     sample_count: usize,
-    pcm_pool: &PcmPool,
-) -> DecodeResult<PcmBuf> {
-    let mut interleaved = pcm_pool.get_with(Vec::clear);
-    interleaved.ensure_len(sample_count)?;
+    pools: &PoolRegion<S>,
+) -> DecodeResult<SampleBuffer>
+where
+    S: HasPool<f32>,
+{
+    let mut interleaved = pools.get_with_len::<f32>(sample_count)?;
     let frame_count = usize::try_from(frames)?;
-    let mut scratch = pcm_pool.get_with(Vec::clear);
-    scratch.ensure_len(frame_count)?;
+    let mut scratch = pools.get_with_len::<f32>(frame_count)?;
     let buffer = Float32Array::new_with_length(frames);
     for channel in 0..channels {
         let options = AudioDataCopyToOptions::new(u32::from(channel));
@@ -522,13 +545,17 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::{Duration, Instant};
+    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::webcodecs::protocol::{HostCmd, HostOut};
+    use crate::{
+        test_pools::pools,
+        webcodecs::protocol::{HostCmd, HostOut},
+    };
 
     fn open_host() -> (mpsc::Sender<HostCmd>, mpsc::Receiver<HostOut>) {
-        let cmd = spawn_host(PcmPool::default());
+        let cmd = spawn_host(pools());
         let (reply_tx, out) = mpsc::channel();
         cmd.send(HostCmd::Open { id: 1, reply_tx })
             .expect("BUG: host cmd channel closed at spawn");
@@ -553,13 +580,10 @@ mod tests {
             webcodecs::codec::WebCodecsCodec,
         };
 
-        crate::webcodecs::probe::spawn_webcodecs_probe(PcmPool::default());
+        let pools = pools();
+        crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -575,7 +599,8 @@ mod tests {
             crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
                 .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
-        let codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
+        let codec =
+            WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         let mut total_frames: u64 = 0;
@@ -598,7 +623,6 @@ mod tests {
 
     #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
     async fn real_mp3_frames_produce_pcm() {
-        use kithara_bufpool::PcmPool;
         use symphonia::{
             core::{
                 formats::{FormatOptions, probe::Hint},
@@ -615,13 +639,10 @@ mod tests {
             webcodecs::codec::WebCodecsCodec,
         };
 
-        crate::webcodecs::probe::spawn_webcodecs_probe(PcmPool::default());
+        let pools = pools();
+        crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -636,9 +657,9 @@ mod tests {
         let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
             .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
-        let mut codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
-        let pool = PcmPool::default();
-        let mut buf = pool.get();
+        let mut codec =
+            WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");
+        let mut buf = pools.get::<f32>();
 
         for step in 0..64_u32 {
             let (data, pts) = match demuxer.next_frame().expect("demux") {

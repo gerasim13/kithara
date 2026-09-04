@@ -12,18 +12,19 @@ use jni::{
     sys::{jint, jlong},
 };
 use kithara::{
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
-    bufpool::{BytePool, PcmPool},
+    assets::StorageBackend,
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     file::{File as FileSource, FileConfig, FileSrc},
-    stream::Stream,
-};
-use kithara_assets::{AssetStore, StorageBackend};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep},
-    tokio::runtime::Builder,
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep},
+        tokio::runtime::Builder,
+    },
+    play::PlayWorkerConfig,
 };
 use tracing::{error, info};
+
+use crate::pools::{FfiPools, FfiStore, FfiWorker, build as build_pools};
 
 struct Consts;
 impl Consts {
@@ -122,24 +123,33 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
-    let store = AssetStore::builder()
+    let pools = match build_pools() {
+        Ok(pools) => pools,
+        Err(err) => {
+            error!(?err, "buffer-pool initialization failed");
+            return Consts::RC_AUDIO_BUILD;
+        }
+    };
+    let store = FfiStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
     let file_cfg = FileConfig::for_src(FileSrc::Local(input))
         .store(store)
+        .pools(pools.clone())
         .build();
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+    let worker = FfiWorker::new(
+        PlayWorkerConfig::builder(pools)
+            .cancel(CancelToken::never())
+            .build(),
+    );
+    let audio_cfg = AudioConfig::<FileSource<FfiPools>>::for_stream(file_cfg)
         .hint("mp3".to_string())
-        .worker(worker)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .build();
 
-    let mut audio = match Audio::<Stream<FileSource>>::new(audio_cfg).await {
+    let mut audio = match worker.open(audio_cfg).await {
         Ok(a) => a,
         Err(err) => {
-            error!(?err, "Audio::new failed");
+            error!(?err, "play worker failed to open audio");
             return Consts::RC_AUDIO_BUILD;
         }
     };

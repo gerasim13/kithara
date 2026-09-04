@@ -79,7 +79,7 @@ impl FileCoord {
         self.position.load(Ordering::Acquire)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(crate) fn read_pos(&self) -> u64 {
         self.read_pos.load(Ordering::Acquire)
     }
@@ -124,7 +124,7 @@ impl FileCoord {
         self.position.store(pos, Ordering::Release);
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(crate) fn set_read_pos(&self, value: u64) {
         self.read_pos.store(value, Ordering::Release);
         self.reader_advanced.notify_one();

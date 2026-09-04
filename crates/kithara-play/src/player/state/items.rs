@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
-use kithara_events::EventBus;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
 use tracing::debug;
 
@@ -10,8 +10,8 @@ use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
-    pub(crate) item_id: Option<Arc<str>>,
     pub(crate) player_resource: PlayerResource,
+    pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
 }
 
@@ -46,20 +46,6 @@ impl ItemQueue {
         }
     }
 
-    delegate::delegate! {
-        to self.playlist.lock() {
-            #[call(clear)]
-            pub(crate) fn clear_all(&self);
-            #[call(current)]
-            pub(crate) fn current_index(&self) -> usize;
-            pub(crate) fn has_resource(&self, index: usize) -> bool;
-            pub(crate) fn is_announced(&self, index: usize) -> bool;
-            #[call(len)]
-            pub(crate) fn item_count(&self) -> usize;
-            pub(crate) fn set_current(&self, index: usize);
-        }
-    }
-
     pub(crate) fn clear_item(&self, index: usize) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
@@ -69,15 +55,10 @@ impl ItemQueue {
         }
     }
 
-    pub(crate) fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
+    pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
-            let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
+            let pos = playlist.insert(QueuedResource { resource, item_id }, at_position);
             (playlist.len(), pos)
         };
         debug!(count, pos, "item inserted");
@@ -92,15 +73,10 @@ impl ItemQueue {
         removed
     }
 
-    pub(crate) fn replace_item_tagged(
-        &self,
-        index: usize,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-    ) {
+    pub(crate) fn replace_item(&self, index: usize, resource: Resource, item_id: TrackId) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
-            playlist.replace(index, QueuedResource { item_id, resource });
+            playlist.replace(index, QueuedResource { resource, item_id });
             drop(playlist);
             debug!(index, "item replaced");
         }
@@ -111,38 +87,55 @@ impl ItemQueue {
         debug!(count, "slots reserved");
     }
 
-    pub(crate) fn take_for_load(
+    pub(crate) fn take_for_load<S>(
         &self,
         index: usize,
-        rate: f32,
         host_sample_rate: u32,
-        pool: &PcmPool,
-    ) -> Option<TakenItem> {
+        pools: &PoolRegion<S>,
+    ) -> Result<Option<TakenItem>, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let mut playlist = self.playlist.lock();
         if index >= playlist.len() {
-            return None;
+            return Ok(None);
         }
 
-        let queued = playlist.take(index)?;
+        let Some(queued) = playlist.take(index) else {
+            return Ok(None);
+        };
         let (item_id, resource) = (queued.item_id, queued.resource);
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
-        resource.set_playback_rate(rate);
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pool);
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pools)?;
         drop(playlist);
 
-        Some(TakenItem {
+        Ok(Some(TakenItem {
             abr_handle,
-            item_id,
             player_resource,
+            item_id,
             duration_seconds,
-        })
+        }))
+    }
+
+    delegate::delegate! {
+        to self.playlist.lock() {
+            #[call(clear)]
+            pub(crate) fn clear_all(&self);
+            #[call(current)]
+            pub(crate) fn current_index(&self) -> usize;
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn is_announced(&self, index: usize) -> bool;
+            #[call(len)]
+            pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn set_current(&self, index: usize);
+        }
     }
 }
 
@@ -150,17 +143,18 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
-    use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
+    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_decode::{DecodeError, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
 
     struct EofReader {
+        spec: AudioSpec,
         bus: EventBus,
-        spec: PcmSpec,
         metadata: TrackMetadata,
     }
 
@@ -168,13 +162,13 @@ mod tests {
         fn default() -> Self {
             Self {
                 bus: EventBus::default(),
-                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+                spec: AudioSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
                 metadata: TrackMetadata::default(),
             }
         }
     }
 
-    impl PcmSession for EofReader {
+    impl AudioSession for EofReader {
         fn duration(&self) -> Option<Duration> {
             None
         }
@@ -188,7 +182,7 @@ mod tests {
         }
     }
 
-    impl PcmRead for EofReader {
+    impl AudioRead for EofReader {
         fn position(&self) -> Duration {
             Duration::ZERO
         }
@@ -208,12 +202,12 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
 
-    impl PcmControl for EofReader {
+    impl AudioControl for EofReader {
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
             Ok(SeekOutcome::Landed {
                 target: position,
@@ -229,7 +223,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
-        queue.insert(resource("first"), None, None);
+        queue.insert(resource("first"), TrackId::allocate(), None);
 
         let removed = queue.remove_at(0).expect("inserted resource");
 

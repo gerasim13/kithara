@@ -5,7 +5,12 @@ use std::io::Cursor;
 use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    resampler::NoResamplerBackend,
 };
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 struct Consts;
 impl Consts {
@@ -23,7 +28,7 @@ impl Consts {
 }
 
 fn track_mp3() -> &'static [u8] {
-    include_bytes!("../../../assets/test.mp3")
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn partial_slice(full: &'static [u8]) -> &'static [u8] {
@@ -31,11 +36,8 @@ fn partial_slice(full: &'static [u8]) -> &'static [u8] {
     &full[..cut]
 }
 
-fn decoder_config() -> DecoderConfig {
-    DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build()
+fn decoder_config() -> TestDecoderConfig {
+    TestDecoderConfig::builder().pools(pools()).build()
 }
 
 /// Xing-headered MP3 reports the full duration even when probed against

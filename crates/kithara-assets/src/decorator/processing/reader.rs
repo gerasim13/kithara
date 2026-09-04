@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range, path::Path};
 
 use bon::bon;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
@@ -13,23 +13,23 @@ use super::{
 use crate::resource::ReadSide;
 
 /// Read view over a resource that exposes bytes only after processing completes.
-pub struct ProcessedReader<R> {
+pub struct ProcessedReader<R, S> {
     readiness: Arc<ReadinessGate>,
-    pool: BytePool,
+    pools: PoolRegion<S>,
     chunk_size: usize,
     gate_poll_interval: Duration,
     processor: Option<ProcessCtx>,
     inner: R,
 }
 
-impl<R> Clone for ProcessedReader<R>
+impl<R, S> Clone for ProcessedReader<R, S>
 where
     R: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             readiness: Arc::clone(&self.readiness),
-            pool: self.pool.clone(),
+            pools: self.pools.clone(),
             chunk_size: self.chunk_size,
             gate_poll_interval: self.gate_poll_interval,
             processor: self.processor.clone(),
@@ -38,7 +38,7 @@ where
     }
 }
 
-impl<R: fmt::Debug> fmt::Debug for ProcessedReader<R> {
+impl<R: fmt::Debug, S> fmt::Debug for ProcessedReader<R, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessedReader")
             .field("inner", &self.inner)
@@ -49,9 +49,10 @@ impl<R: fmt::Debug> fmt::Debug for ProcessedReader<R> {
 }
 
 #[bon]
-impl<R> ProcessedReader<R>
+impl<R, S> ProcessedReader<R, S>
 where
     R: ReadSide,
+    S: HasPool<u8>,
 {
     fn inner_terminal(&self) -> bool {
         self.readiness.is_failed()
@@ -69,13 +70,13 @@ where
         inner: R,
         readiness: Arc<ReadinessGate>,
         processor: Option<ProcessCtx>,
-        pool: BytePool,
+        pools: PoolRegion<S>,
         chunk_size: usize,
         gate_poll_interval: Duration,
     ) -> Self {
         Self {
             readiness,
-            pool,
+            pools,
             chunk_size,
             gate_poll_interval,
             processor,
@@ -89,14 +90,14 @@ where
     pub(super) fn wrap_ready(
         inner: R,
         processor: Option<ProcessCtx>,
-        pool: BytePool,
+        pools: PoolRegion<S>,
         #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
         #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
     ) -> Self {
         let ready =
             processor.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
-            pool,
+            pools,
             chunk_size,
             gate_poll_interval,
             processor,
@@ -130,22 +131,23 @@ where
     }
 }
 
-impl<R> ReadSide for ProcessedReader<R>
+impl<R, S> ReadSide for ProcessedReader<R, S>
 where
     R: ReadSide,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
-    type Writer = ProcessedWriter<R::Writer>;
+    type Writer = ProcessedWriter<R::Writer, S>;
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.is_readable() && self.inner.contains_range(range)
     }
 
-    fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
+    fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer, S>> {
         let inner = self.inner.reactivate()?;
         Ok(ProcessedWriter::builder()
             .inner(inner)
             .maybe_processor(self.processor)
-            .pool(self.pool)
+            .pools(self.pools)
             .chunk_size(self.chunk_size)
             .gate_poll_interval(self.gate_poll_interval)
             .build())

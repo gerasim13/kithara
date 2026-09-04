@@ -1,24 +1,25 @@
 //! A click is a step in the waveform, so every test here renders PCM through the same calls
 //! `process()` makes and measures the largest jump between neighbouring frames. The mock source is
 //! constant DC: whatever step the render adds is the transport or the fade, never the material.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    events::TrackId,
     platform::sync::Arc,
     play::{
         Resource, SharedEq,
         bridge::{PlayerCmd, SlotControl, TrackTransition, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use ringbuf::traits::Producer;
+
+use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;
@@ -30,8 +31,8 @@ const SETTLE_BLOCKS: usize = 40;
 const MAX_STEP: f32 = 0.01;
 const EXACT: f32 = 1.0e-6;
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
 fn processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -40,36 +41,38 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
-    (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
-        control,
-    )
+    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
 fn track(src: &str, level: f32) -> Box<PlayerResource> {
-    Box::new(PlayerResource::new(
-        Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
-        Arc::from(src),
-        &PcmPool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(
+            Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
+            Arc::from(src),
+            &pools(),
+        )
+        .expect("player resource fits the test pool budget"),
+    )
 }
 
-fn load(control: &mut SlotControl, src: &str, level: f32) {
+fn load(control: &mut SlotControl, src: &str, level: f32) -> TrackId {
+    let item_id = TrackId::allocate();
     push(
         control,
         PlayerCmd::LoadTrack {
             resource: track(src, level),
-            item_id: None,
+            item_id,
         },
     );
+    item_id
 }
 
 fn push(control: &mut SlotControl, cmd: PlayerCmd) {
     control.cmd_tx.try_push(cmd).ok();
 }
 
-fn start(processor: &mut PlayerNodeProcessor, src: &str) {
-    if let Some(track) = processor.track_mut(&Arc::from(src)) {
+fn start(processor: &mut PlayerNodeProcessor, item_id: TrackId) {
+    if let Some(track) = processor.track_mut(item_id) {
         track.play();
     }
 }
@@ -118,10 +121,10 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 #[kithara::test]
 fn pausing_fades_the_output_out() {
     let (mut processor, mut control) = processor();
-    load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
-    start(&mut processor, "a.mp3");
+    start(&mut processor, item_id);
 
     let playing = pump(&mut processor, WARMUP_BLOCKS);
     assert!(
@@ -154,10 +157,10 @@ fn pausing_fades_the_output_out() {
 #[kithara::test]
 fn resuming_fades_the_output_in() {
     let (mut processor, mut control) = processor();
-    load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
-    start(&mut processor, "a.mp3");
+    start(&mut processor, item_id);
     pump(&mut processor, WARMUP_BLOCKS);
 
     push(&mut control, PlayerCmd::SetPaused(true));
@@ -181,12 +184,12 @@ fn resuming_fades_the_output_in() {
 
 fn fading_in() -> (PlayerNodeProcessor, SlotControl, Vec<f32>) {
     let (mut processor, mut control) = processor();
-    load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
     push(&mut control, PlayerCmd::SetPaused(false));
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn(Arc::from("a.mp3"))),
+        PlayerCmd::Transition(TrackTransition::FadeIn(item_id)),
     );
 
     let fading = pump(&mut processor, WARMUP_BLOCKS);
@@ -237,11 +240,11 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 #[kithara::test]
 fn a_track_started_without_a_crossfade_is_instant() {
     let (mut processor, mut control) = processor();
-    load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let first_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
     push(&mut control, PlayerCmd::SetFadeDuration(0.0));
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
-    start(&mut processor, "a.mp3");
+    start(&mut processor, first_id);
 
     let playing = pump(&mut processor, WARMUP_BLOCKS);
     assert!(
@@ -250,9 +253,9 @@ fn a_track_started_without_a_crossfade_is_instant() {
         last(&playing)
     );
 
-    load(&mut control, "b.mp3", SECOND_LEVEL);
+    let second_id = load(&mut control, "b.mp3", SECOND_LEVEL);
     processor.drain_commands();
-    start(&mut processor, "b.mp3");
+    start(&mut processor, second_id);
     let handover = pump(&mut processor, 1);
 
     assert!(

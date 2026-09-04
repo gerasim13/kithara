@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use kithara_encode::EncodedAccessUnit;
 
 use crate::{
@@ -9,24 +9,26 @@ use crate::{
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Segment {
-    pub seq: u64,
     pub bytes: Bytes,
-    pub duration_ts: u32,
     pub discontinuity: bool,
+    pub duration_ts: u32,
+    pub seq: u64,
+    /// Media ticks per second for this segment's duration and timestamp.
+    pub timescale: u32,
 }
 
 /// Frames access units into ADTS and rotates segments on the media clock.
 #[derive(Debug)]
 pub struct Segmenter {
     packer: AdtsPacker,
+    frames: Vec<u8>,
+    discontinuity: bool,
+    duration_ts: u32,
     timescale: u32,
-    target_ts: u64,
     next_seq: u64,
     stream_ts: u64,
-    frames: Vec<u8>,
+    target_ts: u64,
     units: usize,
-    duration_ts: u32,
-    discontinuity: bool,
 }
 
 impl Segmenter {
@@ -35,7 +37,7 @@ impl Segmenter {
     /// # Errors
     ///
     /// Returns an error for invalid configuration or unsupported ADTS audio.
-    pub fn new(config: &BroadcastConfig) -> BroadcastResult<Self> {
+    pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
 
         Ok(Self {
@@ -49,6 +51,59 @@ impl Segmenter {
             duration_ts: 0,
             discontinuity: false,
         })
+    }
+
+    fn close(&mut self) -> Option<Segment> {
+        if self.units == 0 {
+            return None;
+        }
+
+        let mut bytes = BytesMut::with_capacity(TimestampTag::LEN + self.frames.len());
+        bytes.extend_from_slice(&TimestampTag::render(self.stream_ts, self.timescale));
+        bytes.extend_from_slice(&self.frames);
+
+        let segment = Segment {
+            seq: self.next_seq,
+            bytes: bytes.freeze(),
+            duration_ts: self.duration_ts,
+            discontinuity: self.discontinuity,
+            timescale: self.timescale,
+        };
+        self.next_seq += 1;
+        self.stream_ts += u64::from(self.duration_ts);
+        self.frames.clear();
+        self.units = 0;
+        self.duration_ts = 0;
+        self.discontinuity = false;
+        Some(segment)
+    }
+
+    /// Close the open segment.
+    pub fn flush(&mut self) -> Option<Segment> {
+        self.close()
+    }
+
+    /// Close the open segment and mark the next one discontinuous.
+    pub fn mark_drop(&mut self) -> Option<Segment> {
+        let closed = self.close();
+        self.discontinuity = true;
+        closed
+    }
+
+    pub(crate) fn reconfigure<S>(
+        &mut self,
+        config: &BroadcastConfig<S>,
+    ) -> BroadcastResult<Option<Segment>> {
+        config.validate()?;
+        let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
+        let target_ts = config.target_ticks()?;
+        let closed = self.close();
+        self.packer = packer;
+        self.timescale = config.sample_rate;
+        self.target_ts = target_ts;
+        self.stream_ts = 0;
+        self.discontinuity = true;
+        Ok(closed)
     }
 
     /// Append an access unit and close the segment once it reaches the target.
@@ -71,49 +126,15 @@ impl Segmenter {
         }
         Ok(None)
     }
-
-    /// Close the open segment and mark the next one discontinuous.
-    pub fn mark_drop(&mut self) -> Option<Segment> {
-        let closed = self.close();
-        self.discontinuity = true;
-        closed
-    }
-
-    /// Close the open segment.
-    pub fn flush(&mut self) -> Option<Segment> {
-        self.close()
-    }
-
-    fn close(&mut self) -> Option<Segment> {
-        if self.units == 0 {
-            return None;
-        }
-
-        let mut bytes = Vec::with_capacity(TimestampTag::LEN + self.frames.len());
-        bytes.extend_from_slice(&TimestampTag::render(self.stream_ts, self.timescale));
-        bytes.extend_from_slice(&self.frames);
-
-        let segment = Segment {
-            seq: self.next_seq,
-            bytes: Bytes::from(bytes),
-            duration_ts: self.duration_ts,
-            discontinuity: self.discontinuity,
-        };
-        self.next_seq += 1;
-        self.stream_ts += u64::from(self.duration_ts);
-        self.frames.clear();
-        self.units = 0;
-        self.duration_ts = 0;
-        self.discontinuity = false;
-        Some(segment)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_encode::EncodedAccessUnit;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};
     use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
@@ -123,12 +144,16 @@ mod tests {
     impl Consts {
         const PAYLOAD: usize = 200;
         const SAMPLE_RATE: u32 = 48_000;
-        const UNIT_DURATION: u32 = 1_024;
         const UNITS_PER_TARGET: usize = 188;
+        const UNIT_DURATION: u32 = 1_024;
+    }
+
+    fn config() -> BroadcastConfig<TestPools> {
+        BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
     }
 
     fn segmenter() -> Segmenter {
-        Segmenter::new(&BroadcastConfig::builder().build()).expect("segmenter")
+        Segmenter::new(&config()).expect("segmenter")
     }
 
     fn frame_bytes(units: usize) -> usize {
@@ -305,13 +330,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_target_shorter_than_one_tick_is_rejected() {
-        assert!(
-            Segmenter::new(
-                &BroadcastConfig::builder()
-                    .segment_target(Duration::ZERO)
-                    .build()
-            )
-            .is_err()
-        );
+        let mut config = config();
+        config.segment_target = Duration::ZERO;
+
+        assert!(Segmenter::new(&config).is_err());
     }
 }

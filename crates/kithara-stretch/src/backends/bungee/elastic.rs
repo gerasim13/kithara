@@ -1,87 +1,117 @@
-use std::{fmt, num::NonZeroUsize};
+use std::fmt;
 
-use bungee_rs::Stream;
-use fast_interleave::{deinterleave_variable, interleave_variable};
-use num_traits::{ToPrimitive, cast::AsPrimitive};
+use kithara_bufpool::HasPool;
+use num_traits::ToPrimitive;
 
+use super::stream::StreamCore;
 use crate::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticRateEnvelope, ElasticRequest,
+    ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticRequest, elastic::PitchScale,
 };
 
-fn stream(
-    sample_rate: u32,
-    channels: usize,
-    max_input_frames: usize,
-) -> Result<Stream, ElasticError> {
-    let sample_rate: usize = sample_rate.as_();
-    Stream::new(sample_rate, channels, max_input_frames).map_err(ElasticError::EnginePreparation)
-}
-
-fn planar(channels: usize, frames: usize) -> Vec<Vec<f32>> {
-    vec![vec![0.0; frames]; channels]
-}
-
 /// Exact-span Bungee engine.
-///
-/// It renders the requested output span from the requested source span and
-/// stays bit-identical however the caller partitions a block, but its pipeline
-/// only emits audio it has already consumed, so it cannot absorb history
-/// without emitting it and does not implement [`crate::ElasticPriming`]. See
-/// the crate `CONTEXT.md`.
-#[non_exhaustive]
-pub struct BungeeElastic {
-    stream: Stream,
+pub(crate) struct BungeeElastic {
     capabilities: ElasticCapabilities,
-    source: Vec<Vec<f32>>,
-    output: Vec<Vec<f32>>,
+    core: StreamCore,
+    last_request: Option<ElasticRequest>,
+    pitch: f64,
+    rate_age_frames: usize,
+    tail_armed: bool,
+    tail_remaining: Option<usize>,
 }
 
 impl BungeeElastic {
-    /// Source advance per output frame the exact-span engine declares. Bungee
-    /// itself renders outside this window too; the declared range is the one
-    /// the conformance suite verifies, and it widens when a caller needs more.
-    const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0;
-    const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.5;
-    /// Bungee reports latency only after a grain has been analysed, and the
-    /// value keeps growing until the pipeline is full. A prepared engine
-    /// saturates it on a throwaway stream so it reports one stable number for
-    /// its lifetime.
-    const LATENCY_PROBE_BLOCKS: usize = 4;
-    const LATENCY_PROBE_FRAMES: usize = 8192;
-
-    fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
-        ElasticRateEnvelope::try_from(
-            Self::MIN_SOURCE_FRAMES_PER_OUTPUT..=Self::MAX_SOURCE_FRAMES_PER_OUTPUT,
-        )
+    fn frame_count(frames: usize) -> Result<u128, ElasticError> {
+        frames.to_u128().ok_or(ElasticError::SampleCountOverflow)
     }
 
-    fn latency(config: ElasticConfig) -> Result<ElasticLatency, ElasticError> {
-        let mut probe = stream(
-            config.sample_rate(),
-            config.channels(),
-            Self::LATENCY_PROBE_FRAMES,
-        )?;
-        let source = planar(config.channels(), Self::LATENCY_PROBE_FRAMES);
-        let mut output = planar(config.channels(), Self::LATENCY_PROBE_FRAMES);
-        let frames = Self::LATENCY_PROBE_FRAMES
-            .to_f64()
+    fn exact_tail_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
+        let latency = self.capabilities.latency();
+        let source = Self::frame_count(request.source_frames())?;
+        let output = Self::frame_count(request.output_frames())?;
+        let source_tail = Self::frame_count(latency.source_frames())?
+            .checked_mul(output)
+            .map(|frames| frames.div_ceil(source))
             .ok_or(ElasticError::SampleCountOverflow)?;
-        for _ in 0..Self::LATENCY_PROBE_BLOCKS {
-            probe.process(
-                Some(&source),
-                &mut output,
-                Self::LATENCY_PROBE_FRAMES,
-                frames,
-                1.0,
-            );
+        let total = source_tail
+            .checked_add(Self::frame_count(latency.output_frames())?)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        usize::try_from(total).map_err(|_| ElasticError::SampleCountOverflow)
+    }
+
+    fn record_request(&mut self, request: ElasticRequest) -> Result<(), ElasticError> {
+        let latency_frames = self.capabilities.latency().output_frames();
+        let same_rate = self.last_request.map(|previous| {
+            Ok::<_, ElasticError>(
+                Self::frame_count(previous.source_frames())?
+                    * Self::frame_count(request.output_frames())?
+                    == Self::frame_count(request.source_frames())?
+                        * Self::frame_count(previous.output_frames())?,
+            )
+        });
+        self.rate_age_frames = if same_rate.transpose()?.unwrap_or(false) {
+            self.rate_age_frames
+                .saturating_add(request.output_frames())
+                .min(latency_frames)
+        } else {
+            request.output_frames().min(latency_frames)
+        };
+        self.last_request = Some(request);
+        self.tail_remaining = None;
+        Ok(())
+    }
+
+    fn prepare_exact_tail(&mut self) -> Result<(), ElasticError> {
+        if self.tail_remaining.is_some()
+            || self.rate_age_frames != self.capabilities.latency().output_frames()
+        {
+            return Ok(());
         }
-        let frames = probe
-            .latency()
+        let request = self.last_request.ok_or(ElasticError::EnginePreparation(
+            "Bungee exact tail has no source request",
+        ))?;
+        self.tail_remaining = Some(self.exact_tail_frames(request)?);
+        Ok(())
+    }
+
+    fn reset_rate(&mut self) {
+        self.last_request = None;
+        self.rate_age_frames = 0;
+        self.tail_remaining = None;
+    }
+
+    fn latency<S>(
+        core: &mut StreamCore,
+        config: &ElasticConfig<S>,
+    ) -> Result<ElasticLatency, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
+        let probe_frames = config.max_source_frames().min(config.max_output_frames());
+        let request = ElasticRequest::new(probe_frames, probe_frames)?;
+        for _ in 0..StreamCore::PIPELINE_GRAINS {
+            core.probe_silence(request)?;
+        }
+        let source_frames = core.source_latency_frames()?;
+        let output_position = core
+            .output_position()
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee latency probe produced no timed output",
+            ))?;
+        let total_latency = f64::from(core.source_end()) - output_position;
+        let total_frames = total_latency
             .ceil()
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;
-        Ok(ElasticLatency::new(frames, frames))
+        let output_frames = total_frames
+            .checked_sub(source_frames)
+            .filter(|frames| *frames > 0)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee latency probe produced no output-side latency",
+            ))?;
+        core.set_source_latency_frames(source_frames)?;
+        core.discard()?;
+        Ok(ElasticLatency::new(source_frames, output_frames))
     }
 }
 
@@ -95,23 +125,76 @@ impl fmt::Debug for BungeeElastic {
 }
 
 impl ElasticEngine for BungeeElastic {
-    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
-        let rate_envelope = Self::rate_envelope()?;
-        let latency = Self::latency(config)?;
+    fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
+        let mut core = StreamCore::new(&config, config.max_source_frames())?;
+        let latency = Self::latency(&mut core, &config)?;
+        let maximum_warm_source = config.rate_envelope().max_source_frames_per_output()
+            * latency
+                .output_frames()
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        let maximum_warm_source = maximum_warm_source
+            .ceil()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let prime_context = latency
+            .source_frames()
+            .checked_add(latency.source_frames())
+            .and_then(|frames| frames.checked_add(maximum_warm_source))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let retained = core.max_input_frames().max(prime_context);
+        let input_capacity = config
+            .max_source_frames()
+            .checked_add(retained)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        core.prepare_input_capacity(input_capacity)?;
+        let capabilities = ElasticCapabilities::new(config.shape(), latency);
         Ok(Self {
-            stream: stream(
-                config.sample_rate(),
-                config.channels(),
-                config.max_source_frames(),
-            )?,
-            capabilities: ElasticCapabilities::new(config, latency, rate_envelope),
-            source: planar(config.channels(), config.max_source_frames()),
-            output: planar(config.channels(), config.max_output_frames()),
+            core,
+            capabilities,
+            last_request: None,
+            pitch: 1.0,
+            rate_age_frames: 0,
+            tail_armed: false,
+            tail_remaining: None,
         })
     }
 
     fn capabilities(&self) -> ElasticCapabilities {
         self.capabilities
+    }
+
+    fn prime(
+        &mut self,
+        request: ElasticRequest,
+        source_history: &[f32],
+        source_lookahead: &[f32],
+        source: &[f32],
+        discarded_output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        self.capabilities.validate_prime(
+            request,
+            source_history.len(),
+            source_lookahead.len(),
+            source.len(),
+            discarded_output.len(),
+        )?;
+        self.tail_armed = false;
+        self.reset_rate();
+        self.core.prime(
+            source_history,
+            source_lookahead,
+            request,
+            source,
+            self.pitch,
+            discarded_output,
+        )?;
+        self.record_request(request)?;
+        self.tail_armed = true;
+        Ok(())
     }
 
     fn process(
@@ -122,43 +205,63 @@ impl ElasticEngine for BungeeElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
-        let channels = NonZeroUsize::new(self.capabilities.channels())
-            .ok_or(ElasticError::InvalidChannelCount)?;
-        let output_frames = request.output_frames();
-        let requested = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        deinterleave_variable(
-            source,
-            channels,
-            &mut self.source,
-            0..request.source_frames(),
-        );
-        let rendered = self.stream.process(
-            Some(&self.source),
-            &mut self.output,
-            request.source_frames(),
-            requested,
-            1.0,
-        );
-        if rendered != output_frames {
-            return Err(ElasticError::EngineOutputFrameCount {
-                actual: rendered,
-                expected: output_frames,
-            });
-        }
-        interleave_variable(&self.output, 0..output_frames, output, channels);
+        self.core
+            .render(Some(source), request, self.pitch, Some(output))?;
+        self.record_request(request)?;
+        self.tail_armed = true;
         Ok(())
     }
 
+    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
+        self.pitch =
+            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
+        Ok(())
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
+        if !self.tail_armed {
+            return Ok(ElasticDrain::new(0, true));
+        }
+        self.prepare_exact_tail()?;
+        let capacity = self.capabilities.output_capacity(output.len())?;
+        let capacity = self
+            .tail_remaining
+            .map_or(capacity, |remaining| capacity.min(remaining));
+        let mut chunk = self.core.terminal_tail(output, capacity)?;
+        if let Some(remaining) = self.tail_remaining {
+            let remaining =
+                remaining
+                    .checked_sub(chunk.frames())
+                    .ok_or(ElasticError::EnginePreparation(
+                        "Bungee terminal output exceeded its exact span",
+                    ))?;
+            if chunk.complete() && remaining > 0 {
+                self.tail_armed = false;
+                self.reset_rate();
+                return Err(ElasticError::EnginePreparation(
+                    "Bungee terminal output ended before its exact span",
+                ));
+            }
+            if remaining == 0 {
+                if !chunk.complete() {
+                    self.core.discard()?;
+                }
+                chunk = ElasticDrain::new(chunk.frames(), true);
+            } else {
+                self.tail_remaining = Some(remaining);
+            }
+        }
+        self.tail_armed = !chunk.complete();
+        if chunk.complete() {
+            self.reset_rate();
+        }
+        Ok(chunk)
+    }
+
     fn reset(&mut self) -> Result<(), ElasticError> {
-        // The high-level stream exposes no reset, so clearing history means
-        // rebuilding it; the prepared shape and latency are unchanged.
-        self.stream = stream(
-            self.capabilities.sample_rate(),
-            self.capabilities.channels(),
-            self.capabilities.max_source_frames(),
-        )?;
+        self.core.discard()?;
+        self.tail_armed = false;
+        self.reset_rate();
         Ok(())
     }
 }

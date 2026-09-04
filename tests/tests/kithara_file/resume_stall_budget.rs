@@ -4,7 +4,6 @@
 //! A file gap-resume loop that makes zero progress must surface a terminal
 //! `FileEvent::Error` within a bounded number of re-fetches. Models a host
 //! that serves the head of a file and then blackholes every follow-up.
-
 use std::{
     io,
     sync::{
@@ -24,6 +23,7 @@ use axum::{
 use bytes::Bytes;
 use futures::stream;
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{Event, EventBus, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
@@ -33,7 +33,11 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestHttpServer, TestTempDir, kithara};
+use kithara_integration_tests::{
+    TestHttpServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+};
 
 struct Consts;
 impl Consts {
@@ -111,6 +115,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
 
     let temp = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
@@ -123,6 +128,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
                         .build(),
                 )
                 .build(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .cancel(cancel.clone())
@@ -135,12 +141,19 @@ async fn zero_progress_resume_loop_fails_terminally() {
 
     let config = FileConfig::for_src(FileSrc::Remote(url))
         .events(bus)
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel)
         .look_ahead_bytes(Consts::TOTAL as u64)
         .downloader(downloader)
         .build();
-    let _stream = Stream::<File>::new(config)
+    let _stream = Stream::<File<TestPools>>::new(config)
         .await
         .expect("stream opens on the reachable head");
 

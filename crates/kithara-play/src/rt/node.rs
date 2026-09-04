@@ -3,22 +3,22 @@ use std::sync::atomic::Ordering;
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
-    diff::{Diff, Patch},
+    diff::{Diff, Patch, PatchError},
+    event::ParamData,
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{PlayerNodeProcessor, StreamShape};
+use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};
 use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
 ///
-/// Commands (load, unload, seek, pause, fade) are sent to the processor
-/// via channels stored in the node. The `Diff`/`Patch` derives
-/// only apply to the `active` field; all runtime state is `#[diff(skip)]`.
-#[derive(Clone, Diff, Patch)]
-pub struct PlayerNode {
+/// Commands (load, unload, seek, pause, fade) are sent through channels stored
+/// in the node. Only `active` participates in Firewheel parameter updates.
+#[derive(Diff)]
+pub struct PlayerNode<S> {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
@@ -26,23 +26,74 @@ pub struct PlayerNode {
     #[diff(skip)]
     inputs: Arc<Mutex<Option<NodeInputs>>>,
 
-    /// PCM buffer pool for scratch buffer allocation.
+    /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
-    pcm_pool: PcmPool,
+    pools: PoolRegion<S>,
+
+    #[diff(skip)]
+    context_requirement: ContextRequirement,
 }
 
-impl PlayerNode {
-    /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, pcm_pool: PcmPool) -> Self {
-        Self {
-            pcm_pool,
-            active: true,
-            inputs: Arc::new(Mutex::new(Some(inputs))),
+/// A runtime parameter patch for [`PlayerNode`].
+#[non_exhaustive]
+pub enum PlayerNodePatch {
+    /// Updates whether the node is active.
+    Active(<bool as Patch>::Patch),
+}
+
+impl<S> Patch for PlayerNode<S> {
+    type Patch = PlayerNodePatch;
+
+    fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
+        match path {
+            [0, tail @ ..] => Ok(PlayerNodePatch::Active(bool::patch(data, tail)?)),
+            _ => Err(PatchError::InvalidPath),
+        }
+    }
+
+    fn apply(&mut self, patch: Self::Patch) {
+        match patch {
+            PlayerNodePatch::Active(patch) => self.active.apply(patch),
         }
     }
 }
 
-impl AudioNode for PlayerNode {
+impl<S> Clone for PlayerNode<S> {
+    fn clone(&self) -> Self {
+        Self {
+            active: self.active,
+            inputs: Arc::clone(&self.inputs),
+            pools: self.pools.clone(),
+            context_requirement: self.context_requirement,
+        }
+    }
+}
+
+impl<S> PlayerNode<S> {
+    /// Create a player node wired to RT input channels.
+    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>) -> Self {
+        Self {
+            pools,
+            active: true,
+            inputs: Arc::new(Mutex::new(Some(inputs))),
+            context_requirement: ContextRequirement::Standalone,
+        }
+    }
+
+    /// Requires the Host-written render context when constructing this node's
+    /// processor. Standalone nodes retain their context-free contract.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_session_context(mut self) -> Self {
+        self.context_requirement = ContextRequirement::Session;
+        self
+    }
+}
+
+impl<S> AudioNode for PlayerNode<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     type Configuration = EmptyConfig;
 
     fn construct_processor(
@@ -61,7 +112,12 @@ impl AudioNode for PlayerNode {
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::new(inputs, shape, &self.pcm_pool)
+        PlayerNodeProcessor::with_context_requirement(
+            inputs,
+            shape,
+            &self.pools,
+            self.context_requirement,
+        )
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -80,11 +136,14 @@ mod tests {
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
-    use crate::bridge::SharedEq;
+    use crate::{
+        bridge::SharedEq,
+        test_pools::{TestPools, pools},
+    };
 
-    fn make_node() -> (PlayerNode, crate::bridge::SlotControl) {
+    fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, PcmPool::default());
+        let node = PlayerNode::new(inputs, pools());
         (node, control)
     }
 

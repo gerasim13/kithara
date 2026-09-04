@@ -45,7 +45,29 @@ rule:
               stopBy: end
         - not:
             inside:
+              kind: array_type
+              stopBy: end
+        - not:
+            inside:
               kind: macro_invocation
+              stopBy: end
+        - not:
+            inside:
+              any:
+                - pattern: $VALUE / 2
+                - pattern: $VALUE * 2
+                - pattern: 2 * $VALUE
+                - pattern: $VALUE % 2
+                - pattern: $VALUE.powi(2)
+                - pattern: $VALUE.windows(2)
+                - pattern: $VALUE / 3
+                - pattern: $VALUE * 3
+                - pattern: 3 * $VALUE
+                - pattern: $VALUE / 4
+                - pattern: $VALUE * 4
+                - pattern: 4 * $VALUE
+                - pattern: $TYPE::from_be_bytes([$$$VALUES])
+                - pattern: $TYPE::from_le_bytes([$$$VALUES])
               stopBy: end
         - not:
             inside:
@@ -77,6 +99,25 @@ rule:
             inside:
               kind: macro_invocation
               regex: '^ranged!'
+              stopBy: end
+        - not:
+            inside:
+              any:
+                - pattern: $VALUE / 2.0
+                - pattern: $VALUE * 2.0
+                - pattern: 2.0 * $VALUE
+                - pattern: $VALUE.rem_euclid(2.0)
+                - pattern: $VALUE / 3.0
+                - pattern: $VALUE * 3.0
+                - pattern: 3.0 * $VALUE
+                - pattern: $VALUE / 4.0
+                - pattern: $VALUE * 4.0
+                - pattern: 4.0 * $VALUE
+                - pattern: $VALUE + 0.5
+                - pattern: 0.5 + $VALUE
+                - pattern: $VALUE - 0.5
+                - pattern: $VALUE * 0.5
+                - pattern: 0.5 * $VALUE
               stopBy: end
         - not:
             inside:

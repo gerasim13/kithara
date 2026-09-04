@@ -4,7 +4,8 @@ use std::{
 };
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     events::{
         AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
@@ -18,20 +19,22 @@ use kithara::{
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    mixed_codec_ladder_url,
     reads::{read_to_eof, read_until_samples},
-    signal_pcm::{Finite, SignalPcm, signal},
     waits::{wait_for_event, wait_until},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 const D: SawWav = SawWav::DEFAULT;
 
@@ -42,17 +45,16 @@ fn create_wav_init_segment(data_size: usize) -> Vec<u8> {
     // so it relies solely on the byte source EOF — and at a variant switch
     // that races into the decoder emitting one padded packet past the true
     // tail (`position > duration`). A concrete size pins the exact end.
-    create_wav_header(D.sample_rate, D.channels, Some(data_size))
+    signal::header(D.sample_rate, D.channels, Some(data_size))
 }
 
 fn create_pcm_segments(segment_count: usize) -> Vec<u8> {
-    SignalPcm::new(
-        signal::Sawtooth,
+    Vec::from(Pcm::new(
         D.sample_rate,
         D.channels,
-        Finite::from_segments(segment_count, D.segment_size, D.channels),
-    )
-    .into_vec()
+        frames_in_segments(segment_count, D.segment_size, D.channels),
+        Wave::Sawtooth,
+    ))
 }
 
 fn segment_duration_secs() -> f64 {
@@ -158,7 +160,7 @@ impl EventCollector {
     /// return, same hold window as before — keeps clippy's
     /// `significant_drop_tightening` from mis-suggesting an early drop
     /// inside the loop. Mirrors
-    /// `kithara_platform::flash::system::wake::wait_set`.
+    /// `kithara::platform::flash::system::wake::wait_set`.
     fn drain_locked(&self, mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver>) {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         loop {
@@ -224,7 +226,7 @@ impl EventCollector {
                         "DecoderReady(base_offset={base_offset}, variant={variant:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::EndOfStream) => {
+                Event::Audio(AudioEvent::EndOfStream { .. }) => {
                     self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}
@@ -314,7 +316,7 @@ struct PhaseReadStats {
 }
 
 fn read_phase_until_samples<S: StreamType>(
-    audio: &mut Audio<Stream<S>>,
+    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
 ) -> PhaseReadStats {
@@ -344,7 +346,7 @@ fn read_phase_until_samples<S: StreamType>(
 /// assertion itself is unchanged.
 #[kithara::flash(true)]
 fn read_phase_until<S: StreamType>(
-    audio: &mut Audio<Stream<S>>,
+    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
     settled: impl Fn() -> bool,
@@ -359,7 +361,9 @@ fn read_phase_until<S: StreamType>(
 
     while stats.samples < target_samples || !settled() {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 if stats.samples >= target_samples {
                     paced_backoff(position.saturating_sub(consumed));
                 }
@@ -396,13 +400,13 @@ fn read_phase_until<S: StreamType>(
 }
 
 async fn read_until_samples_blocking<S>(
-    mut audio: Audio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
-) -> (Audio<Stream<S>>, u64)
+) -> (RegisteredAudio<Stream<S>, TestPools>, u64)
 where
     S: StreamType + 'static,
-    Audio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     spawn_blocking(move || {
         let samples = read_until_samples(&mut audio, target_samples);
@@ -419,12 +423,12 @@ struct BlockingReadStep {
 }
 
 async fn read_one_chunk_blocking<S>(
-    mut audio: Audio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     label: &str,
-) -> (Audio<Stream<S>>, BlockingReadStep)
+) -> (RegisteredAudio<Stream<S>, TestPools>, BlockingReadStep)
 where
     S: StreamType + 'static,
-    Audio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
@@ -464,15 +468,15 @@ where
 }
 
 async fn read_until_manual_applied<S>(
-    mut audio: Audio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     collector: &EventCollector,
     applied_before: usize,
     target: usize,
     label: &str,
-) -> (Audio<Stream<S>>, PhaseReadStats)
+) -> (RegisteredAudio<Stream<S>, TestPools>, PhaseReadStats)
 where
     S: StreamType + 'static,
-    Audio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -556,11 +560,23 @@ async fn vod_manual_switch_affects_future_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -570,15 +586,11 @@ async fn vod_manual_switch_affects_future_segments() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let mut audio = worker.open(config).await.expect("create audio");
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
@@ -707,13 +719,25 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     let mut rescue_rx = bus.subscribe();
 
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -723,15 +747,11 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let mut audio = worker.open(config).await.expect("create audio");
 
     let mut stalled_requests = HashSet::new();
     let mut saw_load_slow = false;
@@ -879,7 +899,17 @@ async fn multi_track_shared_abr_with_cache() {
     let url2 = server2.url("/master.m3u8");
 
     let temp_dir = TestTempDir::new();
-    let shared_store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(CancelToken::never())
+            .build(),
+    );
+    let shared_store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
@@ -891,18 +921,17 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls1 = HlsConfig::for_url(url1.clone())
         .store(shared_store.clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config1 = AudioConfig::<Hls>::for_stream(hls1)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config1 = AudioConfig::<Hls<TestPools>>::for_stream(hls1)
         .events(bus1)
         .media_info(wav_info.clone())
         .build();
-    let mut audio1 = Audio::<Stream<Hls>>::new(config1).await.expect("track 1");
+    let mut audio1 = worker.open(config1).await.expect("track 1");
 
     let t1_samples = spawn_blocking(move || read_to_eof(&mut audio1))
         .await
@@ -929,18 +958,17 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls2 = HlsConfig::for_url(url2)
         .store(shared_store.clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
 
-    let config2 = AudioConfig::<Hls>::for_stream(hls2)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config2 = AudioConfig::<Hls<TestPools>>::for_stream(hls2)
         .events(bus2)
         .media_info(wav_info.clone())
         .build();
-    let mut audio2 = Audio::<Stream<Hls>>::new(config2).await.expect("track 2");
+    let mut audio2 = worker.open(config2).await.expect("track 2");
 
     let t2_samples = spawn_blocking(move || read_to_eof(&mut audio2))
         .await
@@ -966,20 +994,17 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls3 = HlsConfig::for_url(url1)
         .store(shared_store)
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config3 = AudioConfig::<Hls>::for_stream(hls3)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config3 = AudioConfig::<Hls<TestPools>>::for_stream(hls3)
         .events(bus3)
         .media_info(wav_info)
         .build();
-    let mut audio3 = Audio::<Stream<Hls>>::new(config3)
-        .await
-        .expect("track 1 replay");
+    let mut audio3 = worker.open(config3).await.expect("track 1 replay");
 
     let t3_samples = spawn_blocking(move || read_to_eof(&mut audio3))
         .await
@@ -1055,11 +1080,24 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1069,15 +1107,11 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let mut audio = worker.open(config).await.expect("create audio");
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
@@ -1153,11 +1187,24 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1167,15 +1214,11 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
     // commit gate, then trigger a Manual switch via the handle. The
@@ -1275,32 +1318,41 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 )]
 async fn runtime_cross_codec_manual_switch_no_hang() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 are AAC (mp4a.40.2), variant 3
-    // is FLAC (fLaC). Manual(3) forces the cross-codec path.
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 are AAC (mp4a.40.2), variant 3
+    // is FLAC. Manual(3) forces the cross-codec path.
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Warmup: read until enough AAC samples are produced (state target, not a
     // wall-clock deadline). The outer test timeout is the only backstop.
@@ -1390,6 +1442,12 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1403,7 +1461,14 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // correct no-op — the assertion below would be waiting for a switch the
     // user never asked for.
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1416,16 +1481,12 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .build();
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Tiny warmup read on the blocking pool so the current-thread runtime
     // remains free to drive the peer prefetch.
@@ -1529,6 +1590,12 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
     // Subscribe before the bus is moved into the config so the hold event
@@ -1536,7 +1603,14 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let mut hold_rx = bus.subscribe();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1547,16 +1621,12 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     let (audio, warmup_samples) =
         read_until_samples_blocking(audio, 8_192, "eof-race manual warmup").await;
@@ -1662,13 +1732,26 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
     // DownSwitch that races against the explicit Manual(1) below.
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1683,15 +1766,11 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // `ReaderSeek` event is retained in the broadcast buffer for the
     // seek-settled wait below.
     let mut seek_rx = bus.subscribe();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Tiny warmup on the blocking pool so the peer is actually pumping while
     // the current-thread runtime remains free to drive downloader tasks.
@@ -1816,7 +1895,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     // Long segment duration (6 s in playlist EXTINF) so a full prefetch
     // pushes `buffer_ahead` over the default 10 s `min_buffer_for_up_switch`
-    // gate — same as the real assets/hls/ fixture. Without this the
+    // gate — same as the mixed-codec ladder. Without this the
     // buffer gate alone blocks ABR and the test reports a false GREEN.
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 3,
@@ -1843,12 +1922,25 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1858,15 +1950,11 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Read until the reader itself enters segment 1. The read pump runs on the
     // blocking pool so it cannot park the current-thread runtime that drives
@@ -1937,32 +2025,41 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
 async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 AAC (mp4a.40.2), variant 3
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3
     // FLAC. We need Manual(3) (cross-codec) then Manual(1) (same-codec
     // AAC sibling of v=0) before v=3's decoder recreate fires.
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
 
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
     // Warmup on v=0 (AAC).
     let (mut audio, warmup_total) =
@@ -2067,26 +2164,38 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
-    // The duration of every variant ≈ 220 s. We start on shq (v=2) so we
-    // can downswitch to slq (v=0) for the same-codec scenario.
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
+    // The duration of every variant ≈ 220 s. We start on the top AAC (v=2)
+    // so we can downswitch to the bottom one (v=0) for the same-codec
+    // scenario.
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
     let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(2))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -2094,9 +2203,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 .build(),
         )
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let mut audio = worker.open(config).await.expect("create audio");
 
     // Reader cadence is driven by decoded sample targets, not wall-clock
     // deadlines. Slower scheduling may add `Pending` and delay the outer test
@@ -2290,12 +2397,18 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
-    // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
+    // (fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2317,15 +2430,20 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -2333,9 +2451,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
                 .build(),
         )
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create audio");
+    let mut audio = worker.open(config).await.expect("create audio");
 
     // Phase 1 — play V0 long enough that reader_pos is past seg 6
     // (the seek target ≈ 37 s lands in seg 6). The blocking read
@@ -2402,9 +2518,9 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     // Phase 4 — pump up to ~12 s of wall-clock and expect samples
     // to flow from the new variant. Regression surface: zero
     // samples produced (FSM parked in `RecreatingDecoder`) and the
-    // audio worker panics via `HangDetector` after
+    // playback worker panics via `HangDetector` after
     // `KITHARA_HANG_TIMEOUT_SECS = 5`. The outer test will then fail
-    // with `kithara-audio-worker-0 panicked` rather than this
+    // with `kithara-play-worker-* panicked` rather than this
     // assertion.
     let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
         let mut samples = 0u64;

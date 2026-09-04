@@ -4,13 +4,23 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     module::{ControlNode, ModuleDoc, parse_module},
-    source::{Limits, SourceResolver},
+    source::{Limits, LoadedSource, SourceResolver},
     validate,
 };
 
 #[derive(Debug, Default)]
 pub(crate) struct ModuleSet {
     pub(crate) defs: BTreeMap<SourceUri, ModuleDoc>,
+    /// Every shader a module declares, under the document that declared it.
+    /// Nested rather than keyed by a pair so that a lookup borrows both halves
+    /// of the key instead of building one.
+    shaders: BTreeMap<SourceUri, BTreeMap<String, LoadedSource>>,
+}
+
+impl ModuleSet {
+    pub(crate) fn shader(&self, origin: &SourceUri, source: &str) -> Option<&LoadedSource> {
+        self.shaders.get(origin)?.get(source)
+    }
 }
 
 pub(crate) fn load_module_graph(
@@ -34,15 +44,7 @@ fn load_rec(
     stack: &mut Vec<SourceUri>,
     depth: usize,
 ) -> Result<SourceUri, UiDocError> {
-    let loaded = resolver.load(base, rel)?;
-    let bytes = loaded.text.len();
-    if bytes > limits.max_bytes {
-        return Err(UiDocError::TooLarge {
-            bytes,
-            origin: loaded.uri,
-            max: limits.max_bytes,
-        });
-    }
+    let loaded = load_source(resolver, base, rel, limits)?;
     if stack.contains(&loaded.uri) {
         let mut chain = stack.clone();
         chain.push(loaded.uri);
@@ -69,6 +71,24 @@ fn load_rec(
     Ok(loaded.uri)
 }
 
+fn load_source(
+    resolver: &dyn SourceResolver,
+    base: Option<&SourceUri>,
+    rel: &str,
+    limits: &Limits,
+) -> Result<LoadedSource, UiDocError> {
+    let loaded = resolver.load(base, rel)?;
+    let bytes = loaded.text.len();
+    if bytes > limits.max_bytes {
+        return Err(UiDocError::TooLarge {
+            bytes,
+            origin: loaded.uri,
+            max: limits.max_bytes,
+        });
+    }
+    Ok(loaded)
+}
+
 fn walk_includes(
     resolver: &dyn SourceResolver,
     origin: &SourceUri,
@@ -79,7 +99,9 @@ fn walk_includes(
     depth: usize,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row { children, .. } | ControlNode::Column { children, .. } => {
+        ControlNode::Row { children, .. }
+        | ControlNode::Column { children, .. }
+        | ControlNode::Stage { children, .. } => {
             for child in children {
                 walk_includes(resolver, origin, child, limits, set, stack, depth)?;
             }
@@ -98,7 +120,9 @@ fn walk_includes(
             }
             Ok(())
         }
-        ControlNode::Optional { child, .. }
+        ControlNode::Object { child, .. }
+        | ControlNode::Optional { child, .. }
+        | ControlNode::Placed { child, .. }
         | ControlNode::Pressable { child, .. }
         | ControlNode::Reveal { child, .. }
         | ControlNode::Scroll { child, .. } => {
@@ -122,6 +146,16 @@ fn walk_includes(
             )?;
             Ok(())
         }
+        ControlNode::Shader { source, .. } => {
+            if set.shader(origin, source).is_none() {
+                let loaded = load_source(resolver, Some(origin), source, limits)?;
+                set.shaders
+                    .entry(origin.clone())
+                    .or_default()
+                    .insert(source.clone(), loaded);
+            }
+            Ok(())
+        }
         ControlNode::DeckSummary { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
@@ -143,9 +177,12 @@ fn walk_includes(
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Vis { .. }
+        | ControlNode::Lottie { .. }
+        | ControlNode::Sprite { .. }
+        | ControlNode::Custom { .. }
         | ControlNode::PortalMap { .. }
         | ControlNode::Range { .. }
-        | ControlNode::TrackList { .. }
+        | ControlNode::Table { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }
         | ControlNode::Toggle { .. }

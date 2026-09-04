@@ -1,14 +1,16 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    audio::{Audio, AudioConfig, ConsumerWakeMode},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioSession},
     hls::{Hls, HlsConfig},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, fixture_protocol::DelayRule, offline::resource_from_reader,
 };
 
 use super::*;
+use crate::bufpool_ext::{TestPools, pools};
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
@@ -72,31 +74,41 @@ async fn prepare_tiny_ring_player(
     let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
     let hls = HlsConfig::for_url(master_url.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
+        .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(initial_variant))
         .events(bus.clone())
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
         .events(bus)
-        .pcm_buffer_chunks(OUTPUT_RING_CHUNKS)
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+        .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
+    let audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} audio: {error:?}"));
     let abr = audio
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
-    let mut player = OfflinePlayer::new(SAMPLE_RATE);
-    player.load_and_fadein(resource_from_reader(audio), label);
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools)
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource_from_reader(audio));
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;

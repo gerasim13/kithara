@@ -1,25 +1,25 @@
 mod wire {
-    use firewheel::FirewheelCtx;
-    use kithara_audio::EqBandConfig;
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
-    use kithara_platform::sync::mpsc;
+    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SlotControl},
+        effects::eq::EqBandConfig,
     };
 
     pub type PlayerId = u64;
-
-    pub type StartStreamFn<B> =
-        Box<dyn FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send>;
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]
     pub enum SessionError {
         #[error("player not found: {0}")]
         PlayerNotFound(PlayerId),
+        #[error("invalid session sample rate: {0}")]
+        InvalidSampleRate(u32),
+        #[error("player identity space is exhausted")]
+        PlayerIdExhausted,
         #[error("player already started: {0}")]
         AlreadyStarted(PlayerId),
         #[error("player not running: {0}")]
@@ -50,16 +50,21 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error(transparent)]
+        Sync(#[from] SyncError),
+        #[error(transparent)]
+        BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
 
-    #[non_exhaustive]
-    pub enum Cmd {
+    pub enum Cmd<S> {
         RegisterPlayer {
+            grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            pcm_pool: PcmPool,
+            pools: PoolRegion<S>,
+            sample_rate: u32,
         },
         UnregisterPlayer {
             player_id: PlayerId,
@@ -79,6 +84,7 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
+        #[cfg(any(test, feature = "probe"))]
         SetPlayerMasterVolumes {
             levels: Vec<PlayerLevel>,
         },
@@ -121,11 +127,6 @@ mod wire {
         Tick,
     }
 
-    pub struct CmdMsg {
-        pub cmd: Cmd,
-        pub reply_tx: mpsc::Sender<Reply>,
-    }
-
     /// One player's session-input level in a batch update. `level` is a linear
     /// amplitude in `0.0..=1.0`.
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -157,7 +158,7 @@ mod wire {
     #[derive(Clone, Copy)]
     #[non_exhaustive]
     pub struct SessionSampleRate {
-        /// The rate the output stream runs at, once a stream exists.
+        /// The current Firewheel output rate; `None` means no output is measured.
         pub measured: Option<u32>,
         /// The rate the session last asked the device for.
         pub requested: u32,
@@ -187,38 +188,125 @@ mod wire {
         pub control: SlotControl,
         pub slot: SlotId,
     }
+
+    impl AllocatedSlot {
+        #[must_use]
+        pub fn new(control: SlotControl, slot: SlotId) -> Self {
+            Self { control, slot }
+        }
+    }
 }
 
 mod handle {
-    use kithara_audio::{ConsumerWakeMode, EqBandConfig};
-    use kithara_bufpool::PcmPool;
+    use std::num::NonZeroU32;
+
+    use kithara_audio::ConsumerWakeMode;
+    use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{
+        maybe_send::{MaybeSend, MaybeSync},
+        sync::{Arc, Mutex},
+    };
+    use kithara_warp::BeatGridId;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionSampleRate};
-    use crate::{api::SlotId, error::PlayError};
+    #[cfg(any(test, feature = "probe"))]
+    use super::wire::PlayerLevel;
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
+    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
-    pub trait SessionDispatcher: Send + Sync + 'static {
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+    /// Handle used by resident players to reach their session owner.
+    ///
+    /// The handle stays inside the thread that built it: on wasm that is one
+    /// worker, so the bound is [`MaybeSend`], which is `Send` on every
+    /// threaded target and nothing on wasm.
+    pub trait SessionDispatcher<S>: MaybeSend + MaybeSync {
+        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
 
-        /// Describe how PCM consumers hosted by this session may wake workers.
+        /// Describe how audio consumers hosted by this session may wake workers.
+        /// Every one of them reads from the render callback, offline backends
+        /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
-        fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(PlayError::Session(err)),
                 reply => Ok(reply),
             }
         }
+
+        fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+            match self.exec_ok(Cmd::QuerySampleRate)? {
+                Reply::SampleRate(sample_rate) => Ok(sample_rate),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session sample rate query".into(),
+                )),
+            }
+        }
+
+        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            let requested = self.sample_rate()?.requested;
+            NonZeroU32::new(requested).ok_or(PlayError::Session(SessionError::InvalidSampleRate(
+                requested,
+            )))
+        }
     }
 
-    #[derive(Clone)]
-    pub struct SessionHandle(Arc<dyn SessionDispatcher>);
+    /// Opaque one-shot capability used to attach a Player to its session.
+    ///
+    /// The dispatcher is deliberately inaccessible: decorators may only pass
+    /// this capability down to their resident Player.
+    pub struct SessionBinding<S> {
+        dispatcher: Arc<dyn SessionDispatcher<S>>,
+    }
 
-    impl SessionHandle {
+    impl<S> SessionBinding<S> {
+        /// Wraps the canonical session for one Host insertion.
+        #[doc(hidden)]
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher>) -> Self {
-            Self(dispatcher)
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
+            Self { dispatcher }
+        }
+
+        pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            self.dispatcher.requested_sample_rate()
+        }
+    }
+
+    struct SessionSlot<S> {
+        binding: Mutex<Option<SessionBinding<S>>>,
+    }
+
+    pub struct SessionHandle<S>(Arc<SessionSlot<S>>);
+
+    impl<S> Clone for SessionHandle<S> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    impl<S> SessionHandle<S> {
+        #[must_use]
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
+            Self(Arc::new(SessionSlot {
+                binding: Mutex::new(Some(SessionBinding::new(dispatcher))),
+            }))
+        }
+
+        #[must_use]
+        pub(crate) fn pending() -> Self {
+            Self(Arc::new(SessionSlot {
+                binding: Mutex::default(),
+            }))
+        }
+
+        pub(crate) fn bind(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+            let mut current = self.0.binding.lock();
+            if current.is_some() {
+                return Err(PlayError::SessionAlreadyBound);
+            }
+            *current = Some(binding);
+            drop(current);
+            Ok(())
         }
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
@@ -230,17 +318,41 @@ mod handle {
             }
         }
 
-        #[must_use]
-        pub fn dispatcher(&self) -> Arc<dyn SessionDispatcher> {
-            Arc::clone(&self.0)
+        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher<S>>, PlayError> {
+            self.0
+                .binding
+                .lock()
+                .as_ref()
+                .map(|binding| Arc::clone(&binding.dispatcher))
+                .ok_or(PlayError::SessionUnbound)
         }
 
         delegate::delegate! {
-            to self.0 {
-                #[must_use]
-                pub fn consumer_wake_mode(&self) -> ConsumerWakeMode;
-                pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
-                pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+            to self.dispatcher()? {
+                pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
+                pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            }
+        }
+
+        #[must_use]
+        pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            // An instance may prepare resources before Host insertion. The
+            // pending policy must therefore preserve the RT-safe production
+            // path; explicit offline dispatchers override it after binding.
+            self.dispatcher()
+                .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
+                    dispatcher.consumer_wake_mode()
+                })
+        }
+
+        pub fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+            self.dispatcher()?.exec(cmd)
+        }
+
+        pub fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+            match self.exec(cmd)? {
+                Reply::Err(err) => Err(PlayError::Session(err)),
+                reply => Ok(reply),
             }
         }
 
@@ -251,25 +363,20 @@ mod handle {
             .map(|_| ())
         }
 
-        pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-            match self.exec_ok(Cmd::QuerySampleRate)? {
-                Reply::SampleRate(sample_rate) => Ok(sample_rate),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session sample rate query".into(),
-                )),
-            }
-        }
-
         pub fn register_player(
             &self,
+            grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            pcm_pool: PcmPool,
+            pools: PoolRegion<S>,
         ) -> Result<PlayerId, PlayError> {
+            let sample_rate = self.requested_sample_rate()?.get();
             match self.exec_ok(Cmd::RegisterPlayer {
+                grid_id,
                 bus,
                 eq_layout,
-                pcm_pool,
+                pools,
+                sample_rate,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),
                 _ => Err(PlayError::Internal(
@@ -297,6 +404,7 @@ mod handle {
             .map(|_| ())
         }
 
+        #[cfg(any(test, feature = "probe"))]
         pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
             if levels.is_empty() {
                 return Ok(());
@@ -334,9 +442,9 @@ mod handle {
         pub fn start_player(
             &self,
             player_id: PlayerId,
-            sample_rate: u32,
             master_volume: f32,
         ) -> Result<(), PlayError> {
+            let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
@@ -360,26 +468,64 @@ mod handle {
     }
 }
 
-pub use handle::{SessionDispatcher, SessionHandle};
-pub use wire::{
-    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
-    StartStreamFn,
-};
+pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
+pub use wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate};
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicU32, Ordering},
+    };
+
     use kithara_audio::ConsumerWakeMode;
+    use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
 
-    use super::{Cmd, Reply, SessionDispatcher, SessionHandle};
-    use crate::PlayError;
+    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
+    use crate::{
+        PlayError,
+        test_pools::{TestPools, pools},
+    };
 
     struct DefaultSession;
 
-    impl SessionDispatcher for DefaultSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+    #[derive(Default)]
+    struct RateCapture(AtomicU32);
+
+    fn sample_rate() -> NonZeroU32 {
+        NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
+    }
+
+    impl SessionDispatcher<TestPools> for DefaultSession {
+        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+    }
+
+    impl SessionDispatcher<TestPools> for RateCapture {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            match cmd {
+                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
+                    None,
+                    sample_rate().get(),
+                ))),
+                Cmd::RegisterPlayer { sample_rate, .. } => {
+                    self.0.store(sample_rate, Ordering::Relaxed);
+                    Ok(Reply::PlayerRegistered(1))
+                }
+                Cmd::StartPlayer { sample_rate, .. } => {
+                    self.0.store(sample_rate, Ordering::Relaxed);
+                    Ok(Reply::Ok)
+                }
+                _ => Ok(Reply::Ok),
+            }
         }
 
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -389,11 +535,58 @@ mod tests {
 
     #[kithara::test]
     fn session_handle_delegates_explicit_consumer_wake_mode() {
-        let handle = SessionHandle::new(Arc::new(DefaultSession));
+        let handle: SessionHandle<TestPools> = SessionHandle::new(Arc::new(DefaultSession));
 
         assert_eq!(
             handle.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
         );
+    }
+
+    #[kithara::test]
+    fn pending_session_binds_once() {
+        let handle: SessionHandle<TestPools> = SessionHandle::pending();
+        assert_eq!(
+            handle.consumer_wake_mode(),
+            ConsumerWakeMode::RealtimeDeferred
+        );
+        assert!(matches!(
+            handle.exec(Cmd::Tick),
+            Err(PlayError::SessionUnbound)
+        ));
+
+        handle
+            .bind(SessionBinding::new(Arc::new(DefaultSession)))
+            .expect("bind canonical session");
+        assert_eq!(
+            handle.consumer_wake_mode(),
+            ConsumerWakeMode::RealtimeDeferred
+        );
+        assert!(matches!(handle.exec(Cmd::Tick), Ok(Reply::Ok)));
+        assert!(matches!(
+            handle.bind(SessionBinding::new(Arc::new(DefaultSession))),
+            Err(PlayError::SessionAlreadyBound)
+        ));
+    }
+
+    #[kithara::test]
+    fn session_commands_use_the_bound_host_rate() {
+        let capture = Arc::new(RateCapture::default());
+        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
+        let handle = SessionHandle::new(dispatcher);
+
+        let player_id = handle
+            .register_player(
+                BeatGridId::allocate().expect("player id"),
+                EventBus::default(),
+                Vec::new(),
+                pools(),
+            )
+            .expect("register player");
+        assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
+
+        capture.0.store(0, Ordering::Relaxed);
+        handle.start_player(player_id, 1.0).expect("start player");
+        assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
     }
 }

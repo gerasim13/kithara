@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioSession},
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -10,20 +11,21 @@ use kithara::{
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     TestTempDir, abr_fast, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::read_to_eof,
-    signal_pcm::{Finite, SignalPcm, signal},
     temp_dir,
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -32,21 +34,20 @@ impl Consts {
 }
 
 fn create_wav_init_segment() -> Vec<u8> {
-    create_wav_header(Consts::D.sample_rate, Consts::D.channels, None)
+    signal::header(Consts::D.sample_rate, Consts::D.channels, None)
 }
 
 fn create_pcm_segments() -> Vec<u8> {
-    SignalPcm::new(
-        signal::Sawtooth,
+    Vec::from(Pcm::new(
         Consts::D.sample_rate,
         Consts::D.channels,
-        Finite::from_segments(
+        frames_in_segments(
             Consts::SEGMENT_COUNT,
             Consts::D.segment_size,
             Consts::D.channels,
         ),
-    )
-    .into_vec()
+        Wave::Sawtooth,
+    ))
 }
 
 /// ABR must switch variant at least once during HLS playback.
@@ -98,6 +99,12 @@ async fn abr_auto_switch_during_playback(
     info!(%url, "HLS server ready with 2 variants");
 
     let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
@@ -122,7 +129,14 @@ async fn abr_auto_switch_during_playback(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -132,13 +146,12 @@ async fn abr_auto_switch_during_playback(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>>");
 

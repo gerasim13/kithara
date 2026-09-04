@@ -1,7 +1,8 @@
 use kithara_assets::{AcquisitionResult, ReadSide, ResourceAcquisition, WriteSide};
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
-use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
+use kithara_stream::dl::{DemandFn, FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;
 
 use super::HlsVariant;
@@ -10,13 +11,16 @@ use crate::{
     signal::SizeSignal,
 };
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Builds a fetch command whose completion settles the claim under its cancellation epoch.
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        acq: ResourceAcquisition,
-        handle: FetchClaim<Downloading>,
+        acq: ResourceAcquisition<S>,
+        handle: FetchClaim<Downloading, S>,
         signal: SizeSignal,
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
@@ -57,6 +61,8 @@ impl HlsVariant {
             // WHY: Stalled-escape reconciliation has no reader progress to wake it.
             slow_signal.wake_peer();
         });
+        let demand_slot = slot.handle.slot_state();
+        let demand: DemandFn = Box::new(move || demand_slot.is_reader_demanded());
         let mut inner_writer = slot.writer();
         // WHY: Readers and the audio worker need byte-arrival wakes before terminal settle.
         let writer_fn: WriterFn = Box::new(move |chunk: &[u8]| {
@@ -72,6 +78,7 @@ impl HlsVariant {
                 .maybe_headers(self.profile.headers.clone())
                 .writer(writer_fn)
                 .on_slow(on_slow)
+                .demand(demand)
                 .on_complete(OnCompleteFn::from(slot))
                 .build(),
         )

@@ -2,8 +2,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
-    decode::PcmChunk,
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -12,9 +11,16 @@ use kithara::{
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioChunk,
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, Xorshift64,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 struct Consts;
@@ -27,6 +33,8 @@ impl Consts {
     const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
     const REVISIT_SEEKS: usize = 64;
 }
+
+type TestAudio = RegisteredAudio<Stream<File<TestPools>>, TestPools>;
 
 #[derive(Default)]
 struct LiveStats {
@@ -84,9 +92,9 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 
-fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) -> Option<PcmChunk> {
+fn next_chunk(audio: &mut TestAudio, stage: &str) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -102,7 +110,7 @@ struct RandomSeekResult {
     chunks_read: usize,
 }
 
-fn phase1_warmup(audio: &mut Audio<Stream<File>>, ephemeral: bool) {
+fn phase1_warmup(audio: &mut TestAudio, ephemeral: bool) {
     info!(ephemeral, "Phase 1: warmup");
     for _ in 0..Consts::WARMUP_CHUNKS {
         if next_chunk(audio, "warmup").is_none() {
@@ -112,7 +120,7 @@ fn phase1_warmup(audio: &mut Audio<Stream<File>>, ephemeral: bool) {
 }
 
 fn phase2_random_seek_stress(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut TestAudio,
     rng: &mut Xorshift64,
     max_seek_secs: f64,
 ) -> RandomSeekResult {
@@ -151,11 +159,7 @@ fn phase2_random_seek_stress(
     }
 }
 
-fn phase3_fast_seek_burst(
-    audio: &mut Audio<Stream<File>>,
-    rng: &mut Xorshift64,
-    max_seek_secs: f64,
-) {
+fn phase3_fast_seek_burst(audio: &mut TestAudio, rng: &mut Xorshift64, max_seek_secs: f64) {
     info!(seeks = Consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
     for _ in 0..Consts::FAST_SEEK_BURST {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
@@ -173,7 +177,7 @@ fn phase3_fast_seek_burst(
     audio.preload().expect("preload must succeed");
 }
 
-fn phase4_sequential_after_burst(audio: &mut Audio<Stream<File>>) {
+fn phase4_sequential_after_burst(audio: &mut TestAudio) {
     info!(
         sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
         "Phase 4: sequential read after fast seeks"
@@ -204,11 +208,7 @@ fn phase4_sequential_after_burst(audio: &mut Audio<Stream<File>>) {
     }
 }
 
-fn phase5_revisit_seeks(
-    audio: &mut Audio<Stream<File>>,
-    seek_positions: &[f64],
-    random_ops_done: usize,
-) {
+fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_ops_done: usize) {
     info!(
         seeks = Consts::REVISIT_SEEKS,
         "Phase 5: revisit same positions"
@@ -238,37 +238,45 @@ fn phase5_revisit_seeks(
 )]
 #[cfg_attr(
     target_arch = "wasm32",
-    ignore = "Audio::new bootstrap hangs in wasm-bindgen headless runner"
+    ignore = "PlayWorker::open bootstrap hangs in wasm-bindgen headless runner"
 )]
 #[cfg_attr(not(target_arch = "wasm32"), case::mmap(false))]
 #[case::ephemeral(true)]
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("track.mp3");
+    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
+    let pools = pools();
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
             .max_assets(10)
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
+            .build()
     };
 
-    let file_config = FileConfig::for_src(url.into()).store(store).build();
-    let mut audio = Audio::<Stream<File>>::new(
-        AudioConfig::<File>::for_stream(file_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .hint(("mp3").to_string())
-            .block_on_underrun(true)
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let file_config = FileConfig::for_src(url.into())
+        .store(store)
+        .pools(pools.clone())
+        .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let mut audio = worker
+        .open(
+            AudioConfig::<File<TestPools>>::for_stream(file_config)
+                .hint(("mp3").to_string())
+                .block_on_underrun(true)
+                .build(),
+        )
+        .await
+        .expect("audio creation");
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
-    let mut events = audio.events();
+    let mut events = audio.event_bus().subscribe();
     let events_task = spawn(async move {
         while let Ok(event) = events.recv().await.map(|env| env.event) {
             let mut locked = stats_bg.lock().expect("stats lock poisoned");

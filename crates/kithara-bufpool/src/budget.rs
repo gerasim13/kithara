@@ -1,107 +1,96 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+mod counter;
+mod pair;
 
-use kithara_platform::sync::Arc;
+use counter::BudgetCounter;
+pub(crate) use pair::{BudgetPair, Reservation, ReserveFailure};
 
-use crate::growth::BudgetExhausted;
-
-/// Maximum total bytes a pool may track across all live buffers.
-///
-/// Newtype so the byte-budget cap is unmistakable at call sites
-/// (`with_byte_budget(.., .., ByteBudget(256 * MB))` instead of three
-/// adjacent `usize`s where order is easy to swap). Pass
-/// `ByteBudget(usize::MAX)` for no cap.
+/// Hard byte limit shared by every pool in one region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ByteBudget(pub usize);
+pub struct OverallBudget(pub usize);
+
+/// Percentage of the overall budget available to one physical pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Percent(pub u8);
+
+impl Percent {
+    /// The selected pool may compete for the entire region budget.
+    pub const FULL: Self = Self(100);
+
+    pub(crate) const fn is_valid(self) -> bool {
+        self.0 <= Self::FULL.0
+    }
+}
 
 #[derive(Clone, Debug)]
-pub(crate) struct RegionBudget {
-    inner: Arc<RegionBudgetInner>,
-}
-
-#[derive(Debug)]
-struct RegionBudgetInner {
-    allocated_bytes: AtomicUsize,
-    max_bytes: usize,
-}
+pub(crate) struct RegionBudget(BudgetCounter);
 
 impl RegionBudget {
-    pub(crate) fn new(max_bytes: usize) -> Self {
-        Self {
-            inner: Arc::new(RegionBudgetInner {
-                max_bytes,
-                allocated_bytes: AtomicUsize::new(0),
-            }),
-        }
+    pub(crate) fn new(limit: usize) -> Self {
+        Self(BudgetCounter::new(limit))
     }
 
-    pub(crate) fn allocated_bytes(&self) -> usize {
-        self.inner.allocated_bytes.load(Ordering::Relaxed)
+    pub(crate) fn same_region(&self, other: &Self) -> bool {
+        self.0.same_counter(&other.0)
     }
 
-    pub(crate) fn max_bytes(&self) -> usize {
-        self.inner.max_bytes
-    }
-
-    pub(crate) fn release(&self, amount: usize) {
-        if amount == 0 {
-            return;
-        }
-        let mut current = self.inner.allocated_bytes.load(Ordering::Relaxed);
-        loop {
-            let new = current.saturating_sub(amount);
-            match self.inner.allocated_bytes.compare_exchange_weak(
-                current,
-                new,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(actual) => current = actual,
-            }
+    delegate::delegate! {
+        to self.0 {
+            pub(crate) fn current(&self) -> usize;
+            pub(crate) fn limit(&self) -> usize;
+            pub(crate) fn peak(&self) -> usize;
         }
     }
+}
 
-    pub(crate) fn request(&self, additional: usize) -> Result<(), BudgetExhausted> {
-        if additional == 0 {
-            return Ok(());
-        }
-        let mut current = self.inner.allocated_bytes.load(Ordering::Relaxed);
-        loop {
-            let new = current.checked_add(additional).ok_or(BudgetExhausted)?;
-            if new > self.inner.max_bytes {
-                return Err(BudgetExhausted);
-            }
-            match self.inner.allocated_bytes.compare_exchange_weak(
-                current,
-                new,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(actual) => current = actual,
-            }
-        }
+#[derive(Clone, Debug)]
+pub(crate) struct PoolBudget(BudgetCounter);
+
+impl PoolBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self(BudgetCounter::new(limit))
     }
 
-    pub(crate) fn track_byte_delta(&self, before: usize, after: usize) -> bool {
-        if after > before {
-            let additional = after - before;
-            let mut current = self.inner.allocated_bytes.load(Ordering::Relaxed);
-            loop {
-                let new = current.saturating_add(additional);
-                match self.inner.allocated_bytes.compare_exchange_weak(
-                    current,
-                    new,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => return new > self.inner.max_bytes,
-                    Err(actual) => current = actual,
-                }
-            }
-        } else if before > after {
-            self.release(before - after);
+    delegate::delegate! {
+        to self.0 {
+            pub(crate) fn current(&self) -> usize;
+            pub(crate) fn limit(&self) -> usize;
         }
-        false
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BudgetSnapshot {
+    pub(crate) current: usize,
+    pub(crate) limit: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{BudgetCounter, BudgetPair, RegionBudget};
+
+    #[kithara::test]
+    fn uncommitted_reservation_rolls_back_both_counters() {
+        let pair = BudgetPair::new(RegionBudget::new(16), 16);
+        let reservation = pair.reserve(8).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(pair.region_current(), 8);
+        assert_eq!(pair.current(), 8);
+
+        drop(reservation);
+
+        assert_eq!(pair.region_current(), 0);
+        assert_eq!(pair.current(), 0);
+    }
+
+    #[kithara::test]
+    fn underflow_release_keeps_the_charge() {
+        let counter = BudgetCounter::new(16);
+        counter
+            .try_acquire(8)
+            .unwrap_or_else(|snapshot| panic!("{snapshot:?}"));
+
+        assert!(!counter.release(9, "test"));
+        assert_eq!(counter.current(), 8);
     }
 }

@@ -17,6 +17,5 @@ pub use parse::{
     parse_media_playlist,
 };
 pub use playlist_cache::PlaylistCache;
-pub(crate) use state::PlaylistAccess;
 pub use state::{PlaylistState, SegmentState, VariantState};
 pub(crate) use variant_playlist::load_variant_playlists;

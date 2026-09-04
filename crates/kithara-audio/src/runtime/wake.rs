@@ -1,52 +1,9 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
 use kithara_platform::{
     sync::{ThreadGate, WaitGate},
     time::Duration,
 };
 
 use crate::runtime::WakeSignal;
-
-/// Scheduler wake with immediate off-RT and deferred real-time signal paths.
-#[derive(Default)]
-pub(crate) struct SchedulerWake {
-    /// Gate counter consumed as of the previous wait (scheduler-thread only).
-    seen: AtomicU64,
-    /// Coalesced RT request. Ring/control payloads own their synchronization.
-    deferred: AtomicBool,
-    gate: ThreadGate,
-}
-
-impl SchedulerWake {
-    /// Block until an immediate or deferred wake fires, or `timeout` elapses.
-    ///
-    /// Called only from the scheduler thread (single waiter). A deferred wake
-    /// that races with the park is observed after the bounded timeout.
-    pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
-        if self.take_deferred() {
-            return true;
-        }
-        let since = self.seen.load(Ordering::Relaxed);
-        let woken = self.gate.wait_timeout(since, timeout);
-        self.seen.store(self.gate.current(), Ordering::Relaxed);
-        let deferred = self.take_deferred();
-        woken || deferred
-    }
-
-    /// Signal and unpark the scheduler from an off-RT thread.
-    pub(crate) fn wake(&self) {
-        self.gate.signal();
-    }
-
-    /// Publish a coalesced wake without a syscall or thread unpark.
-    pub(crate) fn defer(&self) {
-        self.deferred.store(true, Ordering::Relaxed);
-    }
-
-    fn take_deferred(&self) -> bool {
-        self.deferred.swap(false, Ordering::Relaxed)
-    }
-}
 
 #[derive(Default)]
 pub(crate) struct ThreadWake {
@@ -73,13 +30,13 @@ impl WakeSignal for ThreadWake {
 #[cfg(test)]
 mod tests {
     use kithara_platform::{
-        sync::{Arc, WaitGate, mpsc},
+        sync::{Arc, mpsc},
         thread::{self, spawn},
         time::Duration,
     };
     use kithara_test_utils::kithara;
 
-    use super::{SchedulerWake, ThreadWake};
+    use super::ThreadWake;
     use crate::runtime::WakeSignal;
 
     #[kithara::test(flash(false))]
@@ -124,17 +81,5 @@ mod tests {
         wake.wake();
 
         assert!(wake.wait_timeout(since, Duration::ZERO));
-    }
-
-    #[kithara::test]
-    fn scheduler_deferred_wake_is_level_triggered_and_coalesced() {
-        let wake = SchedulerWake::default();
-        let gate_epoch = wake.gate.current();
-        wake.defer();
-        wake.defer();
-
-        assert_eq!(wake.gate.current(), gate_epoch);
-        assert!(wake.wait_timeout(Duration::ZERO));
-        assert!(!wake.wait_timeout(Duration::ZERO));
     }
 }

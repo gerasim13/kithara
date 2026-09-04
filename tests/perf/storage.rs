@@ -5,7 +5,7 @@ use std::io::Write;
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     platform::CancelToken,
-    storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt},
+    storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceRead},
 };
 use tempfile::NamedTempFile;
 

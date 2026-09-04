@@ -29,8 +29,8 @@
 //! blocking read completes — the decoded saw-tooth must stay continuous
 //! across the boundary (phase +1 per frame, the same metric
 //! `stress_chunk_integrity` asserts).
-
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -43,18 +43,19 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SAW_PERIOD, TestTempDir,
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
+
+use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 /// Smaller segments than the 200 KB default so the boundary is reached
-/// quickly and a single saw period (`SAW_PERIOD` frames) spans many
+/// quickly and a single saw period (`signal::SAW_PERIOD` frames) spans many
 /// segments — the saw never wraps within one decoded run, so a strand is
 /// unambiguous.
 const SEGMENT_SIZE: usize = 32_768;
@@ -79,16 +80,13 @@ fn segment_first_frame(segment: usize) -> u64 {
     tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() {
-    let init_segment = Arc::new(create_wav_header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            SAMPLE_RATE,
-            CHANNELS,
-            Finite::from_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        )
-        .into_vec(),
-    );
+    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
+    let pcm = Arc::new(Vec::from(Pcm::new(
+        SAMPLE_RATE,
+        CHANNELS,
+        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
+        Wave::Sawtooth,
+    )));
 
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
@@ -113,15 +111,23 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         // Manual variant 0 — no ABR, no recreate; isolate the read-ahead strand.
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let stream = Stream::<Hls>::new(hls_config)
+    let stream = Stream::<Hls<TestPools>>::new(hls_config)
         .await
         .expect("build Stream<Hls> over WAV fixture");
 
@@ -171,14 +177,14 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
-        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .backend(DecoderBackend::Symphonia)
-            .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
-            .maybe_byte_map(byte_map)
-            .hint("wav")
-            .build();
+        let decoder_config =
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .pools(pools)
+                .backend(DecoderBackend::Symphonia)
+                .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
+                .maybe_byte_map(byte_map)
+                .hint("wav")
+                .build();
         let mut decoder = DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config)
             .expect("build Symphonia WAV decoder over Stream<Hls>");
 
@@ -244,7 +250,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
     // Reconstruct the decoded saw-tooth in emission order (one value per
     // frame, channel 0) and assert continuity: each frame's phase is the
-    // previous +1 mod SAW_PERIOD. A read-ahead strand swallows ~640 frames
+    // previous +1 mod signal::SAW_PERIOD. A read-ahead strand swallows ~640 frames
     // at the boundary, producing exactly one large phase jump.
     let channels = CHANNELS as usize;
     let mut samples: Vec<f32> = Vec::new();
@@ -261,13 +267,13 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let mut breaks = 0usize;
     let mut worst_jump = 0usize;
     for w in samples.windows(2) {
-        let prev = phase_from_f32(w[0]);
-        let curr = phase_from_f32(w[1]);
-        let expected_asc = (prev + 1) % SAW_PERIOD;
+        let prev = signal::phase::units(w[0]);
+        let curr = signal::phase::units(w[1]);
+        let expected_asc = (prev + 1) % signal::SAW_PERIOD;
         if curr != expected_asc {
             breaks += 1;
             let jump = curr.abs_diff(prev);
-            worst_jump = worst_jump.max(jump.min(SAW_PERIOD - jump));
+            worst_jump = worst_jump.max(jump.min(signal::SAW_PERIOD - jump));
         }
     }
 

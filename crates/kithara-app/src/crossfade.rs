@@ -1,4 +1,4 @@
-use kithara_platform::time::{Duration, Instant};
+use kithara::platform::time::{Duration, Instant};
 
 pub struct CrossfadeClock {
     duration: Duration,
@@ -30,7 +30,9 @@ pub struct ProgressLog {
 
 impl Default for ProgressLog {
     fn default() -> Self {
-        Self::new()
+        Self {
+            last_emit: Instant::now() - Self::PROGRESS_LOG_INTERVAL,
+        }
     }
 }
 
@@ -38,11 +40,8 @@ impl ProgressLog {
     const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
     #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
-        Self {
-            last_emit: Instant::now() - Self::PROGRESS_LOG_INTERVAL,
-        }
+        Self::default()
     }
 
     pub fn should_emit(&mut self) -> bool {

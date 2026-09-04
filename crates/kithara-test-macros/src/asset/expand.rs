@@ -1,0 +1,108 @@
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{ItemFn, LitStr, parse_macro_input};
+
+use crate::{
+    asset::parse::{AssetArgs, case_names},
+    test::case::{extract_cases, is_case_attr},
+};
+
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as AssetArgs);
+    let mut func = parse_macro_input!(item as ItemFn);
+
+    let cases = match extract_cases(&func.attrs) {
+        Ok(cases) => cases,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    let names = match case_names(&func.sig.ident, &cases) {
+        Ok(names) => names,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    func.attrs.retain(|attr| !is_case_attr(attr));
+
+    let fn_name = func.sig.ident.clone();
+    let fn_name_literal = fn_name.to_string();
+    let content_type = &args.content_type;
+    let context = args.context;
+    let embed = args.embed;
+    let env = &args.env;
+    let ext = &args.ext;
+    let optional = args.optional;
+
+    let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
+        let dependencies = case_dependencies(&args.depends_on, case_literal);
+        let values = &case.values;
+        let call = match (optional || context, dependencies.is_empty()) {
+            (true, true) => quote! { #fn_name(&__context, #(#values),*) },
+            (true, false) => {
+                quote! { #fn_name(&__context, __inputs, #(#values),*) }
+            }
+            (false, true) => quote! { #fn_name(#(#values),*) },
+            (false, false) => quote! { #fn_name(__inputs, #(#values),*) },
+        };
+        let build = if optional {
+            quote! {
+                match #call {
+                    Ok(bytes) => crate::registry::AssetBuild::Ready(bytes),
+                    Err(error) => crate::registry::AssetBuild::Unavailable(error.to_string()),
+                }
+            }
+        } else {
+            quote! { crate::registry::AssetBuild::Ready(#call) }
+        };
+        quote! {
+            ::inventory::submit! {
+                crate::registry::AssetDef {
+                    build: |__context, __inputs| { #build },
+                    case: #case_literal,
+                    content_type: #content_type,
+                    dependencies: &[#(#dependencies),*],
+                    embed: #embed,
+                    env: &[#(#env),*],
+                    ext: #ext,
+                    func: #fn_name_literal,
+                    optional: #optional,
+                }
+            }
+        }
+    });
+
+    quote! {
+        #func
+        #(#submissions)*
+    }
+    .into()
+}
+
+fn case_dependencies(dependencies: &[LitStr], case: &str) -> Vec<LitStr> {
+    dependencies
+        .iter()
+        .map(|dependency| {
+            LitStr::new(
+                &dependency.value().replace("{case}", case),
+                dependency.span(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::LitStr;
+
+    use super::case_dependencies;
+
+    #[test]
+    fn dependency_can_follow_the_asset_case() {
+        let dependencies = [LitStr::new(
+            "rhythm_wav_{case}",
+            proc_macro2::Span::call_site(),
+        )];
+
+        assert_eq!(
+            case_dependencies(&dependencies, "house_124_aligned")[0].value(),
+            "rhythm_wav_house_124_aligned"
+        );
+    }
+}

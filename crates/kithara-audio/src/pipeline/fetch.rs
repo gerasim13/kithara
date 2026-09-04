@@ -1,8 +1,67 @@
+use std::num::NonZeroU32;
+
+/// Exclusive decoded-source boundary represented by rendered PCM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct SourceEnd {
+    /// Sample rate of the decoded source coordinate.
+    #[field(get, copy)]
+    sample_rate: NonZeroU32,
+    /// Exclusive decoded source frame.
+    #[field(get, copy)]
+    frame: u64,
+}
+
+impl SourceEnd {
+    /// Construct a decoded-source boundary.
+    #[must_use]
+    pub const fn new(frame: u64, sample_rate: NonZeroU32) -> Self {
+        Self { sample_rate, frame }
+    }
+}
+
+/// Exact decoded-source interval represented by rendered PCM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+#[non_exhaustive]
+pub struct SourceSpan {
+    /// Inclusive decoded source frame.
+    #[field(get, copy)]
+    start: u64,
+    /// Exclusive decoded source frame.
+    #[field(get, copy)]
+    end: u64,
+    /// Sample rate of the decoded source coordinate.
+    #[field(get, copy)]
+    sample_rate: NonZeroU32,
+}
+
+impl SourceSpan {
+    /// Construct a decoded-source interval.
+    #[must_use]
+    pub const fn new(start: u64, end: u64, sample_rate: NonZeroU32) -> Option<Self> {
+        if start > end {
+            return None;
+        }
+        Some(Self {
+            start,
+            end,
+            sample_rate,
+        })
+    }
+}
+
 /// Fetch result from a worker source.
 #[derive(Debug)]
 pub enum Fetch<C> {
     /// Decoded data for an epoch.
-    Data { data: C, epoch: u64 },
+    Data {
+        data: C,
+        epoch: u64,
+        /// Exact decoded-source boundary represented by this rendered output.
+        source_end: Option<SourceEnd>,
+    },
     /// Natural end-of-stream for an epoch.
     NaturalEof { epoch: u64 },
     /// Decoder or source failure for an epoch.
@@ -13,7 +72,11 @@ impl<C> Fetch<C> {
     /// Create a data fetch.
     #[must_use]
     pub const fn data(data: C, epoch: u64) -> Self {
-        Self::Data { data, epoch }
+        Self::Data {
+            data,
+            epoch,
+            source_end: None,
+        }
     }
 
     /// Create a natural end-of-stream marker.
@@ -35,6 +98,16 @@ impl<C> Fetch<C> {
     #[must_use]
     pub const fn failure(epoch: u64) -> Self {
         Self::Failure { epoch }
+    }
+
+    /// Create rendered data with its exact decoded-source boundary.
+    #[must_use]
+    pub const fn rendered(data: C, epoch: u64, source_end: SourceEnd) -> Self {
+        Self::Data {
+            data,
+            epoch,
+            source_end: Some(source_end),
+        }
     }
 }
 
@@ -79,5 +152,12 @@ mod tests {
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));
         assert!(validator.is_valid(&next));
+    }
+
+    #[kithara::test]
+    fn source_span_rejects_an_inverted_interval() {
+        let rate = NonZeroU32::new(48_000).expect("test sample rate");
+
+        assert_eq!(SourceSpan::new(2, 1, rate), None);
     }
 }

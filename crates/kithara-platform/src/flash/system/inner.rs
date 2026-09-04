@@ -103,16 +103,6 @@ pub(in crate::flash) struct Registry {
     /// dump lists it so a quiescence pin reports WHICH task pins it (and where
     /// it was spawned) instead of a bare `active_async=N`.
     pub(super) active_async_holders: BTreeMap<u64, &'static Location<'static>>,
-    /// Gate state and poll count of every live async task, keyed by task id and
-    /// shared with its [`TaskGate`](super::gate::TaskGate). Inserted at
-    /// `async_acquire`, removed when the task completes or drops.
-    ///
-    /// A holder alone says a task pins the clock, not how. These two numbers
-    /// separate the two ways it can: a task spinning through wake-poll-park
-    /// climbs its poll count without bound, while one left `Runnable` by a wake
-    /// whose re-poll never arrived holds the slot at a poll count that never
-    /// moves again. Both look identical in `active_async=1`.
-    pub(super) task_diag: BTreeMap<u64, Arc<TaskDiag>>,
     /// SYNC counterpart of [`active_async_holders`](Self::active_async_holders):
     /// the dedicated-pacer OS threads currently counted as `Running` in `active`
     /// (audio worker, downloader runtime, flush hub, …), keyed by `ThreadKey`
@@ -124,6 +114,23 @@ pub(in crate::flash) struct Registry {
     /// `pre_count_dedicated` slot not yet claimed, or a just-fired wake bump
     /// before its thread resumes) — the dump annotates that gap.
     pub(super) active_sync_holders: BTreeMap<ThreadKey, SyncHolder>,
+    /// Provenance of every engine-backed primitive minted via
+    /// [`Registry::fresh_cv`] (Condvar/Notify/channel halves/…), keyed by the raw
+    /// cvid. Populated at construction by [`FlashInner::describe_cvid`] only under
+    /// `KITHARA_FLASH_SYNC_TRACE`; cleared on [`FlashInner::reset`]. Purely
+    /// diagnostic: it lets the hang dump label an opaque `Condvar(CvId(n))` waiter
+    /// with the real async primitive (kind + creation site) instead of a bare id.
+    pub(super) cv_desc: BTreeMap<u64, CvDesc>,
+    /// Gate state and poll count of every live async task, keyed by task id and
+    /// shared with its [`TaskGate`](super::gate::TaskGate). Inserted at
+    /// `async_acquire`, removed when the task completes or drops.
+    ///
+    /// A holder alone says a task pins the clock, not how. These two numbers
+    /// separate the two ways it can: a task spinning through wake-poll-park
+    /// climbs its poll count without bound, while one left `Runnable` by a wake
+    /// whose re-poll never arrived holds the slot at a poll count that never
+    /// moves again. Both look identical in `active_async=1`.
+    pub(super) task_diag: BTreeMap<u64, Arc<TaskDiag>>,
     /// OS threads currently inside a BRIDGED wait — blocked on the engine from
     /// within an async poll (`enter_wait_locked`'s bridged arm inserts, the
     /// matching `resume_after_wait` removes). Such a thread polls nothing while
@@ -132,13 +139,6 @@ pub(in crate::flash) struct Registry {
     /// those tasks from pinning a clock only it could move
     /// ([`Registry::pinning_async`]).
     pub(super) bridged: BTreeSet<ThreadKey>,
-    /// Provenance of every engine-backed primitive minted via
-    /// [`Registry::fresh_cv`] (Condvar/Notify/channel halves/…), keyed by the raw
-    /// cvid. Populated at construction by [`FlashInner::describe_cvid`] only under
-    /// `KITHARA_FLASH_SYNC_TRACE`; cleared on [`FlashInner::reset`]. Purely
-    /// diagnostic: it lets the hang dump label an opaque `Condvar(CvId(n))` waiter
-    /// with the real async primitive (kind + creation site) instead of a bare id.
-    pub(super) cv_desc: BTreeMap<u64, CvDesc>,
     /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
     pub(super) next_cv: u64,
     /// Monotonic waiter-id mint — see `Registry::fresh_id`.
@@ -166,14 +166,14 @@ pub(in crate::flash) struct Registry {
 /// Purely for the hang dump (see
 /// [`Registry::active_sync_holders`](Registry::active_sync_holders)).
 pub(in crate::flash) struct SyncHolder {
-    /// The OS thread name, if it was named (`spawn_named` pacers always are).
-    pub(super) name: Option<String>,
     /// Where the pacer last re-entered `Running` — its claim site the first
     /// time, the wait it came back from after that. A pacer that pins
     /// quiescence has been running since, so this is the last thing it is
     /// known to have finished waiting on; without it the dump names a thread
     /// and says nothing about what it is doing.
     pub(super) resumed_from: &'static Location<'static>,
+    /// The OS thread name, if it was named (`spawn_named` pacers always are).
+    pub(super) name: Option<String>,
     /// Virtual time at that resume. Against `virtual_now` it gives how long
     /// the pin has lasted, which separates "busy right now" from "stuck since
     /// the clock last moved".

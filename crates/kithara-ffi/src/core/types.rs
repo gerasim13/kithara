@@ -1,11 +1,14 @@
-use kithara_events::{
-    AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-    DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
-    PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason, StretchBackendKind,
-    TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
+use kithara::{
+    events::{
+        AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass,
+        DecodeErrorKind, DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain,
+        KeyFailureStage, KeySource, PlaybackResamplerKind, QueueRepeatMode, ResamplerKind,
+        RouteChangeReason, StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId,
+        TrackStatus as TS,
+    },
+    platform::{sync::Arc, time::Duration},
+    play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
 };
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -133,7 +136,7 @@ pub struct FfiItemConfig {
     /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
     /// `https://…/master.m3u8`) **or** an absolute local file path
     /// (`/Users/…/song.flac`). Parsed via
-    /// [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+    /// [`kithara::play::ResourceSrc::parse`] at insert time, then passed
     /// to [`kithara::play::ResourceConfig::for_src`].
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
@@ -229,8 +232,8 @@ pub enum FfiTrackStatus {
     Cancelled,
 }
 
-impl From<kithara_events::TrackStatus> for FfiTrackStatus {
-    fn from(s: kithara_events::TrackStatus) -> Self {
+impl From<kithara::events::TrackStatus> for FfiTrackStatus {
+    fn from(s: kithara::events::TrackStatus) -> Self {
         match s {
             TS::Loading => Self::Loading,
             TS::Slow => Self::Slow,
@@ -295,18 +298,18 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
     }
 }
 
-impl From<kithara_queue::RepeatMode> for FfiRepeatMode {
-    fn from(value: kithara_queue::RepeatMode) -> Self {
+impl From<kithara::queue::RepeatMode> for FfiRepeatMode {
+    fn from(value: kithara::queue::RepeatMode) -> Self {
         match value {
-            kithara_queue::RepeatMode::Off => Self::Off,
-            kithara_queue::RepeatMode::One => Self::One,
-            kithara_queue::RepeatMode::All => Self::All,
+            kithara::queue::RepeatMode::Off => Self::Off,
+            kithara::queue::RepeatMode::One => Self::One,
+            kithara::queue::RepeatMode::All => Self::All,
             _ => Self::Unknown,
         }
     }
 }
 
-impl TryFrom<FfiRepeatMode> for kithara_queue::RepeatMode {
+impl TryFrom<FfiRepeatMode> for kithara::queue::RepeatMode {
     type Error = FfiRepeatMode;
 
     fn try_from(value: FfiRepeatMode) -> Result<Self, Self::Error> {
@@ -469,7 +472,7 @@ pub enum FfiPlayerEvent {
 
 /// Transition style for a track switch.
 ///
-/// Mirrors [`kithara_queue::Transition`]. Use [`FfiTransition::None`]
+/// Mirrors [`kithara::queue::Transition`]. Use [`FfiTransition::None`]
 /// for immediate cuts (`AVQueuePlayer` user-initiated-selection idiom),
 /// [`FfiTransition::Crossfade`] to use the player's configured
 /// duration (typical for auto-advance and Next/Prev buttons), or
@@ -482,7 +485,7 @@ pub enum FfiTransition {
     CrossfadeWith { seconds: f32 },
 }
 
-impl From<FfiTransition> for kithara_queue::Transition {
+impl From<FfiTransition> for kithara::queue::Transition {
     fn from(t: FfiTransition) -> Self {
         match t {
             FfiTransition::None => Self::None,
@@ -521,7 +524,7 @@ impl From<AudioCodecKind> for FfiAudioCodecKind {
             AudioCodecKind::Alac => Self::Alac,
             AudioCodecKind::Pcm => Self::Pcm,
             AudioCodecKind::Adpcm => Self::Adpcm,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -555,7 +558,7 @@ impl From<ContainerKind> for FfiContainerKind {
             ContainerKind::Ogg => Self::Ogg,
             ContainerKind::Caf => Self::Caf,
             ContainerKind::Mkv => Self::Mkv,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -575,7 +578,7 @@ impl From<DecoderBackend> for FfiDecoderBackend {
             DecoderBackend::Symphonia => Self::Symphonia,
             DecoderBackend::Apple => Self::Apple,
             DecoderBackend::Android => Self::Android,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -601,7 +604,7 @@ impl From<DecoderChangeCause> for FfiDecoderChangeCause {
             DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
             DecoderChangeCause::Recovery => Self::Recovery,
             DecoderChangeCause::HostRateChange => Self::HostRateChange,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -621,7 +624,7 @@ impl From<DecodeErrorClass> for FfiDecodeErrorClass {
             DecodeErrorClass::Interrupted => Self::Interrupted,
             DecodeErrorClass::VariantChange => Self::VariantChange,
             DecodeErrorClass::Other => Self::Other,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -661,7 +664,7 @@ impl From<DecodeErrorKind> for FfiDecodeErrorKind {
             DecodeErrorKind::BackendStatus => Self::BackendStatus,
             DecodeErrorKind::Interrupted => Self::Interrupted,
             DecodeErrorKind::Backend => Self::Backend,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -679,7 +682,7 @@ impl From<FrameDomain> for FfiFrameDomain {
         match value {
             FrameDomain::Source => Self::Source,
             FrameDomain::Output => Self::Output,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -701,7 +704,7 @@ impl From<ResamplerKind> for FfiResamplerKind {
             ResamplerKind::Apple => Self::Apple,
             ResamplerKind::Glide => Self::Glide,
             ResamplerKind::None => Self::None,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -1156,19 +1159,19 @@ mod tests {
     #[kithara::test]
     fn queue_repeat_mode_round_trips_through_ffi() {
         for expected in [
-            kithara_queue::RepeatMode::Off,
-            kithara_queue::RepeatMode::One,
-            kithara_queue::RepeatMode::All,
+            kithara::queue::RepeatMode::Off,
+            kithara::queue::RepeatMode::One,
+            kithara::queue::RepeatMode::All,
         ] {
             let ffi = FfiRepeatMode::from(expected);
-            assert_eq!(kithara_queue::RepeatMode::try_from(ffi), Ok(expected));
+            assert_eq!(kithara::queue::RepeatMode::try_from(ffi), Ok(expected));
         }
     }
 
     #[kithara::test]
     fn unknown_ffi_repeat_mode_is_rejected() {
         assert_eq!(
-            kithara_queue::RepeatMode::try_from(FfiRepeatMode::Unknown),
+            kithara::queue::RepeatMode::try_from(FfiRepeatMode::Unknown),
             Err(FfiRepeatMode::Unknown)
         );
     }

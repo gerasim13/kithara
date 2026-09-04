@@ -14,7 +14,7 @@ extension IntegrationRegressionsIOS {
 
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
-            url: try TestServerFixture.asset("test.mp3").absoluteString
+            url: try TestServerFixture.signal("signal_mp3_track_sine440_187s.mp3").absoluteString
         )
         defer {
             player.stop()

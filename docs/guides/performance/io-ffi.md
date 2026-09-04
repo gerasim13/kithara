@@ -39,13 +39,13 @@ impl fmt::Display for RangeSpec { /* ... */ }        // range.to_string() once p
 let mut buf = Vec::new();
 while let Some(c) = stream.next().await { buf.extend_from_slice(&c); }
 Bytes::from(buf)
-// good: pre-size from the already-parsed Content-Length; zero-copy handoff
-let mut buf = Vec::with_capacity(content_length);
+// good: pre-size the durable output from Content-Length; freeze without copying
+let mut buf = BytesMut::with_capacity(content_length);
 // ...extend...
-Bytes::from(buf)                                     // per-segment scratch -> kithara-bufpool
+buf.freeze()
 ```
 
-*tier: warm | detector: enforced-ast-grep (perf.prefer-primitive-pool) | present in kithara (Bytes handoff; missing with_capacity in net/client body_bytes)*
+Reusable byte scratch comes from the injected `PoolRegion<S>` via `get::<u8>()` and grows through `try_extend_from_slice`; a durable payload that crosses ownership stays `Bytes`. *tier: warm | detector: enforced-ast-grep (perf.prefer-primitive-pool) | present in kithara*
 
 Absent in kithara today - watch for regressions:
 

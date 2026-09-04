@@ -48,34 +48,40 @@ pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
 /// Bounds a lane log, which a run appends to once per attempt.
 pub(crate) const MAX_LANE_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(crate) struct StressReportArgs {
-    /// `JUnit` emitted by the nextest stress profile.
+    /// Optional directory containing structured attempt envelopes.
     #[arg(long)]
-    junit: PathBuf,
+    #[field(with = with_optional_envelopes, vis = "pub(crate)")]
+    envelope_dir: Option<PathBuf>,
+    /// Optional line evidence whose records carry nextest attempt identifiers.
+    #[arg(long)]
+    #[field(with = with_optional_lines, vis = "pub(crate)")]
+    line_log: Option<PathBuf>,
+    /// Optional one-second Linux host and cgroup pressure samples.
+    #[arg(long)]
+    #[field(with = with_pressure, option_set_some, vis = "pub(crate)")]
+    pressure_log: Option<PathBuf>,
     /// Machine-readable output from `cargo nextest list` for the same selection.
     #[arg(long)]
     inventory: PathBuf,
-    /// Optional line evidence whose records carry nextest attempt identifiers.
+    /// `JUnit` emitted by the nextest stress profile.
     #[arg(long)]
-    line_log: Option<PathBuf>,
-    /// Optional directory containing structured attempt envelopes.
-    #[arg(long)]
-    envelope_dir: Option<PathBuf>,
-    /// Optional one-second Linux host and cgroup pressure samples.
-    #[arg(long)]
-    pressure_log: Option<PathBuf>,
+    junit: PathBuf,
     /// Markdown summary destination.
     #[arg(long)]
     output: PathBuf,
+    #[arg(skip)]
+    #[field(with, vis = "pub(crate)")]
+    evidence: StressEvidenceConfig,
+    /// Explain an absent `JUnit` as fallout from the primary nextest step.
+    #[arg(long)]
+    #[field(with, vis = "pub(crate)")]
+    allow_missing: bool,
     /// Number of stress iterations requested from nextest.
     #[arg(long)]
     expected_count: usize,
-    /// Explain an absent `JUnit` as fallout from the primary nextest step.
-    #[arg(long)]
-    allow_missing: bool,
-    #[arg(skip)]
-    evidence: StressEvidenceConfig,
 }
 
 impl StressReportArgs {
@@ -89,70 +95,40 @@ impl StressReportArgs {
         Self {
             junit,
             inventory,
+            output,
+            expected_count,
             line_log: None,
             envelope_dir: None,
             pressure_log: None,
-            output,
-            expected_count,
             allow_missing: false,
             evidence: StressEvidenceConfig::default(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn with_allow_missing(mut self, allow_missing: bool) -> Self {
-        self.allow_missing = allow_missing;
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_pressure(mut self, path: PathBuf) -> Self {
-        self.pressure_log = Some(path);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_optional_envelopes(mut self, path: Option<PathBuf>) -> Self {
-        self.envelope_dir = path;
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_optional_lines(mut self, path: Option<PathBuf>) -> Self {
-        self.line_log = path;
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_evidence(mut self, evidence: StressEvidenceConfig) -> Self {
-        self.evidence = evidence;
-        self
     }
 }
 
 #[derive(Debug, Default)]
 struct TestStats {
-    max_secs: f64,
-    observed_iterations: BTreeSet<usize>,
     failed_iterations: BTreeSet<usize>,
+    observed_iterations: BTreeSet<usize>,
+    max_secs: f64,
 }
 
 #[derive(Debug)]
 struct RenderedReport {
-    markdown: String,
-    complete: bool,
     /// What each test did in this lane, kept so lanes can be put side by side.
     rates: BTreeMap<TestId, LaneRate>,
     /// Repeats [`quarantine_poisoned_iterations`] threw out, kept so the
     /// evidence census can be held to the same set as the rate tables.
     quarantined: BTreeSet<usize>,
+    markdown: String,
+    complete: bool,
 }
 
 #[derive(Debug, Default)]
 struct EvidenceProblems {
     rows: Vec<String>,
-    total: usize,
     invalid: bool,
+    total: usize,
 }
 
 type TestId = (String, String);
@@ -165,17 +141,17 @@ struct Inventory {
 
 #[derive(Debug, Deserialize)]
 struct InventorySuite {
+    testcases: BTreeMap<String, InventoryCase>,
     #[serde(rename = "binary-id")]
     binary_id: String,
     status: String,
-    testcases: BTreeMap<String, InventoryCase>,
 }
 
 #[derive(Debug, Deserialize)]
 struct InventoryCase {
-    ignored: bool,
     #[serde(rename = "filter-match")]
     filter_match: InventoryMatch,
+    ignored: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,29 +190,29 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
 /// run exists to answer — which lane does this flake belong to — spread
 /// across two documents for the reader to join by hand.
 pub(crate) struct LaneReport {
-    pub(crate) markdown: String,
     pub(crate) rates: BTreeMap<TestId, LaneRate>,
     /// How many of this lane's attempts the command rejected, for a lane whose
     /// verdict is an exit code rather than a set of test results.
     pub(crate) attempts: Option<LaneRate>,
     pub(crate) verdict: Result<()>,
-    /// Whether the lane produced valid per-attempt evidence at all. A lane
-    /// whose artifact was missing or invalid has nothing to stand in a
-    /// comparison — counting it as trustworthy is how a run summary
-    /// contradicts its own per-lane verdicts.
-    pub(crate) readable: bool,
+    pub(crate) markdown: String,
     /// Whether every requested iteration is accounted for. A readable lane can
     /// still fall short of its own request — quarantined repeats, truncated
     /// output, a run that stopped early — and a rate measured over the
     /// survivors answers a different question than the run asked.
     pub(crate) complete: bool,
+    /// Whether the lane produced valid per-attempt evidence at all. A lane
+    /// whose artifact was missing or invalid has nothing to stand in a
+    /// comparison — counting it as trustworthy is how a run summary
+    /// contradicts its own per-lane verdicts.
+    pub(crate) readable: bool,
 }
 
 /// How often one test failed in one lane.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LaneRate {
-    pub(crate) failed: usize,
     pub(crate) attempts: usize,
+    pub(crate) failed: usize,
 }
 
 pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
@@ -356,10 +332,10 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         Err(NotClean::reported("stress evidence"))
     };
     Ok(LaneReport {
+        verdict,
         markdown: report.markdown,
         rates: report.rates,
         attempts: None,
-        verdict,
         readable: true,
         complete: report.complete,
     })
@@ -785,6 +761,10 @@ pub(crate) struct AttemptRecords {
 }
 
 impl AttemptRecords {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rates.is_empty() && self.silent.is_empty() && self.unreadable.is_empty()
+    }
+
     /// The most executions any one test recorded.
     ///
     /// This is what a lane that repeats internally can be held to: its report
@@ -796,10 +776,6 @@ impl AttemptRecords {
             .map(|rate| rate.attempts)
             .max()
             .unwrap_or(0)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rates.is_empty() && self.silent.is_empty() && self.unreadable.is_empty()
     }
 }
 
@@ -1124,9 +1100,9 @@ fn render(
     render_quarantine(&mut out, &quarantined);
     render_failures(&mut out, tests);
     RenderedReport {
-        markdown: out,
         complete,
         rates,
+        markdown: out,
         quarantined: quarantined.into_keys().collect(),
     }
 }
@@ -1335,11 +1311,11 @@ mod tests {
 
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
+            failed,
+            secs,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),
-            failed,
-            secs,
             timestamp: None,
             output: String::new(),
             output_truncated: false,

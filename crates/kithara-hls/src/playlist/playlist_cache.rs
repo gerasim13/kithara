@@ -2,6 +2,7 @@
 
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ResourceKey};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, RwLock},
@@ -19,8 +20,10 @@ use crate::{HlsError, HlsResult, handle::PlaylistPeer};
 ///
 /// Clone-friendly: all mutable state lives behind `Arc`, so clones see
 /// the same master/media `OnceCell` buckets and configured headers/URLs.
-#[derive(Clone)]
-pub struct PlaylistCache {
+pub struct PlaylistCache<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Cache-wide config (headers, master URL, base URL override). Held
     /// behind `Arc<RwLock<...>>` so clones see the same builder
     /// mutations.
@@ -31,7 +34,7 @@ pub struct PlaylistCache {
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
     /// Cache-first + downloader pipeline for `.m3u8` playlist bodies.
-    fetch: PlaylistPeer,
+    fetch: PlaylistPeer<S>,
 }
 
 #[derive(Default, Clone)]
@@ -41,15 +44,28 @@ struct PlaylistConfig {
     master_url: Option<Url>,
 }
 
-impl PlaylistCache {
-    #[must_use]
-    pub fn new(
-        scope: AssetScope,
-        downloader: PeerHandle,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Self {
+impl<S> Clone for PlaylistCache<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
         Self {
-            fetch: PlaylistPeer::new(downloader, scope, byte_pool),
+            config: Arc::clone(&self.config),
+            master: Arc::clone(&self.master),
+            media: Arc::clone(&self.media),
+            fetch: self.fetch.clone(),
+        }
+    }
+}
+
+impl<S> PlaylistCache<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    #[must_use]
+    pub fn new(scope: AssetScope<S>, downloader: PeerHandle, pools: PoolRegion<S>) -> Self {
+        Self {
+            fetch: PlaylistPeer::new(downloader, scope, pools),
             config: Arc::new(RwLock::default()),
             master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),

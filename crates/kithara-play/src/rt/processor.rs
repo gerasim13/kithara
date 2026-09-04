@@ -5,16 +5,21 @@ use firewheel::{
     StreamInfo,
     dsp::fade::FadeCurve,
     event::ProcEvents,
-    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
+use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapCons, HeapProd, traits::Producer};
 use smallvec::SmallVec;
 
-use super::track::PlayerTrack;
+use super::{context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
@@ -26,6 +31,13 @@ use crate::{
 pub(crate) enum CrossfadeCurve {
     #[default]
     EqualPower,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ContextRequirement {
+    #[default]
+    Standalone,
+    Session,
 }
 
 const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
@@ -63,18 +75,18 @@ impl CrossfadeSettings {
 pub struct PlayerNodeProcessor {
     #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
+    pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
-    /// Media seconds consumed per output second, applied to every track the
-    /// processor owns and seeded into every track it loads.
-    pub(super) playback_rate: f32,
     pub(super) prefetch_duration: f32,
     trash_tx: HeapProd<PlayerTrack>,
+    /// Last effective rate successfully delivered to the control thread.
+    last_notified_rate: f32,
+    context_requirement: ContextRequirement,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -93,19 +105,36 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
+    pub fn new<S>(inputs: NodeInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
+        Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
+    }
+
+    pub(super) fn with_context_requirement<S>(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+        context_requirement: ContextRequirement,
+    ) -> Self
+    where
+        S: HasPool<f32>,
+    {
+        let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
         Self {
+            last_notified_rate,
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pool, shape),
+            render: RenderPass::new(pools, shape),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
-            playback_rate: 1.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+            context_requirement,
         }
     }
 
@@ -118,12 +147,9 @@ impl PlayerNodeProcessor {
             .map(|(slot, track)| (slot, track.ended_at_eof()))
             .collect();
 
-        // Superpowered-style end-of-queue resume: if removing the finished tracks would empty the
-        // slot set (the queue has played out) and one of them reached *natural* EOF, keep that
-        // single track resident (warm) so a later in-range seek can revive it (`apply_seek`). It is
-        // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when the next track loads.
-        // Tracks that finished via `stop()` or a faded-out crossfade (not `ended_at_eof`) are
-        // discarded as usual.
+        // WHY: Superpowered-style end-of-queue resume: if removing the finished tracks would empty the slot set (the queue has played out)
+        // and one of them reached *natural* EOF, keep that single track resident (warm) so a later in-range seek can revive it
+        // (`apply_seek`).
         let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
             finished
                 .iter()
@@ -134,16 +160,16 @@ impl PlayerNodeProcessor {
 
         for (slot, _) in finished.iter().filter(|(slot, _)| Some(*slot) != retain) {
             if let Some(track) = self.tracks.remove_at(*slot) {
+                let item_id = track.item_id();
                 let src = Arc::clone(track.src());
                 self.discard_track(track);
                 self.notif_tx
-                    .try_push(PlayerNotification::Unloaded { src })
+                    .try_push(PlayerNotification::Unloaded { src, item_id })
                     .ok();
             }
         }
 
-        // The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays
-        // false until a seek revives it.
+        // WHY: The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }
@@ -170,13 +196,41 @@ impl PlayerNodeProcessor {
                 self.playback.metrics().record_evicted_playing();
             }
             if let Some(track) = self.tracks.remove_at(slot) {
+                let item_id = track.item_id();
                 let src = Arc::clone(track.src());
                 self.discard_track(track);
                 self.notif_tx
-                    .try_push(PlayerNotification::Unloaded { src })
+                    .try_push(PlayerNotification::Unloaded { src, item_id })
                     .ok();
             }
         }
+    }
+
+    fn leading_effective_rate(&self) -> Option<f32> {
+        self.tracks
+            .iter()
+            .find_map(|(_, track)| track.state().is_leading().then(|| track.playback_rate()))
+    }
+
+    fn publish_effective_rate(&mut self, rate: f32) {
+        self.playback.rate.store(rate, Ordering::Relaxed);
+        if self.last_notified_rate != rate
+            && self
+                .notif_tx
+                .try_push(PlayerNotification::RateChanged { rate })
+                .is_ok()
+        {
+            self.last_notified_rate = rate;
+        }
+    }
+
+    pub(super) fn refresh_effective_rate(&mut self) {
+        let rate = if self.playback.playing.load(Ordering::SeqCst) {
+            self.leading_effective_rate().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        self.publish_effective_rate(rate);
     }
 
     pub fn render_audio(
@@ -185,7 +239,18 @@ impl PlayerNodeProcessor {
         frames: usize,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
+        self.render_with_context(None, buffers, frames, is_playing)
+    }
+
+    fn render_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
         self.render.render_audio(
+            context,
             RenderTargets {
                 tracks: &mut self.tracks,
                 notification_tx: &mut self.notif_tx,
@@ -198,30 +263,36 @@ impl PlayerNodeProcessor {
         )
     }
 
+    fn render_context<'a>(
+        &self,
+        store: &'a ProcStore,
+        info: &ProcInfo,
+    ) -> Result<Option<&'a RenderContext>, &'static str> {
+        match self.context_requirement {
+            ContextRequirement::Standalone => Ok(None),
+            ContextRequirement::Session => read_render_context(store, info).map(Some),
+        }
+    }
+
+    fn retire(&mut self, track: PlayerTrack) {
+        let item_id = track.item_id();
+        let src = Arc::clone(track.src());
+        self.discard_track(track);
+        self.notif_tx
+            .try_push(PlayerNotification::Unloaded { src, item_id })
+            .ok();
+    }
+
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
             .iter()
             .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
-    pub(super) fn unload_track(&mut self, src: &str) {
-        if let Some(track) = self.tracks.remove(src) {
-            self.retire(track);
-        }
-    }
-
     pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
         if let Some(track) = self.tracks.remove_at(slot) {
             self.retire(track);
         }
-    }
-
-    fn retire(&mut self, track: PlayerTrack) {
-        let src = Arc::clone(track.src());
-        self.discard_track(track);
-        self.notif_tx
-            .try_push(PlayerNotification::Unloaded { src })
-            .ok();
     }
 
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -246,10 +317,8 @@ impl PlayerNodeProcessor {
     /// the first render block, or every active track was a non-leading
     /// fade-in).
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        // Both windows come from the leading track's lock-free snapshots: the
-        // decoded frontier (always `>=` position) and the cached span the
-        // download side published. The queue view unions them into the
-        // buffered window the FFI polls for loaded ranges.
+        // WHY: Both windows come from the leading track's lock-free snapshots: the decoded frontier (always `>=` position) and the cached
+        // span the download side published.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.playback
@@ -283,17 +352,17 @@ impl PlayerNodeProcessor {
 
     delegate::delegate! {
         to self.tracks {
-            /// Look up a track by its source identifier.
+            /// Look up a track by its queue-item identity.
             #[must_use]
             #[call(get)]
-            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
+            pub fn track(&self, item_id: TrackId) -> Option<&PlayerTrack>;
             /// Number of tracks currently held in the processor arena.
             #[must_use]
             #[call(len)]
             pub fn track_count(&self) -> usize;
-            /// Look up a track by its source identifier (mutable).
+            /// Look up a track by its queue-item identity (mutable).
             #[call(get_mut)]
-            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
+            pub fn track_mut(&mut self, item_id: TrackId) -> Option<&mut PlayerTrack>;
         }
     }
 }
@@ -310,7 +379,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         info: &ProcInfo,
         mut buffers: ProcBuffers,
         _events: &mut ProcEvents,
-        _extra: &mut ProcExtra,
+        extra: &mut ProcExtra,
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
@@ -320,15 +389,150 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let is_playing = self.playback.playing.load(Ordering::SeqCst);
 
+        let context = match self.render_context(&extra.store, info) {
+            Ok(context) => context,
+            Err(reason) => {
+                let _ = extra.logger.try_error(reason);
+                return ProcessStatus::ClearAllOutputs;
+            }
+        };
+
         let (playback_started, leading_outcome_pos_dur) =
-            self.render_audio(&mut buffers, info.frames, is_playing);
+            self.render_with_context(context, &mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
+        self.refresh_effective_rate();
 
         if playback_started {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use firewheel::{
+        clock::InstantSamples,
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{ProcStore, StreamStatus},
+    };
+    use kithara_platform::time::Duration;
+    use kithara_warp::{RenderContext, SessionEpoch, SessionFrame, TransportRevision};
+    use ringbuf::traits::{Consumer, Producer};
+
+    use super::*;
+    use crate::{
+        bridge::{SharedEq, slot_channels},
+        test_pools::pools,
+    };
+
+    fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    }
+
+    fn session_processor() -> PlayerNodeProcessor {
+        let (inputs, _control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        PlayerNodeProcessor::with_context_requirement(
+            inputs,
+            shape,
+            &pools(),
+            ContextRequirement::Session,
+        )
+    }
+
+    fn proc_info() -> ProcInfo {
+        ProcInfo {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            frames: 512,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            prev_output_was_silent: true,
+            sample_rate_recip: f64::from(44_100).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        }
+    }
+
+    #[kithara::test]
+    fn session_processors_read_the_same_host_context() {
+        let mut store = ProcStore::with_capacity(1);
+        super::super::install_render_context(&mut store)
+            .expect("invariant: fixture installs one context slot");
+        super::super::publish_render_context(
+            &mut store,
+            RenderContext::new(
+                SessionFrame::new(0)..SessionFrame::new(512),
+                NonZeroU32::new(44_100).expect("static sample rate"),
+                None,
+                SessionEpoch::new(3),
+                Some(TransportRevision::first()),
+            )
+            .expect("invariant: fixture context is valid"),
+        )
+        .expect("invariant: fixture context slot exists");
+        let info = proc_info();
+        let left = session_processor();
+        let right = session_processor();
+        let left = left
+            .render_context(&store, &info)
+            .expect("session context")
+            .expect("required context");
+        let right = right
+            .render_context(&store, &info)
+            .expect("session context")
+            .expect("required context");
+
+        assert!(std::ptr::eq(left, right));
+        assert_eq!(left.session_epoch(), SessionEpoch::new(3));
+        assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
+    }
+
+    #[kithara::test]
+    fn full_notification_ring_retries_latest_effective_rate_once() {
+        let (mut processor, mut control) = processor();
+        let filler = Arc::from("filler");
+        while processor
+            .notif_tx
+            .try_push(PlayerNotification::Loaded {
+                src: Arc::clone(&filler),
+            })
+            .is_ok()
+        {}
+
+        processor.publish_effective_rate(1.25);
+        processor.publish_effective_rate(1.5);
+        assert_eq!(processor.playback.rate.load(Ordering::Relaxed), 1.5);
+        assert_eq!(processor.last_notified_rate, 0.0);
+
+        assert!(control.notif_rx.try_pop().is_some());
+        processor.publish_effective_rate(1.5);
+
+        let mut delivered = Vec::new();
+        while let Some(notification) = control.notif_rx.try_pop() {
+            if let PlayerNotification::RateChanged { rate } = notification {
+                delivered.push(rate);
+            }
+        }
+        assert_eq!(delivered, [1.5]);
+
+        processor.publish_effective_rate(1.5);
+        assert!(control.notif_rx.try_pop().is_none());
     }
 }

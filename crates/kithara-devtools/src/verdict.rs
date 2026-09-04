@@ -4,9 +4,9 @@ use std::fmt;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ChildFailure {
-    label: String,
     exit_code: Option<i32>,
     stderr: Option<String>,
+    label: String,
 }
 
 impl fmt::Display for ChildFailure {
@@ -26,6 +26,23 @@ impl fmt::Display for ChildFailure {
 impl std::error::Error for ChildFailure {}
 
 impl ChildFailure {
+    /// Report a child whose standard error was captured by the current process.
+    #[must_use]
+    pub fn captured(label: String, exit_code: Option<i32>, stderr: String) -> anyhow::Error {
+        let stderr = (!stderr.is_empty()).then_some(stderr);
+        anyhow::Error::new(Self {
+            exit_code,
+            stderr,
+            label,
+        })
+    }
+
+    pub(crate) fn exit_code(&self) -> i32 {
+        self.exit_code
+            .filter(|code| (1..=i32::from(u8::MAX)).contains(code))
+            .unwrap_or(1)
+    }
+
     /// Report a child whose output was inherited by the current process.
     #[must_use]
     pub fn inherited(label: String, exit_code: Option<i32>) -> anyhow::Error {
@@ -34,23 +51,6 @@ impl ChildFailure {
             exit_code,
             stderr: None,
         })
-    }
-
-    /// Report a child whose standard error was captured by the current process.
-    #[must_use]
-    pub fn captured(label: String, exit_code: Option<i32>, stderr: String) -> anyhow::Error {
-        let stderr = (!stderr.is_empty()).then_some(stderr);
-        anyhow::Error::new(Self {
-            label,
-            exit_code,
-            stderr,
-        })
-    }
-
-    pub(crate) fn exit_code(&self) -> i32 {
-        self.exit_code
-            .filter(|code| (1..=i32::from(u8::MAX)).contains(code))
-            .unwrap_or(1)
     }
 }
 
@@ -104,14 +104,16 @@ impl NotClean {
         })
     }
 
-    /// The same verdict from a check that prints its findings but does not
-    /// hand back a count.
-    #[must_use]
-    pub fn reported(check: &'static str) -> anyhow::Error {
-        anyhow::Error::new(Self {
-            check,
-            findings: None,
-        })
+    fn render(error: &anyhow::Error) -> (String, i32) {
+        if let Some(verdict) = error.downcast_ref::<Self>() {
+            return (verdict.to_string(), 1);
+        }
+
+        if let Some(failure) = error.downcast_ref::<ChildFailure>() {
+            return (failure.to_string(), failure.exit_code());
+        }
+
+        (format!("Error: {error:?}"), 1)
     }
 
     /// Print `error` the way it deserves and give the exit code to leave with.
@@ -125,16 +127,14 @@ impl NotClean {
         code
     }
 
-    fn render(error: &anyhow::Error) -> (String, i32) {
-        if let Some(verdict) = error.downcast_ref::<Self>() {
-            return (verdict.to_string(), 1);
-        }
-
-        if let Some(failure) = error.downcast_ref::<ChildFailure>() {
-            return (failure.to_string(), failure.exit_code());
-        }
-
-        (format!("Error: {error:?}"), 1)
+    /// The same verdict from a check that prints its findings but does not
+    /// hand back a count.
+    #[must_use]
+    pub fn reported(check: &'static str) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            check,
+            findings: None,
+        })
     }
 }
 

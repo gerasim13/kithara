@@ -1,3 +1,4 @@
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 #![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,
@@ -6,6 +7,11 @@
 
 mod common;
 
+pub use kithara_integration_tests::bufpool_ext;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod audio_artifact;
+
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 #[path = "common/gapless.rs"]
@@ -13,6 +19,7 @@ mod gapless_common;
 
 mod browser_runner_smoke;
 mod events;
+mod kithara_analysis;
 mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
@@ -25,7 +32,6 @@ mod kithara_encode {
     mod factory_tests;
     mod flac_tests;
     mod stream_tests;
-    mod traits_tests;
     mod types_tests;
 }
 

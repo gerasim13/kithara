@@ -4,22 +4,22 @@ use std::{
 };
 
 use kithara::{
-    audio::{Audio, PcmSession, ReadOutcome},
+    audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::EventBus,
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
     },
+    play::RegisteredAudio,
     stream::{Stream, StreamType},
 };
-use kithara_integration_tests::Xorshift64;
+use kithara_integration_tests::{Xorshift64, bufpool_ext::TestPools};
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 pub(crate) const CHANNELS: u16 = 2;
 pub(crate) const FREQ_HZ: f64 = 440.0;
-pub(crate) const STREAM_FRAMES: u64 = (SAMPLE_RATE as u64) * 60;
 pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
 /// Minimum fitted amplitude for a scan window to carry a meaningful phase.
 /// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);
@@ -130,7 +130,11 @@ pub(crate) fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f6
     (phase, amp)
 }
 
-fn read_block<T>(audio: &mut Audio<Stream<T>>, buf: &mut [f32], label: &str) -> Option<usize>
+fn read_block<T>(
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    buf: &mut [f32],
+    label: &str,
+) -> Option<usize>
 where
     T: StreamType<Events = EventBus>,
 {
@@ -150,7 +154,7 @@ where
 /// carries the same guard.
 #[kithara::flash(true)]
 fn read_block_with_position<T>(
-    audio: &mut Audio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<(usize, Duration)>
@@ -160,7 +164,9 @@ where
     let mut retries = 0usize;
     loop {
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, position }) => return Some((count.get(), position)),
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => return Some((count.get(), position)),
             Ok(ReadOutcome::Pending { .. }) => {
                 retries += 1;
                 assert!(
@@ -186,7 +192,7 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// Async twin of [`read_block_with_position`]; same reason for the guard.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
-    audio: &mut Audio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<usize>
@@ -232,7 +238,8 @@ fn check_against_previous(
         return None;
     }
     // The source is mono: both channels carry the same sine
-    // (`signal_pcm`), so the timeline this asserts on is the channel mean.
+    // (`kithara_test_fixtures::signal`), so the timeline this asserts on is the
+    // channel mean.
     // Reading one channel measures the decoder's stereo synthesis as well:
     // HE-AAC v2 reconstructs L and R from a mono core plus quantised spatial
     // parameters, and that reconstruction error is antisymmetric between the
@@ -281,7 +288,7 @@ fn check_against_previous(
 }
 
 pub(crate) fn e2e_phase_scan<T>(
-    audio: &mut Audio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
 ) -> Vec<PhaseDrift>
@@ -320,7 +327,7 @@ where
 }
 
 pub(crate) fn seek_phase_scan<T, F>(
-    audio: &mut Audio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_secs: f64,
     seek_count: usize,
@@ -375,7 +382,7 @@ where
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
 pub(crate) async fn scripted_phase_scan<T, S, F>(
-    audio: &mut Audio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
@@ -445,7 +452,7 @@ where
     drifts
 }
 
-async fn wait_for_preload<T>(audio: &Audio<Stream<T>>)
+async fn wait_for_preload<T>(audio: &RegisteredAudio<Stream<T>, TestPools>)
 where
     T: StreamType<Events = EventBus>,
 {

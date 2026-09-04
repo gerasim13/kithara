@@ -1,5 +1,5 @@
 use iced::keyboard::{Key, Modifiers, key::Named};
-use kithara_ui::render::WindowCommand;
+use kithara::ui::render::WindowCommand;
 
 use super::message::Message;
 

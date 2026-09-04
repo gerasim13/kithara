@@ -443,10 +443,10 @@ mod tests {
 
     fn scenario(name: &str, state: ScenarioState, trace_state: TraceState) -> ScenarioSummary {
         ScenarioSummary {
+            state,
             exit_code: None,
             stderr: None,
             stdout: None,
-            state,
             name: name.to_string(),
             trace: TraceSummary {
                 state: trace_state,

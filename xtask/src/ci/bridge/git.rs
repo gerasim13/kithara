@@ -60,7 +60,7 @@ impl GitRepo {
                 &github_url,
                 &format!(
                     "+refs/heads/{}:refs/heads/bridge/github",
-                    self.config.branch
+                    self.config.github_branch
                 ),
             ],
             Some(github.git_header()),
@@ -79,7 +79,7 @@ impl GitRepo {
                 &gitlab_url,
                 &format!(
                     "+refs/heads/{}:refs/heads/bridge/gitlab",
-                    self.config.branch
+                    self.config.gitlab_branch
                 ),
             ],
             Some(gitlab.git_header()),
@@ -367,7 +367,7 @@ impl GitRepo {
             &[
                 "push",
                 &url,
-                &format!("{sha}:refs/heads/{}", self.config.branch),
+                &format!("{sha}:refs/heads/{}", self.config.github_branch),
             ],
             Some(github.git_header()),
         )?;
@@ -532,7 +532,8 @@ mod tests {
             gitlab_project_path: "group/repo".into(),
             gitlab_username: "bot".into(),
             gitlab_token_file: state.join("gitlab.token"),
-            branch: "main".into(),
+            github_branch: "main".into(),
+            gitlab_branch: "develop".into(),
             state_dir: state.to_path_buf(),
             trusted_authors: Vec::new(),
         }

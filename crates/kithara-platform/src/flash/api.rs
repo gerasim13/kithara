@@ -73,20 +73,14 @@ impl Future for FlashSleep {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if let Some(handle) = self.handle.as_ref() {
             if handle.granted() {
-                // The engine crossed our deadline and granted this waiter.
-                // Resolve is GRANT-driven, never a bare `Clock` read
-                // (`now >= deadline`): only the engine firing THIS waiter sets `granted`,
-                // so a clock that jumps past our deadline via some OTHER advance
-                // cannot resolve us early. The task's `active_async` count is
-                // owned by the spawn poll-wrapper, so resolve touches no counter.
+                // WHY: The engine crossed our deadline and granted this waiter. Resolve is GRANT-driven, never a bare `Clock` read (`now >=
+                // deadline`): only the engine firing THIS waiter sets `granted`, so a clock that jumps past our deadline via some OTHER advance
+                // cannot resolve us early.
                 self.handle = None;
                 return Poll::Ready(());
             }
-            // Spurious re-poll before the engine fires us: stay parked.
             return Poll::Pending;
         }
-        // First poll: register `delta` from the current virtual instant; the
-        // deadline is computed under the engine lock (no backward-clock race).
         let (handle, adv) = system::register_sleep_async(self.delta_nanos, cx.waker().clone());
         self.handle = Some(handle);
         adv.fire();
@@ -188,9 +182,8 @@ impl Future for Yield {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        // `Yield` is `Unpin` (every field of both variants is), so the safe
-        // `get_mut`/`Pin::new` projection is available, and the compiler rejects
-        // this code if a variant gains a `!Unpin` field.
+        // WHY: `Yield` is `Unpin` (every field of both variants is), so the safe `get_mut`/`Pin::new` projection is available, and the
+        // compiler rejects this code if a variant gains a `!Unpin` field.
         match self.get_mut() {
             Self::Flash(f) => Pin::new(f).poll(cx),
             Self::Real { yielded } => {
@@ -269,7 +262,7 @@ pub fn virtual_park_timeout(duration: Duration) {
 }
 
 pub(super) fn duration_to_nanos(d: Duration) -> u64 {
-    // Fold via `u64` seconds + `u32` subsec — no `u128` intermediate, no cast.
+    // WHY: Fold via `u64` seconds + `u32` subsec - no `u128` intermediate, no cast.
     const NANOS_PER_SEC: u64 = 1_000_000_000;
     d.as_secs()
         .saturating_mul(NANOS_PER_SEC)
@@ -393,8 +386,7 @@ impl<F: Future> Future for WithAmbient<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
-        // The guard is a named binding, so it drops AFTER `fut.poll(cx)`
-        // returns, restoring the worker thread's previous ambient.
+        // WHY: The guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the worker thread's previous ambient.
         let _a = set_ambient_for_spawn(*this.on);
         this.fut.poll(cx)
     }
@@ -426,8 +418,7 @@ impl<F: Future> Future for FlashDynamic<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = self.project();
-        // The `_g` guard is a named binding, so it drops AFTER `fut.poll(cx)`
-        // returns, restoring the previous mode.
+        // WHY: The `_g` guard is a named binding, so it drops AFTER `fut.poll(cx)` returns, restoring the previous mode.
         let _g = enter_dynamic(*this.on);
         this.fut.poll(cx)
     }

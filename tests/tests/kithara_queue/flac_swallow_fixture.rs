@@ -1,16 +1,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrMode,
-    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
         time::{self, Duration, Instant},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
@@ -23,6 +25,8 @@ use kithara_integration_tests::{
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
 };
 use kithara_test_utils::probe::capture as probe_capture;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
 /// repo's DRM fixtures.
@@ -129,12 +133,17 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let temp = TestTempDir::new();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
 
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid master URL"),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid master URL"),
     )
     .downloader(downloader)
     .discriminator("t0")
@@ -145,8 +154,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker)
     .build();
 
     let resource = Resource::new(cfg)
@@ -155,8 +163,12 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let recorder = probe_capture::install();
 
-    let mut player = OfflinePlayer::new(OUT_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
     let windows =

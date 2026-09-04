@@ -27,9 +27,9 @@ just test run --lane=cold      # opt-in cold L2 fixture cache (profile `cold`)
 
 Three lanes carry the tests that are not about the product: the build tooling,
 and the harness the product tests are written with. They are not optional
-coverage — they run nightly on the fork's Linux fleet through `lanes.yml`, and
-immediately on any push that touches their own sources (the `support` job in
-`ci.yml`).
+coverage — the `linux-tooling`, `linux-harness` and `linux-fixtures` lanes run
+them nightly on the fork's Linux fleet, and the `linux-support` lane runs the
+ones a push touched on every push.
 
 ```sh
 just test run --lane=tooling   # kithara-devtools, xtask

@@ -1,58 +1,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 #[cfg(test)]
 use kithara_play::PlaybackShared;
-use kithara_play::{PlaybackSnapshot, ResourceSrc};
+use kithara_play::ResourceSrc;
+pub use kithara_play::player::PlaybackView;
 
 use crate::track::TrackSource;
-
-/// One-shot view of the player's live playback state, returned by
-/// [`Queue::playback_view`](super::Queue::playback_view).
-///
-/// Collapses position / duration / buffered / playing into a single
-/// read so pollers (the FFI time thread, `snapshot`) assemble the whole
-/// state from one coherent call instead of several separate accessors.
-/// Each field keeps its own `Option` semantics: `position` carries the
-/// cached smoothing (filters transient `0.0` on pause/resume), and
-/// `duration` is `None` while unknown.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[non_exhaustive]
-pub struct PlaybackView {
-    /// Seconds playable without further network — the wider of the cached
-    /// span and the decoded-ahead frontier. `None` when no track is active.
-    /// Always `>=` `position`.
-    pub buffered: Option<f64>,
-    /// Total media duration in seconds; `None` while unknown.
-    pub duration: Option<f64>,
-    /// Smoothed playback position in seconds; `None` until a stable
-    /// position is known (e.g. between tracks).
-    pub position: Option<f64>,
-    /// Whether playback is active.
-    pub playing: bool,
-}
-
-impl From<PlaybackSnapshot> for PlaybackView {
-    /// Resolve a raw player snapshot into the queue-level view: an unknown
-    /// duration (`0.0`) collapses to `None`, and the buffered window is the
-    /// union of the cached span and the decoded `frontier`. `position` is
-    /// carried through raw here — [`Queue::playback_view`](super::Queue::playback_view)
-    /// then overrides it with the cached/smoothed value it owns.
-    ///
-    /// The union, not a replacement: the cached span is what a host progress
-    /// bar means by "available", but the frontier stays a floor because a
-    /// decoder that has run ahead of what the download side reported still
-    /// holds playable audio, and a window falling behind the playhead makes the
-    /// host pause into a buffering deadlock.
-    fn from(snapshot: PlaybackSnapshot) -> Self {
-        Self {
-            position: Some(snapshot.position()),
-            duration: (snapshot.duration() > 0.0).then_some(snapshot.duration()),
-            buffered: Some(snapshot.frontier().max(snapshot.cached())),
-            playing: snapshot.is_playing(),
-        }
-    }
-}
 
 /// Transition style for a track switch.
 ///
@@ -307,7 +262,10 @@ pub(crate) fn should_arm_crossfade(
         && !armed_for.is_armed_for(current_id)
 }
 
-pub(super) fn extract_track_name(source: &TrackSource) -> String {
+pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let raw = match source {
         TrackSource::Uri(s) => s.as_str(),
         TrackSource::Config(cfg) => return name_from_src(cfg.source()),

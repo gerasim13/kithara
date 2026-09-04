@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Synchronous audio encoding with packaged and byte outputs"
+description = "Portable and native audio encoding with continuous and finite outputs"
 publish = false
 
 [features]
@@ -28,6 +28,7 @@ tls-native = ["kithara-stream/tls-native"]
 tls-rustls = ["kithara-stream/tls-rustls"]
 
 [dependencies]
+kithara-bufpool = { workspace = true }
 kithara-stream = { workspace = true }
 
 bon = { workspace = true }
@@ -41,6 +42,12 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 fdk-aac-sys = { workspace = true, optional = true }
 ffmpeg-next = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true
