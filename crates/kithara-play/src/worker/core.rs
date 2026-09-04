@@ -105,16 +105,23 @@ where
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
+        let config = config.into();
+        let audio_buffer_chunks = config.audio().audio_buffer_chunks();
         let TrackConfig {
             audio,
             effects,
             engine_load,
             warp,
-        } = config.into();
+        } = config;
         let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        let prepared = Audio::<Stream<T>>::prepare(
+            audio,
+            audio_buffer_chunks,
+            Arc::new(wake),
+            self.pools().clone(),
+        )
+        .await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
@@ -125,6 +132,7 @@ where
                 effects,
                 drain,
                 spec,
+                self.pools().clone(),
             );
             (warp, source)
         });

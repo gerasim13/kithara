@@ -55,20 +55,32 @@ impl<T> Outlet<T> {
         self.push_or_park(item)
     }
 
+    /// Whether one item can enter the ring without occupying overflow.
+    pub(crate) fn can_push_direct(&self) -> bool {
+        self.overflow.is_none() && !self.producer.is_full()
+    }
+
+    /// Push directly into the ring without using overflow.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the single producer did not reserve ring capacity first.
+    pub(crate) fn push_direct(&mut self, item: T) {
+        assert!(
+            self.overflow.is_none(),
+            "direct ring admission requires an empty overflow slot"
+        );
+        match self.try_push_ring(item) {
+            Ok(()) => {}
+            Err(_) => panic!("direct ring admission requires reserved capacity"),
+        }
+    }
+
     /// Flush any deferred work owned by the wake signal.
     pub(crate) fn flush_wake_signals(&self) {
         if let Some(wake) = &self.wake {
             wake.flush_deferred();
         }
-    }
-
-    /// Whether both the ring buffer and the overflow slot are full.
-    ///
-    /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
-    /// return `Err`.
-    #[cfg(test)]
-    pub(crate) fn is_full(&self) -> bool {
-        self.overflow.is_some() && self.producer.is_full()
     }
 
     fn notify(&self) {
@@ -93,6 +105,16 @@ impl<T> Outlet<T> {
             self.overflow.is_none(),
             "push_or_park called with non-empty overflow"
         );
+        match self.try_push_ring(item) {
+            Ok(()) => true,
+            Err(item) => {
+                self.overflow = Some(item);
+                false
+            }
+        }
+    }
+
+    fn try_push_ring(&mut self, item: T) -> Result<(), T> {
         let was_empty = self.producer.is_empty();
         match self.producer.try_push(item) {
             Ok(()) => {
@@ -100,12 +122,9 @@ impl<T> Outlet<T> {
                 if was_empty {
                     self.notify_data_available();
                 }
-                true
+                Ok(())
             }
-            Err(item) => {
-                self.overflow = Some(item);
-                false
-            }
+            Err(item) => Err(item),
         }
     }
 
@@ -127,21 +146,6 @@ impl<T> Outlet<T> {
         let _ = self.push_or_park(item);
         Ok(())
     }
-
-    delegate::delegate! {
-        to self.overflow {
-            /// Whether an item is currently parked in the overflow slot.
-            #[call(is_some)]
-            pub(crate) const fn has_pending(&self) -> bool;
-            /// Discard the parked overflow item, returning it to the caller.
-            ///
-            /// Useful when a producer needs to invalidate previously enqueued data
-            /// (e.g. on a seek epoch change) without waiting for the consumer to
-            /// drain the ring.
-            #[call(take)]
-            pub(crate) const fn take_pending(&mut self) -> Option<T>;
-        }
-    }
 }
 
 /// The input port of a node.
@@ -152,9 +156,6 @@ pub(crate) struct Inlet<T> {
 impl<T> Inlet<T> {
     delegate::delegate! {
         to self.consumer {
-            /// Check if the inlet is empty.
-            #[cfg(test)]
-            pub(crate) fn is_empty(&self) -> bool;
             /// Pop an item from the inlet. Returns `None` if empty.
             pub(crate) fn try_pop(&mut self) -> Option<T>;
         }
@@ -215,25 +216,20 @@ mod tests {
     #[kithara::test]
     fn connect_push_pop() {
         let (mut out, mut inl) = connect::<i32>(2, None);
-        assert!(inl.is_empty());
-        assert!(!out.is_full());
+        assert_eq!(inl.try_pop(), None);
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
         assert_eq!(out.try_push(3), Ok(()));
-        assert!(out.has_pending());
         assert_eq!(out.try_push(4), Err(4));
-        assert!(out.is_full());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(inl.try_pop(), Some(2));
         assert_eq!(inl.try_pop(), None);
 
         assert!(out.flush());
-        assert!(!out.has_pending());
         assert_eq!(inl.try_pop(), Some(3));
         assert_eq!(inl.try_pop(), None);
-        assert!(inl.is_empty());
     }
 
     #[kithara::test]
@@ -242,11 +238,9 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(out.try_push(3), Ok(()));
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(2));
         assert!(out.flush());
@@ -259,25 +253,25 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        assert!(out.has_pending());
 
         assert!(!out.flush());
-        assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert!(out.flush());
-        assert!(!out.has_pending());
+        assert_eq!(inl.try_pop(), Some(2));
+        assert_eq!(inl.try_pop(), None);
     }
 
     #[kithara::test]
-    fn take_pending_clears_overflow() {
-        let (mut out, _inl) = connect::<i32>(1, None);
+    fn direct_push_never_occupies_overflow() {
+        let (mut out, mut inl) = connect::<i32>(1, None);
 
-        assert_eq!(out.try_push(1), Ok(()));
-        assert_eq!(out.try_push(2), Ok(()));
-        assert_eq!(out.take_pending(), Some(2));
-        assert!(!out.has_pending());
-        assert_eq!(out.take_pending(), None);
+        assert!(out.can_push_direct());
+        out.push_direct(1);
+        assert!(!out.can_push_direct());
+        assert_eq!(inl.try_pop(), Some(1));
+        assert_eq!(inl.try_pop(), None);
+        assert!(out.can_push_direct());
     }
 
     #[kithara::test]

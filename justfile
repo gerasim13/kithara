@@ -31,7 +31,13 @@ help:
 
 [no-exit-message]
 [positional-arguments]
-_xtask *ARGS: _xtask-ready
+_xtask *ARGS:
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="$PWD/target"; if [[ "$system" = Linux ]]; then slot="${CI_CONCURRENT_ID:?a Linux CI build needs its runner slot}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-slot-$slot"; fi; mkdir -p "$build_target"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+
+[no-exit-message]
+[positional-arguments]
+[private]
+_xtask-unleased *ARGS: _xtask-ready
     @exec just _xtask-cached strict "$@"
 
 [no-exit-message]
@@ -46,18 +52,15 @@ _xtask-refresh:
 _xtask-ready:
     @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
 
-# The one build with no compiler cache of its own. `RUSTC_WRAPPER` is exported
-# to every recipe above, but the variable telling it where to write is produced
-# by `CiEnvironment` — inside the binary this build is compiling. On a CI runner
-# that left it falling to sccache's own default, which sits in a home the
-# cleanup ladder never touches by design: 6.5 GiB there by 2026-08-22, and no
-# step could reach it. It writes to the namespace the cleaner already prunes
-# instead. The choice cannot move into xtask, which does not exist yet here.
+# The one build with no caches of its own. Their variables are normally produced
+# by `CiEnvironment`, inside the binary this build is compiling. Keep both in the
+# bootstrap namespace the host cleaner owns; Cargo's source cache is split by
+# platform because Cargo also installs native tools below the same home.
 [no-exit-message]
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then export SCCACHE_DIR="$KITHARA_CI_CACHE_ROOT/bootstrap/${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; fi; exec env CARGO_TARGET_DIR="$PWD/target/xtask-self-cache" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; if [[ "$system" = Linux ]]; then slot="${CI_CONCURRENT_ID:?a Linux CI bootstrap needs its runner slot}"; target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-slot-$slot/xtask-self-cache"; fi; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 [no-exit-message]
 [positional-arguments]

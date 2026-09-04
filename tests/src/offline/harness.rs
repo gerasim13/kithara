@@ -4,16 +4,13 @@ use kithara::{
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     host::{HostConfig, HostOwned},
-    platform::{
-        sync::{Arc, Mutex},
-        tokio::sync::broadcast::error::TryRecvError,
-    },
+    platform::{sync::Mutex, tokio::sync::broadcast::error::TryRecvError},
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         effects::eq::EqBandConfig,
         player::{Player, PlayerControl, PlayerControlSource},
     },
-    warp::StretchControls,
+    warp::WarpConfig,
 };
 
 use super::{OfflineHostHarness, host::offline_pools};
@@ -41,7 +38,7 @@ pub struct OfflinePlayerOptions {
     /// panic instead of inserted silence.
     #[builder(default)]
     block_on_underrun: bool,
-    timestretch: Option<Arc<StretchControls>>,
+    warp: Option<WarpConfig>,
 }
 
 impl OfflinePlayerHarness {
@@ -64,7 +61,7 @@ impl OfflinePlayerHarness {
             .sample_rate(sample_rate)
             .worker(worker.clone())
             .maybe_eq_layout(options.eq_layout)
-            .maybe_timestretch(options.timestretch)
+            .maybe_warp(options.warp)
             .build();
 
         let player = PlayerImpl::new(player_config);

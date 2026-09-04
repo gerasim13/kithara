@@ -41,10 +41,12 @@ impl<T> Sender<T> {
     ///
     /// Returns [`SendError`] if the receiver has been dropped.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        let mut queue = self.0.queue.lock();
         if !self.0.receiver_alive.load(Ordering::Acquire) {
             return Err(SendError(value));
         }
-        self.0.queue.lock().push_back(value);
+        queue.push_back(value);
+        drop(queue);
         // WHY: A receiver registers its condvar waiter UNDER the queue lock and releases the lock only as it parks, so this notify (which we
         // issue after releasing the lock above) can never land before the waiter is registered - no lost wakeup.
         self.0.cv.notify_one();
@@ -143,6 +145,31 @@ impl<T> Receiver<T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
+        let mut queue = self.0.queue.lock();
         self.0.receiver_alive.store(false, Ordering::Release);
+        let queued = std::mem::take(&mut *queue);
+        drop(queue);
+        drop(queued);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{TryRecvError, channel};
+
+    #[kithara::test]
+    fn dropping_receiver_drops_queued_messages() {
+        let (outer_tx, outer_rx) = channel();
+        let (reply_tx, reply_rx) = channel::<()>();
+
+        assert!(outer_tx.send(reply_tx).is_ok());
+        drop(outer_rx);
+
+        assert!(matches!(
+            reply_rx.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
     }
 }

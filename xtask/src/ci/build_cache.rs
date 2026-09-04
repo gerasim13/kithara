@@ -6,13 +6,24 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result, bail};
 use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
+
+pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
+
+struct Consts;
+
+impl Consts {
+    const HEARTBEAT_FILE: &'static str = ".kithara-job-heartbeat";
+    // Two cleanup intervals tolerate a paused VM while bounding a killed job's
+    // stale claim. A live helper refreshes this every 30 seconds.
+    const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CacheEntry {
@@ -173,6 +184,11 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         let metadata = fs::symlink_metadata(&path)
             .with_context(|| format!("reading build cache metadata for {}", path.display()))?;
         if !metadata.file_type().is_dir() {
+            if metadata.file_type().is_file()
+                && path.file_name() == Some(OsStr::new(Consts::HEARTBEAT_FILE))
+            {
+                contents.active |= heartbeat_is_fresh(&path, &metadata);
+            }
             continue;
         }
         let modified = metadata
@@ -298,6 +314,20 @@ fn lease_file_is_held(path: &Path, ask: fn(File) -> Result<FileLock, TryLockErro
     ask(file).is_err()
 }
 
+fn heartbeat_is_fresh(path: &Path, metadata: &fs::Metadata) -> bool {
+    let Ok(modified) = metadata.modified() else {
+        return true;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return true;
+    };
+    if age <= Consts::HEARTBEAT_MAX_AGE {
+        return true;
+    }
+    let _ = fs::remove_file(path);
+    false
+}
+
 /// Claims `CARGO_TARGET_DIR` for the life of this process, if one is named.
 ///
 /// The checkout lease cannot protect it: on Linux runners the target is a
@@ -374,10 +404,34 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(targets)
 }
 
+/// Build directories kept in the executor cache rather than in a checkout.
+///
+/// Linux Docker checkouts are temporary volumes. Their targets live below the
+/// mounted cache root, one per runner slot, so the host budget must discover
+/// them without walking Cargo homes and compiler caches beside them.
+pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    let slots = root.join(TARGET_SLOT_CACHE_NAMESPACE);
+    if !slots.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut targets = Vec::new();
+    for entry in
+        fs::read_dir(&slots).with_context(|| format!("reading build cache {}", slots.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading build cache {}", slots.display()))?;
+        if entry.file_type()?.is_dir() {
+            targets.push(entry.path());
+        }
+    }
+    targets.sort();
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::OpenOptions,
+        fs::{FileTimes, OpenOptions},
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
@@ -621,6 +675,30 @@ mod tests {
         assert!(!candidate_entries(directory.path()).unwrap().active);
     }
 
+    #[test]
+    fn a_fresh_cross_vm_heartbeat_defers_eviction() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join(Consts::HEARTBEAT_FILE), b"").unwrap();
+
+        assert!(candidate_entries(directory.path()).unwrap().active);
+    }
+
+    #[test]
+    fn a_stale_cross_vm_heartbeat_leaves_the_target_evictable() {
+        let directory = tempfile::tempdir().unwrap();
+        let heartbeat = directory.path().join(Consts::HEARTBEAT_FILE);
+        let file = File::create(&heartbeat).unwrap();
+        file.set_times(
+            FileTimes::new().set_modified(
+                SystemTime::now() - Consts::HEARTBEAT_MAX_AGE - Duration::from_secs(1),
+            ),
+        )
+        .unwrap();
+
+        assert!(!candidate_entries(directory.path()).unwrap().active);
+        assert!(!heartbeat.exists());
+    }
+
     /// The claim a lane takes and the question a reclaim asks are one protocol,
     /// so the holder has to be the real one, not a lock this test rolled itself.
     #[test]
@@ -656,6 +734,18 @@ mod tests {
                 checkout.join("target-stress"),
             ]
         );
+    }
+
+    #[test]
+    fn persistent_runner_slots_are_build_caches_the_budget_owns() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("target-slots/review-linux-aarch64-slot-0");
+        let second = root.path().join("target-slots/review-linux-aarch64-slot-1");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::create_dir_all(root.path().join("review/linux-aarch64/cargo/registry")).unwrap();
+
+        assert_eq!(cached_target_dirs(root.path()).unwrap(), [first, second]);
     }
 
     /// A checkout a job holds still has to answer to the ceiling.

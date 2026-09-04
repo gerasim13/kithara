@@ -106,6 +106,42 @@ pub fn time_stretch_failures(
     cochlea_failures(label, candidate, control, false)
 }
 
+/// Require a mix to retain the loudness of its loudest contributing deck.
+#[must_use]
+pub fn mix_loudness_failures(
+    label: &str,
+    mix: &CochleaReport,
+    decks: &[CochleaReport],
+    tolerance_lu: f64,
+) -> Vec<String> {
+    assert!(!decks.is_empty(), "mix loudness needs at least one deck");
+    assert!(
+        tolerance_lu.is_finite() && tolerance_lu >= 0.0,
+        "mix loudness tolerance must be finite and non-negative"
+    );
+
+    let mut failures = Vec::new();
+    let Some(mix_lufs) = mix.integrated_lufs else {
+        failures.push(format!("{label}: mix integrated loudness is undefined"));
+        return failures;
+    };
+    let mut loudest = f64::NEG_INFINITY;
+    for (index, deck) in decks.iter().enumerate() {
+        match deck.integrated_lufs {
+            Some(lufs) => loudest = loudest.max(lufs),
+            None => failures.push(format!(
+                "{label}: deck {index} integrated loudness is undefined"
+            )),
+        }
+    }
+    if loudest.is_finite() && mix_lufs + tolerance_lu < loudest {
+        failures.push(format!(
+            "{label}: mix is quieter than the loudest deck: mix={mix_lufs:.3} LUFS, loudest={loudest:.3} LUFS, tolerance={tolerance_lu:.3} LU"
+        ));
+    }
+    failures
+}
+
 /// Validate tempo and exact beat phase across deterministic rhythmic stems.
 #[must_use]
 pub fn synchronization_failures(

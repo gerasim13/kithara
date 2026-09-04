@@ -195,6 +195,12 @@ Exporting the directory to the children cannot stand in for it: the children are
 cargo, which claims nothing, and a directory no budget can see is one no budget
 can reclaim.
 
+Linux runner targets cross the Colima bind mount, where file locks do not reach
+the macOS host. The public CI command therefore refreshes
+`.kithara-job-heartbeat` beside the lock, and host cleanup accepts only a recent
+heartbeat. Normal exit removes it; a killed job becomes reclaimable after the
+bounded freshness window.
+
 Pressure sampling ends after the test and evidence phase so the reporter consumes
 a closed stream, and its end marker records the *primary* exit status, while the
 manifest's exit code is the later combined verdict and can additionally reflect

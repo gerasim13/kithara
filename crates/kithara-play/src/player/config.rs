@@ -5,7 +5,7 @@ use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_warp::{BeatGridId, StretchControls};
+use kithara_warp::{BeatGridId, WarpConfig};
 
 use crate::{
     PlayWorker,
@@ -28,10 +28,9 @@ pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
     #[builder(default = allocate_grid_id())]
     pub(crate) grid_id: BeatGridId,
-    /// Per-deck time-stretch control handle, shared with the UI and the
-    /// worker Warp chain (see `kithara_warp::StretchControls`).
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) timestretch: Arc<StretchControls>,
+    /// Per-deck Warp resources and live temporal controls.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     pub(crate) worker: PlayWorker<S>,
@@ -80,7 +79,7 @@ impl<S> Clone for PlayerConfig<S> {
     fn clone(&self) -> Self {
         Self {
             grid_id: self.grid_id,
-            timestretch: Arc::clone(&self.timestretch),
+            warp: self.warp.clone(),
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
             block_on_underrun: self.block_on_underrun,
@@ -102,6 +101,7 @@ impl<S> Clone for PlayerConfig<S> {
 impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
+            .field("warp", &self.warp)
             .field("gapless_mode", &self.gapless_mode)
             .field("eq_layout", &self.eq_layout)
             .field("auto_advance_enabled", &self.auto_advance_enabled)

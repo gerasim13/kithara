@@ -67,7 +67,7 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.params.set_default_rate(rate);
-        self.core.timestretch.set_speed(target);
+        self.core.warp.stretch().set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
         }
@@ -114,8 +114,8 @@ impl<S> PlayerRuntime<S> {
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.timestretch.set_speed(rate);
-        let target = self.core.timestretch.speed();
+        self.core.warp.stretch().set_speed(rate);
+        let target = self.core.warp.stretch().speed();
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
     }
 

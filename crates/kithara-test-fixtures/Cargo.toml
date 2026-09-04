@@ -51,6 +51,8 @@ aes = { workspace = true }
 
 bytes = { workspace = true }
 cbc = { workspace = true }
+cochlea-render = { workspace = true }
+cochlea-score = { workspace = true }
 delegate = { workspace = true }
 futures-lite = { workspace = true }
 hex = { workspace = true }

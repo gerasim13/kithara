@@ -239,8 +239,11 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
-        let target_dirs =
+        let mut target_dirs =
             build_cache::persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
+        target_dirs.extend(build_cache::cached_target_dirs(
+            &self.host_root.join("cache"),
+        )?);
         build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a

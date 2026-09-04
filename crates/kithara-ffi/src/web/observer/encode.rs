@@ -156,7 +156,7 @@ pub(crate) fn encode(event: &FfiPlayerEvent) -> JsValue {
         }
         FfiPlayerEvent::DjStretchBackendChanged { kind } => {
             set_str(&obj, KIND, "DjStretchBackendChanged");
-            set_str(&obj, "kind", stretch_backend_kind_str(*kind));
+            set_str(&obj, "backend", stretch_backend_kind_str(*kind));
         }
         FfiPlayerEvent::AssetCommitted {
             asset_root,

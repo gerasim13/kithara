@@ -37,6 +37,9 @@ where
         observer: Option<Box<dyn AudioObserver>>,
     ) -> AudioConfig<kithara_file::File<S>, B> {
         let pools = worker.pools().clone();
+        let audio_buffer_chunks = self
+            .audio_buffer_chunks
+            .map(|chunks| chunks.max(self.preload_chunks).get());
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -70,6 +73,7 @@ where
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
+            .maybe_audio_buffer_chunks(audio_buffer_chunks)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_host_sample_rate(self.host_sample_rate)
@@ -88,6 +92,9 @@ where
         observer: Option<Box<dyn AudioObserver>>,
     ) -> Result<AudioConfig<kithara_hls::Hls<S>, B>, DecodeError> {
         let pools = worker.pools().clone();
+        let audio_buffer_chunks = self
+            .audio_buffer_chunks
+            .map(|chunks| chunks.max(self.preload_chunks).get());
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(_) => {
@@ -112,6 +119,7 @@ where
             .build();
         Ok(
             AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)
+                .maybe_audio_buffer_chunks(audio_buffer_chunks)
                 .maybe_cancel(self.cancel.clone())
                 .maybe_hint(self.hint)
                 .maybe_host_sample_rate(self.host_sample_rate)

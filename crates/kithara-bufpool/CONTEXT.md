@@ -79,5 +79,9 @@ collect, or pre-warm contract.
 empty guard from the same core. Long-lived storage can therefore publish one
 generation and continue without retaining the schema facade.
 
+`BufferRing<B>` is an owning FIFO view over one already-sized buffer. It never
+grows or shifts retained values; failed pushes and pops leave both sides
+unchanged, and `into_inner` returns the original pool guard to its owner.
+
 `stats()` reports the shared region budget. `pool_stats::<K>()` reports reuse for
 one registered generic slot; built-in hot-path keys compile out counter updates.

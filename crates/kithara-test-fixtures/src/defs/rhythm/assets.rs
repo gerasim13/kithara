@@ -1,4 +1,9 @@
-use kithara_analysis::BeatArtifact;
+use std::num::{NonZeroU32, NonZeroU64};
+
+use kithara_analysis::{
+    AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate, AnalysisFingerprint, AnalysisProgress,
+    AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange, TrackAnalysis,
+};
 use kithara_test_macros as kithara;
 
 use super::score::{self, Control, Style};
@@ -33,8 +38,8 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 }
 
 #[kithara::asset(
-    ext = "beat",
-    content_type = "application/x-kithara-beat",
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
     depends_on = ["rhythm_wav_{case}"]
 )]
 #[case::ambient_dub_62_aligned(Style::AmbientDub, Control::Aligned)]
@@ -61,15 +66,13 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 #[case::breakbeat_140_one_frame_late(Style::Breakbeat, Control::OneFrameLate)]
 #[case::breakbeat_140_one_beat_bar_late(Style::Breakbeat, Control::OneBeatBarLate)]
 #[case::breakbeat_140_missing_beat(Style::Breakbeat, Control::MissingBeat)]
-fn rhythm_expected_beat(_inputs: &[&[u8]], style: Style, control: Control) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    BeatArtifact::from(score::truth(style, control)).write_to(&mut bytes);
-    bytes
+fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -> Vec<u8> {
+    analysis_file(BeatArtifact::from(score::truth(style, control)))
 }
 
 #[kithara::asset(
-    ext = "beat",
-    content_type = "application/x-kithara-beat",
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
     depends_on = ["rhythm_wav_{case}"]
 )]
 #[case::ambient_dub_62_aligned()]
@@ -96,10 +99,71 @@ fn rhythm_expected_beat(_inputs: &[&[u8]], style: Style, control: Control) -> Ve
 #[case::breakbeat_140_one_frame_late()]
 #[case::breakbeat_140_one_beat_bar_late()]
 #[case::breakbeat_140_missing_beat()]
-fn rhythm_analyzed_beat(inputs: &[&[u8]]) -> Vec<u8> {
-    super::analyze::beat(
+fn rhythm_analyzed_analysis(inputs: &[&[u8]]) -> Vec<u8> {
+    analysis_file(super::analyze::beat(
         inputs
             .first()
             .expect("invariant: the declared rhythm WAV dependency is present"),
-    )
+    ))
+}
+
+fn analysis_file(artifact: BeatArtifact) -> Vec<u8> {
+    const CHUNK_SECONDS: u64 = 16;
+    const EXTENT: u64 = 48_000 * 12;
+    const FINGERPRINT: &str = "rhythm-fixture:v1";
+
+    let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
+    let mut coverage = Coverage::default();
+    coverage.insert(FrameRange::new(0, EXTENT));
+    let analysis = TrackAnalysis::builder()
+        .token(AnalysisToken::from("rhythm-fixture"))
+        .revision(1)
+        .source_sample_rate(sample_rate)
+        .extent(EXTENT)
+        .coverage(coverage)
+        .fingerprint(AnalysisFingerprint::new(Some(FINGERPRINT), None))
+        .settled(true)
+        .maybe_waveform(None)
+        .beat(BeatSnapshot::new(artifact, BeatState::Final, Vec::new()))
+        .build();
+    let progress = AnalysisProgress::try_from(analysis)
+        .expect("settled fixture analysis forms final progress");
+    let chunk_frames = NonZeroU64::new(u64::from(sample_rate.get()) * CHUNK_SECONDS)
+        .expect("fixture analysis chunk is non-zero");
+    let spec = AnalysisFileSpec::for_analysis(progress.analysis(), chunk_frames)
+        .expect("fixture analysis has a stable extent");
+    let update = AnalysisFile::create(&spec, &progress).expect("fixture analysis file encodes");
+    let bytes = materialize(&update);
+    AnalysisFile::parse(&bytes, progress.analysis().fingerprint())
+        .expect("fixture analysis file restores");
+    bytes
+}
+
+fn materialize(update: &AnalysisFileUpdate) -> Vec<u8> {
+    let len = usize::try_from(update.final_len()).expect("fixture analysis length fits usize");
+    let mut bytes = vec![0; len];
+    let initial = update
+        .initial_bytes()
+        .expect("new fixture analysis supplies its fixed prefix");
+    bytes[..initial.len()].copy_from_slice(initial);
+    write_at(
+        &mut bytes,
+        update.payload().offset(),
+        update.payload().bytes(),
+    );
+    for patch in update.patches() {
+        write_at(&mut bytes, patch.offset(), patch.bytes());
+    }
+    bytes
+}
+
+fn write_at(destination: &mut [u8], offset: u64, source: &[u8]) {
+    let start = usize::try_from(offset).expect("fixture analysis offset fits usize");
+    let end = start
+        .checked_add(source.len())
+        .expect("fixture analysis write end fits usize");
+    destination
+        .get_mut(start..end)
+        .expect("fixture analysis write stays in committed length")
+        .copy_from_slice(source);
 }

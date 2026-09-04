@@ -224,7 +224,7 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct StateController {
-    beat_clock: Arc<Mutex<BeatClockState>>,
+    beat_clock: Mutex<BeatClockState>,
     #[field(get, deref = false)]
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
@@ -264,7 +264,7 @@ impl StateController {
             state,
             timestretch,
             cancel,
-            beat_clock: Arc::new(Mutex::new(BeatClockState::default())),
+            beat_clock: Mutex::new(BeatClockState::default()),
         }
     }
 

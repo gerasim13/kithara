@@ -16,6 +16,11 @@ name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
 required-features = ["uniffi-bindgen-cli"]
 
+[[test]]
+name = "web-observer"
+path = "src/web/observer/tests.rs"
+required-features = ["wasm"]
+
 # Native-only deps for the UniFFI surface (`src/{cipher,config,item,…}.rs`).
 # Moved to `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` so
 # wasm32 builds don't pull `uniffi` (Future + Send incompatible with wasm)
@@ -139,6 +144,9 @@ uuid = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }

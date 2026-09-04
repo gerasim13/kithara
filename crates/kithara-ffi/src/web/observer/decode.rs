@@ -99,7 +99,7 @@ pub(crate) fn decode(data: &JsValue) -> Option<FfiPlayerEvent> {
             on: get_bool(data, "on")?,
         },
         "DjStretchBackendChanged" => FfiPlayerEvent::DjStretchBackendChanged {
-            kind: decode_stretch_backend_kind(get_str(data, "kind")),
+            kind: decode_stretch_backend_kind(get_str(data, "backend")),
         },
         "AssetCommitted" => FfiPlayerEvent::AssetCommitted {
             asset_root: get_str(data, "asset_root").unwrap_or_default(),

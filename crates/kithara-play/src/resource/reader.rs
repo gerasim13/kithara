@@ -10,9 +10,7 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, StretchControls, WarpConfig,
-};
+use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher, StretchControls};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -181,7 +179,7 @@ impl Resource {
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
-        let stretch = Arc::clone(&config.stretch);
+        let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
@@ -191,7 +189,7 @@ impl Resource {
                 let audio_config = config.build_file_config(&worker, observer);
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
-                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .warp(warp.clone())
                     .build();
                 Self::from_stream_audio(track, src, &worker).await?
             }
@@ -199,7 +197,7 @@ impl Resource {
                 let audio_config = config.build_hls_config(&worker, observer)?;
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
-                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .warp(warp)
                     .build();
                 Self::from_stream_audio(track, src, &worker).await?
             }
@@ -409,7 +407,7 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
-    use kithara_warp::{SessionEpoch, SessionFrame, Warp};
+    use kithara_warp::{SessionEpoch, SessionFrame, Warp, WarpConfig};
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;

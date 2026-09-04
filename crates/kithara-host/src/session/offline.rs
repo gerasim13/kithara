@@ -37,7 +37,7 @@ enum OfflineMsg<S> {
 }
 
 struct OfflineSessionTask<S> {
-    cmd_rx: mpsc::Receiver<OfflineMsg<S>>,
+    cmd_rx: Option<mpsc::Receiver<OfflineMsg<S>>>,
     max_block_frames: NonZeroU32,
     pools: PoolRegion<S>,
     position: u64,
@@ -75,6 +75,7 @@ where
     fn tick_host(&mut self, message: HostCmdMsg<S>) -> TickResult {
         let HostCmdMsg { cmd, reply_tx } = message;
         if matches!(&cmd, HostCmd::Shutdown) {
+            drop(self.cmd_rx.take());
             self.state.take();
             if reply_tx.send(HostReply::Ok).is_err() {
                 warn!("offline Host shutdown reply receiver dropped");
@@ -168,7 +169,10 @@ where
     }
 
     fn tick(&mut self) -> TickResult {
-        match self.cmd_rx.try_recv() {
+        let Some(cmd_rx) = self.cmd_rx.as_ref() else {
+            return TickResult::Done;
+        };
+        match cmd_rx.try_recv() {
             Ok(message) => self.tick_message(message),
             Err(mpsc::TryRecvError::Disconnected) => TickResult::Done,
             Err(mpsc::TryRecvError::Empty) => {
@@ -231,7 +235,7 @@ where
                 ctx.start_stream(config).map_err(|error| error.to_string())
             };
             OfflineSessionTask {
-                cmd_rx,
+                cmd_rx: Some(cmd_rx),
                 max_block_frames,
                 pools,
                 position: 0,

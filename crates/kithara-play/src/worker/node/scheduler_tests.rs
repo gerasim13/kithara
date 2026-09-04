@@ -140,7 +140,6 @@ where
         emit: Arc::new(DeferredBus::<Event>::new(EventBus::new(8), 8)),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         preload_gate: Arc::clone(&preload_gate),
-        retired_chunk: None,
         runtime: DecoderRuntime {
             seek_epoch,
             ..Default::default()

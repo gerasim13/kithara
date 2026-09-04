@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use bon::Builder;
 use kithara_platform::sync::Arc;
 
@@ -13,4 +15,35 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    /// Optional output-frame cap between samples of live temporal controls.
+    /// Without a cap, Warp consumes the complete source span accepted by its backend.
+    #[field(get, copy)]
+    render_quantum_frames: Option<NonZeroUsize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    #[case::default(None, None)]
+    #[case::configured(Some(64), Some(64))]
+    fn render_quantum_is_configurable_in_frames(
+        #[case] configured: Option<usize>,
+        #[case] expected: Option<usize>,
+    ) {
+        let config = WarpConfig::builder()
+            .maybe_render_quantum_frames(
+                configured
+                    .map(|frames| NonZeroUsize::new(frames).expect("fixture quantum is non-zero")),
+            )
+            .build();
+
+        assert_eq!(
+            config.render_quantum_frames().map(NonZeroUsize::get),
+            expected
+        );
+    }
 }
