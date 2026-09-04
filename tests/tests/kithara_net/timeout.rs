@@ -124,24 +124,10 @@ async fn test_timeout_with_error() {
 }
 
 #[kithara::test(tokio)]
-#[case(Duration::from_millis(100), Duration::from_millis(200), true)]
-#[case(Duration::from_millis(200), Duration::from_millis(100), false)]
-async fn test_all_net_methods_with_timeout(
-    #[case] delay: Duration,
-    #[case] timeout: Duration,
-    #[case] should_succeed: bool,
-) {
-    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
-    let timeout_net = mock_net.with_timeout(timeout);
-
-    if should_succeed {
-        assert_success_all_net_methods(&timeout_net).await;
-    } else {
-        let url = test_url();
-        let result = timeout_net.get_bytes(url, None).await;
-        assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), NetError::Timeout));
-    }
+async fn test_all_net_methods_with_timeout() {
+    let mock_net = DelayedNet::new(make_timeout_mock(true), Duration::from_millis(100));
+    let timeout_net = mock_net.with_timeout(Duration::from_millis(200));
+    assert_success_all_net_methods(&timeout_net).await;
 }
 
 #[kithara::test(tokio)]
