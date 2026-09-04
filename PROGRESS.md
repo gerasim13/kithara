@@ -14,7 +14,10 @@ the change that lands the work, and keep it short.
   new `kithara-macros` generates every patch and its `apply`; `struct-patch` and
   every hand-written patch struct are gone. The output rate is named once,
   under `app`. Secrets stay `$KITHARA_...` references and one resolving nowhere
-  stops startup.
+  stops startup. Merged with `production/main`: `broadcast`, `player.warp`, and
+  the stretch backends' preparation geometry under `player.warp.backends` are
+  sections now, and `app.crossfade_seconds` is gone in favour of
+  `player.crossfade_duration`.
 - Harness and document revision. `AGENTS.md` routes instead of restating, and the
   `style` namespace budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every README to `readme_shape`.

@@ -345,7 +345,9 @@ mod tests {
     fn a_patch_writes_the_bit_rate_and_keeps_the_seeded_channel_count() {
         let settings: BroadcastConfigPatch =
             serde_yaml_ng::from_str("bit_rate: 256000\n").expect("the document types");
-        let mut config = BroadcastConfig::builder().channels(4).build();
+        let mut config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
+            .channels(4)
+            .build();
 
         config.apply(settings);
 
@@ -360,7 +362,7 @@ mod tests {
     fn a_document_can_compose_a_playlist_the_builder_would_have_refused() {
         let settings: BroadcastConfigPatch =
             serde_yaml_ng::from_str("window: 1\n").expect("the document types");
-        let mut config = BroadcastConfig::builder().build();
+        let mut config = config();
 
         config.apply(settings);
 
