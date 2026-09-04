@@ -10,27 +10,26 @@ fn test_data() -> Vec<u8> {
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_vec()
 }
 
-#[kithara::fixture]
-fn small_data() -> Vec<u8> {
-    b"Hello".to_vec()
-}
-
 #[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-#[case(0, b"ABCDE")]
-#[case(5, b"FGHIJ")]
-#[case(10, b"KLMNO")]
-#[case(20, b"UVWXY")]
-#[case(25, b"Z")]
-fn seek_start_reads_correct_bytes(
+#[case::start_0(SeekFrom::Start(0), 0, b"ABCDE")]
+#[case::start_5(SeekFrom::Start(5), 5, b"FGHIJ")]
+#[case::start_10(SeekFrom::Start(10), 10, b"KLMNO")]
+#[case::start_20(SeekFrom::Start(20), 20, b"UVWXY")]
+#[case::start_25(SeekFrom::Start(25), 25, b"Z")]
+#[case::end_minus_5(SeekFrom::End(-5), 21, b"VWXYZ")]
+#[case::end_minus_10(SeekFrom::End(-10), 16, b"QRSTU")]
+#[case::end_minus_26(SeekFrom::End(-26), 0, b"ABCDE")]
+fn seek_reads_correct_bytes(
     test_data: Vec<u8>,
-    #[case] seek_pos: u64,
+    #[case] seek_from: SeekFrom,
+    #[case] expected_pos: u64,
     #[case] expected: &[u8],
 ) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
-    let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
-    assert_eq!(pos, seek_pos);
+    let pos = stream.seek(seek_from).unwrap();
+    assert_eq!(pos, expected_pos);
 
     let mut buf = vec![0u8; expected.len()];
     let n = stream.read(&mut buf).unwrap();
@@ -40,21 +39,29 @@ fn seek_start_reads_correct_bytes(
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
+#[case::start_zero(SeekFrom::Start(0), 0, b"ABCDE")]
+#[case::start_eof(SeekFrom::Start(26), 26, b"")]
+#[case::end_zero(SeekFrom::End(0), 26, b"")]
+fn seek_after_read_returns_expected_bytes(
+    test_data: Vec<u8>,
+    #[case] seek_from: SeekFrom,
+    #[case] expected_pos: u64,
+    #[case] expected: &[u8],
+) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
     let mut buf = [0u8; 10];
     let _ = stream.read(&mut buf).unwrap();
 
-    let pos = stream.seek(SeekFrom::Start(0)).unwrap();
-    assert_eq!(pos, 0);
+    let pos = stream.seek(seek_from).unwrap();
+    assert_eq!(pos, expected_pos);
 
     let mut buf = [0u8; 5];
     let n = stream.read(&mut buf).unwrap();
 
-    assert_eq!(n, 5);
-    assert_eq!(&buf[..n], b"ABCDE");
+    assert_eq!(n, expected.len());
+    assert_eq!(&buf[..n], expected);
 }
 
 /// `SeekFrom::Current(offset)` after reading `initial_read` bytes must land
@@ -96,41 +103,6 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 
     let pos = stream.stream_position().unwrap();
     assert_eq!(pos, 10);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-#[case(-5, b"VWXYZ")]
-#[case(-10, b"QRSTU")]
-#[case(-26, b"ABCDE")]
-fn seek_end_reads_correct_bytes(test_data: Vec<u8>, #[case] offset: i64, #[case] expected: &[u8]) {
-    let data_len = test_data.len();
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let expected_pos = (data_len as i64 + offset) as u64;
-
-    let pos = stream.seek(SeekFrom::End(offset)).unwrap();
-    assert_eq!(pos, expected_pos);
-
-    let mut buf = vec![0u8; expected.len()];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, expected.len());
-    assert_eq!(&buf[..n], expected);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
-    let data_len = test_data.len() as u64;
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let pos = stream.seek(SeekFrom::End(0)).unwrap();
-    assert_eq!(pos, data_len);
-
-    let mut buf = [0u8; 5];
-    let n = stream.read(&mut buf).unwrap();
-    assert_eq!(n, 0);
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
@@ -233,35 +205,4 @@ fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 
     assert_eq!(n, 0);
     assert_eq!(pos, 10);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-fn seek_exact_to_last_byte(small_data: Vec<u8>) {
-    let len = small_data.len() as u64;
-    let source = MemorySource::new(small_data);
-    let mut stream = memory_stream(source);
-
-    let pos = stream.seek(SeekFrom::Start(len - 1)).unwrap();
-    assert_eq!(pos, len - 1);
-
-    let mut buf = [0u8; 1];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, 1);
-    assert_eq!(buf[0], b'o');
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), hang_timeout_secs(1))]
-fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
-    let len = small_data.len() as u64;
-    let source = MemorySource::new(small_data);
-    let mut stream = memory_stream(source);
-
-    let pos = stream.seek(SeekFrom::Start(len)).unwrap();
-    assert_eq!(pos, len);
-
-    let mut buf = [0u8; 10];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, 0);
 }
