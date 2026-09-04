@@ -51,10 +51,10 @@ impl Consts {
     const PLAY_POSITION_SECS: f64 = 0.3;
 }
 
-/// A throttled body that never delivers a byte in the test window, so the
-/// probe parks inside `Resource::new` and the load keeps its permit.
-fn register_hung(helper: &TestServerHelper) -> BehaviorHandle {
-    helper.register_behavior(FixtureBehavior {
+/// Register the hung background source and reachable foreground MP3 used by
+/// every lane scenario.
+fn register_sources(helper: &TestServerHelper) -> (BehaviorHandle, BehaviorHandle) {
+    let hung = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(vec![0u8; Consts::HUNG_BODY_LEN]),
             content_type: Some("audio/mpeg"),
@@ -63,18 +63,15 @@ fn register_hung(helper: &TestServerHelper) -> BehaviorHandle {
             chunk: Consts::HUNG_THROTTLE_CHUNK,
             delay_ms: Consts::HUNG_THROTTLE_DELAY_MS,
         },
-    })
-}
-
-/// A reachable, decodable MP3 whose per-request hits the test can count.
-fn register_fast_mp3(helper: &TestServerHelper) -> BehaviorHandle {
-    helper.register_behavior(FixtureBehavior {
+    });
+    let fast = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
-    })
+    });
+    (hung, fast)
 }
 
 fn fast_url(handle: &BehaviorHandle) -> Url {
@@ -174,8 +171,7 @@ async fn wait_for_status_matching(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn select_pending_track_parked_behind_hung_load_promotes() {
     let helper = TestServerHelper::new().await;
-    let hung = register_hung(&helper);
-    let fast = register_fast_mp3(&helper);
+    let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
@@ -230,8 +226,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn superseded_hung_selection_frees_lane_for_next_select() {
     let helper = TestServerHelper::new().await;
-    let hung = register_hung(&helper);
-    let fast = register_fast_mp3(&helper);
+    let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
