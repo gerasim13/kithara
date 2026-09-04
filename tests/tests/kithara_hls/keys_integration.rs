@@ -36,21 +36,6 @@ fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn fetch_and_cache_key(
-    #[future] test_server: TestServer,
-    assets_fixture: TestAssets,
-) -> HlsResult<()> {
-    let server = test_server.await;
-    let key_store = test_key_store(&assets_fixture, None);
-    let key_url = server.url("/aes/key.bin");
-
-    let key = key_store.get_raw_key(&key_url, None).await?;
-    assert_eq!(key.as_ref(), b"0123456789abcdef");
-
-    Ok(())
-}
-
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::uppercase(uppercase_key, true, b"0123456789ABCDEF")]
 #[case::reverse(reverse_key, true, b"fedcba9876543210")]
 #[case::unmatched(sentinel_key, false, b"0123456789abcdef")]
@@ -102,6 +87,7 @@ async fn key_store_caching_behavior(
     let key1: Bytes = key_store.get_raw_key(&key_url, None).await?;
     let key2 = key_store.get_raw_key(&key_url, None).await?;
 
+    assert_eq!(key1.as_ref(), b"0123456789abcdef");
     assert_eq!(key1, key2);
 
     Ok(())
