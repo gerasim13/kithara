@@ -280,13 +280,13 @@ and its position.
 ### Crate sections
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
-in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, and under `gui`, `ui`
-and `draw_pool`. Which knobs a section may name — and the argument for each left out — is the owning crate's
-contract. The patches travel whole: `AppConfig` carries `hls`, `file` and `audio` to `ResourceConfig`, and `main`
-stops the store builder one step short with `into_config()` to patch `assets_store`. Nothing is copied field by
-field, so a knob those crates add later needs no edit here.
+in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, `play_worker`,
+`dispatcher`, and under `gui`, `ui` and `draw_pool`. Which knobs a section may name — and the argument for each left
+out — is the owning crate's contract. The patches travel whole: `AppConfig` carries `hls`, `file` and `audio` to
+`ResourceConfig`, and `main` stops the store builder one step short with `into_config()` to patch `assets_store`.
+Nothing is copied field by field, so a knob those crates add later needs no edit here.
 
-Five sections carry a rule that is not the owning crate's. `net` is applied before `--insecure`, an override that can
+Seven sections carry a rule that is not the owning crate's. `net` is applied before `--insecure`, an override that can
 turn verification off and never back on. `assets_store`'s `backend` resolves to `StorageBackend::default` when
 unnamed — a stable root under the system temp directory, deliberately not `AssetStore::open`'s own fallback, which
 takes a fresh directory per launch and would move the cache every run. `pools` is composed here from
@@ -294,10 +294,13 @@ takes a fresh directory per launch and would move the cache every run. `pools` i
 leaves no single crate type to carry. `ui` and `draw_pool` are two sections rather than one nested pair because
 `UiConfig.draw_buffers` is a *built* `DrawBuffers` and `DrawPoolLimits` reaches one only through
 `DrawBuffers::try_new`; `Config::ui` therefore reads `draw_pool` before it builds — never onto an already-built
-`UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`. `broadcast` is
-the one section no patch on `AppConfig` carries: a `BroadcastConfig` is built from the shared worker and pools, which
-exist only in `main`, so the section is applied to the built value there. It is `#[cfg(feature = "broadcast")]` on
-both sides, so a build without the service has no such field and refuses a document that names one.
+`UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`. `broadcast` and
+`play_worker` are the two sections no `AppConfig` field carries: both are built in `main`, from the shared worker and
+pools that exist only there, so each section is applied to the built value on the spot. `broadcast` is
+`#[cfg(feature = "broadcast")]` on both sides, so a build without the service has no such field and refuses a document
+that names one. `dispatcher` travels on `AppConfig` the way `player` does and names thread budgets only. `name` is
+not among them: a dispatcher is named where it is built, and one document key would hand every dispatcher the app
+builds the same thread name.
 
 The audio session is the exception `app` carries. `HostConfig` is a session-mode enum, Realtime or Offline, not a
 configuration struct, so it has no patch and a document cannot flip a running application from one mode to the other.

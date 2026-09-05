@@ -11,10 +11,10 @@ use kithara::{
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::PlayerConfigPatch,
+    play::{PlayWorkerConfigPatch, PlayerConfigPatch},
     queue::QueueConfigPatch,
     stream::dl::DownloaderConfigPatch,
-    worker::{ComputePool, WorkerConfigPatch},
+    worker::{ComputePool, DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde::Deserialize;
 
@@ -39,6 +39,10 @@ pub(crate) struct Document {
     pub(crate) beat: BeatAnalysisConfigPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastConfigPatch,
+    /// Thread budgets the app builds its background dispatchers with. The
+    /// thread name is not among them: a dispatcher is named where it is
+    /// built.
+    pub(crate) dispatcher: DispatcherConfigPatch,
     pub(crate) downloader: DownloaderConfigPatch,
     /// Draw-pool retention limits `UiConfig::draw_buffers` is built from.
     /// Read before `DrawBuffers` is constructed, never patched onto
@@ -50,6 +54,8 @@ pub(crate) struct Document {
     pub(crate) flush: FlushPolicyPatch,
     pub(crate) hls: HlsConfigPatch,
     pub(crate) net: NetOptionsPatch,
+    /// Thread budgets of the one playback worker every deck shares.
+    pub(crate) play_worker: PlayWorkerConfigPatch,
     pub(crate) player: PlayerConfigPatch,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
@@ -134,6 +140,8 @@ pub(crate) enum SeedAlphabet {
 mod tests {
     use std::num::NonZeroUsize;
 
+    use kithara::platform::time::Duration;
+
     use super::{ComputePool, Document};
     use crate::baked::BAKED_DOCUMENT;
 
@@ -201,6 +209,14 @@ mod tests {
             document.file.reader_event_capacity.is_none(),
             "a document naming no file section leaves the crate default standing"
         );
+        assert!(
+            document.dispatcher.wait_timeout.is_none(),
+            "a document naming no dispatcher section leaves the crate default standing"
+        );
+        assert!(
+            document.play_worker.wait_timeout.is_none(),
+            "a document naming no play_worker section leaves the crate default standing"
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -227,6 +243,36 @@ mod tests {
         assert!(
             document.pools.samples.max_buffers.is_none(),
             "naming one pool leaves the other empty"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_dispatcher_section_names_the_wait_budget() {
+        let document: Document = serde_yaml_ng::from_str("dispatcher:\n  wait_timeout: 4ms\n")
+            .expect("a valid document");
+
+        assert_eq!(
+            document.dispatcher.wait_timeout,
+            Some(Duration::from_millis(4))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_dispatcher_thread_name_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<Document>("dispatcher:\n  name: renamed\n")
+            .expect_err("one document key must not rename every dispatcher");
+
+        assert!(error.to_string().contains("name"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_play_worker_section_names_the_track_ceiling() {
+        let document: Document =
+            serde_yaml_ng::from_str("play_worker:\n  capacity: 4\n").expect("a valid document");
+
+        assert_eq!(
+            document.play_worker.capacity.map(NonZeroUsize::get),
+            Some(4)
         );
     }
 

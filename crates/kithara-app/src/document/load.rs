@@ -18,9 +18,9 @@ use kithara::{
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
+    play::{PlayWorkerConfigPatch, PlayerConfigPatch, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
-    worker::{ComputePool, WorkerConfigPatch},
+    worker::{ComputePool, DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
 
@@ -268,6 +268,21 @@ impl Config {
     #[must_use]
     pub fn worker(&self) -> WorkerConfigPatch {
         self.document.worker.clone()
+    }
+
+    /// Knobs the document sets on the one playback worker every deck
+    /// shares. Applied at the construction site in `main`, where the pools it
+    /// is built from exist.
+    #[must_use]
+    pub fn play_worker(&self) -> PlayWorkerConfigPatch {
+        self.document.play_worker.clone()
+    }
+
+    /// Knobs the document sets on the background dispatchers the app builds.
+    /// Applied at each construction site, which keeps its own thread name.
+    #[must_use]
+    pub fn dispatcher(&self) -> DispatcherConfigPatch {
+        self.document.dispatcher.clone()
     }
 
     /// Knobs the document sets on the application's buffer pools.

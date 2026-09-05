@@ -17,7 +17,10 @@ the change that lands the work, and keep it short.
   stops startup. Merged with `production/main`: `broadcast`, `player.warp`, and
   the stretch backends' preparation geometry under `player.warp.backends` are
   sections now, and `app.crossfade_seconds` is gone in favour of
-  `player.crossfade_duration`.
+  `player.crossfade_duration`. The two configs that grew thread budgets since
+  carry the derive too: `play_worker` names the one playback worker's budgets and
+  `dispatcher` names every app-owned dispatcher's, minus the thread name each
+  construction site keeps.
 - Harness and document revision. `AGENTS.md` routes instead of restating, and the
   `style` namespace budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every README to `readme_shape`.

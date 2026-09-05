@@ -14,7 +14,7 @@ use kithara::{
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
     stream::dl::Downloader,
-    worker::Worker,
+    worker::{DispatcherConfigPatch, Worker},
 };
 use kithara_macros::Patch;
 use url::Url;
@@ -182,6 +182,13 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub queue: QueueConfigPatch,
+    /// What the document's `dispatcher:` section says about the background
+    /// dispatchers the app builds, carried as a patch for the same reason
+    /// [`AppConfig::player`] is: each construction site keeps its own thread
+    /// name and lays this over the rest.
+    #[builder(default)]
+    #[patch(skip)]
+    pub dispatcher: DispatcherConfigPatch,
 }
 
 impl fmt::Debug for AppConfig {
@@ -212,7 +219,8 @@ impl fmt::Debug for AppConfig {
             .field("audio", &self.audio)
             .field("hls", &self.hls)
             .field("file", &self.file)
-            .field("queue", &self.queue);
+            .field("queue", &self.queue)
+            .field("dispatcher", &self.dispatcher);
         #[cfg(feature = "gui")]
         builder.field("ui", &self.ui);
         builder.finish_non_exhaustive()

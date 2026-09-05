@@ -122,12 +122,12 @@ fn main() -> AppResult {
         worker_config = worker_config.with_compute_pool(pool);
     }
     let base_worker = Worker::new(worker_config);
-    let worker = AppWorker::new(
-        PlayWorkerConfig::builder(pools.clone())
-            .cancel(shutdown.child())
-            .worker(base_worker.clone())
-            .build(),
-    );
+    let mut play_worker_config = PlayWorkerConfig::builder(pools.clone())
+        .cancel(shutdown.child())
+        .worker(base_worker.clone())
+        .build();
+    play_worker_config.apply(document.play_worker());
+    let worker = AppWorker::new(play_worker_config);
     #[cfg(feature = "broadcast")]
     let broadcast = {
         let mut broadcast = AppBroadcastConfig::builder(base_worker.clone(), pools.clone())
@@ -173,6 +173,7 @@ fn main() -> AppResult {
         .broadcast(broadcast)
         .store(store)
         .queue(document.queue())
+        .dispatcher(document.dispatcher())
         .player(document.player())
         .audio(document.audio())
         .hls(document.hls())

@@ -54,6 +54,6 @@ pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceS
 pub use rt::{PlayerNode, StreamShape};
 pub use sync::GroupState;
 pub use worker::{
-    EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, RegisteredAudio, ServiceClass,
-    TrackConfig,
+    EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
+    RegisteredAudio, ServiceClass, TrackConfig,
 };
