@@ -131,7 +131,8 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    hang_timeout_secs(3)
+    hang_timeout_secs(3),
+    sync_session
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

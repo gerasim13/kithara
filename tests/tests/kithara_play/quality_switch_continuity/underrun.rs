@@ -287,7 +287,8 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    hang_timeout_secs(3)
+    hang_timeout_secs(3),
+    sync_session
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -331,7 +332,8 @@ async fn delayed_target_rebuild_keeps_the_player_output_continuous(
     serial,
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug"),
+    sync_session
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -375,7 +377,8 @@ async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_de
     serial,
     timeout(Duration::from_secs(600)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug"),
+    sync_session
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

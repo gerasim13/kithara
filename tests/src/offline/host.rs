@@ -13,10 +13,11 @@ use kithara::{
             Arc, Mutex,
             atomic::{AtomicU64, Ordering},
         },
-        time::Duration,
+        time::{Duration, sleep},
+        tokio::task::{JoinHandle, spawn},
     },
     play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
-    queue::Queue,
+    queue::{Queue, QueueControl, QueueError},
     signal::AudioSpec,
 };
 use ringbuf::{
@@ -27,6 +28,34 @@ use ringbuf::{
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 const GAIN_FLOOR_SECS: f64 = 0.9;
+
+/// Pump the queue on a timer the way an application's own tick loop does.
+///
+/// `no_block`: `tick` dispatches through the session's synchronous command
+/// bridge, so a pump living in an async task waits for the reply. The permit
+/// covers that one call; every other wait the task makes stays under the
+/// census.
+pub fn spawn_tick_pump<S>(control: QueueControl<S>, every: Duration) -> JoinHandle<()>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    spawn(async move {
+        loop {
+            sleep(every).await;
+            if tick(&control).is_err() {
+                break;
+            }
+        }
+    })
+}
+
+#[kithara::allow_block]
+fn tick<S>(control: &QueueControl<S>) -> Result<(), QueueError>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    control.tick()
+}
 
 pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
     match config {

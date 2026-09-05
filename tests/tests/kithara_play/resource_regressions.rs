@@ -853,7 +853,13 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(25)),
+    hang_timeout_secs(3),
+    sync_session
+)]
 #[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -1090,7 +1096,8 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     tokio,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(10),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug"),
+    sync_session
 )]
 async fn stress_offline_crossfade_no_gaps() {
     use kithara_integration_tests::offline::OfflinePlayer;

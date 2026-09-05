@@ -101,7 +101,8 @@ fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> Path
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(60))
+    timeout(Duration::from_secs(60)),
+    sync_session
 )]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck() {
     let case = DOWNTEMPO_HOUSE_SYNC;

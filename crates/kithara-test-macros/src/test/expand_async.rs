@@ -7,8 +7,8 @@ use super::{
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_hang_budget,
         make_hard_timeout_watchdog, make_prekill_guard, make_runtime_builder, make_selenium_attrs,
-        make_serial_attr, make_tracing_init, make_wasm_serial_guard, wrap_with_model,
-        wrap_with_soft_fail, wrap_with_timeout,
+        make_serial_attr, make_tracing_init, make_wasm_serial_guard, make_watched_root,
+        wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -51,6 +51,7 @@ pub(crate) fn emit_async_runtime_test(
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
     let tracing_init = make_tracing_init(args, remaining_attrs);
+    let watched_root = make_watched_root(&fn_name_str, &inner_body, args);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -63,12 +64,7 @@ pub(crate) fn emit_async_runtime_test(
                         .scope(__probe_install_id,
                             ::kithara_test_utils::kithara_platform::flash::with_ambient(
                                 #flash,
-                                ::kithara_test_utils::no_block::watch_root(
-                                    #fn_name_str,
-                                    async {
-                                        #inner_body
-                                    },
-                                ),
+                                #watched_root,
                             )),
                     ::core::panic::Location::caller(),
                 ),
@@ -173,6 +169,7 @@ pub(crate) fn emit_async_timeout_test(
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
     let tracing_init = make_tracing_init(args, remaining_attrs);
+    let watched_root = make_watched_root(&fn_name_str, &inner_body, args);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -191,12 +188,7 @@ pub(crate) fn emit_async_timeout_test(
                                         __timeout_dur,
                                         ::kithara_test_utils::kithara_platform::flash::with_ambient(
                                             #flash,
-                                            ::kithara_test_utils::no_block::watch_root(
-                                                #fn_name_str,
-                                                async {
-                                                    #inner_body
-                                                },
-                                            ),
+                                            #watched_root,
                                         ),
                                     )
                                     .await

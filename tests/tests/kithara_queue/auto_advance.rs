@@ -142,7 +142,7 @@ fn crossfade_started_requires_a_live_predecessor() {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -176,7 +176,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -214,7 +214,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
 /// cf=0: queue.tick must drive `process_notifications`, the audio thread
 /// arena handover at EOF promotes the armed next track, and the second
 /// track's PCM signal must replace the first one's.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_A_VALUE: f32 = 0.10;
@@ -280,7 +280,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 /// cf>0: queue.tick observes `HandoverRequested`, calls `commit_next`,
 /// the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
@@ -352,7 +352,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 /// fix-under-test by asserting both `PrefetchRequested` and `HandoverRequested`
 /// reach the bus during a cf>0 cycle — purely event-level, but pinned to
 /// the real `Queue::tick` path.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{
         events::{Event, PlayerEvent},
@@ -427,7 +427,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 ///
 /// Track A is quiet, track B is loud — if B preempted A the early
 /// window's mean amplitude would jump to B's level.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
     const QUIET_VALUE: f32 = 0.10;
@@ -492,7 +492,7 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
 /// for `Consumed` track B which my fix re-spawns. We pre-supply fresh
 /// `Resource`s to the loader so spawn completes synthetically, mirroring
 /// what a real network loader would deliver on a replay.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_A_VALUE: f32 = 0.10;
@@ -557,7 +557,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 
 /// When the last track finishes, the live playback snapshot must become inactive
 /// so the UI sees a stopped state even though transport intent remains unchanged.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{
         events::{Event, QueueEvent},
@@ -617,7 +617,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 /// Regression: `PrefetchRequested` can arrive before `current_index` is
 /// written on autoplay start. If `peek_next` defaults `None` to `Some(0)`,
 /// the prefetch handler arms slot 0 against the already-playing decoder.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_VALUE: f32 = 0.30;

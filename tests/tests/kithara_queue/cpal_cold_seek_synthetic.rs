@@ -23,7 +23,7 @@ use kithara_integration_tests::{
 use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

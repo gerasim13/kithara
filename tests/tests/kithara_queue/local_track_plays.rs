@@ -9,7 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, sleep, timeout},
+        time::{Duration, timeout},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, offline_gain_window},
+    offline::{OfflineQueue, offline_gain_window, spawn_tick_pump},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -208,15 +208,7 @@ fn build_queue_with_tick(
         ),
     )
     .expect("create product offline queue");
-    let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = spawn_tick_pump(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -228,7 +220,7 @@ fn build_queue_with_tick(
     (queue, downloader, store, tick_handle)
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
 #[case::mp3_symphonia(LocalSource::Mp3, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -476,7 +468,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// collapses real time. `wait_for_loader_done` accepts `Loaded |
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)), sync_session)]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

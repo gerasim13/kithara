@@ -110,7 +110,7 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
         }));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn a_failure_flags_the_entry_that_played() {
     let (harness, queue, _first, playing) = fixture_playing_the_second_copy();
 
@@ -124,7 +124,7 @@ async fn a_failure_flags_the_entry_that_played() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn a_failure_spares_an_entry_that_only_shares_the_url() {
     let (harness, queue, first, playing) = fixture_playing_the_second_copy();
 

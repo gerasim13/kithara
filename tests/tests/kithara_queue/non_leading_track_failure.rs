@@ -114,7 +114,7 @@ fn publish_background_failure(harness: &OfflinePlayerHarness, stale: TrackRef) {
         }));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn background_track_failure_does_not_advance_the_queue() {
     let (harness, queue, stale) = fixture_playing_the_middle_track();
 
@@ -128,7 +128,7 @@ async fn background_track_failure_does_not_advance_the_queue() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn background_track_failure_does_not_cut_the_current_track_audio() {
     let (harness, queue) = make_fixture();
     let (stale_id, stale_src) = loaded_track(&queue, QUIET);
@@ -159,7 +159,7 @@ async fn background_track_failure_does_not_cut_the_current_track_audio() {
 /// Acting on a background failure also flags a queue entry, taking it out
 /// of selection for the rest of the session — on the strength of a slot
 /// nobody is listening to.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, sync_session)]
 async fn background_track_failure_does_not_flag_a_queue_entry() {
     let (harness, queue, stale) = fixture_playing_the_middle_track();
 

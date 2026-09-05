@@ -9,6 +9,28 @@ use syn::{Attribute, Expr, Ident};
 
 use super::parse::TestArgs;
 
+/// Wrap a test body in the root census watcher.
+///
+/// The census reads a watched body as a real-time poll. A `sync_session` test
+/// drives a session whose dispatch is synchronous, so its body waits on the
+/// session command bridge by contract; permit that wait here, inside this body
+/// only. Product code keeps its own watcher on every task it spawns, so the
+/// permit never reaches it.
+pub(crate) fn make_watched_root(
+    fn_name_str: &str,
+    inner_body: &TokenStream2,
+    args: &TestArgs,
+) -> TokenStream2 {
+    let body = if args.is_sync_session {
+        quote! { ::kithara_test_utils::no_block::permit_poll(async #inner_body).await }
+    } else {
+        quote! { #inner_body }
+    };
+    quote! {
+        ::kithara_test_utils::no_block::watch_root(#fn_name_str, async { #body })
+    }
+}
+
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     if args.is_serial {
         quote! { #[serial_test::serial] }
