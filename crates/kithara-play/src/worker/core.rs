@@ -39,7 +39,6 @@ impl<S> PlayWorker<S> {
     #[must_use]
     pub fn new(config: PlayWorkerConfig<S>) -> Self {
         let PlayWorkerConfig {
-            backpressure_poll_interval,
             cancel,
             capacity,
             fairness_yield_interval,
@@ -61,7 +60,6 @@ impl<S> PlayWorker<S> {
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let dispatcher_config = DispatcherConfig::builder()
             .name(format!("kithara-play-worker-{id}"))
-            .backpressure_poll_interval(backpressure_poll_interval)
             .capacity(capacity)
             .fairness_yield_interval(fairness_yield_interval)
             .idle_timeout(idle_timeout)
