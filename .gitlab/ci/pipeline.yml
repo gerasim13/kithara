@@ -32,6 +32,14 @@ stages:
 # instead by keeping the build directory between jobs.
 variables:
   CARGO_INCREMENTAL: "0"
+  # A job fetches the sources before it runs anything, and the runner charges a
+  # failure there to the job: `apple:xcframework` reported a script failure two
+  # seconds in, having compiled nothing, because the GitLab web front end
+  # answered that one fetch with 502. Neighbouring jobs on the same host fetched
+  # normally minutes either side, so the outage lasted seconds while the job it
+  # landed on was already red for the gate. The runner will repeat the fetch on
+  # its own; it does so once unless told a number.
+  GET_SOURCES_ATTEMPTS: "3"
   # GitHub's HTTP/2 ref listing stalls in the Linux runner.
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: http.version
