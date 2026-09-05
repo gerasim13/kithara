@@ -303,7 +303,12 @@ where
         let held_source_frames = self.held_source_frames();
         self.emit(Some(samples), held_source_frames)
     }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Prepare deferred renderer state for the current source format.
     pub fn prepare(&mut self, spec: AudioSpec) {
         self.service_target(spec);
@@ -394,7 +399,12 @@ where
             self.process_active(chunk, speed)
         };
         if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output.frames());
+            self.commit_rate_render(
+                snapshot,
+                output.frames(),
+                output.meta.render_revision,
+                speed,
+            );
         }
         output
     }
