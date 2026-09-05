@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -1234,10 +1234,7 @@ async fn render_until_item_end_with_post_roll(
             harness
                 .tick_and_drain()
                 .into_iter()
-                .map(|event| TimedPlayerEvent {
-                    frame_end: rendered_frames,
-                    event,
-                }),
+                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
 
         if events.iter().any(|event| {
@@ -1254,10 +1251,7 @@ async fn render_until_item_end_with_post_roll(
                     harness
                         .tick_and_drain()
                         .into_iter()
-                        .map(|event| TimedPlayerEvent {
-                            frame_end: rendered_frames,
-                            event,
-                        }),
+                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );
             }
             return (rendered, events);
@@ -1269,12 +1263,6 @@ async fn render_until_item_end_with_post_roll(
         );
         time::sleep(Duration::from_millis(5)).await;
     }
-}
-
-#[derive(Clone, Debug)]
-struct TimedPlayerEvent {
-    frame_end: usize,
-    event: PlayerEvent,
 }
 
 struct ContinuityMetric;

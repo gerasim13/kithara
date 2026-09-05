@@ -13,4 +13,4 @@ pub use host::{
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
 };
-pub use window::{WindowStats, deinterleave_left, rms};
+pub use window::{TimedPlayerEvent, WindowStats, deinterleave_left, rms};

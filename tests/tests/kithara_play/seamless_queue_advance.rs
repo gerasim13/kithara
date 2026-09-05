@@ -11,7 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -335,10 +335,7 @@ async fn render_until_second_item_end(
             harness
                 .tick_and_drain()
                 .into_iter()
-                .map(|event| TimedPlayerEvent {
-                    frame_end: rendered_frames,
-                    event,
-                }),
+                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
 
         if count_item_end(&events) >= 2 {
@@ -350,10 +347,7 @@ async fn render_until_second_item_end(
                     harness
                         .tick_and_drain()
                         .into_iter()
-                        .map(|event| TimedPlayerEvent {
-                            frame_end: rendered_frames,
-                            event,
-                        }),
+                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );
             }
             return (rendered, events);
@@ -365,12 +359,6 @@ async fn render_until_second_item_end(
         );
         time::sleep(block_budget).await;
     }
-}
-
-#[derive(Clone, Debug)]
-struct TimedPlayerEvent {
-    frame_end: usize,
-    event: PlayerEvent,
 }
 
 fn count_item_end(events: &[TimedPlayerEvent]) -> usize {
