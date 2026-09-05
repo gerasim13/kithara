@@ -8,6 +8,16 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Mac CI host cleanup. The host spent a day refusing jobs for space while its
+  hourly pass was gone: the agent hung inside `opendir` on a volume that had
+  stopped answering, and launchd starts no second instance while the first is
+  alive. A watchdog thread now ends a pass at `cleanup_deadline_seconds`. The
+  pass that did run freed nothing, because `build_cache_size` is a ceiling over
+  one cache and says nothing about whether the volume has room; under
+  `Aggressive` or `Reject` it now reclaims what the volume is short of the soft
+  floor as well. Cleanup also judges by the volume it measured rather than
+  reading free space a second time.
+
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
