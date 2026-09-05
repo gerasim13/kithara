@@ -368,7 +368,7 @@ impl Registry {
             let stats = self.poll_peers(cx, inner);
             aggregate.drained_cmds += stats.drained_cmds;
             aggregate.peer_batches += stats.peer_batches;
-            if aggregate.abr_ticked || self.has_slot_work() {
+            if deadline_elapsed || aggregate.abr_ticked || self.has_slot_work() {
                 Poll::Ready(())
             } else {
                 Poll::Pending
