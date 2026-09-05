@@ -25,10 +25,12 @@ use std::{
 };
 
 use kithara::{
+    encode::EncoderFactory,
     events::{AdvanceReason, Event, QueueEvent, TrackId},
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -36,6 +38,7 @@ use kithara_integration_tests::{
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
+    test_defaults::packaged_content_frames,
 };
 use kithara_test_fixtures::{
     assets,
@@ -50,10 +53,13 @@ const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const SEGMENTS: usize = 3;
 const SEGMENT_SECS: f64 = 2.0;
-/// Length the fixture is built to. Each track's own reported duration drives
-/// the census; this only catches a fixture that stopped resembling itself.
+/// Length every fixture is built to, and the census's ruler.
+///
+/// Measuring a track against the duration the queue reports for it would let
+/// the two agree while both are wrong: the reported duration is what arms the
+/// crossfade, so a short report cuts the track *and* shortens the expectation.
+/// The built length is the one number the playthrough cannot move.
 const NOMINAL_TRACK_SECS: f64 = 6.0;
-const NOMINAL_TRACK_TOLERANCE_SECS: f64 = 1.0;
 const CROSSFADE_SECS: f32 = 1.0;
 /// Three tracks plus slack; the loop leaves early on `QueueEnded`.
 const BLOCK_BUDGET: usize = 3_000;
@@ -90,6 +96,29 @@ const HLS_QUEUE: [Origin; 3] = [Origin::Hls, Origin::Hls, Origin::Hls];
 const LOCAL_QUEUE: [Origin; 3] = [Origin::LocalFlac, Origin::LocalFlac, Origin::LocalFlac];
 /// Readers alternate, so both seams hand over between two different ones.
 const MIXED_QUEUE: [Origin; 3] = [Origin::Hls, Origin::LocalFlac, Origin::Hls];
+
+impl Origin {
+    /// Frames of audio this origin's fixture actually carries.
+    ///
+    /// The stored file is written frame-exact. HLS packages the same ramp into
+    /// segments of whole encoder frames, so it carries a little more than the
+    /// nominal segment length asks for; the census has to measure against what
+    /// was packaged rather than what was requested.
+    fn built_frames(self) -> i64 {
+        match self {
+            Self::LocalFlac => frames_from_secs(NOMINAL_TRACK_SECS),
+            Self::Hls => {
+                let requested = usize::try_from(frames_from_secs(SEGMENT_SECS))
+                    .expect("a segment carries a positive number of frames");
+                let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac)
+                    .expect("FLAC names its encoder frame size");
+                let packaged = packaged_content_frames(requested, frame_samples, SEGMENTS)
+                    .expect("the census fixture's packaged length fits usize");
+                i64::try_from(packaged).expect("the packaged length fits the session axis")
+            }
+        }
+    }
+}
 
 /// What separates one track from the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,18 +466,22 @@ async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
 
     let block = i64::try_from(BLOCK_FRAMES).expect("block size fits the session axis");
     let slack = block * 4;
-    let lengths: Vec<i64> = (0..expected.len())
-        .map(|index| {
+    let lengths: Vec<i64> = origins
+        .iter()
+        .enumerate()
+        .map(|(index, origin)| {
             let secs = *log
                 .durations
                 .get(&index)
                 .unwrap_or_else(|| panic!("queue position {index} must report a duration"));
+            let reported = frames_from_secs(secs);
+            let built = origin.built_frames();
             assert!(
-                (secs - NOMINAL_TRACK_SECS).abs() <= NOMINAL_TRACK_TOLERANCE_SECS,
-                "the fixture at queue position {index} must be about \
-                 {NOMINAL_TRACK_SECS} s long, not {secs} s"
+                (reported - built).abs() <= slack,
+                "queue position {index} must report the length its fixture was \
+                 built to: reported={reported} frames, built={built} +/- {slack}"
             );
-            frames_from_secs(secs)
+            built
         })
         .collect();
 
