@@ -367,6 +367,7 @@ mod tests {
         let runtime = Arc::clone(&player.runtime);
         let observer = player
             .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("test session answers stream-shape queries")
             .cancel
             .expect("prepare_config must populate cancel")
             .child();
