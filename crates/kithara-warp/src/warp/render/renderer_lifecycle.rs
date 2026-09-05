@@ -348,20 +348,23 @@ where
     }
 
     /// Render one complete decoded source chunk.
-    pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    pub fn render(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let snapshot = self.context.load();
         self.prepared_quantum = None;
-        self.render_at(chunk, self.controls.speed(), snapshot)
+        let rate = self.controls.rate_target();
+        chunk.meta.render_revision = rate.revision();
+        self.render_at(chunk, rate.speed(), snapshot)
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    pub fn render_quantum(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let prepared = self.prepared_quantum.take()?;
         if chunk.frames() != prepared.frames {
             return None;
         }
         let snapshot = self.context.load();
-        self.render_at(chunk, prepared.speed, snapshot)
+        chunk.meta.render_revision = prepared.rate.revision();
+        self.render_at(chunk, prepared.rate.speed(), snapshot)
     }
 
     fn render_at(

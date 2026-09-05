@@ -38,22 +38,23 @@ struct SourceWindow {
 }
 
 impl SourceWindow {
-    fn take(&mut self, frames: usize) -> Option<SourceEnd> {
-        let source_end = match self.source {
-            Some(source) if frames >= self.frames => {
-                self.source = None;
-                Some(SourceEnd::new(source.end(), source.sample_rate()))
-            }
-            Some(source) => {
-                let split = partial_source_end(source, frames, self.frames);
-                self.source = split
-                    .and_then(|split| SourceSpan::new(split, source.end(), source.sample_rate()));
-                split.map(|split| SourceEnd::new(split, source.sample_rate()))
-            }
-            None => None,
-        };
-        self.frames = self.frames.saturating_sub(frames);
-        source_end
+    fn source_for(&self, frames: usize) -> Option<SourceSpan> {
+        let source = self.source?;
+        let end = partial_source_end(source, frames.min(self.frames), self.frames)?;
+        SourceSpan::new(source.start(), end, source.sample_rate())
+            .map(|span| span.with_render_revision(source.render_revision()))
+    }
+
+    fn take(&mut self, frames: usize) -> Option<SourceSpan> {
+        let consumed = frames.min(self.frames);
+        let taken = self.source_for(consumed);
+        if let (Some(source), Some(taken)) = (self.source, taken) {
+            self.source = SourceSpan::new(taken.end(), source.end(), source.sample_rate())
+                .filter(|remaining| remaining.start() < remaining.end())
+                .map(|remaining| remaining.with_render_revision(source.render_revision()));
+        }
+        self.frames -= consumed;
+        taken
     }
 }
 
@@ -213,7 +214,9 @@ impl PlayerResource {
                 break;
             };
             let consumed = frames.min(span.frames);
-            source_end = span.take(consumed);
+            source_end = span
+                .take(consumed)
+                .map(|source| SourceEnd::new(source.end(), source.sample_rate()));
             frames -= consumed;
             if span.frames > 0 {
                 self.source_spans.push_front(span);
@@ -389,15 +392,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn partial_scratch_consumption_advances_the_exact_source_span() {
+    fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
-        let mut span = SourceWindow {
-            frames: 10,
-            source: SourceSpan::new(100, 130, rate),
-        };
+        let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
+        let mut span = SourceWindow { frames: 10, source };
 
-        assert_eq!(span.take(4), Some(SourceEnd::new(112, rate)));
+        assert_eq!(
+            span.take(4),
+            SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7))
+        );
         assert_eq!(span.source.map(|source| source.start()), Some(112));
-        assert_eq!(span.take(6), Some(SourceEnd::new(130, rate)));
+        assert_eq!(
+            span.take(6),
+            SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7))
+        );
     }
 }

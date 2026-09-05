@@ -20,4 +20,8 @@ impl RateTarget {
         let [_, _, _, _, a, b, c, d] = self.0.to_be_bytes();
         f32::from_bits(u32::from_be_bytes([a, b, c, d]))
     }
+
+    pub(crate) fn revision(self) -> u64 {
+        u64::from(Self::revision_from(self.0))
+    }
 }

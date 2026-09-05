@@ -7,7 +7,10 @@ use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
 use kithara_test_macros as kithara;
 use tracing::warn;
 
-use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig};
+use crate::{
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
+    temporal::RateTarget,
+};
 
 #[cfg(test)]
 mod tests;
@@ -15,7 +18,7 @@ mod tests;
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
     pub(super) frames: usize,
-    pub(super) speed: f32,
+    pub(super) rate: RateTarget,
 }
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
@@ -137,10 +140,10 @@ where
         remaining: usize,
     ) -> Option<FrameCount> {
         self.sync_plan();
-        let speed = self.controls.speed();
-        match self.source_frames_for_quantum(meta, remaining, speed) {
+        let rate = self.controls.rate_target();
+        match self.source_frames_for_quantum(meta, remaining, rate.speed()) {
             Ok(frames) => {
-                self.prepared_quantum = Some(PreparedQuantum { frames, speed });
+                self.prepared_quantum = Some(PreparedQuantum { frames, rate });
                 Some(FrameCount::new(frames))
             }
             Err(error) => {
