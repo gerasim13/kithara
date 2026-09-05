@@ -1809,12 +1809,6 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
 fn linux_test_lanes_share_one_serialized_target() {
     let workflow = github_workflow("lane.yml");
     let job = workflow_job(workflow_jobs(&workflow), "run");
-    let concurrency = mapping_field(job, "concurrency")
-        .as_mapping()
-        .expect("the lane job has a concurrency contract");
-    let group = mapping_field(concurrency, "group")
-        .as_str()
-        .expect("the lane job names its concurrency group");
     let step = named_step(job, "Run the lane");
     let env = mapping_field(step, "env")
         .as_mapping()
@@ -1829,14 +1823,13 @@ fn linux_test_lanes_share_one_serialized_target() {
         .as_str()
         .expect("the lane step runs a command");
 
-    for value in [group, target, lock] {
+    for value in [target, lock] {
         assert!(
             value.contains("inputs.lane == 'linux-test-simulated-clock'")
                 && value.contains("inputs.lane == 'linux-test-real-clock'"),
             "both Linux test lanes must opt into the shared target explicitly: {value}"
         );
     }
-    assert!(group.contains("github.repository"), "{group}");
     assert!(target.contains("/cache/shared-target/{0}"), "{target}");
     assert!(lock.contains("github.repository"), "{lock}");
     assert!(lock.contains("inputs.lane"), "{lock}");

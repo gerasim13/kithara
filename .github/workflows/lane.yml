@@ -87,13 +87,6 @@ jobs:
     name: ${{ inputs.lane }}
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    # Queue matching test lanes before they occupy a runner. The filesystem
-    # lock in the step below is the final guard for the shared host directory.
-    concurrency:
-      group: ${{ (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') && format('linux-target-{0}-{1}', github.repository, inputs.lane) || format('lane-{0}-{1}', github.run_id, inputs.lane) }}
-      cancel-in-progress: false
-      queue: max
-
     steps:
       # The runner image carries the toolchain, so a lane installs no packages.
       - name: Checkout code
