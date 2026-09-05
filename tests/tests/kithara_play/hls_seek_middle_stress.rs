@@ -52,7 +52,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     result
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::quick_symphonia(1, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

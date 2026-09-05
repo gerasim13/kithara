@@ -5,7 +5,6 @@ pub mod player;
 pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 pub use host::{
     MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, offline_gain_window,
-    spawn_tick_pump,
 };
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,

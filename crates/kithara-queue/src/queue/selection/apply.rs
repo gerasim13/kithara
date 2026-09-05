@@ -36,13 +36,17 @@ where
                     return;
                 }
             };
-            // WHY: `apply_loaded` takes the admission lock and dispatches through the session's synchronous command bridge; on a runtime worker that wait blocks the executor.
             drop(task::spawn_blocking(move || {
                 queue.apply_loaded(id, resource);
             }));
         }));
     }
 
+    /// Apply a finished load synchronously, off the runtime.
+    ///
+    /// Takes the admission lock and dispatches through the session's
+    /// synchronous command bridge, so the caller waits for a reply. On a
+    /// runtime worker that wait parks the executor thread.
     fn apply_loaded(&self, id: TrackId, resource: Resource) {
         let _admission = self.lock_admission();
         if self.is_closed() {
@@ -90,7 +94,12 @@ where
             return;
         }
         self.tracks.set_status(id, TrackStatus::Loaded);
-        if self.tracks.lock().get(index).is_some_and(|e| e.id == id) {
+        if self
+            .tracks
+            .lock()
+            .get(index)
+            .is_some_and(|entry| entry.id == id)
+        {
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 

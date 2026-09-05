@@ -36,8 +36,7 @@ impl Consts {
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug"),
-    sync_session
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     use kithara::assets::{AssetStore, StorageBackend};

@@ -476,7 +476,7 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::symphonia_no_sidx(DecoderBackend::Symphonia, false)]
 #[case::symphonia_with_sidx(DecoderBackend::Symphonia, true)]
 #[cfg_attr(

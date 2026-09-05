@@ -25,10 +25,6 @@ pub(crate) struct TestArgs {
     pub(crate) is_native_only: bool,
     pub(crate) is_selenium: bool,
     pub(crate) is_serial: bool,
-    /// `sync_session`: the body drives a session whose dispatch is synchronous,
-    /// so it waits on the session command bridge by contract. Permits that wait
-    /// inside this body only; tasks the product spawns keep their own census.
-    pub(crate) is_sync_session: bool,
     pub(crate) is_tokio: bool,
     pub(crate) is_wasm_only: bool,
 }
@@ -115,7 +111,6 @@ impl Parse for TestArgs {
                 "browser" => args.is_browser = true,
                 "loom" => args.is_loom = true,
                 "serial" => args.is_serial = true,
-                "sync_session" => args.is_sync_session = true,
                 "selenium" => args.is_selenium = true,
                 "multi_thread" => args.is_multi_thread = true,
                 "timeout" => {

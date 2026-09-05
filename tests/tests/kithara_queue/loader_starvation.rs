@@ -27,9 +27,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, spawn_tick_pump},
-    temp_dir,
-    waits::wait_for_loader_done,
+    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
 };
 use url::Url;
 
@@ -120,7 +118,15 @@ fn build_queue_with_tick(
         ),
     )
     .expect("create product offline queue");
-    let tick_handle = spawn_tick_pump(queue.control(), Duration::from_millis(50));
+    let queue_for_tick = queue.control();
+    let tick_handle = tokio::task::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if queue_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -159,7 +165,7 @@ async fn wait_until_loading(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn hung_loads_must_not_starve_user_selected_track() {
     let helper = TestServerHelper::new().await;
     let hung_urls: Vec<Url> = (0..Consts::HUNG_TRACKS)

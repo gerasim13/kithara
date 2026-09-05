@@ -232,13 +232,7 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
     format!("{request_ids:?}")
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    sync_session
-)]
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

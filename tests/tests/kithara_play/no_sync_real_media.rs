@@ -179,8 +179,7 @@ struct CapturedAudio {
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(300)),
-    sync_session
+    timeout(Duration::from_secs(300))
 )]
 async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
     run_real_media_matrix(false).await;

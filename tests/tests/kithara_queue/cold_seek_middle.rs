@@ -7,7 +7,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, timeout},
+        time::{Duration, Instant, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
@@ -17,10 +17,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
-    fixture_protocol::DelayRule,
-    kithara,
-    offline::{OfflineQueue, spawn_tick_pump},
-    temp_dir,
+    fixture_protocol::DelayRule, kithara, offline::OfflineQueue, temp_dir,
     waits::wait_for_position_event,
 };
 
@@ -95,7 +92,15 @@ fn build_queue_with_tick(
         Queue::new(QueueConfig::builder().player(player).build()),
     )
     .expect("create product offline queue");
-    let tick_handle = spawn_tick_pump(queue.control(), Duration::from_millis(50));
+    let queue_for_tick = queue.control();
+    let tick_handle = tokio::task::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if queue_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -255,7 +260,15 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     )
     .expect("create product offline queue");
 
-    let tick_handle = spawn_tick_pump(queue.control(), Duration::from_millis(50));
+    let queue_for_tick = queue.control();
+    let tick_handle = tokio::task::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if queue_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
 
     let mut rx = queue.subscribe();
     let ids: Vec<TrackId> = resolved
@@ -340,17 +353,17 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let _ = ids;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_one_track_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8"], 0, temp_dir).await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_two_tracks_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 0, temp_dir).await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 1, temp_dir).await;
 }
@@ -377,7 +390,7 @@ async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
 /// every segment fetch to emulate a cold-network CDN. Seeks past the
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     install_tracing();
 
@@ -462,7 +475,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 /// the physical stream length, so `source.seek(Current(delta))` lands
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     install_tracing();
 

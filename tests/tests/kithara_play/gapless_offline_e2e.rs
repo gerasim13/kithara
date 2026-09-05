@@ -103,13 +103,7 @@ fn expected_total_decoded_frames() -> usize {
         .saturating_sub(native_encoder_delay)
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -167,8 +161,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug"),
-    sync_session
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -251,13 +244,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
@@ -318,13 +305,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
     let compensated = render_synthetic_fused_deficit_seam(true).await;
     let uncompensated = render_synthetic_fused_deficit_seam(false).await;
@@ -510,13 +491,7 @@ async fn render_apple_fused_deficit_seam(
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -562,13 +537,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_metadata(
     temp_dir: TestTempDir,
 ) {
@@ -606,13 +575,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     temp_dir: TestTempDir,
 ) {
@@ -705,13 +668,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(

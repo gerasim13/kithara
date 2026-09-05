@@ -1032,8 +1032,7 @@ async fn run(case: SyncCase, provider: Provider) {
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(60)),
-    sync_session
+    timeout(Duration::from_secs(60))
 )]
 #[case::mp3(Provider::Mp3Same)]
 #[case::drm(Provider::HlsSame(HlsProtection::Drm))]

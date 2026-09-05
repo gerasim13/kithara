@@ -43,8 +43,7 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug"),
-    sync_session
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -131,13 +130,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1),
-    sync_session
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let gapless_params = SilenceTrimParams {

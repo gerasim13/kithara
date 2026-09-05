@@ -115,7 +115,7 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 /// deadline. Detector: the `committed_ns` USDT probe on
 /// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)), sync_session)]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

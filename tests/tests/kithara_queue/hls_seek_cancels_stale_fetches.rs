@@ -181,8 +181,7 @@ struct PostSeekObservation {
     multi_thread,
     serial,
     timeout(Duration::from_secs(60)),
-    tracing("kithara_hls=debug,kithara_queue=debug,kithara_stream=debug"),
-    sync_session
+    tracing("kithara_hls=debug,kithara_queue=debug,kithara_stream=debug")
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

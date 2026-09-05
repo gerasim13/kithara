@@ -162,8 +162,7 @@ enum Trigger {
     serial,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(1),
-    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug"),
-    sync_session
+    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
 async fn immediate_seek_size_withheld() {
     run_case(GateMode {
@@ -181,8 +180,7 @@ async fn immediate_seek_size_withheld() {
     serial,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(1),
-    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug"),
-    sync_session
+    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
 async fn immediate_seek_size_and_body_withheld() {
     run_case(GateMode {

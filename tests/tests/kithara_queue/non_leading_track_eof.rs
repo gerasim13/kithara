@@ -110,7 +110,7 @@ fn fixture_with_background_eof() -> (
 /// current track started and the queue advanced on it, cutting a track
 /// with minutes left. The queue must key the advance on the track that
 /// ended being the current one.
-#[kithara::test(tokio, sync_session)]
+#[kithara::test(tokio)]
 async fn background_track_eof_does_not_advance_the_queue() {
     let (harness, queue, stale, current) = fixture_with_background_eof();
 
@@ -136,7 +136,7 @@ async fn background_track_eof_does_not_advance_the_queue() {
 
 /// The audible half of the same defect: the listener hears the current
 /// track handed over to the successor while it is still playing.
-#[kithara::test(tokio, sync_session)]
+#[kithara::test(tokio)]
 async fn background_track_eof_does_not_cut_the_current_track_audio() {
     let (harness, queue, stale, current) = fixture_with_background_eof();
 
@@ -170,7 +170,7 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
 /// the *current* slot, so the faded-out track ends there — its own slot is
 /// still the held one. The queue has already moved on with the pre-arm;
 /// answering that end again would skip a track the listener just started.
-#[kithara::test(tokio, sync_session)]
+#[kithara::test(tokio)]
 async fn outgoing_crossfade_half_eof_does_not_advance_the_queue() {
     let (harness, queue, outgoing, current) = fixture_with_background_eof();
 

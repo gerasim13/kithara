@@ -44,12 +44,6 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
              from async integration work",
         ));
     }
-    if args.is_sync_session && func.sig.asyncness.is_none() {
-        return Err(syn::Error::new_spanned(
-            &func.sig.ident,
-            "`sync_session` permits the census inside a watched async body; a sync test has none",
-        ));
-    }
     if args.is_loom && !matches!(func.sig.output, ReturnType::Default) {
         return Err(syn::Error::new_spanned(
             &func.sig.output,

@@ -448,8 +448,7 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    hang_timeout_secs(3),
-    sync_session
+    hang_timeout_secs(3)
 )]
 async fn kithara_app_manual_aac_to_flac_switch_is_gapless() {
     let server = TestServerHelper::new().await;

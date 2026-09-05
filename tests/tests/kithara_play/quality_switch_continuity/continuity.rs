@@ -545,8 +545,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join() {
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    hang_timeout_secs(3),
-    sync_session
+    hang_timeout_secs(3)
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
