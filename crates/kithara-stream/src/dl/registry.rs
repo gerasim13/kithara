@@ -334,6 +334,13 @@ impl Registry {
     /// guarantees that `process()` runs to completion: no readiness source can
     /// drop `tick()` mid-batch and lose unspawned `FetchCmd`s.
     ///
+    /// The deadline future completes once while the closure runs on every
+    /// wakeup of this tick, so the elapsed flag latches rather than re-polling
+    /// it. A deadline the controller then declines to tick on — its peer was
+    /// cancelled while the loop slept — leaves the loop parked with that future
+    /// finished, and resuming it panics the downloader out from under every
+    /// peer it serves.
+    ///
     /// Returns a [`FetchProgress`] describing whether fetch work moved
     /// forward this tick. Idle returns are possible when `poll_fn` is
     /// woken by `fetch_waker` (an in-flight fetch completed elsewhere)
@@ -355,9 +362,10 @@ impl Registry {
             sleep(deadline.saturating_duration_since(Instant::now())).await;
         };
         tokio::pin!(abr_deadline_wait);
+        let mut deadline_elapsed = false;
 
         poll_fn(|cx| {
-            let deadline_elapsed = abr_deadline_wait.as_mut().poll(cx).is_ready();
+            deadline_elapsed = deadline_elapsed || abr_deadline_wait.as_mut().poll(cx).is_ready();
             aggregate.abr_ticked |= inner.abr.poll_ticks(cx, Instant::now(), deadline_elapsed);
             while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
                 self.add(entry);
