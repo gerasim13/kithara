@@ -1,29 +1,19 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        sync::Arc,
-        time::{Duration, sleep, timeout},
-        tokio,
+        time::{Duration, timeout},
         tokio::sync::OnceCell,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{QueueControl, TrackSource, Transition},
 };
-use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
-};
+use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineQueue, waits::wait_for_position_at_least,
+    kithara,
+    offline::{AppQueueFixture, insecure_app_queue},
+    waits::wait_for_position_at_least,
 };
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
@@ -37,75 +27,17 @@ use kithara_integration_tests::{
 /// (stage DRM tracks are HE-AAC v1).
 const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8";
 
-struct Ctx {
-    config: AppConfig,
-    queue: OfflineQueue<AppPools>,
-    cache: TestTempDir,
+static CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
+
+async fn shared_ctx() -> &'static AppQueueFixture {
+    CTX.get_or_init(|| async { insecure_app_queue() }).await
 }
 
-static CTX: OnceCell<Ctx> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static Ctx {
-    CTX.get_or_init(|| async {
-        let pools = app_pools().expect("build app pool region");
-        let net = NetOptions::builder().is_insecure(true).build();
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-                .build(),
-        );
-        let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-        let shutdown = CancelToken::never();
-        let store = AssetStore::builder(pools.clone())
-            .cancel(shutdown.child())
-            .backend(StorageBackend::default())
-            .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
-            .build();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::builder(pools)
-                .cancel(shutdown.child())
-                .build(),
-        );
-        let session_pools = worker.pools().clone();
-        let config = AppConfig::builder()
-            .downloader(downloader)
-            .shutdown(shutdown)
-            .worker(worker.clone())
-            .store(store)
-            .build();
-        let session_config = HostConfig::offline(session_pools)
-            .pacing(Duration::from_millis(10))
-            .build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session_config.sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = OfflineQueue::new(
-            session_config,
-            Queue::new(QueueConfig::builder().player(player).build()),
-        )
-        .expect("create product offline queue");
-
-        let q = queue.control();
-        tokio::task::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(50)).await;
-                let _ = q.tick();
-            }
-        });
-
-        Ctx {
-            config,
-            queue,
-            cache: TestTempDir::new(),
-        }
-    })
-    .await
-}
-
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
+fn build_track_source(
+    url: &str,
+    ctx: &AppQueueFixture,
+    backend: DecoderBackend,
+) -> TrackSource<AppPools> {
     super::app_track_source(
         url,
         &ctx.config,
