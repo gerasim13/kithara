@@ -189,21 +189,30 @@ async fn timeout_test_endpoint() -> impl IntoResponse {
     "Should timeout"
 }
 
+const KEY_BYTES: &[u8] = &[
+    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+];
+const AUTH_KEY_BYTES: &[u8] = &[
+    0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+];
+const PARAM_KEY_BYTES: &[u8] = &[
+    0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34, 0x56, 0x78,
+];
+
+fn key_response(key_bytes: &'static [u8]) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
+        .body(Body::from(Bytes::from_static(key_bytes)))
+        .unwrap()
+}
+
 async fn key_endpoint(
     State(counter): State<KeyRequestCounter>,
     _request: Request,
 ) -> Result<Response, StatusCode> {
     counter.increment("/key");
-
-    let key_bytes = vec![
-        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
-        0x10,
-    ];
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
-        .body(Body::from(Bytes::from(key_bytes)))
-        .unwrap())
+    Ok(key_response(KEY_BYTES))
 }
 
 async fn key_with_auth_endpoint(
@@ -217,10 +226,7 @@ async fn key_with_auth_endpoint(
 
     match auth_header {
         Some("Bearer secret-key-token") => {
-            let key_bytes = vec![
-                0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
-                0x32, 0x10,
-            ];
+            let key_bytes = AUTH_KEY_BYTES;
 
             let range_header = headers.get("Range").and_then(|h| h.to_str().ok());
 
@@ -250,11 +256,7 @@ async fn key_with_auth_endpoint(
 
                 Err(StatusCode::BAD_REQUEST)
             } else {
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/octet-stream")
-                    .body(Body::from(Bytes::from(key_bytes)))
-                    .unwrap())
+                Ok(key_response(key_bytes))
             }
         }
         _ => Err(StatusCode::UNAUTHORIZED),
@@ -274,15 +276,7 @@ async fn key_with_params_endpoint(
         query_params.contains("drm_id=test123") && query_params.contains("version=1.0");
 
     if has_required_params {
-        let key_bytes = vec![
-            0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34,
-            0x56, 0x78,
-        ];
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/octet-stream")
-            .body(Body::from(Bytes::from(key_bytes)))
-            .unwrap())
+        Ok(key_response(PARAM_KEY_BYTES))
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
