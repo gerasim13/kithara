@@ -68,11 +68,11 @@ where
     /// [`AudioConfig`]: kithara_audio::AudioConfig
     #[builder(default)]
     pub(crate) audio: AudioConfigPatch,
-    /// Consumer wake capability handed to the built audio pipeline. A
-    /// player-managed resource has this overwritten with its session's wake
-    /// policy, so it is not a document key.
-    #[builder(default)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
+    /// Session-owned audio-consumer wake capability. Player preparation fills
+    /// this field; `None` identifies a direct resource consumed off RT. Not a
+    /// document key: the session owns it.
+    #[builder(skip)]
+    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
     /// Whether audio-thread reads block on a producer-ring underrun. Only an
     /// offline harness or a player's own policy sets this, so it is not a
     /// document key.
@@ -195,12 +195,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
+    fn direct_config_has_no_session_wake_policy() {
         let config = test_config("https://example.com/track.mp3").expect("valid config");
-        assert_eq!(
-            config.consumer_wake_mode,
-            ConsumerWakeMode::RealtimeDeferred
-        );
+        assert_eq!(config.consumer_wake_mode, None);
     }
 
     fn worker() -> PlayWorker<TestPools> {
@@ -284,6 +281,30 @@ mod tests {
                 .build();
         let audio_config = config.build_hls_config(&worker, None).unwrap();
         assert!(audio_config.stream().bus.is_some());
+    }
+
+    #[kithara::test]
+    fn direct_resources_wake_the_worker_off_rt() {
+        let worker = worker();
+        let file: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(valid_src("https://example.com/a.mp3"))
+                .store(store())
+                .build();
+        assert_eq!(
+            file.build_file_config(&worker, None).consumer_wake_mode(),
+            ConsumerWakeMode::ImmediateOffRt
+        );
+
+        let hls: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(valid_src("https://example.com/a.m3u8"))
+                .store(store())
+                .build();
+        assert_eq!(
+            hls.build_hls_config(&worker, None)
+                .expect("valid HLS config")
+                .consumer_wake_mode(),
+            ConsumerWakeMode::ImmediateOffRt
+        );
     }
 
     #[kithara::test]
@@ -427,8 +448,8 @@ mod tests {
 
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
         assert_eq!(
-            config.consumer_wake_mode,
-            ConsumerWakeMode::RealtimeDeferred
+            config.consumer_wake_mode, None,
+            "a direct resource carries no session wake policy"
         );
         assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());

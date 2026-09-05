@@ -1,4 +1,4 @@
-use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
+use kithara_audio::{AudioConfig, AudioObserver, ConsumerWakeMode, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
@@ -77,7 +77,10 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_observer(observer)
-            .consumer_wake_mode(self.consumer_wake_mode)
+            .consumer_wake_mode(
+                self.consumer_wake_mode
+                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
+            )
             .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
@@ -118,7 +121,10 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_observer(observer)
-            .consumer_wake_mode(self.consumer_wake_mode)
+            .consumer_wake_mode(
+                self.consumer_wake_mode
+                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
+            )
             .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
