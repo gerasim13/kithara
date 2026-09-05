@@ -7,12 +7,12 @@ use kithara::{
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
+    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
 };
 
 use crate::bufpool_ext::TestPools;
@@ -67,24 +67,9 @@ fn render_loop(
     pcm
 }
 
-fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        SAMPLE_RATE,
-    );
-    let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .should_autoplay(false)
-        .build();
-    let queue = harness.insert_control(Queue::new(config));
-    (harness, queue)
-}
-
 #[kithara::test]
 fn seek_updates_cached_position_optimistically() {
-    let (_harness, queue) = make_fixture();
+    let (_harness, queue) = offline_queue_fixture(SAMPLE_RATE);
     let id = queue.insert_loaded_for_test(make_resource("seek", 120.0, 0.10));
     queue.select(id, Transition::None).expect("select track");
 
@@ -101,7 +86,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_VALUE: f32 = 0.30;
 
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE));
     // Registered but never completed: stands in for a stalled loader.
@@ -146,7 +131,7 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
     const LOUD: f32 = 0.80;
     const WARMUP_BLOCKS: usize = 64;
 
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD));
@@ -196,7 +181,7 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
 /// keeping the status truthful for later re-selects.
 #[kithara::test(tokio)]
 async fn play_button_marks_current_loaded_track_consumed() {
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
     let id_a = queue.insert_loaded_for_test(make_resource("a", 8.0, 0.3));
     let _id_b = queue.insert_loaded_for_test(make_resource("b", 8.0, 0.3));
 
@@ -225,7 +210,7 @@ async fn reselect_playing_track_cancels_pending_switch() {
     /// Enough blocks to confirm audible playback without reaching EOF.
     const WARMUP_BLOCKS: usize = 64;
 
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE));
     let id_b = queue.register_for_test();

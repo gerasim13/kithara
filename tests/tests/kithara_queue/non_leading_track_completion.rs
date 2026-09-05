@@ -13,12 +13,12 @@ use kithara::{
     self,
     events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
+    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
 };
 
 use crate::bufpool_ext::TestPools;
@@ -42,21 +42,6 @@ enum Completion {
 enum NonLeadingRole {
     Background,
     Outgoing,
-}
-
-fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        SAMPLE_RATE,
-    );
-    let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .should_autoplay(false)
-        .build();
-    let queue = harness.insert_control(Queue::new(config));
-    (harness, queue)
 }
 
 /// Load a track whose player-side `src` is its queue URI, the way a real
@@ -105,7 +90,7 @@ fn non_leading_fixture() -> (
     TrackRef,
     TrackId,
 ) {
-    let (harness, queue) = make_fixture();
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
     let (stale, stale_src) = loaded_track(&queue, QUIET);
     let (current, _) = loaded_track(&queue, LOUD);
     let (_next, _) = loaded_track(&queue, QUIET);
