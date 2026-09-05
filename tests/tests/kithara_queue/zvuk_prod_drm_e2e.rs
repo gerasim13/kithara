@@ -1,13 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{
-    decode::DecoderBackend,
-    platform::{time::Duration, tokio::sync::OnceCell},
-    queue::Transition,
-};
+use kithara::{decode::DecoderBackend, platform::time::Duration, queue::Transition};
 use kithara_integration_tests::{
     kithara,
-    offline::{AppQueueFixture, insecure_app_queue},
+    offline::LazyAppQueueFixture,
     waits::{wait_for_loader_done_event, wait_for_position_at_least},
 };
 
@@ -22,11 +18,7 @@ use kithara_integration_tests::{
 /// (stage DRM tracks are HE-AAC v1).
 const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8";
 
-static CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static AppQueueFixture {
-    CTX.get_or_init(|| async { insecure_app_queue() }).await
-}
+static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 
 /// Production zvuk DRM end-to-end: load → select → play, asserting
 /// that audio progresses. Pins the production code path the user
@@ -62,7 +54,7 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let ctx = shared_ctx().await;
+    let ctx = CTX.get().await;
     let source = super::source_helper::app_drm_track_source(PROD_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx

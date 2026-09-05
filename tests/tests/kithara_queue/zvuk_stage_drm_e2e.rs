@@ -1,13 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{
-    decode::DecoderBackend,
-    platform::{time::Duration, tokio::sync::OnceCell},
-    queue::Transition,
-};
+use kithara::{decode::DecoderBackend, platform::time::Duration, queue::Transition};
 use kithara_integration_tests::{
     kithara,
-    offline::{AppQueueFixture, insecure_app_queue},
+    offline::LazyAppQueueFixture,
     waits::{wait_for_loader_done_event, wait_for_position_at_least},
 };
 
@@ -18,11 +14,7 @@ use kithara_integration_tests::{
 /// `randomString(of: 8)` hex format used by prod.
 const STAGE_TRACK: &str = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
-static CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static AppQueueFixture {
-    CTX.get_or_init(|| async { insecure_app_queue() }).await
-}
+static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 
 /// Staging zvq.me DRM end-to-end: load → select → play, asserting
 /// that audio progresses (position advances by ≥0.9s over 2s wall
@@ -43,7 +35,7 @@ async fn shared_ctx() -> &'static AppQueueFixture {
             stage DRM confirmed working — needs KITHARA_DRM_STAGE_* creds + VPN."]
 #[case::symphonia(DecoderBackend::Symphonia)]
 async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
-    let ctx = shared_ctx().await;
+    let ctx = CTX.get().await;
     let source = super::source_helper::app_drm_track_source(STAGE_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source).expect("append stage DRM track");

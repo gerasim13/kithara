@@ -27,6 +27,19 @@ pub struct AppQueueFixture {
     pub cache: TestTempDir,
 }
 
+pub struct LazyAppQueueFixture(tokio::sync::OnceCell<AppQueueFixture>);
+
+impl LazyAppQueueFixture {
+    #[must_use]
+    pub const fn const_new() -> Self {
+        Self(tokio::sync::OnceCell::const_new())
+    }
+
+    pub async fn get(&self) -> &AppQueueFixture {
+        self.0.get_or_init(|| async { insecure_app_queue() }).await
+    }
+}
+
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
 #[must_use]
 pub fn insecure_app_queue() -> AppQueueFixture {

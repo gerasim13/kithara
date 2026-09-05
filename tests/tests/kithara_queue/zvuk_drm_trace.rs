@@ -2,17 +2,11 @@
 
 use kithara::{
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    platform::{
-        time::{Duration, timeout},
-        tokio::sync::OnceCell,
-    },
+    platform::time::{Duration, timeout},
     queue::QueueControl,
 };
 use kithara_app::{pools::AppPools, sources::build_source};
-use kithara_integration_tests::{
-    kithara,
-    offline::{AppQueueFixture, insecure_app_queue},
-};
+use kithara_integration_tests::{kithara, offline::LazyAppQueueFixture};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -27,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 async fn zvuk_drm_master_playlist_trace() {
     install_tracing();
 
-    let ctx = shared_ctx().await;
+    let ctx = CTX.get().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
     let mut config = ctx.config.clone();
@@ -44,11 +38,7 @@ async fn zvuk_drm_master_playlist_trace() {
     }
 }
 
-static CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
-
-async fn shared_ctx() -> &'static AppQueueFixture {
-    CTX.get_or_init(|| async { insecure_app_queue() }).await
-}
+static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 
 fn install_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
