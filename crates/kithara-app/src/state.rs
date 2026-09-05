@@ -268,22 +268,6 @@ impl StateController {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        queue: AppQueueControl,
-        timestretch: Arc<StretchControls>,
-        state: UiState,
-        cancel: CancelToken,
-    ) -> Self {
-        Self {
-            queue,
-            state: Arc::new(Mutex::new(state)),
-            timestretch,
-            cancel,
-            beat_clock: Mutex::new(BeatClockState::default()),
-        }
-    }
-
     /// Apply a closure under the lock. Returns the closure's result.
     /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
     /// abr selection) that must outlive the next event echo.
@@ -333,6 +317,26 @@ impl StateController {
     #[must_use]
     pub fn snapshot(&self) -> UiState {
         self.state.lock().clone()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_fixture {
+    use super::*;
+
+    pub(crate) fn controller(
+        queue: AppQueueControl,
+        timestretch: Arc<StretchControls>,
+        cancel: CancelToken,
+    ) -> Arc<StateController> {
+        let state = Arc::new(Mutex::new(UiState::new(&queue)));
+        Arc::new(StateController {
+            queue,
+            state,
+            timestretch,
+            cancel,
+            beat_clock: Mutex::new(BeatClockState::default()),
+        })
     }
 }
 

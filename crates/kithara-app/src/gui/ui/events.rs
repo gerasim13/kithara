@@ -465,97 +465,15 @@ mod tests {
 
     #[cfg(not(feature = "broadcast"))]
     mod routing {
-        use ::kithara::{
-            assets::StorageBackend,
-            host::HostConfig,
-            net::{HttpClient, NetOptions},
-            platform::{CancelToken, sync::Arc},
-            play::PlayWorkerConfig,
-            stream::dl::{Downloader, DownloaderConfig},
-            ui::render::{ControlAction, DragPhase, UiEvent, WindowCommand},
-        };
-        use iced::window::Id;
+        use ::kithara::ui::render::{ControlAction, DragPhase, UiEvent, WindowCommand};
         use kithara_test_utils::kithara;
 
         use super::super::translate;
         use crate::{
-            broadcast::Broadcaster,
-            catalog::Catalog,
-            config::{AppBroadcastConfig, AppConfig},
-            deck::{Deck, DeckId, DeckSet, EqMode},
-            gui::{
-                app::{Decks, Kithara},
-                deck::DeckMsg,
-                message::Message,
-                mix::MixMsg,
-                ui::{AppUi, package::Package},
-            },
-            pools::{self, AppHost, AppStore, AppWorker},
-            state::{AbrVariant, StateController, UiState},
+            deck::{DeckId, EqMode},
+            gui::{app::Kithara, deck::DeckMsg, message::Message, mix::MixMsg, test_fixture},
+            state::AbrVariant,
         };
-
-        fn config() -> AppConfig {
-            let shutdown = CancelToken::root();
-            let pools = pools::build().expect("valid app pool policy");
-            let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-            let downloader = Downloader::new(
-                DownloaderConfig::for_client(HttpClient::new(
-                    NetOptions::builder().build(),
-                    pools.clone(),
-                    shutdown.child(),
-                ))
-                .build(),
-            );
-            let store = AppStore::builder(pools)
-                .backend(StorageBackend::Memory)
-                .build();
-            AppConfig::builder()
-                .downloader(downloader)
-                .shutdown(shutdown)
-                .worker(worker)
-                .store(store)
-                .build()
-        }
-
-        fn state() -> Kithara {
-            let config = config();
-            let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
-            let decks: Vec<Deck> = (0..2)
-                .map(|index| {
-                    Deck::build(DeckId(index), &config, &mut host)
-                        .expect("host accepts the test deck")
-                })
-                .collect();
-            let controllers = decks
-                .iter()
-                .map(|deck| {
-                    let controller = StateController::for_test(
-                        deck.queue.control().clone(),
-                        Arc::clone(&deck.timestretch),
-                        UiState::empty(),
-                        deck.cancel_child(),
-                    );
-                    (deck.id, Arc::new(controller))
-                })
-                .collect();
-            let session = DeckSet::new(host, decks);
-            let decks = Decks::new(controllers).expect("fixture has decks");
-            let catalog = Catalog::new(vec![
-                "/music/local.flac".to_string(),
-                "https://example.test/stream.m3u8".to_string(),
-            ]);
-            let ui = AppUi::new(Package::load(None).expect("shipped UI package"))
-                .expect("shipped UI compiles");
-            Kithara::mounted(
-                session,
-                decks,
-                catalog,
-                config,
-                ui,
-                Broadcaster::new(AppBroadcastConfig::default()),
-                Id::unique(),
-            )
-        }
 
         fn send(state: &mut Kithara, path: &str, action: ControlAction) -> Option<Message> {
             translate(
@@ -569,7 +487,7 @@ mod tests {
 
         #[kithara::test(native, flash(false))]
         fn deck_and_bar_controls_translate_to_their_owned_messages() {
-            let mut state = state();
+            let mut state = test_fixture::state();
             state.decks.get_mut(DeckId(0)).unwrap().ui.duration = 120.0;
             state
                 .decks
@@ -623,7 +541,7 @@ mod tests {
 
         #[kithara::test(native, flash(false))]
         fn stream_controls_own_the_quality_menu_and_selected_rung() {
-            let mut state = state();
+            let mut state = test_fixture::state();
             state.decks.get_mut(DeckId(0)).unwrap().ui.abr_variants = vec![AbrVariant {
                 index: 7,
                 label: "320k".to_string(),
@@ -661,7 +579,7 @@ mod tests {
 
         #[kithara::test(native, flash(false))]
         fn mixer_controls_translate_levels_eq_and_stage_window() {
-            let mut state = state();
+            let mut state = test_fixture::state();
 
             assert!(matches!(
                 send(
@@ -733,7 +651,7 @@ mod tests {
 
         #[kithara::test(native, flash(false))]
         fn library_and_host_events_update_view_state_and_keep_row_identity() {
-            let mut state = state();
+            let mut state = test_fixture::state();
 
             assert!(translate(&mut state, UiEvent::LibraryQuery("loc".to_string())).is_none());
             assert_eq!(state.ui.cache.library.query, "loc");
