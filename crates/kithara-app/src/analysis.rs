@@ -146,7 +146,7 @@ impl AnalysisController {
         Self {
             cache: TrackAnalysisCache::new(
                 runner.fingerprint().clone(),
-                config.worker.pools().clone(),
+                config.worker.pools(),
                 config.analysis_chunk_seconds,
             ),
             persistence,
@@ -625,7 +625,7 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fingerprint(), test_pools(), chunk_seconds())
+        TrackAnalysisCache::new(fingerprint(), &test_pools(), chunk_seconds())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {

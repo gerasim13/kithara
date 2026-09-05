@@ -19,7 +19,7 @@ use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
-    beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
+    beat::{BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
     waveform::bucket::Waveform,
 };
@@ -31,8 +31,8 @@ pub(super) const MARKER_TOLERANCE: u64 = 64;
 pub(super) type Artifacts = (Waveform, Vec<u64>);
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
-    Box::new(Unimock::new(
+pub(super) fn beat_detector() -> Unimock {
+    Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(|_, _| {
@@ -41,7 +41,7 @@ pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
                     downbeats: vec![BeatMark::at(0.25)],
                 })
             })),
-    ))
+    )
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]

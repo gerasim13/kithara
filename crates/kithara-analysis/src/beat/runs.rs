@@ -13,14 +13,10 @@ use crate::{
     progress::{BeatRunResume, write_samples},
 };
 
-struct Run<B>
-where
-    B: ResamplerBackend,
-{
+struct Run {
     start: u64,
     end: u64,
     mono: SampleBuffer,
-    stream: Option<MonoStream<B>>,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -29,7 +25,7 @@ pub(super) struct Runs<B>
 where
     B: ResamplerBackend,
 {
-    runs: Vec<Run<B>>,
+    runs: Vec<Run>,
     config: BeatAnalysisConfig<B>,
     budget: usize,
     #[field(get, vis = "pub(super)")]
@@ -102,6 +98,8 @@ where
             );
             if run.start >= run.end {
                 self.runs.remove(0);
+            } else {
+                run.mono.shrink_to_fit();
             }
         }
     }
@@ -116,10 +114,10 @@ where
 
     pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
         for index in 0..self.runs.len() {
-            let Some((span, stream)) = self
+            let Some(span) = self
                 .runs
-                .get_mut(index)
-                .map(|run| (run.end.saturating_sub(run.start), run.stream.take()))
+                .get(index)
+                .map(|run| run.end.saturating_sub(run.start))
             else {
                 continue;
             };
@@ -127,11 +125,7 @@ where
             let Some(run) = self.runs.get_mut(index) else {
                 continue;
             };
-            let mono = &mut run.mono;
-            if let Some(stream) = stream {
-                finish_stream(stream, mono)?;
-            }
-            pad(mono, expected)?;
+            pad(&mut run.mono, expected)?;
         }
         Ok(())
     }
@@ -159,7 +153,7 @@ where
     where
         S: HasPool<f32>,
     {
-        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
+        let mut restored: Vec<Run> = Vec::with_capacity(runs.len());
         for run in runs {
             let expected = self.detector_frames(run.end.saturating_sub(run.start));
             if run.mono.len() != expected {
@@ -170,11 +164,11 @@ where
                 .get_with_len::<f32>(samples.len())
                 .map_err(|_| BlobError::Corrupt)?;
             mono.copy_from_slice(&samples);
+            mono.shrink_to_fit();
             restored.push(Run {
                 start: run.start,
                 end: run.end,
                 mono,
-                stream: None,
             });
         }
         if restored.iter().any(|run| {
@@ -219,7 +213,7 @@ where
             return Ok(());
         }
 
-        let absorbed: Vec<Run<B>> = self.runs.splice(first..last, []).collect();
+        let absorbed: Vec<Run> = self.runs.splice(first..last, []).collect();
         if let Some(merged) = self.merge(pools, absorbed, mono, at, end)? {
             self.runs.insert(first, merged);
         }
@@ -238,18 +232,17 @@ where
     fn merge<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        absorbed: Vec<Run<B>>,
+        absorbed: Vec<Run>,
         mono: &[f32],
         at: u64,
         end: u64,
-    ) -> Result<Option<Run<B>>, BeatDetectError>
+    ) -> Result<Option<Run>, BeatDetectError>
     where
         S: HasPool<f32>,
     {
         let base = absorbed.first().map_or(at, |run| run.start.min(at));
         let mut out = pools.get::<f32>();
         let mut cursor = base;
-        let mut stream = None;
 
         for run in absorbed {
             if cursor < run.start {
@@ -265,11 +258,6 @@ where
             if run.end <= cursor {
                 continue;
             }
-            let mut run = run;
-            if let Some(inner) = run.stream.take() {
-                let tail = &mut run.mono;
-                finish_stream(inner, tail)?;
-            }
             let skip = self.detector_frames(cursor.saturating_sub(run.start));
             append(&mut out, run.mono.get(skip..).unwrap_or_default())?;
             cursor = run.end;
@@ -280,17 +268,15 @@ where
             let Some(piece) = slice(mono, at, cursor, end) else {
                 return Ok(None);
             };
-            let opened = self.open(pools, piece, cursor, end)?;
-            append(&mut out, &opened.mono)?;
-            stream = opened.stream;
+            self.segment(pools, &mut out, piece)?;
             cursor = end;
+            pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
         }
 
         Ok(Some(Run {
             start: base,
             end: cursor,
             mono: out,
-            stream,
         }))
     }
 
@@ -300,24 +286,16 @@ where
         mono: &[f32],
         at: u64,
         end: u64,
-    ) -> Result<Run<B>, BeatDetectError>
+    ) -> Result<Run, BeatDetectError>
     where
         S: HasPool<f32>,
     {
         let mut out = pools.get::<f32>();
-        let stream = if self.source_rate == self.target_rate {
-            append(&mut out, mono)?;
-            None
-        } else {
-            let mut stream = self.stream(pools)?;
-            push_stream(&mut stream, mono, &mut out)?;
-            Some(stream)
-        };
+        self.segment(pools, &mut out, mono)?;
         Ok(Run {
             start: at,
             end,
             mono: out,
-            stream,
         })
     }
 
@@ -424,13 +402,14 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PoolConfig;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
     use super::Runs;
     use crate::{
         BeatAnalysisConfig,
-        test_pools::{TestPools, pools},
+        test_pools::{TestPools, pools, pools_with},
     };
 
     const SRC: u32 = 44_100;
@@ -465,14 +444,33 @@ mod tests {
     }
 
     fn budgeted(source_rate: u32, budget: usize) -> TestRuns {
+        budgeted_with_pools(source_rate, budget, pools())
+    }
+
+    fn budgeted_with_pools(
+        source_rate: u32,
+        budget: usize,
+        pools: kithara_bufpool::PoolRegion<TestPools>,
+    ) -> TestRuns {
         TestRuns {
             inner: Runs::new(
                 BeatAnalysisConfig::<RubatoBackend>::default(),
                 source_rate,
                 budget,
             ),
-            pools: pools(),
+            pools,
         }
+    }
+
+    fn non_retaining_pools(max_bytes: usize) -> kithara_bufpool::PoolRegion<TestPools> {
+        pools_with(
+            max_bytes,
+            PoolConfig::builder().max_buffers(32).build(),
+            PoolConfig::builder()
+                .max_buffers(8)
+                .max_retained_capacity(1)
+                .build(),
+        )
     }
 
     fn ramp(frames: usize, from: u64) -> Vec<f32> {
@@ -582,6 +580,57 @@ mod tests {
             reclaimed > 0 && reclaimed < 44_100,
             "the budget reclaims the overflow, not the track: {reclaimed}"
         );
+    }
+
+    #[kithara::test]
+    fn reclaimed_mono_releases_charged_capacity() {
+        const BUDGET: usize = 4096;
+        const MAX_CHARGED_BYTES: usize = BUDGET * size_of::<f32>();
+        const TARGET_RATE: u32 = 22_050;
+
+        let pools = non_retaining_pools(4 * MAX_CHARGED_BYTES);
+        let mut set = budgeted_with_pools(TARGET_RATE, BUDGET, pools.clone());
+        for cycle in 0..4u64 {
+            let at = cycle * BUDGET as u64;
+            set.push(&ramp(BUDGET, at), at);
+
+            assert_eq!(set.held_frames(), BUDGET);
+            assert!(
+                pools.stats().allocated_bytes <= MAX_CHARGED_BYTES,
+                "cycle {cycle} retains {} charged bytes for a {MAX_CHARGED_BYTES}-byte mono budget",
+                pools.stats().allocated_bytes
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn fragmented_runs_share_the_region_with_loader_scratch() {
+        const LOADER_BYTES: usize = 512 * 1024;
+        const POOL_BYTES: usize = 2 * LOADER_BYTES;
+
+        let pools = non_retaining_pools(POOL_BYTES);
+        let loader = pools
+            .get_with_len::<u8>(LOADER_BYTES)
+            .expect("initial loader scratch must fit");
+
+        let mut set = budgeted_with_pools(SRC, usize::MAX, pools.clone());
+        for fragment in 0..24u16 {
+            set.push(&[f32::from(fragment)], u64::from(fragment) * 2);
+        }
+        assert_eq!(set.spans().count(), 24, "source gaps must remain distinct");
+        assert_eq!(loader.len(), LOADER_BYTES);
+
+        drop(loader);
+        let loader = pools
+            .get_with_len::<u8>(LOADER_BYTES)
+            .expect("fragmented analysis must leave capacity for loader scratch");
+        assert_eq!(loader.len(), LOADER_BYTES);
+
+        drop(set);
+        drop(loader);
+        pools
+            .get_with_len::<u8>(POOL_BYTES)
+            .expect("completed analysis must return its capacity to the region");
     }
 
     #[kithara::test]

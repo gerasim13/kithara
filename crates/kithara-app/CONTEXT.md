@@ -246,6 +246,11 @@ evicted, moved and deleted with the cached audio bytes. Its fixed header and com
 chunks, while each committed generation replaces the current payload. Restore validates the analyzer
 fingerprint, source rate, extent, and configured chunk duration before resuming only missing ranges.
 
+Each deck cache and the app-wide persistence actor reuse one checked-out byte scratch buffer. Capacity up to
+2 MiB remains charged as fixed working memory between operations; `normalize` releases larger allocations after
+each operation. These guards are active rather than idle pool inventory, so region pressure does not reclaim
+them.
+
 Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
 or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
 into every blob and a mismatch is a miss, so `waveform_max_buckets` and runtime beat-analysis tuning re-analyse
