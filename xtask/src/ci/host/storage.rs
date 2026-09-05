@@ -1174,10 +1174,10 @@ fn unix_time() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs::FileTimes, time::SystemTime};
+    use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
 
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::ci::{config::fixture, host::testing::install_double};
 
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();
@@ -1251,25 +1251,21 @@ mod tests {
 
     /// A tempdir has more than the sixty bytes this config calls a floor, so the
     /// run below is `Normal` — the pressure that used to skip the trim entirely.
-    #[cfg(unix)]
     #[test]
     fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
-        let bin = cfg.host.brew_root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
+        install_double(&cfg.host.brew_root.join("bin"), "colima");
         let asked = directory.path().join("asked");
-        fs::write(
-            bin.join("colima"),
-            format!("#!/bin/sh\necho \"$@\" > {}\n", asked.display()),
-        )
-        .unwrap();
-        fs::set_permissions(bin.join("colima"), fs::Permissions::from_mode(0o755)).unwrap();
 
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
         assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
         storage.cleanup().unwrap();
@@ -1692,34 +1688,45 @@ mod tests {
         assert!(!review.exists());
     }
 
-    /// A `tart` that answers a listing and records what else it was asked for.
-    #[cfg(unix)]
-    fn fake_tart(cfg: &mut CiConfig, root: &Path, running: bool) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
+    /// A `tart` that records what it was asked for.
+    fn fake_tart(cfg: &mut CiConfig, root: &Path) -> PathBuf {
         cfg.host.brew_root = root.join("brew");
-        let bin = cfg.host.brew_root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let asked = root.join("asked");
-        let tart = bin.join("tart");
-        fs::write(
-            &tart,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = list ]; then printf '%s' \
-                 '[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
-                 {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]'; \
-                 exit 0; fi\nprintf '%s' \"$*\" > {}\n",
-                asked.display()
+        install_double(&cfg.host.brew_root.join("bin"), "tart");
+        root.join("asked")
+    }
+
+    /// The environment a `tart` double answers a listing from.
+    fn tart_vars(asked: &Path, running: bool) -> BTreeMap<OsString, OsString> {
+        BTreeMap::from([
+            (
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.to_path_buf().into_os_string(),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&tart, fs::Permissions::from_mode(0o755)).unwrap();
-        asked
+            (
+                OsString::from("KITHARA_TEST_STDOUT"),
+                OsString::from(format!(
+                    "[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
+                     {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]"
+                )),
+            ),
+        ])
+    }
+
+    /// What `tart` was asked for other than the listing every run begins with.
+    ///
+    /// The listing is how the code under test decides, so its presence in the
+    /// trace carries no verdict; what follows it does.
+    fn asked_beyond_listing(asked: &Path) -> Vec<String> {
+        fs::read_to_string(asked)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.starts_with("list"))
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Lay out `<TART_HOME>/vms` with a base bundle and, optionally, a clone
     /// whose parts were last written `since` ago.
-    #[cfg(unix)]
     fn tart_vms(cfg: &mut CiConfig, root: &Path, clone_age: Option<Duration>) {
         let vms = root.join("vm/tart/vms");
         cfg.host.macos_vm_bundle = vms.join("kithara-macos-base");
@@ -1746,22 +1753,21 @@ mod tests {
     /// divergence the dead runner wrote, not the size a directory walk reads
     /// off a copy-on-write clone. Driven through `cleanup` rather than the
     /// step alone, because a step nothing calls frees nothing.
-    #[cfg(unix)]
     #[test]
     fn an_abandoned_job_vm_is_deleted() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
 
         storage.cleanup().unwrap();
 
         assert_eq!(
-            fs::read_to_string(&asked).unwrap_or_default(),
-            "delete kithara-ci-job",
+            asked_beyond_listing(&asked),
+            ["delete kithara-ci-job"],
             "an abandoned clone must be handed back to tart"
         );
     }
@@ -1769,14 +1775,13 @@ mod tests {
     /// The base bundle is the one thing here that cannot be remade without a
     /// person and an IPSW, so it is named out of the sweep rather than aged out
     /// of it: with no clone beside it, cleanup must ask tart for nothing.
-    #[cfg(unix)]
     #[test]
     fn the_base_bundle_is_never_a_delete_candidate() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), None);
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);
@@ -1791,20 +1796,19 @@ mod tests {
     /// A guest serves every job it is offered and writes nothing to its bundle
     /// while it waits, so an idle runner looks exactly as stale as a dead one.
     /// Liveness is what separates them.
-    #[cfg(unix)]
     #[test]
     fn a_job_vm_a_runner_serves_from_survives() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), true);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, true));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);
 
         assert!(
-            !asked.exists(),
+            asked_beyond_listing(&asked).is_empty(),
             "a running guest must not be taken from the runner serving jobs on it"
         );
     }
@@ -1813,14 +1817,13 @@ mod tests {
     /// guest answers, which is up to two hundred seconds — longer than the five
     /// minutes this runs on. Deleting it there fails the boot and takes the
     /// runner down with it.
-    #[cfg(unix)]
     #[test]
     fn a_freshly_cloned_job_vm_survives() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
-        let asked = fake_tart(&mut cfg, directory.path(), false);
+        let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(Duration::ZERO));
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_abandoned_job_vms(HostStorage::DAY);

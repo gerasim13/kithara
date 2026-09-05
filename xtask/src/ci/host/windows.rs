@@ -214,9 +214,10 @@ impl<'a> WindowsHost<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, ffi::OsString, fs};
 
     use super::*;
+    use crate::ci::host::testing::install_double;
 
     fn guest() -> WindowsGuest {
         WindowsGuest {
@@ -260,6 +261,76 @@ mod tests {
             PathBuf::from("/usr/local/bin/qemu-system-aarch64")
         );
         assert_eq!(host.qemu_img(), PathBuf::from("/usr/local/bin/qemu-img"));
+    }
+
+    /// `qemu_follows_the_configured_homebrew_root` pins the accessor, which a
+    /// spawn site is free to ignore. This runs one.
+    #[test]
+    fn creating_the_data_disk_runs_the_configured_qemu_img() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::ci::config::fixture();
+        config.host.brew_root = directory.path().join("brew");
+        install_double(&config.host.brew_root.join("bin"), "qemu-img");
+        let asked = directory.path().join("asked");
+        let guest = guest();
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
+        let root = directory.path().join("vm/windows");
+
+        WindowsHost::for_test(&config, &guest, &root, &process)
+            .ensure_data_disk()
+            .expect("create the data disk");
+
+        let arguments = fs::read_to_string(&asked).expect("qemu-img was never asked for anything");
+        assert!(
+            arguments.starts_with("create -f qcow2 "),
+            "qemu-img was asked for {arguments} instead of a disk"
+        );
+        assert!(
+            arguments.contains(&format!("{}G", guest.data_disk_gib)),
+            "the disk was not sized from the guest profile: {arguments}"
+        );
+    }
+
+    /// The second of the two spawn sites, and the one that boots the guest.
+    #[test]
+    fn starting_the_guest_runs_the_configured_qemu() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::ci::config::fixture();
+        config.host.brew_root = directory.path().join("brew");
+        let bin = config.host.brew_root.join("bin");
+        install_double(&bin, "qemu-img");
+        install_double(&bin, "qemu-system-aarch64");
+        let asked = directory.path().join("asked");
+        let guest = guest();
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
+        let root = directory.path().join("vm/windows");
+
+        WindowsHost::for_test(&config, &guest, &root, &process)
+            .start(Boot::Installed)
+            .expect("start the guest");
+
+        let boot = fs::read_to_string(&asked)
+            .expect("nothing was started")
+            .lines()
+            .last()
+            .expect("a boot line")
+            .to_owned();
+        assert!(
+            boot.starts_with("-name kithara-windows"),
+            "started with {boot}"
+        );
     }
 
     /// The page file and `TEMP` are what grow the system image, and Windows

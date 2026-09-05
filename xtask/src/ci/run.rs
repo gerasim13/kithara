@@ -494,19 +494,20 @@ fn command_lane(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
-    use std::{collections::BTreeSet, env, fs, path::Path};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        env,
+        ffi::OsString,
+        fs,
+        path::Path,
+    };
 
     use clap::{Parser, ValueEnum};
-    #[cfg(unix)]
     use kithara_devtools::common::tools::ToolsConfig;
 
-    #[cfg(unix)]
-    use super::execute_lane;
     use super::{
         super::{config::fixture, process::Recording},
-        CacheGroup, Consts, Lane, LinuxImageAttestation, PipelineKind, command_lane,
+        CacheGroup, Consts, Lane, LinuxImageAttestation, PipelineKind, command_lane, execute_lane,
         linux_image_diagnosis, require_provisioned_linux_image, sccache_server_is_stopped,
     };
     use crate::{
@@ -743,7 +744,6 @@ mod tests {
         lanes
     }
 
-    #[cfg(unix)]
     #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
         const UDS_READY: &str = "--stop-server\n--start-server\nlane\n--show-stats\n";
@@ -751,30 +751,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let sccache = bin.join("sccache");
-        fs::write(
-            &sccache,
-            r#"#!/bin/sh
-printf '%s\n' "$1" >> "$KITHARA_TEST_TRACE"
-case "$1:$KITHARA_TEST_SCENARIO" in
-    --stop-server:already-stopped)
-        printf 'Stopping sccache server...\n'
-        printf "%s\n" "sccache: error: couldn't connect to server" \
-            "sccache: caused by: No such file or directory (os error 2)" >&2
-        exit 2
-        ;;
-    --stop-server:stop-failure) exit 7 ;;
-    --start-server:start-failure) exit 8 ;;
-    --stop-server:*|--start-server:*|--show-stats:*) exit 0 ;;
-esac
-exit 19
-"#,
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&sccache).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&sccache, permissions).unwrap();
+        super::super::host::testing::install_double(&bin, "sccache");
         let trace = directory.path().join("trace");
 
         for (scenario, uses_sccache, has_server_uds, expected_trace) in [
@@ -791,20 +768,42 @@ exit 19
             ("success", false, false, "lane\n"),
         ] {
             let _ = fs::remove_file(&trace);
-            let process = Process::new(
-                directory.path(),
-                BTreeMap::from([
-                    (OsString::from("PATH"), bin.clone().into_os_string()),
-                    (
-                        OsString::from("KITHARA_TEST_SCENARIO"),
-                        OsString::from(scenario),
+            let mut vars = BTreeMap::from([
+                (OsString::from("PATH"), bin.clone().into_os_string()),
+                (
+                    OsString::from("KITHARA_TEST_SCENARIO"),
+                    OsString::from(scenario),
+                ),
+                (
+                    OsString::from("KITHARA_TEST_TRACE"),
+                    trace.clone().into_os_string(),
+                ),
+                (
+                    OsString::from("KITHARA_TEST_RULES"),
+                    OsString::from(
+                        "sccache:--stop-server:stop-failure=7,\
+                         sccache:--start-server:start-failure=8,\
+                         sccache:--stop-server:already-stopped=2",
                     ),
-                    (
-                        OsString::from("KITHARA_TEST_TRACE"),
-                        trace.clone().into_os_string(),
-                    ),
-                ]),
-            );
+                ),
+            ]);
+            if scenario == "already-stopped" {
+                let refused = Consts::SCCACHE_MISSING_UDS_CODE
+                    .or(Consts::CONNECTION_REFUSED_CODE)
+                    .expect("this platform names an error code for a server that is not listening");
+                vars.insert(
+                    OsString::from("KITHARA_TEST_STDOUT"),
+                    OsString::from("Stopping sccache server...\n"),
+                );
+                vars.insert(
+                    OsString::from("KITHARA_TEST_STDERR"),
+                    OsString::from(format!(
+                        "sccache: error: couldn't connect to server\n\
+                         sccache: caused by: no server was listening {refused}\n"
+                    )),
+                );
+            }
+            let process = Process::new(directory.path(), vars);
 
             let outcome = execute_lane(
                 &process,

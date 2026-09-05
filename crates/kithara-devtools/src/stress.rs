@@ -1543,13 +1543,12 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         let record = temp.path().join("repeats.txt");
         let executable = std::env::current_exe().expect("current test executable");
         let mode = StressModeConfig {
-            command: vec![
-                executable.to_string_lossy().into_owned(),
-                child_test_name("record_repeats"),
-                "--exact".to_owned(),
-                "--ignored".to_owned(),
-                "--nocapture".to_owned(),
-            ],
+            command: std::iter::once(executable.to_string_lossy().into_owned())
+                .chain(crate::common::child_test_args(
+                    module_path!(),
+                    "record_repeats",
+                ))
+                .collect(),
             set_env: BTreeMap::from([(
                 REPEATS_RECORD_ENV.to_owned(),
                 record.to_string_lossy().into_owned(),
@@ -1584,12 +1583,6 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             .lines()
             .map(str::to_owned)
             .collect()
-    }
-
-    fn child_test_name(name: &str) -> String {
-        let module = module_path!();
-        let module = module.split_once("::").map_or(module, |(_, module)| module);
-        format!("{module}::{name}")
     }
 
     /// A lane that repeats inside one launch pays for a rebuild and a cold start

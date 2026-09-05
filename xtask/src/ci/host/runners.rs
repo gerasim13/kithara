@@ -574,10 +574,10 @@ pub(super) fn require_macos() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
+    use std::{collections::BTreeMap, ffi::OsString};
 
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::ci::{config::fixture, host::testing::install_double};
 
     /// What the runner is actually handed has to fit the machine. Admission and
     /// the per-job Cargo budget are rendered into the same file from two
@@ -636,8 +636,11 @@ mod tests {
         assert_eq!(fs::read(&path).expect("read the destination"), b"payload");
     }
 
+    #[cfg(unix)]
     #[test]
     fn installing_over_a_read_only_destination_replaces_it() {
+        use std::os::unix::fs::PermissionsExt;
+
         let directory = tempfile::tempdir().expect("temporary directory");
         let source = directory.path().join("source");
         let destination = directory.path().join("destination");
@@ -684,7 +687,7 @@ mod tests {
         let asked = directory.path().join("launchctl-arguments");
         let mut vars = BTreeMap::new();
         vars.insert(
-            OsString::from("KITHARA_TEST_LAUNCHCTL_ARGS"),
+            OsString::from("KITHARA_TEST_TRACE"),
             asked.clone().into_os_string(),
         );
         let process = Process::new(directory.path(), vars);
@@ -694,14 +697,7 @@ mod tests {
             .agent_root()
             .join("com.zvuk.kithara-ci.macos-runner.plist");
         fs::write(&legacy, "legacy").expect("seed legacy launch agent");
-        let launchctl = directory.path().join("launchctl");
-        fs::write(
-            &launchctl,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$KITHARA_TEST_LAUNCHCTL_ARGS\"\n",
-        )
-        .expect("write launchctl fixture");
-        fs::set_permissions(&launchctl, PermissionsExt::from_mode(0o755))
-            .expect("make launchctl fixture executable");
+        let launchctl = install_double(directory.path(), "launchctl");
 
         manager
             .retire_legacy_macos_runner("gui/501", &launchctl)
@@ -715,33 +711,29 @@ mod tests {
     }
 
     fn legacy_runner_fixture(
-        script: &str,
+        vars: BTreeMap<OsString, OsString>,
     ) -> (tempfile::TempDir, CiConfig, Process, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut config = fixture();
         config.host.host_root = directory.path().join("ci");
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let process = Process::new(directory.path(), vars);
         let manager = RunnerManager::new(&config, &process);
         fs::create_dir_all(manager.agent_root()).expect("create launch agent directory");
         let legacy = manager
             .agent_root()
             .join("com.zvuk.kithara-ci.macos-runner.plist");
         fs::write(&legacy, "legacy").expect("seed legacy launch agent");
-        let launchctl = directory.path().join("launchctl");
-        fs::write(&launchctl, script).expect("write launchctl fixture");
-        fs::set_permissions(&launchctl, PermissionsExt::from_mode(0o755))
-            .expect("make launchctl fixture executable");
+        let launchctl = install_double(directory.path(), "launchctl");
         (directory, config, process, legacy, launchctl)
     }
 
     #[test]
     fn failed_legacy_bootout_preserves_a_loaded_service_plist() {
-        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
-            "#!/bin/sh\n\
-             if [ \"$1\" = bootout ]; then exit 7; fi\n\
-             if [ \"$1\" = print ]; then exit 0; fi\n\
-             exit 64\n",
-        );
+        let (_directory, config, process, legacy, launchctl) =
+            legacy_runner_fixture(BTreeMap::from([(
+                OsString::from("KITHARA_TEST_RULES"),
+                OsString::from("launchctl:bootout:*=7"),
+            )]));
         let manager = RunnerManager::new(&config, &process);
 
         let error = manager
@@ -754,16 +746,21 @@ mod tests {
 
     #[test]
     fn failed_legacy_bootout_removes_a_confirmed_absent_service_plist() {
-        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
-            "#!/bin/sh\n\
-             if [ \"$1\" = bootout ]; then exit 7; fi\n\
-             if [ \"$1\" = print ]; then\n\
-               printf '%s\\n' 'Bad request.' >&2\n\
-               printf '%s\\n' 'Could not find service \"com.zvuk.kithara-ci.macos-runner\" in domain for user gui: 501' >&2\n\
-               exit 113\n\
-             fi\n\
-             exit 64\n",
-        );
+        let (_directory, config, process, legacy, launchctl) =
+            legacy_runner_fixture(BTreeMap::from([
+                (
+                    OsString::from("KITHARA_TEST_RULES"),
+                    OsString::from("launchctl:bootout:*=7,launchctl:print:*=113"),
+                ),
+                (
+                    OsString::from("KITHARA_TEST_STDERR"),
+                    OsString::from(
+                        "Bad request.\n\
+                         Could not find service \"com.zvuk.kithara-ci.macos-runner\" \
+                         in domain for user gui: 501\n",
+                    ),
+                ),
+            ]));
         let manager = RunnerManager::new(&config, &process);
 
         manager
@@ -775,15 +772,17 @@ mod tests {
 
     #[test]
     fn legacy_runner_probe_failure_preserves_the_plist() {
-        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
-            "#!/bin/sh\n\
-             if [ \"$1\" = bootout ]; then exit 7; fi\n\
-             if [ \"$1\" = print ]; then\n\
-               printf '%s\\n' 'launchctl probe failed' >&2\n\
-               exit 42\n\
-             fi\n\
-             exit 64\n",
-        );
+        let (_directory, config, process, legacy, launchctl) =
+            legacy_runner_fixture(BTreeMap::from([
+                (
+                    OsString::from("KITHARA_TEST_RULES"),
+                    OsString::from("launchctl:bootout:*=7,launchctl:print:*=42"),
+                ),
+                (
+                    OsString::from("KITHARA_TEST_STDERR"),
+                    OsString::from("launchctl probe failed\n"),
+                ),
+            ]));
         let manager = RunnerManager::new(&config, &process);
 
         let error = manager
