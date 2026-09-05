@@ -527,13 +527,18 @@ fn an_unmergeable_head_is_failed_and_rejected_with_the_reason() {
 const CURRENT_BASE: &str = "04fcb5a0a1978c3d1f0e2b3a4c5d6e7f80910111";
 const OLDER_BASE: &str = "418167884f6c2e1d3a4b5c6d7e8f90a1b2c3d4e5";
 const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
+const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5";
+
+fn live_heads() -> Vec<String> {
+    vec![PULL_HEAD.to_owned()]
+}
 
 #[test]
 fn a_quarantine_ref_judged_against_an_older_base_is_superseded() {
     let refs = [quarantine_ref(PULL_HEAD, OLDER_BASE, 1)];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
         [refs[0].as_str()]
     );
 }
@@ -543,7 +548,7 @@ fn a_quarantine_ref_judged_against_the_current_base_is_kept() {
     let refs = [quarantine_ref(PULL_HEAD, CURRENT_BASE, 2)];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
         [] as [&str; 0]
     );
 }
@@ -553,7 +558,7 @@ fn a_branch_that_is_not_a_verification_run_is_never_swept() {
     let refs = ["develop".to_owned(), "laba/419-connectivity".to_owned()];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
         [] as [&str; 0]
     );
 }
@@ -565,7 +570,7 @@ fn the_older_quarantine_naming_scheme_is_swept_by_the_same_rule() {
     )];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
         [refs[0].as_str()]
     );
 }
@@ -579,7 +584,9 @@ fn a_sweep_drops_every_branch_a_moved_base_left_behind() {
 
     sweep_quarantine_refs(
         CURRENT_BASE,
+        &live_heads(),
         || Ok(listed),
+        |_| Ok(()),
         |refs| {
             deleted
                 .borrow_mut()
@@ -598,7 +605,9 @@ fn a_sweep_with_nothing_left_behind_never_reaches_the_remote() {
 
     sweep_quarantine_refs(
         CURRENT_BASE,
+        &live_heads(),
         || Ok(vec![quarantine_ref(PULL_HEAD, CURRENT_BASE, 1)]),
+        |_| Ok(()),
         |_| {
             called.set(true);
             Ok(())
@@ -607,4 +616,54 @@ fn a_sweep_with_nothing_left_behind_never_reaches_the_remote() {
     .unwrap();
 
     assert!(!called.get());
+}
+
+/// The queue this leaves behind. A pull request that gets a new commit keeps
+/// its previous verification standing in the resource group, and the mac
+/// runner takes one job at a time: nine of these were waiting at once, ahead
+/// of the runs people were waiting on. The base rule cannot see them, because
+/// the base did not move — the head did.
+#[test]
+fn a_quarantine_ref_for_a_head_no_open_pull_request_names_is_superseded() {
+    let refs = [quarantine_ref(RETIRED_HEAD, CURRENT_BASE, 1)];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        [refs[0].as_str()]
+    );
+}
+
+#[test]
+fn a_quarantine_ref_for_an_open_pull_requests_head_is_kept() {
+    let refs = [quarantine_ref(PULL_HEAD, CURRENT_BASE, 1)];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        [] as [&str; 0]
+    );
+}
+
+/// Deleting the branch does not stop its run: `GitLab` keeps a queued pipeline
+/// in the resource group after the ref it names is gone, so the slot stays
+/// taken by a commit nobody will merge.
+#[test]
+fn a_sweep_cancels_the_run_of_every_branch_it_drops() {
+    let stale = quarantine_ref(RETIRED_HEAD, CURRENT_BASE, 1);
+    let live = quarantine_ref(PULL_HEAD, CURRENT_BASE, 1);
+    let listed = vec![stale.clone(), live, "develop".to_owned()];
+    let cancelled = RefCell::new(Vec::new());
+
+    sweep_quarantine_refs(
+        CURRENT_BASE,
+        &live_heads(),
+        || Ok(listed),
+        |reference| {
+            cancelled.borrow_mut().push(reference.to_owned());
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+
+    assert_eq!(*cancelled.borrow(), [stale]);
 }

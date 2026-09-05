@@ -107,6 +107,11 @@ opens one deduplicated GitLab incident. A rejection is recorded for the exact
 head and base pair and refused on sight; `ci bridge retry` is the only route to
 a rejudgement.
 
+A verification branch is removed once nothing will name it again: its base has
+moved, or no open pull request stands on its head. Its queued run is cancelled
+first, because deleting the ref does not release the resource-group slot the run
+is holding.
+
 ## The verdict
 
 Gating on green would hold every change behind red it did not cause. The judged
