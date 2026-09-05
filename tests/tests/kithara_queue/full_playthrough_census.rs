@@ -2,7 +2,9 @@
 
 //! A three-track queue played from the first frame of the first track to the
 //! last frame of the last, with every output frame attributed to the track
-//! that produced it.
+//! that produced it. The same census runs over both readers a track can arrive
+//! through — segments streamed as HLS, and a whole FLAC file read from disk —
+//! and over a queue that alternates between them at every seam.
 //!
 //! `PlayerTrack::render` names the track, the block-relative span it was asked
 //! for, and the track's own media clock. What a track *actually* contributed
@@ -17,7 +19,10 @@
 //! Cochlea says the take never falls silent for longer than the handover's
 //! block quantum and never sums two tracks above the level one plays at.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use kithara::{
     events::{AdvanceReason, Event, QueueEvent, TrackId},
@@ -32,7 +37,10 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
-use kithara_test_fixtures::signal::{FrameClass, classify_windows};
+use kithara_test_fixtures::{
+    assets,
+    signal::{FrameClass, classify_windows},
+};
 use kithara_test_utils::probe::{IntoProbeArg, capture as probe_capture, capture::Recorder};
 
 use crate::bufpool_ext::TestPools;
@@ -67,6 +75,22 @@ const SILENCE_THRESHOLD: f32 = 1.0e-3;
 /// does not doubles it, which is 6 dB away.
 const PEAK_BAND_DB: f64 = 0.5;
 
+/// Where one track's bytes come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    /// A three-segment media playlist served over HTTP.
+    Hls,
+    /// A whole FLAC file read from the fixture store by path.
+    LocalFlac,
+}
+
+/// Every track streamed as HLS.
+const HLS_QUEUE: [Origin; 3] = [Origin::Hls, Origin::Hls, Origin::Hls];
+/// Every track read from a file.
+const LOCAL_QUEUE: [Origin; 3] = [Origin::LocalFlac, Origin::LocalFlac, Origin::LocalFlac];
+/// Readers alternate, so both seams hand over between two different ones.
+const MIXED_QUEUE: [Origin; 3] = [Origin::Hls, Origin::LocalFlac, Origin::Hls];
+
 /// What separates one track from the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Seam {
@@ -97,33 +121,55 @@ fn frames_from_secs(secs: f64) -> i64 {
     num_traits::cast(frames).expect("a fixture duration fits the session axis")
 }
 
-async fn hls_flac_resource(
-    player: &PlayerControl<TestPools>,
-    server: &TestServerHelper,
-    cache_dir: &Path,
+/// The stored six-second body carrying this ramp.
+fn local_flac(pattern: PcmPattern) -> &'static Path {
+    let asset = match pattern {
+        PcmPattern::Ascending => assets::signal_flac_saw_6s(),
+        PcmPattern::Descending => assets::signal_flac_saw_down_6s(),
+        PcmPattern::ShiftedAscending => panic!("the census queues the two ramp directions only"),
+    };
+    asset.path().expect("a stored fixture names its store path")
+}
+
+/// The source one track is read from. HLS packages the ramp into segments the
+/// server hands out one request at a time; the local leg names a file the
+/// reader can open whole. The census does not distinguish them afterwards.
+async fn track_src(
+    origin: Origin,
+    server: Option<&TestServerHelper>,
     pattern: PcmPattern,
+) -> ResourceSrc {
+    match origin {
+        Origin::Hls => {
+            let created = server
+                .expect("the HLS leg runs against a server")
+                .create_hls(
+                    HlsFixtureBuilder::new()
+                        .variant_count(1)
+                        .segments_per_variant(SEGMENTS)
+                        .segment_duration_secs(SEGMENT_SECS)
+                        .packaged_audio_per_variant_pcm_flac(SAMPLE_RATE, CHANNELS, vec![pattern]),
+                )
+                .await
+                .expect("create census HLS fixture");
+            ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL")
+        }
+        Origin::LocalFlac => ResourceSrc::Path(PathBuf::from(local_flac(pattern))),
+    }
+}
+
+async fn open_resource(
+    player: &PlayerControl<TestPools>,
+    src: ResourceSrc,
+    cache_dir: &Path,
 ) -> Resource {
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(SEGMENTS)
-                .segment_duration_secs(SEGMENT_SECS)
-                .packaged_audio_per_variant_pcm_flac(SAMPLE_RATE, CHANNELS, vec![pattern]),
-        )
-        .await
-        .expect("create census HLS fixture");
-    let config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
-    )
-    .store(kithara_integration_tests::disk_asset_store(cache_dir))
-    .build();
+    let config = ResourceConfig::<TestPools>::for_src(src)
+        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .build();
     let config = player
         .prepare_config(config)
-        .expect("prepare census HLS resource");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open census HLS resource");
+        .expect("prepare census resource");
+    let mut resource = Resource::new(config).await.expect("open census resource");
     let _ = resource.preload().await;
     resource
 }
@@ -135,7 +181,8 @@ struct Census {
 }
 
 async fn build_queue(
-    server: &TestServerHelper,
+    origins: &[Origin],
+    server: Option<&TestServerHelper>,
     temp_dir: &TestTempDir,
     seam: Seam,
     patterns: &[PcmPattern],
@@ -153,12 +200,12 @@ async fn build_queue(
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config));
 
     let mut tracks = Vec::with_capacity(patterns.len());
-    for (index, pattern) in patterns.iter().enumerate() {
-        let resource = hls_flac_resource(
+    for (index, (origin, pattern)) in origins.iter().zip(patterns).enumerate() {
+        let src = track_src(*origin, server, *pattern).await;
+        let resource = open_resource(
             harness.player(),
-            server,
+            src,
             &temp_dir.path().join(format!("track{index}")),
-            *pattern,
         )
         .await;
         tracks.push(queue.insert_loaded_for_test(resource));
@@ -346,15 +393,19 @@ fn longest_silence(channel: &[f32]) -> usize {
     longest
 }
 
-async fn run_census(seam: Seam, temp_dir: &TestTempDir) {
+async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
     let recorder = probe_capture::install();
-    let server = TestServerHelper::new().await;
+    let server = if origins.contains(&Origin::Hls) {
+        Some(TestServerHelper::new().await)
+    } else {
+        None
+    };
     let patterns = [
         PcmPattern::Ascending,
         PcmPattern::Descending,
         PcmPattern::Ascending,
     ];
-    let census = build_queue(&server, temp_dir, seam, &patterns).await;
+    let census = build_queue(origins, server.as_ref(), temp_dir, seam, &patterns).await;
     let (rendered, log) = play_to_the_end(&census).await;
 
     assert!(
@@ -507,8 +558,8 @@ async fn run_census(seam: Seam, temp_dir: &TestTempDir) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(Seam::Gapless, &temp_dir).await;
+async fn gapless_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&HLS_QUEUE, Seam::Gapless, &temp_dir).await;
 }
 
 /// Crossfade: the overlap must be exactly the configured one, at the boundary
@@ -519,6 +570,53 @@ async fn gapless_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&HLS_QUEUE, Seam::Crossfade, &temp_dir).await;
+}
+
+/// The same gapless census over local files: a track that arrives whole rather
+/// than segment by segment must still be played to its last frame.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn gapless_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&LOCAL_QUEUE, Seam::Gapless, &temp_dir).await;
+}
+
+/// The same crossfade census over local files.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn crossfaded_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&LOCAL_QUEUE, Seam::Crossfade, &temp_dir).await;
+}
+
+/// A queue whose neighbours never share a reader: each seam hands over from a
+/// segmented stream to a file, or back, and must still land on the frame.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn gapless_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&MIXED_QUEUE, Seam::Gapless, &temp_dir).await;
+}
+
+/// The same mixed queue with the crossfade: the overlap is the configured one
+/// at a seam whose two sides are read differently.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn crossfaded_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&MIXED_QUEUE, Seam::Crossfade, &temp_dir).await;
 }

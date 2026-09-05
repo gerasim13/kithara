@@ -29,16 +29,18 @@ the change that lands the work, and keep it short.
   length, and two tracks may share output frames only inside the crossfade the
   queue announced - and the rendered audio says the same thing twice more, by
   ramp provenance and by Cochlea. A one-line mutation that arms the crossfade a
-  second early fails both legs on the serve-length assertion. Landed for
-  HLS/FLAC at cf=0 and cf=1.0.
+  second early fails every leg on the serve-length assertion. The census runs
+  over both readers a track can arrive through - HLS segments and a whole FLAC
+  file named by `ResourceSrc::Path` - and over a queue that alternates between
+  them at every seam, each at cf=0 and cf=1.0. The local legs read two new
+  six-second ramp bodies from the fixture store, one per direction.
 
 ## Next
 
-- The local-file leg of the census. Nothing in the suite plays a
-  `ResourceSrc::Path` today - every fixture goes through the test server - and
-  the signal catalogue has no ramp asset between two and thirty seconds, so the
-  leg needs two six-second FLAC entries in `kithara-test-fixtures` before it
-  can run.
+- A local MPEG leg for the census, still unmeasured. The census reads a track's
+  length off the probe to within four render blocks and its provenance off the
+  ramp's slope; whether an MP3's encoder delay and its lossy ramp edge stay
+  inside both is a question for the fixture, not an answer yet.
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497
   comments carrying prose outside a doc comment, 105 doc blocks past a dozen
