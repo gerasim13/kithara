@@ -301,7 +301,10 @@ esac
             r#"#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
-exec "$SELF_CACHE_TEST_XTASK" self-cache bootstrap
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$#" -gt 0 ] || { printf 'fixture cargo received no run arguments\n' >&2; exit 2; }
+shift
+exec "$SELF_CACHE_TEST_XTASK" "$@"
 "#,
         )
     }
