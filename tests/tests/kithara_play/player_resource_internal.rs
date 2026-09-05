@@ -36,6 +36,15 @@ fn make_player_resource(seconds: f64) -> PlayerResource {
         .expect("player resource fits the test pool budget")
 }
 
+fn fill_planar(output: &mut [&mut [f32]], frames: usize, mut sample: impl FnMut(usize) -> f32) {
+    for frame in 0..frames {
+        let value = sample(frame);
+        for channel in output.iter_mut() {
+            channel[frame] = value;
+        }
+    }
+}
+
 struct ChunkReader {
     bus: EventBus,
     emitted: Arc<AtomicU64>,
@@ -77,9 +86,7 @@ impl AudioRead for ChunkReader {
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
         let frames = Self::CHUNK_FRAMES.min(output[0].len());
-        for channel in output {
-            channel[..frames].fill(0.5);
-        }
+        fill_planar(output, frames, |_| 0.5);
         Ok(self.emit(frames))
     }
 
@@ -139,30 +146,33 @@ impl PositionReader {
             total_frames,
         }
     }
+
+    fn read_with(&mut self, frames: usize, write: impl FnOnce(u64, usize)) -> ReadOutcome {
+        let avail = (self.total_frames - self.frame_idx).min(frames as u64) as usize;
+        if avail == 0 {
+            return ReadOutcome::Eof {
+                position: self.position(),
+            };
+        }
+        write(self.frame_idx, avail);
+        self.frame_idx += avail as u64;
+        ReadOutcome::Frames {
+            count: std::num::NonZeroUsize::new(avail).expect("available frames are non-zero"),
+            position: self.position(),
+            source_span: None,
+        }
+    }
 }
 
 impl AudioRead for PositionReader {
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        let channels = self.spec.channels as usize;
+        let channels = usize::from(self.spec.channels);
         let frames = buf.len() / channels;
-        let avail = (self.total_frames - self.frame_idx).min(frames as u64) as usize;
-        if avail == 0 {
-            return Ok(ReadOutcome::Eof {
-                position: self.position(),
-            });
-        }
-        for i in 0..avail {
-            let v = (self.frame_idx + i as u64) as f32;
-            for c in 0..channels {
-                buf[i * channels + c] = v;
+        Ok(self.read_with(frames, |start, avail| {
+            for (frame, output) in buf.chunks_exact_mut(channels).take(avail).enumerate() {
+                output.fill((start + frame as u64) as f32);
             }
-        }
-        self.frame_idx += avail as u64;
-        Ok(ReadOutcome::Frames {
-            count: std::num::NonZeroUsize::new(avail).unwrap(),
-            position: self.position(),
-            source_span: None,
-        })
+        }))
     }
 
     fn read_planar<'a>(
@@ -170,24 +180,9 @@ impl AudioRead for PositionReader {
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
         let frames = output[0].len();
-        let avail = (self.total_frames - self.frame_idx).min(frames as u64) as usize;
-        if avail == 0 {
-            return Ok(ReadOutcome::Eof {
-                position: self.position(),
-            });
-        }
-        for i in 0..avail {
-            let v = (self.frame_idx + i as u64) as f32;
-            for ch in output.iter_mut() {
-                ch[i] = v;
-            }
-        }
-        self.frame_idx += avail as u64;
-        Ok(ReadOutcome::Frames {
-            count: std::num::NonZeroUsize::new(avail).unwrap(),
-            position: self.position(),
-            source_span: None,
-        })
+        Ok(self.read_with(frames, |start, avail| {
+            fill_planar(output, avail, |frame| (start + frame as u64) as f32);
+        }))
     }
 
     fn spec(&self) -> AudioSpec {
