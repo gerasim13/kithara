@@ -45,6 +45,26 @@ pub fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Longest run below `threshold` within the bounded sample window.
+#[must_use]
+pub fn max_silence_run(samples: &[f32], start: usize, end: usize, threshold: f32) -> usize {
+    let end = end.min(samples.len());
+    if end <= start {
+        return 0;
+    }
+    let mut max_run = 0;
+    let mut current = 0;
+    for sample in &samples[start..end] {
+        if sample.abs() < threshold {
+            current += 1;
+            max_run = max_run.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    max_run
+}
+
 /// Root mean square of an interleaved sample slice.
 #[must_use]
 pub fn rms(samples: &[f32]) -> f32 {
