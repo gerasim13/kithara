@@ -19,8 +19,26 @@ the change that lands the work, and keep it short.
   crate wearing the MIT badge, two crates naming a dead owner, and a logo no
   published crate page could load.
 
+- Full-playthrough queue census. A three-track queue is played from the first
+  frame of the first track to the last frame of the last, and every output
+  frame is attributed to the track that produced it. `PlayerTrack::render`
+  carries a USDT probe naming the track, the block-relative span it was asked
+  for, and the track's own media clock, so what a track contributed to a block
+  is the clock's increase across it rather than the span it was handed. Both
+  halves of a premature switch are pinned - a track must serve its whole
+  length, and two tracks may share output frames only inside the crossfade the
+  queue announced - and the rendered audio says the same thing twice more, by
+  ramp provenance and by Cochlea. A one-line mutation that arms the crossfade a
+  second early fails both legs on the serve-length assertion. Landed for
+  HLS/FLAC at cf=0 and cf=1.0.
+
 ## Next
 
+- The local-file leg of the census. Nothing in the suite plays a
+  `ResourceSrc::Path` today - every fixture goes through the test server - and
+  the signal catalogue has no ramp asset between two and thirty seconds, so the
+  leg needs two six-second FLAC entries in `kithara-test-fixtures` before it
+  can run.
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497
   comments carrying prose outside a doc comment, 105 doc blocks past a dozen
