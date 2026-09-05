@@ -868,6 +868,7 @@ fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
 mod artifacts {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
+    use unimock::Unimock;
 
     use super::{
         super::{
@@ -898,7 +899,7 @@ mod artifacts {
         usize::try_from(EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
-    fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
+    fn beat_pass(detector: Unimock) -> AnalyzerBuilder<RubatoBackend, TestPools> {
         AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(BUCKETS)
             .with_beat_config(
@@ -908,11 +909,12 @@ mod artifacts {
                     .detector_overlap_seconds(0)
                     .build(),
             )
-            .with_beat_detector(beat_detector(), GridParams::default())
+            .with_beat_detector(Box::new(detector), GridParams::default())
     }
 
     fn covered(source: Source, offer: &[(u64, u64)]) -> Route {
-        let mut pass = Pass::open(source, beat_pass());
+        let detector = beat_detector();
+        let mut pass = Pass::open(source, beat_pass(detector.clone()));
         for (at, frames) in offer {
             pass.offer(*at, *frames);
             pass.drive(2);
