@@ -496,12 +496,10 @@ mod tests {
     #[test]
     fn an_indivisible_sccache_budget_is_rounded_down() {
         let mut host = super::super::fixture().host;
+        host.job_concurrency = 3;
         host.sccache_size = "50G".to_owned();
 
-        assert_eq!(
-            host.sccache_slot_size().unwrap(),
-            format!("{}G", 50 / host.job_concurrency)
-        );
+        assert_eq!(host.sccache_slot_size().unwrap(), "16G");
         assert!(host.validate().is_ok());
     }
 
