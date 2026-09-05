@@ -228,4 +228,5 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # starts the runner because images built on top of this one have state to hand
 # over — an emulator writes into the SDK it was created in — and they can only
 # name an owner that already exists.
+ENV KITHARA_STABLE_TOOLCHAIN=${RUST_VERSION}
 RUN useradd --create-home --shell /bin/bash runner
