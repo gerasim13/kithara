@@ -239,23 +239,6 @@ async fn render_tiny_ring_switch(
     }
 }
 
-fn longest_silent_run(samples: &[f32]) -> usize {
-    let mut current = 0usize;
-    let mut longest = 0usize;
-    for frame in samples.chunks_exact(usize::from(CHANNELS)) {
-        if frame
-            .iter()
-            .all(|sample| sample.abs() <= ACTIVE_SAMPLE_THRESHOLD)
-        {
-            current = current.saturating_add(1);
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
-}
-
 fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     let audio = ProbeAudio {
         samples: samples.to_vec(),
