@@ -16,9 +16,24 @@ the change that lands the work, and keep it short.
   which keeps every ordering. MSRV is 1.95, `rkyv` 0.8.18 and `bytecheck` 0.8.3
   retire their own deprecations, and `kithara-app`'s GUI-only modules are gated
   on `gui` so a `lib-only` build stops warning about 57 unused items.
+- The `sccache` trap in the Clippy path, closed. A workstation Clippy run set
+  `CARGO_INCREMENTAL=1` to cancel the blanket `0` the `justfile` exports, but
+  `sccache` reads that variable too and aborts rather than fall back, for any
+  language: `btls-sys` reached its own C compiler through a CMake launcher that
+  refused to run, and printed no compiler error because no compiler ran.
+  Clearing both variables says the same thing to Cargo - workspace crates are
+  incremental by default and registry ones never - and nothing to anyone else.
+  No site in the repository sets a non-zero `CARGO_INCREMENTAL` now.
 
 ## Next
 
+- `[profile.release] opt-level = "z"` builds every native and DSP dependency for
+  size, so `signalsmith-stretch`, `rubato` and `symphonia-bundle-mp3` are less
+  optimised in a release build than in a debug one, where explicit
+  `[profile.dev.package.*]` entries give them 2 or 3. The suite is unaffected:
+  17 of 18 lanes build `test-release`, which is `opt-level = 3` and reaches the
+  C and C++ dependencies through `OPT_LEVEL`. This is a shipping decision, not a
+  test one, and it wants its own change.
 - `block` 0.1.6 is a future-incompat report no change here can answer: it
   reaches the tree through `cpal` and has no published successor.
 - `kithara-ui` still warns under `--no-default-features --features render` and
