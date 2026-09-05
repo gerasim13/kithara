@@ -78,10 +78,17 @@ where
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
-    /// Session-owned audio-consumer wake capability. Player preparation fills
-    /// this field; `None` identifies a direct resource consumed off RT.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
+    /// Audio-consumer wake capability for this resource's reader. The default
+    /// is safe for a consumer on the real-time render callback.
+    /// `PlayerImpl::prepare_config` always overwrites it with the session
+    /// policy, so a player-managed resource cannot carry a second source of
+    /// that policy. A direct reader off the real-time thread opts into
+    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
+    /// and inline reader-event delivery. Never declare `ImmediateOffRt` on a
+    /// resource headed into a player without `prepare_config`: its reads would
+    /// then publish inline on the render callback.
+    #[builder(default)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
     /// here; a direct reader off the real-time thread may opt in itself.
@@ -163,9 +170,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn direct_config_has_no_session_wake_policy() {
+    fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
         let config = test_config("https://example.com/track.mp3").expect("valid config");
-        assert_eq!(config.consumer_wake_mode, None);
+        assert_eq!(
+            config.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
     }
 
     fn worker() -> PlayWorker<TestPools> {
@@ -249,30 +259,6 @@ mod tests {
                 .build();
         let audio_config = config.build_hls_config(&worker, None).unwrap();
         assert!(audio_config.stream().bus.is_some());
-    }
-
-    #[kithara::test]
-    fn direct_resources_wake_the_worker_off_rt() {
-        let worker = worker();
-        let file: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.mp3"))
-                .store(store())
-                .build();
-        assert_eq!(
-            file.build_file_config(&worker, None).consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
-
-        let hls: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.m3u8"))
-                .store(store())
-                .build();
-        assert_eq!(
-            hls.build_hls_config(&worker, None)
-                .expect("valid HLS config")
-                .consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
     }
 
     #[kithara::test]
