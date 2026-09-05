@@ -97,7 +97,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
             let executable = executable
                 .to_str()
                 .context("this executable's path is not UTF-8")?;
-            services::install(&process, &host, &pins, executable)
+            services::install(&process, &host, &pins, &args.pins, executable)
         }
         LinuxCommand::Compose { out, mint } => {
             let pins = CiPins::load(&args.pins)?;
