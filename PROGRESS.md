@@ -55,6 +55,30 @@ the change that lands the work, and keep it short.
   arrived, and nothing pinned the size-less MP3 read past the download boundary
   as a park rather than an end - the FLAC half of that pair had both.
 
+  The hunt named a third, and it is the reported defect's shape. Every
+  truncating delivery the test server offered advertises the full
+  `Content-Length` first, so the client can always measure what arrived against
+  a declared number. A `200` that names no total was missing, and that is the
+  one case where a body that stops early is framed exactly like a complete one:
+  the net layer reads the end as clean, the file layer commits the bytes it
+  happened to write as the whole file, and a read past them answers `Eof`. The
+  play layer then takes that `Eof` at face value - the trigger's EOF branch
+  returns before it ever consults duration or position - so a track that lost
+  its body two fifths in is announced as having played to its end, and the
+  queue advances with a crossfade. `Delivery::UnsizedEarlyClose` serves that
+  shape, and a test asks the reader to tell the two ends apart using the one
+  number it still has: the length the track's own header names.
+
+  The play layer now refuses that end. The reader announces how many frames are
+  left once it has seen EOF, and that announcement is what arms the crossfade
+  and what shrinks the visible duration onto itself - both a fade before the
+  end, not at it, which is why a check at the end itself arrived a fade too
+  late. An announcement pointing further from the declared length than the
+  distance the triggers already use to call an end near is refused where it
+  enters, so neither fires; the end that follows is reported as a failure, and
+  the queue leaves the track the way it leaves a failed one - no crossfade. The
+  distance now has one owner, shared by the triggers and the reader.
+
 ## Next
 
 - A local MPEG leg for the census. Measured against six-second MP3 ramps: the
