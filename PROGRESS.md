@@ -37,10 +37,16 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- A local MPEG leg for the census, still unmeasured. The census reads a track's
-  length off the probe to within four render blocks and its provenance off the
-  ramp's slope; whether an MP3's encoder delay and its lossy ramp edge stay
-  inside both is a question for the fixture, not an answer yet.
+- A local MPEG leg for the census. Measured against six-second MP3 ramps: the
+  probe half passes unchanged - each track serves its whole length and the seams
+  overlap by exactly the configured crossfade - but two acoustic oracles cannot
+  speak for a lossy container. The slope classifier sustains no class at a
+  tolerance under 1.0, and 1.0 is where the two directions stop being told
+  apart: at tol 2 a descending track reads as ascending, because the classes are
+  only two units away and the ascending test is asked first. The take's sample
+  peak is -4.74 dBFS against a single track's -6.02, so the lossy overshoot
+  alone leaves the band that catches a fade summing instead of attenuating. The
+  leg needs its own provenance instrument, not another fixture.
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497
   comments carrying prose outside a doc comment, 105 doc blocks past a dozen

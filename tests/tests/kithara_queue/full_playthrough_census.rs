@@ -352,9 +352,18 @@ fn left_channel(rendered: &[f32]) -> Vec<f32> {
 
 /// Runs of one classification, ignoring the `Unknown` windows a crossfade's
 /// mixed span produces.
+///
+/// The classifier reads a ramp's slope in the units the fixture was written
+/// in, where one frame is one unit. The session plays at `CENSUS_LEVEL`, so the
+/// take is undone by it first; classifying the attenuated ramp would leave
+/// every window sitting on the tolerance's edge.
 fn class_runs(rendered: &[f32]) -> Vec<(FrameClass, usize)> {
+    let ramp: Vec<f32> = left_channel(rendered)
+        .iter()
+        .map(|sample| sample / CENSUS_LEVEL)
+        .collect();
     let mut runs: Vec<(FrameClass, usize)> = Vec::new();
-    for class in classify_windows(&left_channel(rendered), CLASS_WINDOW, CLASS_TOL) {
+    for class in classify_windows(&ramp, CLASS_WINDOW, CLASS_TOL) {
         if matches!(class, FrameClass::Unknown) {
             continue;
         }
