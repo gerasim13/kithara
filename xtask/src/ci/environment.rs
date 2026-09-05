@@ -185,17 +185,27 @@ impl PreparedSccache {
         config: &CiConfig,
         cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
-        Self::for_target(cfg!(windows), shared_root, cache_root, config, cache_group)
+        let cargo_reapi = !is_gitlab()
+            && env::var_os("RUSTC_WRAPPER").as_deref() == Some(OsStr::new("kithara-cargo-reapi"));
+        Self::for_target(
+            cfg!(windows),
+            cargo_reapi,
+            shared_root,
+            cache_root,
+            config,
+            cache_group,
+        )
     }
 
     fn for_target(
         target_is_windows: bool,
+        cargo_reapi: bool,
         shared_root: &Path,
         cache_root: &Path,
         config: &CiConfig,
         cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
-        if target_is_windows {
+        if target_is_windows || cargo_reapi {
             return Ok(None);
         }
         if !cache_group.uses_sccache() {
@@ -776,7 +786,20 @@ mod tests {
         let root = Path::new("/cache");
 
         let prepared =
-            PreparedSccache::for_target(true, root, root, &config, CacheGroup::Macos).unwrap();
+            PreparedSccache::for_target(true, false, root, root, &config, CacheGroup::Macos)
+                .unwrap();
+
+        assert!(prepared.is_none());
+    }
+
+    #[test]
+    fn cargo_reapi_runner_does_not_replace_its_wrapper_with_sccache() {
+        let config = super::super::config::fixture();
+        let root = Path::new("/cache");
+
+        let prepared =
+            PreparedSccache::for_target(false, true, root, root, &config, CacheGroup::Linux)
+                .unwrap();
 
         assert!(prepared.is_none());
     }
