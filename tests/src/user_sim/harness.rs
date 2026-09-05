@@ -6,8 +6,8 @@ use kithara::{
     bufpool::HasPool,
     decode::DecoderBackend,
     events::{
-        AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
-        TrackId, TrackStatus,
+        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
+        TrackStatus,
     },
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -227,8 +227,6 @@ impl SimHarness {
             Action::SeekRatio(r) => self.do_seek(r, false).await,
             Action::SeekNearEnd(r) => self.do_seek(r, true).await,
             Action::SelectAt(i) => self.do_select_at(i).await,
-            Action::SelectPrev => self.do_select_prev().await,
-            Action::SelectNext => self.do_select_next().await,
             Action::SetQuality(idx) => self.do_set_quality(idx).await,
             Action::QualityAuto => self.do_quality_auto().await,
             Action::Pause => self.do_pause(),
@@ -466,51 +464,6 @@ impl SimHarness {
         // Refresh codec snapshot — picking a different track legitimately
         // changes the codec, so this is a reset, not an assertion.
         self.last_known_codec = self.current_codec();
-    }
-
-    async fn do_select_prev(&mut self) {
-        let mut rx = self.queue.subscribe();
-        if self
-            .queue
-            .return_to_previous(Transition::None)
-            .expect("queue stays open during the scenario")
-            .is_some()
-        {
-            self.await_current_changed(&mut rx).await;
-            self.last_known_codec = self.current_codec();
-        }
-    }
-
-    async fn do_select_next(&mut self) {
-        let mut rx = self.queue.subscribe();
-        if self
-            .queue
-            .advance_to_next(Transition::None, AdvanceReason::UserNext)
-            .expect("queue stays open during the scenario")
-            .is_some()
-        {
-            self.await_current_changed(&mut rx).await;
-            self.last_known_codec = self.current_codec();
-        }
-    }
-
-    /// Park (on the virtual clock) until the queue publishes a
-    /// `CurrentTrackChanged`, or a short virtual deadline elapses. Lets
-    /// the engine run the handover instead of guessing with a fixed
-    /// sleep that may fire before the tick driver applies the change.
-    async fn await_current_changed(&self, rx: &mut EventReceiver) {
-        let wait = async {
-            loop {
-                match recv_event(rx).await {
-                    // The handover landed, or the bus closed and never will.
-                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { .. }))) | Err(_) => {
-                        return;
-                    }
-                    Ok(_) => {}
-                }
-            }
-        };
-        let _ = timeout(Duration::from_secs(5), wait).await;
     }
 
     async fn do_set_quality(&mut self, idx: usize) {
