@@ -144,44 +144,16 @@ fn resource_config(
         .build()
 }
 
-/// Open a resource with [`resource_config`] options; panics on error.
-async fn open_resource_full(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    backend: DecoderBackend,
-    hint: Option<&str>,
-    worker: PlayWorker<TestPools>,
-) -> Resource {
-    Resource::new(resource_config(url, store, backend, hint, worker))
-        .await
-        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
-}
-
 async fn open_resource(
     url: &url::Url,
     store: AssetStore<TestPools>,
     worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), worker).await
-}
-
-fn resource_config_with_worker(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> ResourceConfig<TestPools> {
-    resource_config(url, store, backend, Some("mp3"), worker)
-}
-
-fn resource_config_no_hint(
-    url: &url::Url,
-    store: AssetStore<TestPools>,
-    worker: PlayWorker<TestPools>,
-    backend: DecoderBackend,
-) -> ResourceConfig<TestPools> {
-    resource_config(url, store, backend, None, worker)
+    let config = resource_config(url, store, backend, Some("mp3"), worker);
+    Resource::new(config)
+        .await
+        .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
 // Keep this warmup nonblocking: under full-suite load a blocking underrun arms
@@ -579,11 +551,12 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config_with_worker(
+        let result = Resource::new(resource_config(
             &bad_url,
             store.clone(),
-            worker.clone(),
             backend,
+            Some("mp3"),
+            worker.clone(),
         ))
         .await;
         assert!(
@@ -1305,7 +1278,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
 
-    let config = resource_config_no_hint(&url, store, play_worker(&region), backend);
+    let config = resource_config(&url, store, backend, None, play_worker(&region));
     let mut resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
