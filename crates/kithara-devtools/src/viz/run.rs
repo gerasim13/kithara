@@ -76,6 +76,7 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
         semantic::enrich(
             &mut graph,
             &ctx.root,
+            ctx.config.tools.program("rust-analyzer"),
             args.krate.as_deref(),
             args.module.as_deref(),
             args.scenario.as_deref(),

@@ -18,5 +18,6 @@ pub mod scope;
 pub mod style;
 pub mod suppress;
 pub mod timestamp;
+pub mod tools;
 pub mod violation;
 pub mod walker;

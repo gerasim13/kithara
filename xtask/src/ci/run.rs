@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use tracing::{info, warn};
 
 use super::{
@@ -297,9 +297,9 @@ fn sccache_server_already_stopped(output: &Output) -> bool {
     sccache_server_is_stopped(output.status.code(), &output.stdout, &output.stderr)
 }
 
-fn retire_sccache_server(process: &Process) -> Result<()> {
+fn retire_sccache_server(process: &Process, tools: &ToolsConfig) -> Result<()> {
     process.ensure(
-        "sccache",
+        tools.program("sccache"),
         &["--stop-server"],
         "retire the compiler cache",
         sccache_server_already_stopped,
@@ -308,19 +308,28 @@ fn retire_sccache_server(process: &Process) -> Result<()> {
 
 fn execute_lane(
     process: &Process,
+    tools: &ToolsConfig,
     uses_sccache: bool,
     has_server_uds: bool,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     if uses_sccache {
-        retire_sccache_server(process)?;
+        retire_sccache_server(process, tools)?;
         if has_server_uds {
-            process.run("sccache", &["--start-server"], "start the compiler cache")?;
+            process.run(
+                tools.program("sccache"),
+                &["--start-server"],
+                "start the compiler cache",
+            )?;
         }
     }
     let result = dispatch();
     if uses_sccache {
-        process.best_effort("sccache", &["--show-stats"], "sccache statistics");
+        process.best_effort(
+            tools.program("sccache"),
+            &["--show-stats"],
+            "sccache statistics",
+        );
     }
     result
 }
@@ -352,6 +361,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             "KITHARA_CI_HOST_CONFIG must point at the host profile installed on this executor",
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
+    ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
     let image_attestation = LinuxImageAttestation::from_gitlab()?;
     require_provisioned_linux_image(lane.cache_group(), &ci_config, image_attestation.as_ref())?;
     let environment = CiEnvironment::prepare(ctx, &ci_config, lane.cache_group())?;
@@ -381,28 +391,36 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             args.kind,
             &ctx.root,
             &ci_config,
+            &ctx.config.tools,
             &swiftpm_cache,
             &ext.ci.lanes,
         );
     }
-    execute_lane(&process, uses_sccache, has_server_uds, || match lane {
-        Lane::ReleaseXcframework => {
-            super::release::xcframework(&process, ctx, &ext, &temp, &args.package)
-        }
-        Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
-        Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
-        Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-        Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-        Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
-        ref lane => command_lane(
-            lane,
-            args.kind,
-            &process,
-            &ci_config,
-            &swiftpm_cache,
-            &ext.ci.lanes,
-        ),
-    })
+    execute_lane(
+        &process,
+        &ctx.config.tools,
+        uses_sccache,
+        has_server_uds,
+        || match lane {
+            Lane::ReleaseXcframework => {
+                super::release::xcframework(&process, ctx, &ext, &temp, &args.package)
+            }
+            Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
+            Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
+            Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
+            Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
+            Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
+            ref lane => command_lane(
+                lane,
+                args.kind,
+                &process,
+                &ci_config,
+                &ctx.config.tools,
+                &swiftpm_cache,
+                &ext.ci.lanes,
+            ),
+        },
+    )
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
@@ -412,6 +430,7 @@ fn report_lane(
     kind: PipelineKind,
     root: &Path,
     ci_config: &CiConfig,
+    tools: &ToolsConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
@@ -419,13 +438,13 @@ fn report_lane(
         root,
         Recording::default()
             .with_reply(
-                "xcodebuild",
+                tools.program("xcodebuild"),
                 &format!("Xcode {}", ci_config.pins.expected_xcode_version),
             )
             .with_reply("chromium", &ci_config.pins.chromium_version)
             .with_reply("chromedriver", &ci_config.pins.chromium_version),
     );
-    let outcome = command_lane(lane, kind, &process, ci_config, swiftpm_cache, lanes);
+    let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
     let recorded = process
         .recorded()
         .context("a recording process keeps its recording")?;
@@ -449,6 +468,7 @@ fn command_lane(
     kind: PipelineKind,
     process: &Process,
     ci_config: &CiConfig,
+    tools: &ToolsConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
@@ -459,13 +479,15 @@ fn command_lane(
         | Lane::ReleaseAndroid
         | Lane::ReleasePublish
         | Lane::Verdict => bail!("{lane:?} produces artifacts and is not a command lane"),
-        Lane::AppleSwiftTest => super::lane::apple::swift_test(process, ci_config, swiftpm_cache),
-        Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config),
+        Lane::AppleSwiftTest => {
+            super::lane::apple::swift_test(process, ci_config, tools, swiftpm_cache)
+        }
+        Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config, tools),
         Lane::Declared { name, .. } => {
             let declared = lanes.get(name).with_context(|| {
                 format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml")
             })?;
-            super::lane::declared::run(process, declared, &ci_config.pins, kind)
+            super::lane::declared::run(process, declared, &ci_config.pins, tools, kind)
         }
     }
 }
@@ -477,6 +499,8 @@ mod tests {
     use std::{collections::BTreeSet, env, fs, path::Path};
 
     use clap::{Parser, ValueEnum};
+    #[cfg(unix)]
+    use kithara_devtools::common::tools::ToolsConfig;
 
     #[cfg(unix)]
     use super::execute_lane;
@@ -502,9 +526,11 @@ mod tests {
             .expect("xtask has a workspace root");
         let ci_config = fixture();
         let ext = KitharaExt::load(root).expect("the project config parses");
+        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+            .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
         let recording = Recording::default().with_reply(
-            "xcodebuild",
+            project.tools.program("xcodebuild"),
             &format!("Xcode {}", ci_config.pins.expected_xcode_version),
         );
         let process = Process::recording(root, recording);
@@ -513,6 +539,7 @@ mod tests {
             kind,
             &process,
             &ci_config,
+            &project.tools,
             &root.join("target/swiftpm"),
             &ext.ci.lanes,
         )
@@ -613,6 +640,8 @@ mod tests {
             .expect("xtask has a workspace root");
         let ci_config = fixture();
         let ext = KitharaExt::load(root).expect("the project config parses");
+        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+            .expect("the project config loads");
         let mut report = String::new();
 
         for name in every_lane() {
@@ -626,7 +655,7 @@ mod tests {
                 let version = ci_config.pins.chromium_version.clone();
                 let recording = Recording::default()
                     .with_reply(
-                        "xcodebuild",
+                        project.tools.program("xcodebuild"),
                         &format!("Xcode {}", ci_config.pins.expected_xcode_version),
                     )
                     .with_reply("chromium", &version)
@@ -637,6 +666,7 @@ mod tests {
                     *kind,
                     &process,
                     &ci_config,
+                    &project.tools,
                     &root.join("target/swiftpm"),
                     &ext.ci.lanes,
                 );
@@ -776,12 +806,18 @@ exit 19
                 ]),
             );
 
-            let outcome = execute_lane(&process, uses_sccache, has_server_uds, || {
-                let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
-                sequence.push_str("lane\n");
-                fs::write(&trace, sequence)?;
-                Ok(())
-            });
+            let outcome = execute_lane(
+                &process,
+                &ToolsConfig::default(),
+                uses_sccache,
+                has_server_uds,
+                || {
+                    let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
+                    sequence.push_str("lane\n");
+                    fs::write(&trace, sequence)?;
+                    Ok(())
+                },
+            );
 
             let succeeds = !scenario.ends_with("failure");
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");

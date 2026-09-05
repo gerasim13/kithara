@@ -29,6 +29,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub ext: Table,
     pub test: TestCommandConfig,
+    pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
 }
@@ -1135,5 +1136,24 @@ tools = ["cargo-mutants"]
                 .to_string()
                 .contains("cannot be both configured and not applicable")
         );
+    }
+
+    #[test]
+    fn a_tools_table_reaches_the_project_config() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join(".config")).expect("create .config");
+        fs::write(
+            temp.path().join(".config/xtask.toml"),
+            r#"
+[tools.ast-grep]
+program = "ast-grep"
+pin = "ast-grep"
+"#,
+        )
+        .expect("write config");
+
+        let config = ProjectConfig::load(temp.path()).expect("the config loads");
+
+        assert_eq!(config.tools.program("ast-grep"), "ast-grep");
     }
 }

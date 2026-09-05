@@ -71,6 +71,7 @@ impl SemanticSummary {
 pub(crate) fn enrich(
     graph: &mut EvidenceGraph,
     root: &Path,
+    program: &str,
     package: Option<&str>,
     module: Option<&str>,
     scenario: Option<&str>,
@@ -87,7 +88,7 @@ pub(crate) fn enrich(
         return SemanticSummary::static_only("no source symbols selected for semantic resolution");
     }
 
-    let mut client = match Client::start(root, SEMANTIC_TIMEOUT) {
+    let mut client = match Client::start(program, root, SEMANTIC_TIMEOUT) {
         Ok(client) => client,
         Err(ClientError::Unavailable(message)) => {
             return SemanticSummary::static_only(message);

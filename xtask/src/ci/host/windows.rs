@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use super::runners::path_text;
 use crate::ci::{
     config::{CiConfig, WindowsGuest},
     process::Process,
@@ -26,15 +27,13 @@ pub(super) enum Boot {
 /// reproducible, or reachable by a fix, which is the same reason the periodic
 /// agents stopped running a binary only an operator could replace.
 pub(super) struct WindowsHost<'a> {
+    config: &'a CiConfig,
     guest: &'a WindowsGuest,
     root: PathBuf,
     process: &'a Process,
 }
 
 impl<'a> WindowsHost<'a> {
-    const QEMU: &'static str = "/opt/homebrew/bin/qemu-system-aarch64";
-    const QEMU_IMG: &'static str = "/opt/homebrew/bin/qemu-img";
-
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
         let guest = config
             .host
@@ -42,6 +41,7 @@ impl<'a> WindowsHost<'a> {
             .as_ref()
             .context("this machine's profile defines no Windows guest")?;
         Ok(Self {
+            config,
             guest,
             root: config.host.host_root.join("vm/windows"),
             process,
@@ -56,6 +56,14 @@ impl<'a> WindowsHost<'a> {
         self.root.join("data.qcow2")
     }
 
+    fn qemu(&self) -> PathBuf {
+        self.config.host.brew_tool("qemu-system-aarch64")
+    }
+
+    fn qemu_img(&self) -> PathBuf {
+        self.config.host.brew_tool("qemu-img")
+    }
+
     /// Create the data disk if it is not there yet.
     ///
     /// Creating it is cheap and does not start the guest: a `qcow2` allocates
@@ -65,8 +73,9 @@ impl<'a> WindowsHost<'a> {
         if disk.exists() {
             return Ok(());
         }
+        let qemu_img = self.qemu_img();
         self.process.run(
-            Self::QEMU_IMG,
+            path_text(&qemu_img)?,
             &[
                 "create",
                 "-f",
@@ -181,14 +190,21 @@ impl<'a> WindowsHost<'a> {
         }
         let owned = self.boot_arguments(boot);
         let arguments: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let qemu = self.qemu();
         self.process
-            .run(Self::QEMU, &arguments, "start the Windows guest")?;
+            .run(path_text(&qemu)?, &arguments, "start the Windows guest")?;
         Ok(())
     }
 
     #[cfg(test)]
-    fn for_test(guest: &'a WindowsGuest, root: &Path, process: &'a Process) -> Self {
+    fn for_test(
+        config: &'a CiConfig,
+        guest: &'a WindowsGuest,
+        root: &Path,
+        process: &'a Process,
+    ) -> Self {
         Self {
+            config,
             guest,
             root: root.to_path_buf(),
             process,
@@ -211,10 +227,39 @@ mod tests {
     }
 
     fn arguments(boot: Boot) -> Vec<String> {
+        let config = crate::ci::config::fixture();
         let guest = guest();
         let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
-        WindowsHost::for_test(&guest, Path::new("/Volumes/CI/vm/windows"), &process)
-            .boot_arguments(boot)
+        WindowsHost::for_test(
+            &config,
+            &guest,
+            Path::new("/Volumes/CI/vm/windows"),
+            &process,
+        )
+        .boot_arguments(boot)
+    }
+
+    /// The Homebrew prefix is a machine fact, not a build-time one: an Intel
+    /// mac installs under `/usr/local`. Both binaries take the same lookup,
+    /// so one test covers the pair.
+    #[test]
+    fn qemu_follows_the_configured_homebrew_root() {
+        let mut config = crate::ci::config::fixture();
+        config.host.brew_root = PathBuf::from("/usr/local");
+        let guest = guest();
+        let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
+        let host = WindowsHost::for_test(
+            &config,
+            &guest,
+            Path::new("/Volumes/CI/vm/windows"),
+            &process,
+        );
+
+        assert_eq!(
+            host.qemu(),
+            PathBuf::from("/usr/local/bin/qemu-system-aarch64")
+        );
+        assert_eq!(host.qemu_img(), PathBuf::from("/usr/local/bin/qemu-img"));
     }
 
     /// The page file and `TEMP` are what grow the system image, and Windows

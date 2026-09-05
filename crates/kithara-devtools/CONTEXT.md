@@ -34,6 +34,17 @@ section at top level is a typed parse error naming the token.
 `tests/config_contract.rs` pins the defaults, the rejection, the passthrough, and
 the requirement that a stress config name the directory it builds into.
 
+**`[tools]` ownership rule.** A role is a job the core needs done
+(`ast-grep`, `typos`, `samply`), never a binary the project happens to
+install. `program` is what a project puts in front of that role — an absolute
+path, or a name for `PATH` to resolve — and defaults to the role name, so a
+project that installs the expected tools configures nothing. `pin`, when
+given, names the `.config/ci-pins.toml` key that fixes the version; the
+consuming bin cross-checks the two so a role cannot claim a pin that does not
+exist. Version-control programs and the Rust toolchain are deliberately absent:
+`git`, `cargo`, `gh` and `rustup` are the ground a project stands on, and a
+config able to redirect them is a hazard, not a feature.
+
 `[workspace-scan] exclude` globs apply in the scoped walkers only; raw `.rs`
 discovery stays a pure directory walk.
 

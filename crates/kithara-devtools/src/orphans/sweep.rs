@@ -92,10 +92,13 @@ struct Merged {
 }
 
 pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
+    let program: Arc<str> = Arc::from(ctx.config.tools.program("cargo-modules"));
     check_tool(
-        "cargo-modules",
+        &program,
         &["modules", "--version"],
-        Consts::INSTALL_HINT,
+        ctx.config
+            .tools
+            .install_hint("cargo-modules", Consts::INSTALL_HINT),
     )?;
 
     if args.packages.is_empty() && args.audit_mode {
@@ -146,6 +149,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         let queue = Arc::clone(&queue);
         let reports = Arc::clone(&reports);
         let root = Arc::clone(&root);
+        let program = Arc::clone(&program);
         handles.push(thread::spawn(move || {
             loop {
                 let job = {
@@ -153,7 +157,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
                     queue.pop()
                 };
                 let Some(job) = job else { break };
-                let report = examine(&job, &root);
+                let report = examine(&job, &root, &program);
                 reports
                     .lock()
                     .expect("BUG: orphans reports mutex poisoned")
@@ -186,9 +190,9 @@ fn workers(cpus: usize, memory: Option<u64>) -> usize {
 
 /// What to report when a run fails. A tool that explained itself is quoted as
 /// it stands; one that ended without a word is named by how it ended.
-fn failure(status: &str, text: &str) -> String {
+fn failure(program: &str, status: &str, text: &str) -> String {
     if text.trim().is_empty() {
-        return format!("cargo modules ended with {status} and produced no output");
+        return format!("{program} ended with {status} and produced no output");
     }
     text.to_owned()
 }
@@ -291,15 +295,15 @@ fn verdict(reports: &BTreeMap<String, Merged>, root: &Path, deny: bool) -> Resul
 
 /// Asks the tool, then asks the source. A module the tool cannot resolve in
 /// this configuration is only an orphan when nothing declares it.
-fn examine(job: &Job, root: &Path) -> Report {
-    let output = Command::new("cargo")
+fn examine(job: &Job, root: &Path, program: &str) -> Report {
+    let output = Command::new(program)
         .args(["modules", "orphans", "--cfg-test"])
         .args(&job.selector)
         .args(["--package", &job.package])
         .output();
     let output = match output {
         Ok(output) => output,
-        Err(err) => return Report::failed(job, format!("cargo modules did not start: {err}")),
+        Err(err) => return Report::failed(job, format!("{program} did not start: {err}")),
     };
     let text = format!(
         "{}{}",
@@ -308,7 +312,7 @@ fn examine(job: &Job, root: &Path) -> Report {
     );
     let found = findings(&text, root);
     if found.is_empty() && !output.status.success() {
-        return Report::failed(job, failure(&output.status.to_string(), &text));
+        return Report::failed(job, failure(program, &output.status.to_string(), &text));
     }
     let declared = match declared_files(&job.src) {
         Ok(declared) => declared,
@@ -490,13 +494,27 @@ mod tests {
     /// job that ran out of room.
     #[test]
     fn a_run_that_said_nothing_reports_how_it_ended() {
-        assert!(failure("signal: 9 (SIGKILL)", "").contains("signal: 9 (SIGKILL)"));
+        assert!(
+            failure("cargo-modules", "signal: 9 (SIGKILL)", "").contains("signal: 9 (SIGKILL)")
+        );
+    }
+
+    /// The program is configurable, so a message naming `cargo-modules` while
+    /// something else ran would send the reader to a binary that never started.
+    /// Seeded off the role name, which a message that ignored its argument
+    /// could still print.
+    #[test]
+    fn a_run_that_said_nothing_names_the_program_that_ran() {
+        assert!(
+            failure("/opt/pinned/bin/cargo-modules", "exit status: 1", "")
+                .contains("/opt/pinned/bin/cargo-modules")
+        );
     }
 
     #[test]
     fn a_run_that_explained_itself_keeps_its_own_words() {
         assert_eq!(
-            failure("exit status: 1", "error: no such package"),
+            failure("cargo-modules", "exit status: 1", "error: no such package"),
             "error: no such package"
         );
     }
