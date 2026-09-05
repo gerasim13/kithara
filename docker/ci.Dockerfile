@@ -201,7 +201,7 @@ RUN printf '%s\n' \
       'workspace=${CARGO_REAPI_WORKSPACE_ROOT:-${GITHUB_WORKSPACE:?CI did not name the workspace}}' \
       'target=${CARGO_REAPI_TARGET_ROOT:-${CARGO_TARGET_DIR:?CI did not name the Cargo target}}' \
       'action_log=${CARGO_REAPI_ACTION_LOG:-$target/cargo-reapi/actions.jsonl}' \
-      'for argument in "$@"; do case "$argument" in wasm32-unknown-unknown|--target=wasm32-unknown-unknown) exec sccache "$@" ;; esac; done' \
+      'for argument in "$@"; do case "$argument" in wasm32-unknown-unknown|--target=wasm32-unknown-unknown) exec /usr/local/cargo/bin/sccache "$@" ;; esac; done' \
       'for name in ${!ACTIONS_@} ${!CI_@} ${!GITHUB_@} ${!RUNNER_@}; do unset "$name"; done' \
       'export CARGO_REAPI_WORKSPACE_ROOT="$workspace"' \
       'export CARGO_REAPI_TARGET_ROOT="$target"' \
