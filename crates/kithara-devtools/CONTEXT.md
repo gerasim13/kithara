@@ -326,9 +326,9 @@ is swept through its binaries instead of dropped.
 One run loads the whole workspace into a rust-analyzer database and peaked at
 3.0 GiB here, so concurrency is a property of the job rather than a constant: the
 sweep takes the smaller of the cores it may use and its cgroup memory cap divided
-by that budget, capped at four. A CI job container bounded at 8 GiB and three cores
-exhausted its cgroup under a fixed four, and the kernel killed the step before any
-verdict. The chosen count and the numbers behind it are printed, because a sweep
+by that budget, capped at `orphans.max_parallelism`. A CI job container bounded at
+8 GiB and three cores exhausted its cgroup under a fixed four, and the kernel
+killed the step before any verdict. The chosen count and the numbers behind it are printed, because a sweep
 quietly running one at a time is otherwise indistinguishable from a slow one.
 Without an explicit deny the run is advisory.
 

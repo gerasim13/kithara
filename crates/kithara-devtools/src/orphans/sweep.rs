@@ -19,7 +19,6 @@ struct Consts;
 impl Consts {
     const INSTALL_HINT: &'static str = "cargo install cargo-modules";
     const MARKER: &'static str = "orphaned module `";
-    const MAX_PARALLELISM: usize = 4;
     /// A cgroup v2 job container reports its own cap here; a machine without
     /// one has no such file and is bounded by its cores alone.
     const MEMORY_MAX: &'static str = "/sys/fs/cgroup/memory.max";
@@ -130,7 +129,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
 
     let cpus = thread::available_parallelism().map_or(1, NonZero::get);
     let memory = memory_limit();
-    let parallelism = workers(cpus, memory);
+    let parallelism = workers(cpus, memory, ctx.config.orphans.max_parallelism);
     let cap = memory.map_or_else(
         || "no memory cap".to_owned(),
         |bytes| format!("{} MiB memory cap", bytes / (1024 * 1024)),
@@ -181,11 +180,11 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
 /// How many runs the job has room for. A fixed count answers to the machine
 /// the sweep was written on, and a CI container holds fewer rust-analyzer
 /// databases than that: the kernel kills the job before it reports anything.
-fn workers(cpus: usize, memory: Option<u64>) -> usize {
-    let by_memory = memory.map_or(Consts::MAX_PARALLELISM, |bytes| {
-        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(Consts::MAX_PARALLELISM)
+fn workers(cpus: usize, memory: Option<u64>, max_parallelism: usize) -> usize {
+    let by_memory = memory.map_or(max_parallelism, |bytes| {
+        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(max_parallelism)
     });
-    cpus.min(by_memory).clamp(1, Consts::MAX_PARALLELISM)
+    cpus.min(by_memory).clamp(1, max_parallelism)
 }
 
 /// What to report when a run fails. A tool that explained itself is quoted as
@@ -430,6 +429,7 @@ fn is_library(target: &cargo_metadata::Target) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::project::ProjectConfig;
 
     fn parse(line: &str) -> Option<Finding> {
         finding(line, Path::new("/workspace"))
@@ -523,23 +523,45 @@ mod tests {
     /// that holds three apiece is what the kernel killed the sweep for.
     #[test]
     fn a_capped_container_runs_what_its_memory_holds() {
-        assert_eq!(workers(3, Some(8 * GIB)), 2);
+        assert_eq!(
+            workers(
+                3,
+                Some(8 * GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            2
+        );
     }
 
     #[test]
     fn a_machine_without_a_cap_runs_the_maximum() {
-        assert_eq!(workers(16, None), Consts::MAX_PARALLELISM);
+        let max_parallelism = ProjectConfig::default().orphans.max_parallelism;
+        assert_eq!(workers(16, None, max_parallelism), max_parallelism);
     }
 
     /// A cap too small for even one run still has to sweep, one at a time.
     #[test]
     fn a_cap_below_one_run_still_runs_one() {
-        assert_eq!(workers(3, Some(GIB)), 1);
+        assert_eq!(
+            workers(
+                3,
+                Some(GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            1
+        );
     }
 
     #[test]
     fn fewer_cores_than_memory_allows_run_one_per_core() {
-        assert_eq!(workers(2, Some(64 * GIB)), 2);
+        assert_eq!(
+            workers(
+                2,
+                Some(64 * GIB),
+                ProjectConfig::default().orphans.max_parallelism
+            ),
+            2
+        );
     }
 
     fn report(label: &str, orphans: Vec<Finding>, declared: Vec<PathBuf>) -> Report {

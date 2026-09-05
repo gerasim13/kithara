@@ -11,7 +11,6 @@ use tracing::info;
 
 use super::services::launchd;
 use crate::ci::{
-    HOST_CORES, HOST_JOB_CONCURRENCY,
     config::{CiConfig, MAC_CONFIG_PATH},
     environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
@@ -29,17 +28,24 @@ enum LaunchdServiceState {
 }
 
 impl<'a> RunnerManager<'a> {
+    const LEGACY_MACOS_RUNNER_LABEL: &'static str = "com.zvuk.kithara-ci.macos-runner";
+
     /// Cargo workers one admitted job may occupy.
     ///
     /// Derived rather than written down, because the two numbers drifted apart
     /// the one time they were: admission went from two jobs to three while this
     /// stayed at four, and twelve compilers on ten cores left nothing for the
     /// runner, sccache, and the linkers. The spare core is that remainder.
-    const CARGO_BUILD_JOBS: usize = (HOST_CORES - 1) / HOST_JOB_CONCURRENCY;
-    const LEGACY_MACOS_RUNNER_LABEL: &'static str = "com.zvuk.kithara-ci.macos-runner";
+    fn cargo_build_jobs(&self) -> usize {
+        self.config
+            .host
+            .cores
+            .saturating_sub(1)
+            .div_euclid(self.config.host.job_concurrency)
+    }
 
-    fn cargo_build_jobs_env() -> String {
-        format!("CARGO_BUILD_JOBS={}", Self::CARGO_BUILD_JOBS)
+    fn cargo_build_jobs_env(&self) -> String {
+        format!("CARGO_BUILD_JOBS={}", self.cargo_build_jobs())
     }
 
     pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
@@ -262,8 +268,8 @@ impl<'a> RunnerManager<'a> {
     /// recycle, and sccache died inside it often enough that jobs compiled
     /// locally — a suite that runs in three minutes took an hour to reach.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
-        let concurrency = HOST_JOB_CONCURRENCY;
-        let cargo_build_jobs = Self::cargo_build_jobs_env();
+        let concurrency = self.config.host.job_concurrency;
+        let cargo_build_jobs = self.cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
         let builds = self.config.host.build_root().display();
         let url = self.config.host.gitlab_origin();
@@ -279,7 +285,7 @@ impl<'a> RunnerManager<'a> {
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"]\n",
             tokens.linux,
-            docker_host(home),
+            docker_host(home, &self.config.host.colima_profile),
             tokens.macos,
             tokens.android,
             tokens.release,
@@ -303,7 +309,7 @@ impl<'a> RunnerManager<'a> {
             colima,
             "start",
             "--profile",
-            "kithara",
+            self.config.host.colima_profile.as_str(),
             "--foreground",
             "--cpus",
             "5",
@@ -437,11 +443,12 @@ impl<'a> RunnerManager<'a> {
     }
 }
 
-pub(super) fn docker_host(home: &Path) -> String {
-    format!(
-        "unix://{}",
-        home.join(".colima/kithara/docker.sock").display()
-    )
+pub(super) fn docker_socket(home: &Path, profile: &str) -> PathBuf {
+    home.join(".colima").join(profile).join("docker.sock")
+}
+
+pub(super) fn docker_host(home: &Path, profile: &str) -> String {
+    format!("unix://{}", docker_socket(home, profile).display())
 }
 
 pub(super) struct Tokens {
@@ -619,9 +626,10 @@ mod tests {
             .parse()
             .expect("the Cargo budget is a worker count");
 
+        let cores = config.host.cores;
         assert!(
-            admitted * workers < HOST_CORES,
-            "{admitted} jobs of {workers} workers claim every one of the host's {HOST_CORES} cores"
+            admitted * workers < cores,
+            "{admitted} jobs of {workers} workers claim every one of the host's {cores} cores"
         );
     }
 
@@ -894,7 +902,7 @@ mod tests {
         let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
         assert_eq!(
             rendered["concurrent"].as_integer(),
-            Some(HOST_JOB_CONCURRENCY as i64)
+            Some(config.host.job_concurrency as i64)
         );
         let runners = rendered["runners"].as_array().unwrap();
         assert_eq!(runners.len(), 4, "one registration per runner token");
@@ -935,7 +943,7 @@ mod tests {
                     .unwrap()
                     .iter()
                     .any(|value| {
-                        value.as_str() == Some(RunnerManager::cargo_build_jobs_env().as_str())
+                        value.as_str() == Some(manager.cargo_build_jobs_env().as_str())
                     }),
                 "{} has no per-job Cargo CPU budget",
                 runner["name"]
@@ -1041,6 +1049,59 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no host-side bind sources were checked");
+    }
+
+    /// One colima instance carries the Linux lane, and the profile naming it is
+    /// read at three sites: the call that creates the instance, the socket the
+    /// runner config hands the Docker executor, and the socket cleanup prunes
+    /// the build cache through. A profile left at its default cannot tell a
+    /// site that reads the key from one that spells the name out, so this seeds
+    /// it away from the default.
+    #[test]
+    fn the_configured_colima_profile_reaches_the_instance_and_its_socket() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut config = fixture();
+        config.host.colima_profile = "kithara-probe".to_owned();
+        let process = Process::new(&root, BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+
+        let args = manager.colima_args("colima");
+        let named = args
+            .windows(2)
+            .find(|pair| pair[0] == "--profile")
+            .map(|pair| pair[1].as_str());
+        assert_eq!(named, Some("kithara-probe"));
+
+        let socket = docker_socket(&home, &config.host.colima_profile);
+        assert!(
+            socket.ends_with(".colima/kithara-probe/docker.sock"),
+            "{}",
+            socket.display()
+        );
+
+        let rendered = manager.runner_config(&home, &tokens);
+        assert!(
+            rendered.contains(&docker_host(&home, &config.host.colima_profile)),
+            "the runner config does not point at the configured profile's socket: {rendered}"
+        );
+        assert!(
+            !rendered.contains(".colima/kithara/docker.sock"),
+            "the runner config still names the default profile's socket: {rendered}"
+        );
     }
 
     #[test]
