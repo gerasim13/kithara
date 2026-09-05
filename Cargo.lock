@@ -5163,7 +5163,6 @@ dependencies = [
  "kithara-worker",
  "kithara-workspace-hack",
  "ringbuf 0.5.0",
- "serde",
  "thiserror 2.0.18",
  "tracing",
  "triple_buffer",

@@ -55,7 +55,6 @@ delegate = { workspace = true }
 fieldwork = { workspace = true }
 firewheel = { workspace = true }
 ringbuf = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 triple_buffer = { workspace = true }

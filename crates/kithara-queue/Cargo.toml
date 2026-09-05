@@ -9,6 +9,11 @@ description = "Queue/playlist orchestration: gapless, crossfade-aware."
 keywords = ["audio", "player", "playlist", "gapless", "dj"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["serde"]
+
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
