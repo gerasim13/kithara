@@ -124,6 +124,14 @@ jobs:
             just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
           fi
 
+      - name: Upload Cargo timing report
+        if: ${{ always() && (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cargo-timings-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /cache/shared-target/${{ github.repository }}/**/cargo-timings/cargo-timing.html
+          if-no-files-found: error
+
       # `artifact-when: always` uploads even when the lane failed: a budget
       # report is most worth reading on the run that broke the budget.
       # `failure` uploads only on a failed lane, for evidence that exists
