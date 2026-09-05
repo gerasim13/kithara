@@ -99,6 +99,13 @@ enum Origin {
     /// playlist meets when it leaves a segmented stream for a file on a
     /// server, which asks for one body and reads it as it arrives.
     RemoteFlac,
+    /// The same ramp as a whole MPEG body served over HTTP.
+    ///
+    /// MPEG reconciles its length with its audio least of all: the figure
+    /// comes from a frame count in a header, and encoder delay and padding
+    /// sit either side of it. That is the seam a playlist crosses when it
+    /// leaves a segmented stream for a file on a music server.
+    RemoteMp3,
 }
 
 /// Every track streamed as HLS.
@@ -110,6 +117,9 @@ const MIXED_QUEUE: [Origin; 3] = [Origin::Hls, Origin::LocalFlac, Origin::Hls];
 /// The seam a playlist crosses when it leaves a segmented stream for a whole
 /// body on a server, and crosses back.
 const NETWORK_QUEUE: [Origin; 3] = [Origin::Hls, Origin::RemoteFlac, Origin::Hls];
+/// The same seam, crossed into the container that declares its length least
+/// exactly. This is the shape the reported premature switch was seen on.
+const MPEG_QUEUE: [Origin; 3] = [Origin::Hls, Origin::RemoteMp3, Origin::Hls];
 
 impl Origin {
     /// Frames of audio this origin's fixture actually carries.
@@ -120,7 +130,9 @@ impl Origin {
     /// was packaged rather than what was requested.
     fn built_frames(self) -> i64 {
         match self {
-            Self::LocalFlac | Self::RemoteFlac => frames_from_secs(NOMINAL_TRACK_SECS),
+            Self::LocalFlac | Self::RemoteFlac | Self::RemoteMp3 => {
+                frames_from_secs(NOMINAL_TRACK_SECS)
+            }
             Self::Hls => {
                 let requested = usize::try_from(frames_from_secs(SEGMENT_SECS))
                     .expect("a segment carries a positive number of frames");
@@ -136,7 +148,7 @@ impl Origin {
     /// Whether this origin's bytes arrive over HTTP.
     const fn needs_server(self) -> bool {
         match self {
-            Self::Hls | Self::RemoteFlac => true,
+            Self::Hls | Self::RemoteFlac | Self::RemoteMp3 => true,
             Self::LocalFlac => false,
         }
     }
@@ -177,6 +189,15 @@ fn flac_asset(pattern: PcmPattern) -> Asset {
     match pattern {
         PcmPattern::Ascending => assets::signal_flac_saw_6s(),
         PcmPattern::Descending => assets::signal_flac_saw_down_6s(),
+        PcmPattern::ShiftedAscending => panic!("the census queues the two ramp directions only"),
+    }
+}
+
+/// The same ramp stored as MPEG.
+fn mp3_asset(pattern: PcmPattern) -> Asset {
+    match pattern {
+        PcmPattern::Ascending => assets::signal_mp3_saw_6s(),
+        PcmPattern::Descending => assets::signal_mp3_saw_down_6s(),
         PcmPattern::ShiftedAscending => panic!("the census queues the two ramp directions only"),
     }
 }
@@ -223,6 +244,19 @@ async fn track_src(
                     delivery: Delivery::Range,
                 });
             ResourceSrc::parse(handle.child_url("track.flac").as_str())
+                .expect("valid remote track URL")
+        }
+        Origin::RemoteMp3 => {
+            let handle = server
+                .expect("the MPEG leg runs against a server")
+                .register_behavior(FixtureBehavior {
+                    content: Content::StaticBytes {
+                        bytes: Arc::new(mp3_asset(pattern).bytes().to_vec()),
+                        content_type: Some("audio/mpeg"),
+                    },
+                    delivery: Delivery::Range,
+                });
+            ResourceSrc::parse(handle.child_url("track.mp3").as_str())
                 .expect("valid remote track URL")
         }
     }
@@ -472,7 +506,14 @@ fn longest_silence(channel: &[f32]) -> usize {
     longest
 }
 
-async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
+/// The playthrough the provenance half attributed, handed to the oracles that
+/// read the audio itself.
+struct Take {
+    rendered: Vec<f32>,
+    ordered: Vec<(u64, Active)>,
+}
+
+async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) -> Take {
     let recorder = probe_capture::install();
     let server = if origins.iter().copied().any(Origin::needs_server) {
         Some(TestServerHelper::new().await)
@@ -560,47 +601,6 @@ async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
         );
     }
 
-    let runs = class_runs(&rendered);
-    let classes: Vec<FrameClass> = runs
-        .iter()
-        .filter(|(_, count)| *count >= SUSTAINED_WINDOWS)
-        .map(|(class, _)| *class)
-        .collect();
-    assert_eq!(
-        classes,
-        vec![
-            FrameClass::Ascending,
-            FrameClass::Descending,
-            FrameClass::Ascending
-        ],
-        "the rendered audio must carry each track's own signal, in queue order; \
-         runs={runs:?}"
-    );
-
-    let played = &rendered[..played_samples(&ordered)];
-
-    let silence = longest_silence(&left_channel(played));
-    assert!(
-        silence <= BLOCK_FRAMES,
-        "the playthrough may fall silent only for as long as the handover is \
-         quantised to: run={silence} frames, one render block is {BLOCK_FRAMES}"
-    );
-
-    let report = CochleaReport::measure(played, CHANNELS, SAMPLE_RATE);
-    let track_peak_dbfs = 20.0 * f64::from(CENSUS_LEVEL).log10();
-    let peak = report
-        .sample_peak_dbfs
-        .expect("a played take carries a sample peak");
-    assert!(
-        peak <= track_peak_dbfs + PEAK_BAND_DB,
-        "a crossfade must fade the two tracks against each other rather than sum \
-         them: peak={peak} dBFS, one track plays at {track_peak_dbfs} dBFS"
-    );
-    assert_eq!(
-        report.leading_silence_ms, 0.0,
-        "the queue must start on the first track's first frame: {report:?}"
-    );
-
     let landed: Vec<u64> = log
         .advances
         .iter()
@@ -631,6 +631,63 @@ async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
         },
         "a crossfade must be announced exactly at the configured boundaries"
     );
+
+    Take { rendered, ordered }
+}
+
+/// The oracles that read the rendered audio rather than the probe: each
+/// track's own ramp in queue order, no silence longer than the handover's
+/// quantisation, and a seam that fades rather than sums. A lossy container
+/// carries none of these, so a census over one runs the provenance half
+/// alone.
+fn census_acoustics(take: &Take) {
+    let rendered = take.rendered.as_slice();
+    let ordered = take.ordered.as_slice();
+    let runs = class_runs(rendered);
+    let classes: Vec<FrameClass> = runs
+        .iter()
+        .filter(|(_, count)| *count >= SUSTAINED_WINDOWS)
+        .map(|(class, _)| *class)
+        .collect();
+    assert_eq!(
+        classes,
+        vec![
+            FrameClass::Ascending,
+            FrameClass::Descending,
+            FrameClass::Ascending
+        ],
+        "the rendered audio must carry each track's own signal, in queue order; \
+         runs={runs:?}"
+    );
+
+    let played = &rendered[..played_samples(ordered)];
+
+    let silence = longest_silence(&left_channel(played));
+    assert!(
+        silence <= BLOCK_FRAMES,
+        "the playthrough may fall silent only for as long as the handover is \
+         quantised to: run={silence} frames, one render block is {BLOCK_FRAMES}"
+    );
+
+    let report = CochleaReport::measure(played, CHANNELS, SAMPLE_RATE);
+    let track_peak_dbfs = 20.0 * f64::from(CENSUS_LEVEL).log10();
+    let peak = report
+        .sample_peak_dbfs
+        .expect("a played take carries a sample peak");
+    assert!(
+        peak <= track_peak_dbfs + PEAK_BAND_DB,
+        "a crossfade must fade the two tracks against each other rather than sum \
+         them: peak={peak} dBFS, one track plays at {track_peak_dbfs} dBFS"
+    );
+    assert_eq!(
+        report.leading_silence_ms, 0.0,
+        "the queue must start on the first track's first frame: {report:?}"
+    );
+}
+
+async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
+    let take = census_provenance(origins, seam, temp_dir).await;
+    census_acoustics(&take);
 }
 
 /// Gapless: no output frame may be claimed by two tracks at once. A premature
@@ -728,4 +785,32 @@ async fn gapless_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir)
 )]
 async fn crossfaded_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
     run_census(&MIXED_QUEUE, Seam::Crossfade, &temp_dir).await;
+}
+
+/// The reported premature switch was seen where an HLS stream hands over to a
+/// whole MPEG body on a server. The provenance half runs alone here: a lossy
+/// container carries neither a readable ramp direction nor a peak the fade
+/// oracle can read, so what is left is the attribution - each track serves the
+/// length it was built to, and the seam overlaps by nothing at all.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn gapless_mpeg_queue_serves_every_track_whole(temp_dir: TestTempDir) {
+    let _ = census_provenance(&MPEG_QUEUE, Seam::Gapless, &temp_dir).await;
+}
+
+/// The same seam with the crossfade the reported defect was heard as: the
+/// overlap must be exactly the configured one, and a track cut short shows up
+/// as an overlap wider than the queue announced.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn crossfaded_mpeg_queue_serves_every_track_whole(temp_dir: TestTempDir) {
+    let _ = census_provenance(&MPEG_QUEUE, Seam::Crossfade, &temp_dir).await;
 }

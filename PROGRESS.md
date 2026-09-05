@@ -75,32 +75,45 @@ the change that lands the work, and keep it short.
   against are both gone. What stays is an MPEG leg the census never had: a
   whole streamed body played to its end at both seam settings.
 
-  The reported defect is still open, and the hunt has a sharper target. Its
+  The reported defect is still open and its mechanism is not known, but its
   seam - an HLS stream handing over to a whole MPEG body on another host - is
-  covered by nothing. `real_playlist` loads each real source as a queue of one,
-  so it never crosses a seam at all, and the census alternates HLS with FLAC
-  but never with MPEG.
+  covered now, from both sides. `run_census` is split: the
+  provenance half attributes every output frame, and the acoustic half - ramp
+  direction, silence, Cochlea peak - runs after it on the legs whose container
+  can carry those oracles. An `Origin::RemoteMp3` leg puts a whole MPEG body
+  between two HLS tracks and runs the provenance half alone, and
+  `real_playlist` gained the network counterpart: the real `silvercomet` HLS
+  stream ahead of a real MPEG body, measuring where the outgoing track's clock
+  stood when the queue left it. Nothing measured that before - the file's other
+  cases load one real source as a queue of one, and `queue_playlist_behavior`
+  waits for the advance without asking when it came.
+
+  The seam test found the reason nothing had caught the defect: the network
+  lane has not compiled since `#260`. Three errors, none of them about the
+  network - two calls to a pool helper shadowed by a local binding of the same
+  name, and a queue field typed as the queue where the harness hands out its
+  control. Every real-CDN test in the repo has been dark for a fortnight,
+  `real_playlist` among them. The lane builds again, and the three dead
+  `sync::Arc` imports that rot uncovered are gone with it.
+
+  Six read-only angles hunted the mechanism and every positive finding was
+  refuted by an adversarial pass, fourteen of sixteen verdicts. What survived
+  is two negative results, both confirmed twice: an HLS playlist duration is
+  exact float arithmetic over `#EXTINF` and cannot be under-stated, and an
+  MPEG duration is header-derived and can only be over-stated. The
+  wrong-duration family is closed. The structural observations that looked like
+  a mechanism - `HandoverRequested` is a unit variant carrying no track, and
+  the queue's handler for it has no role filter where its two neighbours do -
+  are true and unreachable: the emitting latch is cleared only by `fade_in`,
+  `play` and `seek`, never by `fade_out`, so a track promoted over has already
+  spent its one handover. Likewise the Apple size-less MPEG open does not
+  launder a frontier read into an end: `wait_range` gates the whole requested
+  range, so a frontier read answers `Pending`, `probe_read` maps it to
+  `Interrupted`, and `take_pending_callback_error` rescues it one line before
+  the `packets == 0` check.
 
 ## Next
 
-- The seam the reported defect was seen on: an HLS stream handing over to a
-  whole MPEG body on another host. Two instruments are wanted, sharing the
-  census's provenance half - every track serves its whole length, and two
-  tracks share output frames only inside the crossfade the queue announced. An
-  offline leg puts an `Origin::RemoteMp3` between HLS tracks; a network leg
-  queues the real `silvercomet` HLS master ahead of the real MPEG body, which
-  is the closest a test gets to the report. The acoustic oracles stay out of
-  both: they cannot read a lossy container.
-- A local MPEG leg for the census. Measured against six-second MP3 ramps: the
-  probe half passes unchanged - each track serves its whole length and the seams
-  overlap by exactly the configured crossfade - but two acoustic oracles cannot
-  speak for a lossy container. The slope classifier sustains no class at a
-  tolerance under 1.0, and 1.0 is where the two directions stop being told
-  apart: at tol 2 a descending track reads as ascending, because the classes are
-  only two units away and the ascending test is asked first. The take's sample
-  peak is -4.74 dBFS against a single track's -6.02, so the lossy overshoot
-  alone leaves the band that catches a fade summing instead of attenuating. The
-  leg needs its own provenance instrument, not another fixture.
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497
   comments carrying prose outside a doc comment, 105 doc blocks past a dozen

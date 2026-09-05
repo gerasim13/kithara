@@ -118,6 +118,20 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::FRAMES_2S_44K1,
     None
 )]
+#[case::saw_6s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1,
+    None
+)]
+#[case::saw_down_6s(
+    Wave::SawtoothDescending,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1,
+    None
+)]
 #[case::saw_2s_64k(
     Wave::Sawtooth,
     Consts::RATE_44K1,
