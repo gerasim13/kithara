@@ -157,13 +157,7 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
     }
 }
 
-async fn render_tiny_ring_control(
-    master_url: &url::Url,
-    transition: Transition,
-    backend: DecoderBackend,
-) -> Render {
-    let label = format!("{}-tiny-ring-control", transition.label);
-    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
+async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<DecoderObservation>) {
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
@@ -174,6 +168,17 @@ async fn render_tiny_ring_control(
             samples.len() / usize::from(CHANNELS),
         ));
     }
+    (samples, decoder_events)
+}
+
+async fn render_tiny_ring_control(
+    master_url: &url::Url,
+    transition: Transition,
+    backend: DecoderBackend,
+) -> Render {
+    let label = format!("{}-tiny-ring-control", transition.label);
+    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
+    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.from),
@@ -201,16 +206,7 @@ async fn render_tiny_ring_switch(
         .set_mode(AbrMode::manual(transition.to))
         .unwrap_or_else(|error| panic!("request {label}: {error}"));
 
-    let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
-    let mut decoder_events = Vec::new();
-    while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
-        let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, frames).await);
-        decoder_events.extend(drain_decoder_events(
-            &mut prepared.events,
-            samples.len() / usize::from(CHANNELS),
-        ));
-    }
+    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.to),
