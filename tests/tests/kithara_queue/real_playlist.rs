@@ -16,9 +16,6 @@ use kithara_integration_tests::{
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
-#[path = "source_helper.rs"]
-mod source_helper;
-
 /// Same as [`build_source`] but overrides `store.cache_dir` with this
 /// process's private temp dir so the real `kithara-app` cache stays
 /// clean.
@@ -28,10 +25,10 @@ fn build_track_source(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> TrackSource<AppPools> {
-    source_helper::app_track_source(
+    super::source_helper::app_track_source(
         url,
         &ctx.config,
-        source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         abr,
         None,

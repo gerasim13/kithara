@@ -2,11 +2,9 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::AbrMode,
     platform::{time::Duration, tokio::sync::OnceCell},
-    queue::{TrackSource, Transition},
+    queue::Transition,
 };
-use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
     kithara,
     offline::{AppQueueFixture, insecure_app_queue},
@@ -24,21 +22,6 @@ static CTX: OnceCell<AppQueueFixture> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static AppQueueFixture {
     CTX.get_or_init(|| async { insecure_app_queue() }).await
-}
-
-fn build_track_source(
-    url: &str,
-    ctx: &AppQueueFixture,
-    backend: DecoderBackend,
-) -> TrackSource<AppPools> {
-    super::app_track_source(
-        url,
-        &ctx.config,
-        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
-        backend,
-        AbrMode::Auto(None),
-        None,
-    )
 }
 
 /// Staging zvq.me DRM end-to-end: load → select → play, asserting
@@ -61,7 +44,7 @@ fn build_track_source(
 #[case::symphonia(DecoderBackend::Symphonia)]
 async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = shared_ctx().await;
-    let source = build_track_source(STAGE_TRACK, ctx, backend);
+    let source = super::source_helper::app_drm_track_source(STAGE_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source).expect("append stage DRM track");
 

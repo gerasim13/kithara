@@ -23,9 +23,6 @@ use kithara_integration_tests::{
 };
 use tracing::info;
 
-#[path = "source_helper.rs"]
-mod source_helper;
-
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.
 /// The baked `zvuk-prod` provider supplies the DRM keyserver headers.
 const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/125895892_2/master.m3u8";
@@ -210,10 +207,10 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         .build();
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(cfg) = source_helper::app_track_source(
+    let TrackSource::Config(cfg) = super::source_helper::app_track_source(
         PROD_TRACK,
         &config,
-        source_helper::app_disk_asset_store(&config, temp.path()),
+        super::source_helper::app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),

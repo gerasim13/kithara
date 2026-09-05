@@ -2,9 +2,9 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, PlayerEvent},
+    events::{Event, EventReceiver, PlayerEvent},
     platform::time::{Duration, Instant, timeout},
-    queue::{QueueControl, TrackSource, Transition},
+    queue::{QueueControl, Transition},
 };
 use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
@@ -48,21 +48,6 @@ const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
 
 async fn build_ctx() -> AppQueueFixture {
     insecure_app_queue()
-}
-
-fn build_track_source(
-    url: &str,
-    ctx: &AppQueueFixture,
-    backend: DecoderBackend,
-) -> TrackSource<AppPools> {
-    super::app_track_source(
-        url,
-        &ctx.config,
-        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
-        backend,
-        AbrMode::Auto(None),
-        None,
-    )
 }
 
 /// Wait until the decoder has produced at least one PCM chunk for the
@@ -308,15 +293,27 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            SENTINEL_BEFORE,
+            &ctx,
+            backend,
+        ))
         .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(build_track_source(TARGET_TRACK, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            TARGET_TRACK,
+            &ctx,
+            backend,
+        ))
         .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
+        .append(super::source_helper::app_drm_track_source(
+            SENTINEL_AFTER,
+            &ctx,
+            backend,
+        ))
         .expect("append trailing sentinel");
 
     wait_for_loader_done_event(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
