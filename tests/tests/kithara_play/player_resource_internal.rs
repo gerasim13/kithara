@@ -7,10 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara::{
     self,
@@ -25,16 +22,15 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{Fault, MockReader, TestPcmReader};
+use kithara_integration_tests::{
+    audio_mock::{Fault, MockReader, TestPcmReader},
+    test_defaults::Consts,
+};
 
 use crate::bufpool_ext::pools;
 
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
-}
-
 fn make_player_resource(seconds: f64) -> PlayerResource {
-    let reader = TestPcmReader::new(mock_spec(), seconds);
+    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, seconds);
     let resource = Resource::from_reader(reader, None);
     PlayerResource::new(resource, Arc::from("test.mp3"), &pools())
         .expect("player resource fits the test pool budget")
@@ -55,7 +51,7 @@ impl ChunkReader {
             bus: EventBus::default(),
             emitted,
             meta: TrackMetadata::default(),
-            spec: mock_spec(),
+            spec: Consts::AUDIO_SPEC,
         }
     }
 
@@ -133,7 +129,7 @@ struct PositionReader {
 
 impl PositionReader {
     fn new(seconds: f64) -> Self {
-        let spec = mock_spec();
+        let spec = Consts::AUDIO_SPEC;
         let total_frames = (seconds * spec.sample_rate.get() as f64) as u64;
         Self {
             bus: EventBus::default(),
@@ -308,7 +304,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 /// through, heard as a looped/glitched frame during seek.
 #[kithara::test(tokio)]
 async fn read_zeroes_output_when_no_data_available() {
-    let reader = MockReader::faulty(mock_spec(), Fault::Stall);
+    let reader = MockReader::faulty(Consts::AUDIO_SPEC, Fault::Stall);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("pending"), &pools())
         .expect("player resource fits the test pool budget");
@@ -335,7 +331,7 @@ async fn read_zeroes_output_when_no_data_available() {
 
 #[kithara::test(tokio)]
 async fn full_read_prefetches_buffered_eof() {
-    let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
+    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 900.0 / 44100.0);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");
@@ -355,7 +351,7 @@ async fn full_read_prefetches_buffered_eof() {
 
 #[kithara::test(tokio)]
 async fn read_returns_partial_when_eof_inside_buffer() {
-    let reader = TestPcmReader::new(mock_spec(), 0.01);
+    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 0.01);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");
@@ -392,7 +388,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
 /// distinguish "track aborted mid-stream" from "track played out".
 #[kithara::test(tokio)]
 async fn read_returns_failed_not_eof_on_decoder_error() {
-    let reader = MockReader::faulty(mock_spec(), Fault::DecodeError);
+    let reader = MockReader::faulty(Consts::AUDIO_SPEC, Fault::DecodeError);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &pools())
         .expect("player resource fits the test pool budget");

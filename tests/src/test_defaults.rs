@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara::platform::{sync::Arc, time::Duration};
+use kithara::{
+    platform::{sync::Arc, time::Duration},
+    signal::AudioSpec,
+};
 use kithara_test_fixtures::signal;
 
 /// Default audio parameters for generated WAV test fixtures.
@@ -89,6 +92,8 @@ impl Consts {
     };
     /// Default channel count.
     pub const CHANNELS: u16 = SawWav::DEFAULT.channels;
+    /// Default decoded-audio format used by playback fixtures.
+    pub const AUDIO_SPEC: AudioSpec = AudioSpec::new(Self::CHANNELS, Self::NON_ZERO_SAMPLE_RATE);
     /// Default packaged HLS segment size (bytes).
     pub const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 

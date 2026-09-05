@@ -7,10 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara::{
     self,
@@ -22,16 +19,10 @@ use kithara::{
         PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
         SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
-    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
 
 use crate::bufpool_ext::{TestPools, pools};
-
-const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -46,13 +37,9 @@ enum RemoveAtScenario {
     ShiftCurrentIndex,
 }
 
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, FIXTURE_SAMPLE_RATE)
-}
-
 fn make_resource(duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(mock_spec(), duration_secs),
+        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
         Some(Arc::from(format!("test-resource-{duration_secs}"))),
     )
 }
@@ -61,7 +48,7 @@ fn make_resource(duration_secs: f64) -> Resource {
 /// stay distinguishable in failure output.
 fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(mock_spec(), duration_secs),
+        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
         Some(Arc::from(format!("memory://{label}"))),
     )
 }
@@ -94,9 +81,10 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(AllocatedSlot::new(control, slot))
             }
-            Cmd::QuerySampleRate => {
-                Reply::SampleRate(SessionSampleRate::new(None, FIXTURE_SAMPLE_RATE.get()))
-            }
+            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
+                None,
+                Consts::NON_ZERO_SAMPLE_RATE.get(),
+            )),
             Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
             _ => Reply::Ok,
         };
@@ -118,7 +106,7 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
@@ -142,7 +130,7 @@ fn prepared_player<const N: usize>(
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .sample_rate(FIXTURE_SAMPLE_RATE)
+        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(fixture_session())
         .build()

@@ -22,9 +22,11 @@ use kithara::{
         bridge::RtMetrics,
         rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
     },
-    signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::{MockReader, TestPcmReader};
+use kithara_integration_tests::{
+    audio_mock::{MockReader, TestPcmReader},
+    test_defaults::Consts,
+};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Split},
@@ -51,16 +53,13 @@ enum ReadOutcomeScenario {
     Finished,
 }
 
-fn mock_spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
-}
-
 /// The identity every tagged fixture track in this module carries.
 const ITEM: TrackId = TrackId(1);
 
 fn make_track_with(duration_secs: f64, item_id: TrackId) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
-    let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs), None);
+    let resource =
+        Resource::from_reader(TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs), None);
     make_track_from_resource(resource, src, item_id)
 }
 
@@ -332,7 +331,7 @@ async fn read_outcome_matches_track_state(#[case] scenario: ReadOutcomeScenario)
 #[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let frontier_ns = Arc::new(AtomicU64::new(0));
-    let reader = MockReader::live_frontier(mock_spec(), Arc::clone(&frontier_ns));
+    let reader = MockReader::live_frontier(Consts::AUDIO_SPEC, Arc::clone(&frontier_ns));
     let src: Arc<str> = Arc::from("frontier.flac");
     let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
     let track = make_track_from_resource(resource, src, TrackId::allocate());
@@ -479,7 +478,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
 async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
     let src = Arc::from("misreported.mp3");
     let resource = Resource::from_reader(
-        MockReader::misreported_duration(mock_spec(), 900),
+        MockReader::misreported_duration(Consts::AUDIO_SPEC, 900),
         Some(Arc::clone(&src)),
     );
     let mut track = make_track_from_resource(resource, src, TrackId::allocate());
