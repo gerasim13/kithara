@@ -39,6 +39,7 @@ pub struct OfflinePlayerOptions {
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,
+    output_block_frames: Option<NonZeroU32>,
 }
 
 impl OfflinePlayerHarness {
@@ -46,7 +47,10 @@ impl OfflinePlayerHarness {
         let pools = pools();
         let sample_rate =
             NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
-        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
+        let session = HostConfig::offline(pools)
+            .sample_rate(sample_rate)
+            .maybe_max_block_frames(options.output_block_frames)
+            .build();
         Self::new(options, session)
     }
 

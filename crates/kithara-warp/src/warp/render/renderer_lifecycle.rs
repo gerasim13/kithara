@@ -281,10 +281,10 @@ where
 
         let channels = usize::from(self.spec.channels.max(1));
         let frames = samples.len() / channels;
-        if frames > Self::MAX_SOURCE_FRAMES {
+        if frames > self.source_block_frames.get() {
             let error = ElasticError::SourceFrameLimit {
                 frames,
-                limit: Self::MAX_SOURCE_FRAMES,
+                limit: self.source_block_frames.get(),
             };
             warn!(%error, "time-stretch rendering failed; dropping chunk");
             self.defer_scratch(Some(samples));
