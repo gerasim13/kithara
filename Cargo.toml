@@ -519,13 +519,32 @@ panic = "abort"
 strip = "symbols"
 
 # Size is the right default for the orchestration and network crates and the
-# wrong one for the time-stretch DSP the audio thread runs: `signalsmith-stretch`
-# ships at "z" while the dev profile above gives it 3. The override also sets
-# `OPT_LEVEL` for its build script, so its C++ moves from `-Oz` to `-O3`. The
-# other native dependencies that reach a shipped artifact serve TLS and HTTP
-# decompression (`btls-sys`, `aws-lc-sys`, `zstd-sys`); no audio thread calls
-# them, so they keep the size setting.
+# wrong one for the audio path. The dev profile above already names what is
+# hot; release threw all of it away, so the C++ that stretches and decodes
+# every frame shipped compiled for size. A per-package override reaches both
+# the crate's own codegen and the `OPT_LEVEL` its build script reads, which is
+# what carries the change into the C++.
+#
+# `signalsmith-stretch` and `fdk-aac-sys` compile through `cc`, which passes
+# `OPT_LEVEL` straight to the compiler: both move from `-Oz` to `-O3`.
+# `bungee-sys` is a partial case worth stating exactly - its `build.rs` reads
+# `PROFILE`, not `OPT_LEVEL`, and already hands CMake `Release`, so the
+# vendored bungee core and kissfft were never built for size; the override
+# reaches its Rust side and the `cpp_build` wrapper glue, which do read
+# `OPT_LEVEL`.
+#
+# The remaining natives serve TLS and HTTP decompression (`btls-sys`,
+# `aws-lc-sys`, `zstd-sys`). Their symmetric crypto is hand-written assembly
+# that no `-O` level touches, so they keep the size setting.
+#
+# None of these reach the wasm bundle: it builds `kithara-ffi` with
+# `--no-default-features --features wasm`, which selects no decoder and no
+# stretch backend, so the `web-size` budget is unaffected.
 [profile.release.package.signalsmith-stretch]
+opt-level = 3
+[profile.release.package.bungee-sys]
+opt-level = 3
+[profile.release.package.fdk-aac-sys]
 opt-level = 3
 
 # Best-of-both-worlds profile for maximum testing speed.

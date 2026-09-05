@@ -48,13 +48,29 @@ fn registry() -> &'static CodecRegistry { CODEC_REGISTRY.get_or_init(CodecRegist
 **Size profile starves DSP autovectorization** (PARTLY FIXED) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so the DSP that stays at `"z"` ships scalar.
 
 ```toml
-# the override the workspace now carries
+# the overrides the workspace now carries
 [profile.release.package.signalsmith-stretch]
+opt-level = 3
+[profile.release.package.bungee-sys]
+opt-level = 3
+[profile.release.package.fdk-aac-sys]
 opt-level = 3
 ```
 
-A per-package override reaches two units, not one: the crate's own codegen, and its build script's `OPT_LEVEL` environment variable. `signalsmith-stretch` compiles its C++ through `cc`, which passes `OPT_LEVEL` straight to the compiler, so the override moves that C++ from `-Oz` to `-O3` as well. Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
-*tier: hot | detector: manual (Cargo.toml census) | `signalsmith-stretch` is at 3; the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`, `kithara-audio`/`-decode`/`-resampler`) is still at `"z"` and reaches the wasm bundle, where `web-size` enforces a budget - raising it is a measured change of its own*
+A per-package override reaches two units, not one: the crate's own codegen, and its build script's `OPT_LEVEL` environment variable. That second unit is what carries the change into C++ - but only for a build script that reads `OPT_LEVEL`, which is not universal:
+
+| crate | build system | what the override reaches |
+| --- | --- | --- |
+| `signalsmith-stretch` | `cc` | all of it: `OPT_LEVEL` goes straight to the compiler |
+| `fdk-aac-sys` | `cc` | all of it: 171 files move `-Oz` -> `-O3`, `aacdecoder.cpp` included |
+| `bungee-sys` | `cmake` + `cpp_build` | the Rust side and the `cpp_build` wrapper glue only - `build.rs` picks the CMake config from `PROFILE`, not `OPT_LEVEL`, so the vendored bungee core and kissfft were already `Release` |
+
+The rule generalises: before claiming an override moved a native dependency, read its `build.rs` for which environment variable it consults. Capture the result rather than inferring it - `CC_ENABLE_DEBUG_OUTPUT=1 cargo build --release -p <crate> -vv` and grep for `running:`. `cc` invokes the compiler as `cc`/`c++`, never as `clang`, so grepping for the toolchain name finds nothing.
+
+The TLS and decompression natives (`btls-sys`, `aws-lc-sys`, `zstd-sys`) stay at `"z"` for a reason that is not "off the audio path": their symmetric crypto is hand-written assembly (951 `.S` files in `aws-lc-sys`, 165 in `btls-sys`, covering AES, ChaCha20-Poly1305 and SHA), which no `-O` level touches.
+
+Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
+*tier: hot | detector: manual (Cargo.toml census) | the native C++ audio path is at 3; the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`, `kithara-audio`/`-decode`/`-resampler`) is still at `"z"`. The `[profile.dev.package.*]` block is the repository's own list of what is hot - release honours only the three native entries so far, and the rest is a measured change of its own: those crates reach the wasm bundle, where `web-size` enforces a budget. The native C++ above does not - wasm builds `kithara-ffi` with `--no-default-features --features wasm`, selecting no decoder and no stretch backend*
 
 **wasm ships scalar** (pairs with the above) - no wasm lane enables `+simd128` and the trunk `wasm-opt` params omit `--enable-simd`.
 

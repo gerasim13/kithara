@@ -19,14 +19,20 @@ the change that lands the work, and keep it short.
   crate wearing the MIT badge, two crates naming a dead owner, and a logo no
   published crate page could load.
 
-- Release optimization for the C++ time-stretch. `[profile.release]` sets
-  `opt-level = "z"` workspace-wide, which the audio thread pays for:
-  `signalsmith-stretch` is the one native dependency on the real-time path in a
-  shipped artifact, and its C++ was compiled `-Oz` on both device platforms.
-  A per-package override raises it to 3, which also moves its build script's
-  `OPT_LEVEL`, so the C++ now compiles `-O3`. The TLS and decompression natives
-  (`btls-sys`, `aws-lc-sys`, `zstd-sys`) keep the size setting: no audio thread
-  calls them.
+- Release optimization for the native C++ on the audio path. `[profile.release]`
+  sets `opt-level = "z"` workspace-wide, and the `[profile.dev.package.*]` block
+  right above it is the repository's own list of what is too slow unoptimised -
+  release threw that list away. Both time-stretch backends and the AAC decoder
+  shipped compiled for size. Per-package overrides raise `signalsmith-stretch`,
+  `bungee-sys` and `fdk-aac-sys` to 3, which also moves each build script's
+  `OPT_LEVEL`. Captured A/B for `fdk-aac-sys`: 171 files, `-Oz` -> `-O3`, zero
+  crossover, `aacdecoder.cpp` among them. `bungee-sys` is partial by
+  construction - its `build.rs` reads `PROFILE`, not `OPT_LEVEL`, so CMake was
+  already building the vendored core `Release`; the override reaches its Rust
+  side and `cpp_build` wrapper glue. The TLS and decompression natives
+  (`btls-sys`, `aws-lc-sys`, `zstd-sys`) keep the size setting because their
+  symmetric crypto is hand-written assembly no `-O` level touches. None of the
+  three reach the wasm bundle, so the `web-size` budget is untouched.
 
 ## Next
 
