@@ -5615,6 +5615,7 @@ dependencies = [
  "criterion",
  "delegate",
  "fieldwork",
+ "hotpath",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",

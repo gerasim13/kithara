@@ -21,8 +21,6 @@ use unimock::Unimock;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use unimock::{MockFn, matching};
 
-#[cfg(feature = "analysis-beat")]
-use crate::beat::BeatDetector;
 use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
@@ -39,7 +37,7 @@ pub(super) const MARKER_TOLERANCE: u64 = 64;
 pub(super) type Artifacts = (Waveform, Vec<u64>);
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
+pub(super) fn beat_detector() -> Unimock {
     shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
@@ -62,8 +60,8 @@ pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
 /// `a_scheduled_route_and_a_linear_one_produce_the_same_artifacts`. What the
 /// clause would have verified, each of these tests asserts for itself.
 #[cfg(feature = "analysis-beat")]
-pub(super) fn shareable(mock: Unimock) -> Box<dyn BeatDetector> {
-    Box::new(mock.no_verify_in_drop())
+pub(super) fn shareable(mock: Unimock) -> Unimock {
+    mock.no_verify_in_drop()
 }
 
 /// The node drops its detector wherever the compute pool ends, so a detector
