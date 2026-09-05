@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -1269,13 +1269,6 @@ async fn render_until_item_end_with_post_roll(
         );
         time::sleep(Duration::from_millis(5)).await;
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect()
 }
 
 #[derive(Clone, Debug)]

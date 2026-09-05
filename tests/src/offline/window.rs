@@ -20,6 +20,15 @@ impl WindowStats {
     }
 }
 
+/// Copy the left channel from interleaved PCM samples.
+#[must_use]
+pub fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
+    samples
+        .chunks_exact(channels)
+        .map(|frame| frame[0])
+        .collect()
+}
+
 /// Root mean square of an interleaved sample slice.
 #[must_use]
 pub fn rms(samples: &[f32]) -> f32 {

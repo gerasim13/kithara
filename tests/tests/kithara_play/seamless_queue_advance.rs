@@ -11,7 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
@@ -365,13 +365,6 @@ async fn render_until_second_item_end(
         );
         time::sleep(block_budget).await;
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect::<Vec<_>>()
 }
 
 #[derive(Clone, Debug)]

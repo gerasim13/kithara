@@ -20,7 +20,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
     temp_dir,
 };
 use kithara_test_fixtures::signal::{
@@ -1837,13 +1837,6 @@ impl ToneRenderProgress {
         self.b_seen_at
             .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
-}
-
-fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame[0])
-        .collect()
 }
 
 fn normalized_left(left: &[f32], current_index: Option<usize>) -> Vec<f32> {
