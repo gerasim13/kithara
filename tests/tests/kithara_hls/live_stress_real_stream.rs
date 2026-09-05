@@ -79,6 +79,12 @@ impl Consts {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SeekRegression {
+    FixedWindow,
+    RandomPrefix,
+}
+
 #[derive(Default)]
 struct LiveStats {
     cache_hits: HashMap<(usize, usize), usize>,
@@ -649,11 +655,14 @@ async fn live_ephemeral_revisit_sequence_regression(
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-#[case::hls(false, "HLS")]
-#[case::drm(true, "DRM")]
-async fn live_real_stream_fixed_seek_window_regression(
+#[case::hls_fixed(false, "HLS", SeekRegression::FixedWindow)]
+#[case::drm_fixed(true, "DRM", SeekRegression::FixedWindow)]
+#[case::hls_random(false, "HLS", SeekRegression::RandomPrefix)]
+#[case::drm_random(true, "DRM", SeekRegression::RandomPrefix)]
+async fn live_real_stream_seek_regression(
     #[case] encrypted: bool,
     #[case] label: &str,
+    #[case] regression: SeekRegression,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
@@ -664,78 +673,43 @@ async fn live_real_stream_fixed_seek_window_regression(
 
     spawn_blocking(move || {
         let _ = audio.preload();
-        warmup_until_variant_switch(&mut audio, &stats, "fixed_window");
-
-        let seek_positions = [
-            29.928_167_827,
-            53.261_199_975,
-            123.263_139_768,
-            108.744_577_324,
-            150.472_324_063,
-            35.758_908_045,
-            123.021_311_355,
-        ];
+        let (stage, seek_positions) = match regression {
+            SeekRegression::FixedWindow => (
+                "fixed_window",
+                vec![
+                    29.928_167_827,
+                    53.261_199_975,
+                    123.263_139_768,
+                    108.744_577_324,
+                    150.472_324_063,
+                    35.758_908_045,
+                    123.021_311_355,
+                ],
+            ),
+            SeekRegression::RandomPrefix => {
+                let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+                let max_seek_secs = Consts::capped_seek_secs(
+                    (duration_secs - 2.0).max(20.0),
+                    Consts::WASM_MAX_SEEK_SECS,
+                );
+                let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+                (
+                    "rng_prefix",
+                    (0..80).map(|_| rng.range_f64(1.0, max_seek_secs)).collect(),
+                )
+            }
+        };
+        warmup_until_variant_switch(&mut audio, &stats, stage);
 
         for (idx, pos_secs) in seek_positions.into_iter().enumerate() {
             audio
                 .seek(Duration::from_secs_f64(pos_secs))
-                .unwrap_or_else(|_| panic!("{label} fixed-window seek must not fail at idx={idx}"));
+                .unwrap_or_else(|_| panic!("{label} {stage} seek must not fail at idx={idx}"));
             let _ = audio.preload();
             for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
-                let stage = format!("fixed_window_{idx}_chunk_{read_idx}");
-                let _ = next_chunk(&mut audio, &stage).unwrap_or_else(|| {
-                    panic!("{label} fixed-window read stopped early at idx={idx}")
-                });
-            }
-        }
-    })
-    .await
-    .expect("read phase join");
-
-    let _ = events_task.await;
-}
-
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
-)]
-#[case::hls(false, "HLS")]
-#[case::drm(true, "DRM")]
-async fn live_real_stream_random_seek_prefix_regression(
-    #[case] encrypted: bool,
-    #[case] label: &str,
-    _abr_fast: kithara::abr::AbrSettings,
-) {
-    let server = TestServerHelper::new().await;
-    let pools = pools();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let mut audio = build_live_audio(&worker, &pools, &server, encrypted, 24).await;
-    let (stats, events_task) = spawn_live_stats_task(&mut audio);
-
-    spawn_blocking(move || {
-        let _ = audio.preload();
-        warmup_until_variant_switch(&mut audio, &stats, "rng_prefix");
-
-        let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-        let max_seek_secs =
-            Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
-
-        for idx in 0..80 {
-            let pos_secs = rng.range_f64(1.0, max_seek_secs);
-            audio
-                .seek(Duration::from_secs_f64(pos_secs))
-                .unwrap_or_else(|_| panic!("{label} rng-prefix seek must not fail at idx={idx}"));
-            let _ = audio.preload();
-            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
-                let stage = format!("rng_prefix_{idx}_chunk_{read_idx}");
-                let _ = next_chunk(&mut audio, &stage).unwrap_or_else(|| {
-                    panic!("{label} rng-prefix read stopped early at idx={idx}")
-                });
+                let read_stage = format!("{stage}_{idx}_chunk_{read_idx}");
+                let _ = next_chunk(&mut audio, &read_stage)
+                    .unwrap_or_else(|| panic!("{label} {stage} read stopped early at idx={idx}"));
             }
         }
     })
