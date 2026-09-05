@@ -201,13 +201,16 @@ RUN printf '%s\n' \
       'workspace=${CARGO_REAPI_WORKSPACE_ROOT:-${GITHUB_WORKSPACE:?CI did not name the workspace}}' \
       'target=${CARGO_REAPI_TARGET_ROOT:-${CARGO_TARGET_DIR:?CI did not name the Cargo target}}' \
       'action_log=${CARGO_REAPI_ACTION_LOG:-$target/cargo-reapi/actions.jsonl}' \
+      'for argument in "$@"; do case "$argument" in wasm32-unknown-unknown|--target=wasm32-unknown-unknown) exec "$@" ;; esac; done' \
       'for name in ${!ACTIONS_@} ${!CI_@} ${!GITHUB_@} ${!RUNNER_@}; do unset "$name"; done' \
       'export CARGO_REAPI_WORKSPACE_ROOT="$workspace"' \
       'export CARGO_REAPI_TARGET_ROOT="$target"' \
       'export CARGO_REAPI_ACTION_LOG="$action_log"' \
       'exec cargo-reapi "$@"' \
       > /usr/local/bin/kithara-cargo-reapi \
- && chmod 0755 /usr/local/bin/kithara-cargo-reapi
+ && chmod 0755 /usr/local/bin/kithara-cargo-reapi \
+ && GITHUB_WORKSPACE=/tmp CARGO_TARGET_DIR=/tmp CARGO_REAPI_BACKEND=invalid \
+      kithara-cargo-reapi /bin/true --target wasm32-unknown-unknown
 
 # lockbud is a rustc driver, not a published crate, so it is installed from git
 # at a pinned commit and built by the same nightly it links `rustc_driver`
