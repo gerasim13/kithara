@@ -29,7 +29,7 @@ pub(super) struct Container<'a> {
 
 impl Container<'_> {
     /// Where a job builds and what it reuses, before the linker entries are added.
-    const CACHE_ENVIRONMENT: [&'static str; 3] = [
+    const CACHE_ENVIRONMENT: [&'static str; 5] = [
         // Encoded audio fixtures. Their default home is the container's own temp
         // directory, and a container serves one job and is thrown away — so every
         // job re-encoded every fixture it touched, and a test that builds one
@@ -39,14 +39,10 @@ impl Container<'_> {
         "KITHARA_FIXTURE_CACHE=/cache/fixtures",
         "CARGO_TARGET_DIR=/cache/target",
         "CARGO_INCREMENTAL=0",
-    ];
-    const SCCACHE_ENVIRONMENT: [&'static str; 3] = [
-        "RUSTC_WRAPPER=sccache",
         "SCCACHE_DIR=/cache/sccache",
-        // Well under the volume it lives on, and sccache evicts by least use
-        // rather than growing until the disk decides for it.
         "SCCACHE_CACHE_SIZE=100G",
     ];
+    const SCCACHE_ENVIRONMENT: [&'static str; 1] = ["RUSTC_WRAPPER=sccache"];
     const CARGO_REAPI_ENVIRONMENT: [&'static str; 3] = [
         "RUSTC_WRAPPER=kithara-cargo-reapi",
         "CARGO_REAPI_BACKEND=cache",
@@ -62,8 +58,9 @@ impl Container<'_> {
     /// to itself under the host's configured cache root.
     ///
     /// The registry of downloaded crates is shared because that is what it is
-    /// for. Plain runners also share cargo-reapi's content-addressed compiler
-    /// and linker outputs; the Android image keeps its existing sccache volume.
+    /// for. All runners keep the existing sccache volume so branches predating
+    /// cargo-reapi still reuse it. Plain runners additionally share cargo-reapi's
+    /// content-addressed compiler and linker outputs.
     ///
     /// The build directory is not shared. Its artefacts are valid only for the exact
     /// features, profile and toolchain that produced them, so runners of
@@ -82,15 +79,15 @@ impl Container<'_> {
                     .into_owned(),
                 "/cache/target",
             ),
+            ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ];
-        mounts.push(match runner.flavor {
-            RunnerFlavor::Plain => (
+        if matches!(runner.flavor, RunnerFlavor::Plain) {
+            mounts.push((
                 Self::cargo_reapi_dir(host).to_string_lossy().into_owned(),
                 "/cache/cargo-reapi",
-            ),
-            RunnerFlavor::Android => ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
-        });
+            ));
+        }
         mounts
     }
 
@@ -207,6 +204,11 @@ mod tests {
             Container::mounts(&host, plain)
                 .iter()
                 .any(|(_, target)| *target == "/cache/cargo-reapi")
+        );
+        assert!(
+            Container::mounts(&host, plain)
+                .iter()
+                .any(|(_, target)| *target == "/cache/sccache")
         );
     }
 }
