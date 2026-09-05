@@ -261,15 +261,15 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
     const SOURCE_START: u64 = 10_000;
-    const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
 
     let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
-    let source = sine(SOURCE_FRAMES);
+    let source = sine(source_frames);
     let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     let admitted = SOURCE_START
-        .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
+        .checked_add(u64::try_from(source_frames).expect("source frame count fits u64"))
         .expect("source frontier fits u64");
     let source_latency = renderer
         .engine
@@ -279,7 +279,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
         .latency()
         .source_frames();
     let held =
-        u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
+        u64::try_from(source_latency.min(source_frames)).expect("backend source latency fits u64");
 
     render_serviced(&mut renderer, input).expect("minimum-speed render emits samples");
     assert_eq!(

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+use kithara_stretch::{ElasticBackendConfig, ElasticEngine, ElasticError, StretchKind};
 use kithara_test_macros as kithara;
 use tracing::warn;
 
@@ -28,6 +28,7 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     pub(super) committed: Option<RenderSnapshot>,
     pub(super) controls: Arc<StretchControls>,
+    pub(super) backends: ElasticBackendConfig,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
     /// drops it from `prepare`, outside `produce_tick_rt`.
@@ -43,6 +44,8 @@ pub struct WarpRenderer<S> {
     pub(super) region: Option<ActiveRegion>,
     pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
+    /// Maximum source frames admitted to one elastic render operation.
+    pub(super) source_block_frames: NonZeroUsize,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Source span and live speed selected by the scheduler for the next render.
@@ -87,7 +90,6 @@ where
     S: HasPool<f32>,
 {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
-    pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
@@ -102,16 +104,26 @@ where
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
-        let target = Self::prepare_target(current_kind, spec, &pools, None, None);
+        let target = Self::prepare_target(
+            current_kind,
+            config.backends(),
+            config.source_block_frames(),
+            spec,
+            &pools,
+            None,
+            None,
+        );
         Self {
             context,
             committed: None,
+            backends: config.backends(),
             engine: target.engine,
             retired_engine: None,
             current_kind,
             controls,
             pools,
             spec,
+            source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
             applied_pitch: f64::NAN,
