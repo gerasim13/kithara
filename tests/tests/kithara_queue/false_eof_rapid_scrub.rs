@@ -2,7 +2,7 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, Event, EventReceiver, PlayerEvent},
     platform::time::{Duration, Instant, timeout},
     queue::{QueueControl, TrackSource, Transition},
 };
@@ -10,6 +10,7 @@ use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
     kithara,
     offline::{AppQueueFixture, insecure_app_queue},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
@@ -62,42 +63,6 @@ fn build_track_source(
         AbrMode::Auto(None),
         None,
     )
-}
-
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &QueueControl<AppPools>,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        match &entry.status {
-            TrackStatus::Loaded => return Ok(()),
-            TrackStatus::Failed(err) => return Err(format!("Failed before subscribe: {err}")),
-            _ => {}
-        }
-    }
-    timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match status {
-                    TrackStatus::Loaded => return Ok(()),
-                    TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => continue,
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("no Loaded within {deadline:?}"))?
 }
 
 /// Wait until the decoder has produced at least one PCM chunk for the
@@ -354,7 +319,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
         .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
         .expect("append trailing sentinel");
 
-    wait_for_loaded(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
+    wait_for_loader_done_event(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
         .await
         .unwrap_or_else(|e| panic!("Loaded never arrived for {TARGET_TRACK}: {e}"));
 

@@ -2,18 +2,15 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
-    platform::{
-        time::{Duration, timeout},
-        tokio::sync::OnceCell,
-    },
-    queue::{QueueControl, TrackSource, Transition},
+    events::AbrMode,
+    platform::{time::Duration, tokio::sync::OnceCell},
+    queue::{TrackSource, Transition},
 };
 use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
     kithara,
     offline::{AppQueueFixture, insecure_app_queue},
-    waits::wait_for_position_at_least,
+    waits::{wait_for_loader_done_event, wait_for_position_at_least},
 };
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
@@ -46,42 +43,6 @@ fn build_track_source(
         AbrMode::Auto(None),
         None,
     )
-}
-
-async fn wait_for_loaded(
-    rx: &mut EventReceiver,
-    queue: &QueueControl<AppPools>,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        match &entry.status {
-            TrackStatus::Loaded => return Ok(()),
-            TrackStatus::Failed(err) => return Err(format!("Failed before subscribe: {err}")),
-            _ => {}
-        }
-    }
-    timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match status {
-                    TrackStatus::Loaded => return Ok(()),
-                    TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                    _ => continue,
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("no Loaded within {deadline:?}"))?
 }
 
 /// Production zvuk DRM end-to-end: load → select → play, asserting
@@ -126,7 +87,7 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
         .append(source)
         .expect("append production DRM track");
 
-    wait_for_loaded(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
+    wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("prod DRM load fail [{PROD_TRACK}]: {e}"));
 
