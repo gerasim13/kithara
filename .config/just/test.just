@@ -386,11 +386,11 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     fi
     case "$backend" in
     instrumented)
-        toolchain=("+${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}")
+        toolchain="+${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
         flags="-Zsanitizer=realtime --cfg rtsan"
         ;;
     standalone)
-        toolchain=()
+        toolchain="+${KITHARA_STABLE_TOOLCHAIN:-stable}"
         flags="--cfg rtsan --cfg rtsan_standalone"
         export RTSAN_ENABLE=1
         # The image stages the runtime and names its directory; the file keeps
@@ -431,7 +431,7 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     RTSAN_OPTIONS="$options" \
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
-        cargo "${toolchain[@]}" nextest run --profile rtsan \
+        cargo "$toolchain" nextest run --profile rtsan \
         -p kithara-integration-tests --test {{ SUITE }} \
         --features {{ FEATURES }} \
         --target "$target" $repeats {{ FILTER }}

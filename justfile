@@ -1,17 +1,15 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Keep the runner's wrapper when it provides one. Empty when neither the runner
-# nor the host provides a cache: cargo reads that as "no wrapper", not an error.
+# Empty when absent: cargo reads that as "no wrapper", not as an error.
 sccache := `command -v sccache 2>/dev/null || true`
-rustc_wrapper := env_var_or_default("RUSTC_WRAPPER", sccache)
 
-export RUSTC_WRAPPER := rustc_wrapper
+export RUSTC_WRAPPER := sccache
 
 # sccache refuses incremental compilations, so a wrapper without this is never
 # hit. `check clippy` opts back in on a workstation, where the dependencies are
 # already built and incremental turns 15s into 2.4s, and leaves the shared cache
 # alone in CI, where nothing is already built.
-export CARGO_INCREMENTAL := if rustc_wrapper == "" { "" } else { "0" }
+export CARGO_INCREMENTAL := if sccache == "" { "" } else { "0" }
 
 mod fmt ".config/just/fmt.just"
 mod check ".config/just/check.just"

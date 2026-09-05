@@ -12,7 +12,6 @@ ARG CARGO_MACHETE_VERSION
 ARG CARGO_MODULES_VERSION
 ARG CARGO_MUTANTS_VERSION
 ARG CARGO_NEXTEST_VERSION
-ARG CARGO_REAPI_VERSION
 ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
@@ -174,7 +173,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${CARGO_MODULES_VERSION}" cargo-modules \
  && cargo install --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
  && cargo install --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
- && cargo install --locked --version "${CARGO_REAPI_VERSION}" cargo-reapi \
  && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
  && cargo install --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
  && cargo install --locked --version "${CARGO_SORT_VERSION}" cargo-sort \
@@ -191,27 +189,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
  && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
  && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim
-
-# Job and runner ids are orchestration, not rustc inputs. Build scripts still
-# receive them from Cargo; compiler actions do not, so identical commits can
-# share verified outputs across runners.
-RUN printf '%s\n' \
-      '#!/bin/bash' \
-      'set -eu' \
-      'workspace=${CARGO_REAPI_WORKSPACE_ROOT:-${GITHUB_WORKSPACE:?CI did not name the workspace}}' \
-      'target=${CARGO_REAPI_TARGET_ROOT:-${CARGO_TARGET_DIR:?CI did not name the Cargo target}}' \
-      'action_log=${CARGO_REAPI_ACTION_LOG:-$target/cargo-reapi/actions.jsonl}' \
-      'for argument in "$@"; do case "$argument" in wasm32-unknown-unknown|--target=wasm32-unknown-unknown) exec /usr/local/cargo/bin/sccache "$@" ;; esac; done' \
-      'for name in ${!ACTIONS_@} ${!CI_@} ${!GITHUB_@} ${!RUNNER_@}; do unset "$name"; done' \
-      'export CARGO_REAPI_WORKSPACE_ROOT="$workspace"' \
-      'export CARGO_REAPI_TARGET_ROOT="$target"' \
-      'export CARGO_REAPI_ACTION_LOG="$action_log"' \
-      'exec cargo-reapi "$@"' \
-      > /usr/local/bin/kithara-cargo-reapi \
- && chmod 0755 /usr/local/bin/kithara-cargo-reapi \
- && GITHUB_WORKSPACE=/tmp CARGO_TARGET_DIR=/tmp CARGO_REAPI_BACKEND=invalid \
-      kithara-cargo-reapi rustc --target wasm32-unknown-unknown --version \
-      | grep -q '^rustc '
 
 # lockbud is a rustc driver, not a published crate, so it is installed from git
 # at a pinned commit and built by the same nightly it links `rustc_driver`

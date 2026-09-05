@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
-use crate::ci::{build_cache, config::CiPins, process::Process};
+use crate::ci::{build_cache, process::Process};
 
 /// Build cache older than this is rebuilt faster than it is worth keeping.
 const BUILD_CACHE_AGE: &str = "168h";
@@ -13,9 +13,10 @@ const BUILD_CACHE_AGE: &str = "168h";
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
 /// blanket `docker system prune` would take theirs. A live cache stays and is
-/// held to a budget instead: the per-runner target directories and shared
-/// cargo-reapi cache divide the configured allowance. Fixture and Cargo-home
-/// volumes are never touched. A volume of this
+/// held to a budget instead: the per-runner target directories under the
+/// configured cache root are trimmed here, `kithara-ci-sccache` and
+/// `kithara-ci-fixtures` are what this exists to protect, and Cargo home is
+/// never touched. A volume of this
 /// project's that no container is attached to any more is not a cache but a
 /// leftover, and it is reclaimed.
 ///
@@ -23,12 +24,7 @@ const BUILD_CACHE_AGE: &str = "168h";
 /// this runs from a timer and the pins move with the repository. Read there,
 /// a bumped pin nobody has installed yet would name the running fleet's image
 /// as superseded and take it out from under the services.
-pub(super) fn run(
-    process: &Process,
-    host: &LinuxHost,
-    pins: &CiPins,
-    keep: &[String],
-) -> Result<()> {
+pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Result<()> {
     // Every project image would be superseded by an empty list, and this is
     // the one caller whose mistakes are unattended.
     if keep.is_empty() {
@@ -87,40 +83,8 @@ pub(super) fn run(
         "prune the build cache",
     );
     let target_dirs = target_dirs(host);
-    let budget = host.build_cache_budget_bytes()?;
-    let cargo_reapi_budget = budget / 3;
-    build_cache::enforce_budget(&target_dirs, budget - cargo_reapi_budget)?;
-    cargo_reapi_gc(process, host, pins, cargo_reapi_budget)?;
+    build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
-}
-
-fn cargo_reapi_gc(process: &Process, host: &LinuxHost, pins: &CiPins, budget: u64) -> Result<()> {
-    let source = Container::cargo_reapi_dir(host);
-    let mount = format!(
-        "type=bind,source={},target=/cache/cargo-reapi",
-        source.display()
-    );
-    let budget = budget.to_string();
-    process.run(
-        "docker",
-        &[
-            "run",
-            "--rm",
-            "--mount",
-            &mount,
-            "--entrypoint",
-            "cargo-reapi",
-            &pins.linux_image,
-            "cache",
-            "gc",
-            "--cache-dir",
-            "/cache/cargo-reapi",
-            "--max-bytes",
-            &budget,
-            "--json",
-        ],
-        "prune the shared Cargo action cache",
-    )
 }
 
 /// Which of the project's images nothing on this machine is installed to run.

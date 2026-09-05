@@ -3,6 +3,28 @@ use std::path::{Path, PathBuf};
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
 use crate::ci::{LINUX_LINKER_ENV, config::CiPins};
 
+/// Where a job builds and what it reuses, before the linker entries are added.
+const CACHE_ENVIRONMENT: [&str; 6] = [
+    // Encoded audio fixtures. Their default home is the container's own temp
+    // directory, and a container serves one job and is thrown away — so every
+    // job re-encoded every fixture it touched, and a test that builds one
+    // inside its own deadline lost the race under load. Entries are
+    // content-addressed and namespaced by a build fingerprint, so sharing them
+    // across runners cannot serve one build's bytes to another.
+    "KITHARA_FIXTURE_CACHE=/cache/fixtures",
+    "CARGO_TARGET_DIR=/cache/target",
+    "RUSTC_WRAPPER=sccache",
+    // Without this the wrapper is inert: sccache declines to cache an
+    // incremental compilation, and cargo leaves incremental on by default.
+    // Setting the wrapper and not this is how a cache gets installed, enabled,
+    // and still never hit.
+    "CARGO_INCREMENTAL=0",
+    "SCCACHE_DIR=/cache/sccache",
+    // Well under the volume it lives on, and sccache evicts by least use
+    // rather than growing until the disk decides for it.
+    "SCCACHE_CACHE_SIZE=100G",
+];
+
 /// What one runner's container is, independent of who starts it.
 ///
 /// systemd starts these through a `docker run` line and Compose through a
@@ -28,27 +50,6 @@ pub(super) struct Container<'a> {
 }
 
 impl Container<'_> {
-    /// Where a job builds and what it reuses, before the linker entries are added.
-    const CACHE_ENVIRONMENT: [&'static str; 5] = [
-        // Encoded audio fixtures. Their default home is the container's own temp
-        // directory, and a container serves one job and is thrown away — so every
-        // job re-encoded every fixture it touched, and a test that builds one
-        // inside its own deadline lost the race under load. Entries are
-        // content-addressed and namespaced by a build fingerprint, so sharing them
-        // across runners cannot serve one build's bytes to another.
-        "KITHARA_FIXTURE_CACHE=/cache/fixtures",
-        "CARGO_TARGET_DIR=/cache/target",
-        "CARGO_INCREMENTAL=0",
-        "SCCACHE_DIR=/cache/sccache",
-        "SCCACHE_CACHE_SIZE=100G",
-    ];
-    const SCCACHE_ENVIRONMENT: [&'static str; 1] = ["RUSTC_WRAPPER=sccache"];
-    const CARGO_REAPI_ENVIRONMENT: [&'static str; 3] = [
-        "RUSTC_WRAPPER=kithara-cargo-reapi",
-        "CARGO_REAPI_BACKEND=cache",
-        "CARGO_REAPI_CACHE_DIR=/cache/cargo-reapi",
-    ];
-
     /// The cargo home is mounted whole rather than as its registry and its git
     /// checkouts separately: cargo guards both with a lock file kept beside
     /// them, and jobs on this machine run at the same time. Mounting the data
@@ -58,9 +59,8 @@ impl Container<'_> {
     /// to itself under the host's configured cache root.
     ///
     /// The registry of downloaded crates is shared because that is what it is
-    /// for. All runners keep the existing sccache volume so branches predating
-    /// cargo-reapi still reuse it. Plain runners additionally share cargo-reapi's
-    /// content-addressed compiler and linker outputs.
+    /// for, and the compiler cache because `sccache` keys on the inputs of a
+    /// compilation, so one runner's entry is another's hit.
     ///
     /// The build directory is not shared. Its artefacts are valid only for the exact
     /// features, profile and toolchain that produced them, so runners of
@@ -71,7 +71,7 @@ impl Container<'_> {
     /// cache on the disk selected by the machine profile instead of wherever
     /// Docker stores named volumes.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
-        let mut mounts = vec![
+        vec![
             ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
             (
                 Self::target_dir(host, runner)
@@ -81,22 +81,11 @@ impl Container<'_> {
             ),
             ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
-        ];
-        if matches!(runner.flavor, RunnerFlavor::Plain) {
-            mounts.push((
-                Self::cargo_reapi_dir(host).to_string_lossy().into_owned(),
-                "/cache/cargo-reapi",
-            ));
-        }
-        mounts
+        ]
     }
 
     pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root.join("target").join(&runner.name)
-    }
-
-    pub(super) fn cargo_reapi_dir(host: &LinuxHost) -> PathBuf {
-        host.cache_root.join("cargo-reapi")
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -109,26 +98,25 @@ impl Container<'_> {
 
     /// What the job is told about where to build and what to reuse.
     ///
-    /// Plain runners use cargo-reapi because the Linux test cost is dominated
-    /// by links, which sccache does not store. Each runner still owns its Cargo
-    /// target; verified compiler and linker outputs are shared by content.
+    /// `sccache` is in the image and was reaching nothing: without
+    /// `RUSTC_WRAPPER` every job compiled the workspace from source, and the
+    /// only thing the runners shared was the registry of downloaded crates and
+    /// one build directory that had grown past two hundred gigabytes. A build
+    /// directory is the wrong thing to share — its artefacts are valid only for
+    /// the exact features, profile and toolchain that produced them, so
+    /// twenty-four jobs of different shapes pile up beside each other and reuse
+    /// nothing.
+    /// `sccache` keys on the inputs of a compilation instead, which is what
+    /// makes sharing it across runners sound rather than merely concurrent.
     ///
     /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
-    pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
-        let mut environment: Vec<String> = Self::CACHE_ENVIRONMENT
+    pub(super) fn environment() -> Vec<String> {
+        let mut environment: Vec<String> = CACHE_ENVIRONMENT
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
-        environment.extend(
-            match runner.flavor {
-                RunnerFlavor::Plain => Self::CARGO_REAPI_ENVIRONMENT.as_slice(),
-                RunnerFlavor::Android => Self::SCCACHE_ENVIRONMENT.as_slice(),
-            }
-            .iter()
-            .map(|entry| (*entry).to_owned()),
-        );
         environment.extend(
             LINUX_LINKER_ENV
                 .iter()
@@ -172,9 +160,7 @@ mod tests {
     /// testing.
     #[test]
     fn a_job_is_told_which_linker_to_use() {
-        let host = crate::ci::linux::profile::tests::host_fixture();
-        let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let environment = Container::environment(runner);
+        let environment = Container::environment();
 
         for (name, value) in LINUX_LINKER_ENV {
             assert!(
@@ -182,33 +168,5 @@ mod tests {
                 "{name} is missing from {environment:?}"
             );
         }
-    }
-
-    #[test]
-    fn plain_runners_share_link_outputs_while_android_keeps_sccache() {
-        let host = crate::ci::linux::profile::tests::host_fixture();
-        let plain = host.runner("kithara-ci-octocat").expect("runner");
-        let android = host.runner("kithara-ci-octocat-android").expect("runner");
-
-        assert!(
-            Container::environment(plain)
-                .iter()
-                .any(|entry| entry == "RUSTC_WRAPPER=kithara-cargo-reapi")
-        );
-        assert!(
-            Container::environment(android)
-                .iter()
-                .any(|entry| entry == "RUSTC_WRAPPER=sccache")
-        );
-        assert!(
-            Container::mounts(&host, plain)
-                .iter()
-                .any(|(_, target)| *target == "/cache/cargo-reapi")
-        );
-        assert!(
-            Container::mounts(&host, plain)
-                .iter()
-                .any(|(_, target)| *target == "/cache/sccache")
-        );
     }
 }

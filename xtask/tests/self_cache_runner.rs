@@ -137,7 +137,6 @@ exit 98
             .env("CARGO", env!("CARGO"))
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
-            .env_remove("RUSTC_WRAPPER")
             .stdin(Stdio::null())
             .output()
             .context("bootstrap self-cache fixture")
@@ -165,7 +164,6 @@ exit 98
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
-            .env_remove("RUSTC_WRAPPER")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -193,7 +191,6 @@ exit 98
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
-            .env_remove("RUSTC_WRAPPER")
             .stdin(Stdio::null());
         match target {
             Some(target) => command.env("CARGO_TARGET_DIR", target),
@@ -247,8 +244,7 @@ exit 98
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
             .env("SELF_CACHE_TEST_XTASK", env!("CARGO_BIN_EXE_xtask"))
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
-            .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
-            .env_remove("RUSTC_WRAPPER");
+            .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact);
         Ok(command)
     }
 
@@ -836,7 +832,6 @@ wait "$descendant"
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)
         .env("SELF_CACHE_WORKER_PID", &worker_pid)
-        .env_remove("RUSTC_WRAPPER")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

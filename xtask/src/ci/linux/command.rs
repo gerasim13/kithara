@@ -87,17 +87,14 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         LinuxCommand::Configure { runner, env_file } => {
             registration::configure(&host, host.runner(runner)?, env_file)
         }
-        LinuxCommand::Cleanup { keep } => {
-            let pins = CiPins::load(&args.pins)?;
-            cleanup::run(&process, &host, &pins, keep)
-        }
+        LinuxCommand::Cleanup { keep } => cleanup::run(&process, &host, keep),
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;
             let executable = std::env::current_exe().context("locating this executable")?;
             let executable = executable
                 .to_str()
                 .context("this executable's path is not UTF-8")?;
-            services::install(&process, &host, &pins, &args.pins, executable)
+            services::install(&process, &host, &pins, executable)
         }
         LinuxCommand::Compose { out, mint } => {
             let pins = CiPins::load(&args.pins)?;

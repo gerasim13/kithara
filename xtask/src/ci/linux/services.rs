@@ -40,7 +40,6 @@ pub(super) fn install(
     process: &Process,
     host: &LinuxHost,
     pins: &CiPins,
-    pins_path: &Path,
     executable: &str,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
@@ -67,10 +66,7 @@ pub(super) fn install(
             cpuset, "runner service installed"
         );
     }
-    let pins_path = pins_path
-        .canonicalize()
-        .with_context(|| format!("resolving CI pins {}", pins_path.display()))?;
-    install_cleanup_timer(&installed_images(host, pins), &pins_path)?;
+    install_cleanup_timer(&installed_images(host, pins))?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -161,10 +157,11 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// gigabytes rather than the hundreds `docker images` reports per image — the
 /// point is that the count stops growing, not that a run reclaims much.
 ///
-/// The unit records the installed images to keep and the absolute pins path.
-/// The timer has no repository working directory, while cache GC still needs
-/// the installed generation's budget from those pins.
-fn cleanup_unit(keep: &[&str], pins: &Path) -> String {
+/// The unit names the images to keep rather than reading the pins, because it
+/// runs from a timer with no repository around it — and because what must
+/// survive is what this machine was installed to run, not what the checkout
+/// happens to pin by the time the timer next fires.
+fn cleanup_unit(keep: &[&str]) -> String {
     format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
@@ -172,10 +169,9 @@ fn cleanup_unit(keep: &[&str], pins: &Path) -> String {
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={executable} ci linux --config {config} --pins {pins} cleanup{keep}\n",
+         ExecStart={executable} ci linux --config {config} cleanup{keep}\n",
         executable = LAYOUT.executable,
         config = LINUX_CONFIG_PATH,
-        pins = pins.display(),
         keep = keep
             .iter()
             .map(|image| format!(" --keep {image}"))
@@ -202,8 +198,8 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
-fn install_cleanup_timer(keep: &[&str], pins: &Path) -> Result<()> {
-    let service = cleanup_unit(keep, pins);
+fn install_cleanup_timer(keep: &[&str]) -> Result<()> {
+    let service = cleanup_unit(keep);
     for (name, body) in [
         (LAYOUT.cleanup_unit, service.as_str()),
         (LAYOUT.cleanup_timer, cleanup_timer()),
@@ -292,7 +288,7 @@ fn unit(
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
     )?;
-    for entry in Container::environment(runner) {
+    for entry in Container::environment() {
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
@@ -404,13 +400,7 @@ mod tests {
     fn the_cleanup_unit_is_a_command_this_executable_accepts() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let pins_path = Path::new("/srv/kithara/.config/ci-pins.toml");
-        let text = cleanup_unit(&installed_images(&host, pins), pins_path);
-
-        assert!(
-            text.contains("--pins /srv/kithara/.config/ci-pins.toml"),
-            "{text}"
-        );
+        let text = cleanup_unit(&installed_images(&host, pins));
 
         let command = text
             .lines()
@@ -448,10 +438,7 @@ mod tests {
     fn the_cleanup_unit_names_every_image_the_fleet_runs() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(
-            &installed_images(&host, pins),
-            Path::new("/srv/kithara/.config/ci-pins.toml"),
-        );
+        let text = cleanup_unit(&installed_images(&host, pins));
         for image in [
             &pins.linux_image,
             &pins.linux_runner_image,
@@ -465,7 +452,8 @@ mod tests {
         }
     }
 
-    /// The same compiler-cache contract as the Compose rendering.
+    /// The same contract as the Compose rendering: a unit that does not name
+    /// the wrapper leaves `sccache` installed and unused.
     #[test]
     fn a_unit_is_told_to_use_the_compiler_cache() {
         let host = host_fixture();
@@ -478,8 +466,7 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        let runner = host.runner("kithara-ci-octocat").expect("runner");
-        for entry in Container::environment(runner) {
+        for entry in Container::environment() {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
     }
