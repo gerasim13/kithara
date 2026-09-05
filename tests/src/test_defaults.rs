@@ -99,4 +99,16 @@ impl Consts {
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Render blocks needed to cover `seconds` at the default sample rate.
+    pub fn blocks_for_seconds(seconds: f64, block_frames: usize) -> u32 {
+        let blocks = (seconds * f64::from(Self::SAMPLE_RATE) / block_frames as f64).ceil();
+        #[expect(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "positive ceiling fits in u32 for second-scale windows"
+        )]
+        let result = blocks as u32;
+        result
+    }
 }

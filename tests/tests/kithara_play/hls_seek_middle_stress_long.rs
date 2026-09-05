@@ -91,17 +91,6 @@ struct PlaybackStats {
     progress_events: usize,
 }
 
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32"
-    )]
-    let result = blocks as u32;
-    result
-}
-
 #[kithara::flash(true)]
 async fn render_until_position(
     player: &mut OfflinePlayer,
@@ -317,7 +306,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
-        blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
+        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
         warmup_target,
         Consts::BLOCK_FRAMES,
         1_500,
@@ -347,7 +336,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,
-            blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
+            Shared::blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS, Consts::BLOCK_FRAMES),
             post_target,
             Consts::BLOCK_FRAMES,
             post_seek_wall_ms,

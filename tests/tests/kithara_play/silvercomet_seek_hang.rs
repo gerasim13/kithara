@@ -95,17 +95,6 @@ fn render_and_collect(
     }
 }
 
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32 for second-scale windows"
-    )]
-    let result = blocks as u32;
-    result
-}
-
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
@@ -242,8 +231,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         .with_ansi(false)
         .try_init();
 
-    let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
-    let warmup_blocks = blocks_for_seconds(Consts::WARMUP_SECS);
+    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
+    let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
@@ -389,7 +378,7 @@ mod unit_tests {
 
     #[kithara::test(native, flash(false))]
     fn blocks_for_three_seconds_matches_expected() {
-        let blocks = blocks_for_seconds(3.0);
+        let blocks = Shared::blocks_for_seconds(3.0, Consts::BLOCK_FRAMES);
         assert_eq!(blocks, 259);
     }
 }

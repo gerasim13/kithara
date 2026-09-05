@@ -140,17 +140,6 @@ fn drain_events(events: &mut EventReceiver) {
     }
 }
 
-fn blocks_for_seconds(secs: f64) -> u32 {
-    let blocks = (secs * f64::from(Consts::SAMPLE_RATE) / Consts::BLOCK_FRAMES as f64).ceil();
-    #[expect(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        reason = "positive ceiling fits in u32 for second-scale windows"
-    )]
-    let result = blocks as u32;
-    result
-}
-
 fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -291,7 +280,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         .expect("create local HLS fixture")
         .master_url();
 
-    let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
+    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
