@@ -10,7 +10,7 @@ use kithara_test_macros as kithara;
 use super::{shard::PoolShard, stats::PoolStats, storage::Storage};
 use crate::{
     PoolConfig, PoolError,
-    budget::{BudgetPair, RegionBudget, ReserveFailure},
+    budget::{BudgetPair, IdleReclaimer, RegionBudget, ReserveFailure},
     buffer::OwnedBuffer,
 };
 
@@ -134,7 +134,12 @@ where
         OwnedBuffer::new(Arc::clone(self), value, shard_idx)
     }
 
-    pub(crate) fn grow(&self, current: &mut B, new_len: usize) -> Result<(), PoolError> {
+    pub(crate) fn grow(
+        &self,
+        current: &mut B,
+        new_len: usize,
+        shard_idx: usize,
+    ) -> Result<(), PoolError> {
         let old_capacity = current.capacity();
         if new_len <= old_capacity {
             return Ok(());
@@ -157,7 +162,42 @@ where
         } else {
             new_len
         };
-        let mut grown = self.allocate(target_capacity, old_bytes)?;
+        let mut region_reclaimed = false;
+        let mut pool_reclaimed = false;
+        let mut first_attempt = true;
+        let mut grown = loop {
+            match self.allocate(target_capacity, old_bytes) {
+                Ok(grown) => break grown,
+                Err(error) => {
+                    if first_attempt
+                        && matches!(
+                            &error,
+                            PoolError::OverallBudgetExceeded { .. }
+                                | PoolError::PoolBudgetExceeded { .. }
+                                | PoolError::AllocationFailed { .. }
+                        )
+                        && self.reuse_for_growth(current, new_len, shard_idx)
+                    {
+                        return Ok(());
+                    }
+                    first_attempt = false;
+                    let may_reclaim = match &error {
+                        PoolError::OverallBudgetExceeded { .. } if !region_reclaimed => {
+                            region_reclaimed = true;
+                            true
+                        }
+                        PoolError::PoolBudgetExceeded { .. } if !pool_reclaimed => {
+                            pool_reclaimed = true;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if !may_reclaim || !self.reclaim_for(&error) {
+                        return Err(error);
+                    }
+                }
+            }
+        };
         grown.move_from(current);
         *current = grown;
         Ok(())
@@ -173,6 +213,24 @@ where
                 Self::increment(&self.stat_put_drops);
             }
         }
+    }
+
+    pub(crate) fn normalize(&self, current: &mut B, shard_idx: usize) {
+        let before = Self::byte_size(current).unwrap_or(usize::MAX);
+        if let Some(kept) = self.shards[shard_idx].normalize(current) {
+            self.budgets.release(before.saturating_sub(kept));
+        } else {
+            drop(std::mem::take(current));
+            self.budgets.release(before);
+            Self::increment(&self.stat_put_drops);
+        }
+    }
+
+    pub(crate) fn shrink_to(&self, current: &mut B, min_capacity: usize) {
+        let before = Self::byte_size(current).unwrap_or(usize::MAX);
+        current.shrink_to(min_capacity);
+        let after = Self::byte_size(current).unwrap_or(usize::MAX);
+        self.budgets.release(before.saturating_sub(after));
     }
 
     pub(crate) fn stats(&self) -> PoolStats {
@@ -262,6 +320,115 @@ where
         let probes = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
         (1..=probes).find_map(|offset| self.shards[(home + offset) % SHARDS].try_get())
     }
+
+    fn reuse_for_growth(&self, current: &mut B, new_len: usize, home: usize) -> bool {
+        for offset in 0..SHARDS {
+            let shard_idx = (home + offset) % SHARDS;
+            let candidates = self.shards[shard_idx].len();
+            for _ in 0..candidates {
+                let Some(mut value) = self.shards[shard_idx].try_get() else {
+                    break;
+                };
+                if value.capacity() >= new_len {
+                    value.move_from(current);
+                    self.put(std::mem::replace(current, value), home);
+                    return true;
+                }
+                self.put(value, shard_idx);
+            }
+        }
+        if let Some(cold) = &self.cold {
+            let candidates = cold.len();
+            for _ in 0..candidates {
+                let Some(mut value) = cold.pop() else {
+                    break;
+                };
+                if value.capacity() >= new_len {
+                    value.move_from(current);
+                    self.put(std::mem::replace(current, value), home);
+                    return true;
+                }
+                if let Err(value) = cold.push(value) {
+                    self.put(value, home);
+                }
+            }
+        }
+        false
+    }
+
+    fn reclaim_for(&self, error: &PoolError) -> bool {
+        match error {
+            PoolError::OverallBudgetExceeded {
+                additional_bytes,
+                allocated_bytes,
+                max_bytes,
+            } => {
+                let target =
+                    additional_bytes.saturating_sub(max_bytes.saturating_sub(*allocated_bytes));
+                self.budgets.reclaim_region(target);
+                true
+            }
+            PoolError::PoolBudgetExceeded {
+                additional_bytes,
+                allocated_bytes,
+                max_bytes,
+            } => {
+                let target =
+                    additional_bytes.saturating_sub(max_bytes.saturating_sub(*allocated_bytes));
+                self.release_idle(target);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn release_idle(&self, target: usize) -> usize {
+        if target == 0 {
+            return 0;
+        }
+        let mut released = 0usize;
+        for shard in &self.shards {
+            let candidates = shard.len();
+            for _ in 0..candidates {
+                let Some(value) = shard.try_get() else {
+                    break;
+                };
+                released = released.saturating_add(self.release_value(value));
+                if released >= target {
+                    return released;
+                }
+            }
+        }
+        if let Some(cold) = &self.cold {
+            let candidates = cold.len();
+            for _ in 0..candidates {
+                let Some(value) = cold.pop() else {
+                    break;
+                };
+                released = released.saturating_add(self.release_value(value));
+                if released >= target {
+                    return released;
+                }
+            }
+        }
+        released
+    }
+
+    fn release_value(&self, value: B) -> usize {
+        let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
+        drop(value);
+        self.budgets.release(bytes);
+        bytes
+    }
+}
+
+impl<const SHARDS: usize, B, const OBSERVE: bool> IdleReclaimer for Core<SHARDS, B, OBSERVE>
+where
+    B: Storage + Send + 'static,
+{
+    fn reclaim(&self, bytes: usize) -> usize {
+        self.release_idle(bytes)
+    }
 }
 
 impl<const SHARDS: usize, B, const OBSERVE: bool> Drop for Core<SHARDS, B, OBSERVE>
@@ -285,3 +452,6 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
