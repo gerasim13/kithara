@@ -18,6 +18,15 @@ the change that lands the work, and keep it short.
   floor as well. Cleanup also judges by the volume it measured rather than
   reading free space a second time.
 
+  Verifying any of this was blocked by a second defect. `deps:deny` spent
+  twenty-five minutes listing the `boringssl` submodule's refs before its
+  job timed out: `GIT_CONFIG_COUNT` pins the HTTP version for the git
+  binary, and libgit2, which Cargo fetches with, does not read it. Cargo
+  now fetches through the binary, so both halves see one version. The lane
+  still gates a quarantine pipeline directly instead of reporting to the
+  verdict, which is what let one network stall hold every pull request;
+  that is open.
+
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
