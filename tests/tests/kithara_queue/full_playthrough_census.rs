@@ -27,13 +27,16 @@ use std::{
 use kithara::{
     encode::EncoderFactory,
     events::{AdvanceReason, Event, QueueEvent, TrackId},
-    platform::time::{self, Duration},
+    platform::{
+        sync::Arc,
+        time::{self, Duration},
+    },
     play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     cochlea::CochleaReport,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
@@ -41,6 +44,7 @@ use kithara_integration_tests::{
     test_defaults::packaged_content_frames,
 };
 use kithara_test_fixtures::{
+    asset::Asset,
     assets,
     signal::{FrameClass, classify_windows},
 };
@@ -88,6 +92,13 @@ enum Origin {
     Hls,
     /// A whole FLAC file read from the fixture store by path.
     LocalFlac,
+    /// The same whole FLAC body served over HTTP as one response.
+    ///
+    /// HLS resolves a manifest and asks for one segment at a time; a local
+    /// file is opened by path and is there in full. Neither is the reader a
+    /// playlist meets when it leaves a segmented stream for a file on a
+    /// server, which asks for one body and reads it as it arrives.
+    RemoteFlac,
 }
 
 /// Every track streamed as HLS.
@@ -96,6 +107,9 @@ const HLS_QUEUE: [Origin; 3] = [Origin::Hls, Origin::Hls, Origin::Hls];
 const LOCAL_QUEUE: [Origin; 3] = [Origin::LocalFlac, Origin::LocalFlac, Origin::LocalFlac];
 /// Readers alternate, so both seams hand over between two different ones.
 const MIXED_QUEUE: [Origin; 3] = [Origin::Hls, Origin::LocalFlac, Origin::Hls];
+/// The seam a playlist crosses when it leaves a segmented stream for a whole
+/// body on a server, and crosses back.
+const NETWORK_QUEUE: [Origin; 3] = [Origin::Hls, Origin::RemoteFlac, Origin::Hls];
 
 impl Origin {
     /// Frames of audio this origin's fixture actually carries.
@@ -106,7 +120,7 @@ impl Origin {
     /// was packaged rather than what was requested.
     fn built_frames(self) -> i64 {
         match self {
-            Self::LocalFlac => frames_from_secs(NOMINAL_TRACK_SECS),
+            Self::LocalFlac | Self::RemoteFlac => frames_from_secs(NOMINAL_TRACK_SECS),
             Self::Hls => {
                 let requested = usize::try_from(frames_from_secs(SEGMENT_SECS))
                     .expect("a segment carries a positive number of frames");
@@ -116,6 +130,14 @@ impl Origin {
                     .expect("the census fixture's packaged length fits usize");
                 i64::try_from(packaged).expect("the packaged length fits the session axis")
             }
+        }
+    }
+
+    /// Whether this origin's bytes arrive over HTTP.
+    const fn needs_server(self) -> bool {
+        match self {
+            Self::Hls | Self::RemoteFlac => true,
+            Self::LocalFlac => false,
         }
     }
 }
@@ -151,18 +173,20 @@ fn frames_from_secs(secs: f64) -> i64 {
 }
 
 /// The stored six-second body carrying this ramp.
-fn local_flac(pattern: PcmPattern) -> &'static Path {
-    let asset = match pattern {
+fn flac_asset(pattern: PcmPattern) -> Asset {
+    match pattern {
         PcmPattern::Ascending => assets::signal_flac_saw_6s(),
         PcmPattern::Descending => assets::signal_flac_saw_down_6s(),
         PcmPattern::ShiftedAscending => panic!("the census queues the two ramp directions only"),
-    };
-    asset.path().expect("a stored fixture names its store path")
+    }
 }
 
 /// The source one track is read from. HLS packages the ramp into segments the
 /// server hands out one request at a time; the local leg names a file the
-/// reader can open whole. The census does not distinguish them afterwards.
+/// reader can open whole; the remote leg serves that same file as one
+/// range-capable body, which is what a file server gives a seeking reader, and
+/// names it `.flac` because a bare body carries no other format hint. The
+/// census does not distinguish them afterwards.
 async fn track_src(
     origin: Origin,
     server: Option<&TestServerHelper>,
@@ -183,7 +207,24 @@ async fn track_src(
                 .expect("create census HLS fixture");
             ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL")
         }
-        Origin::LocalFlac => ResourceSrc::Path(PathBuf::from(local_flac(pattern))),
+        Origin::LocalFlac => ResourceSrc::Path(PathBuf::from(
+            flac_asset(pattern)
+                .path()
+                .expect("a stored fixture names its store path"),
+        )),
+        Origin::RemoteFlac => {
+            let handle = server
+                .expect("the remote leg runs against a server")
+                .register_behavior(FixtureBehavior {
+                    content: Content::StaticBytes {
+                        bytes: Arc::new(flac_asset(pattern).bytes().to_vec()),
+                        content_type: Some("audio/flac"),
+                    },
+                    delivery: Delivery::Range,
+                });
+            ResourceSrc::parse(handle.child_url("track.flac").as_str())
+                .expect("valid remote track URL")
+        }
     }
 }
 
@@ -433,7 +474,7 @@ fn longest_silence(channel: &[f32]) -> usize {
 
 async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
     let recorder = probe_capture::install();
-    let server = if origins.contains(&Origin::Hls) {
+    let server = if origins.iter().copied().any(Origin::needs_server) {
         Some(TestServerHelper::new().await)
     } else {
         None
@@ -637,6 +678,32 @@ async fn gapless_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir)
 )]
 async fn crossfaded_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
     run_census(&LOCAL_QUEUE, Seam::Crossfade, &temp_dir).await;
+}
+
+/// The seam a playlist crosses when it leaves a segmented stream for a whole
+/// body on a server, and crosses back. Every assertion the other legs carry
+/// applies unchanged, because only the transport differs: the same ramp, the
+/// same built length, the same provenance.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn gapless_network_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&NETWORK_QUEUE, Seam::Gapless, &temp_dir).await;
+}
+
+/// The same seam with a crossfade: the overlap must be exactly the configured
+/// one, which is the shape a track cut short breaks first.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+async fn crossfaded_network_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
+    run_census(&NETWORK_QUEUE, Seam::Crossfade, &temp_dir).await;
 }
 
 /// A queue whose neighbours never share a reader: each seam hands over from a

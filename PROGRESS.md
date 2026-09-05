@@ -35,6 +35,26 @@ the change that lands the work, and keep it short.
   them at every seam, each at cf=0 and cf=1.0. The local legs read two new
   six-second ramp bodies from the fixture store, one per direction.
 
+  The census now measures against the length its fixtures were built to rather
+  than the duration the queue reports for them. The reported duration is what
+  arms the crossfade, so a short report cut the track and shortened the
+  expectation by the same amount; it is now a separately asserted property.
+  HLS packages a segment as whole encoder frames, so its built length is the
+  rounded figure - one owner, read by the packager and the census both.
+
+  A third reader joined the census: the whole FLAC body served over HTTP as one
+  range-capable response. HLS asks for a segment at a time and a local file is
+  there in full, so neither ever reads past a download frontier; a whole body
+  pulled over the network does, and that is the reader a playlist meets when it
+  leaves a segmented stream for a file on a server. Keeping the FLAC ramp and
+  changing only the transport is what lets every acoustic oracle keep working -
+  the lossy-container problem below is a fixture problem, not a transport one.
+
+  Two coverage holes found while hunting the premature switch, both now filled.
+  Nothing played a streamed MPEG track to its end and checked the length that
+  arrived, and nothing pinned the size-less MP3 read past the download boundary
+  as a park rather than an end - the FLAC half of that pair had both.
+
 ## Next
 
 - A local MPEG leg for the census. Measured against six-second MP3 ramps: the
