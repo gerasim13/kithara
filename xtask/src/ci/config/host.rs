@@ -72,7 +72,8 @@ pub(crate) struct CiHost {
     /// Runner rendering and per-job cache partitioning share this value.
     /// Raising it buys wall-clock and costs disk: every admitted job carries
     /// its own checkout and `target`, and those are what the volume runs out
-    /// of. Defaulted for the same reason `cores` is.
+    /// of. The compiler cache follows on its own - the host's budget is divided
+    /// between the slots. Defaulted for the same reason `cores` is.
     #[serde(default = "default_job_concurrency")]
     pub(crate) job_concurrency: usize,
     /// Size a host log is rotated at.
@@ -386,9 +387,11 @@ const fn default_cores() -> usize {
     10
 }
 
-/// Three admitted jobs: what the disk budget and the core count agree on.
+/// Two admitted jobs: what the disk budget and the core count agree on. Two
+/// keep the required parallelism while leaving four Cargo workers to each on
+/// this ten-core host; three measured slower and evicted a third test tree.
 const fn default_job_concurrency() -> usize {
-    3
+    2
 }
 
 const fn default_active_lease_hours() -> u64 {
@@ -681,7 +684,7 @@ mod tests {
         let host = super::super::fixture().host;
 
         assert_eq!(host.cores, 10);
-        assert_eq!(host.job_concurrency, 3);
+        assert_eq!(host.job_concurrency, 2);
     }
 
     /// The tracked fixture is the operator's field catalogue
@@ -725,7 +728,7 @@ mod tests {
         let host = CiHost::load(&path).expect("a profile without a topology loads");
 
         assert_eq!(host.cores, 10);
-        assert_eq!(host.job_concurrency, 3);
+        assert_eq!(host.job_concurrency, 2);
     }
 
     /// Every moved value keeps today's setting, so a profile that configures

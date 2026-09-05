@@ -504,6 +504,7 @@ mod tests {
 
     use clap::{Parser, ValueEnum};
     use kithara_devtools::common::tools::ToolsConfig;
+    use tempfile::TempDir;
 
     use super::{
         super::{config::fixture, process::Recording},
@@ -516,18 +517,44 @@ mod tests {
         config::{CiLaneConfig, KitharaExt},
     };
 
+    /// The repository the lane declarations are read from, whatever checkout a
+    /// resolution then runs against.
+    fn repo() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root")
+    }
+
+    /// The checkout a lane resolves against. Routing asks the filesystem
+    /// questions - `apple-ios-test` converts a result bundle only when a run
+    /// left one behind - so resolving against the repository would make the
+    /// answer depend on what an earlier build wrote into `target/`. An
+    /// executor keeps that directory between jobs on purpose, so there the
+    /// bundle is always present and the recorded answer never matched.
+    fn checkout() -> TempDir {
+        tempfile::tempdir().expect("create a resolution checkout")
+    }
+
+    /// The same checkout once a simulator run has left its result bundle, which
+    /// is the state the conversion step exists for.
+    fn checkout_after_a_simulator_run() -> TempDir {
+        let checkout = checkout();
+        fs::create_dir_all(checkout.path().join("target/xcresult/ios-test.xcresult"))
+            .expect("leave a result bundle behind");
+        checkout
+    }
+
     /// One lane resolved in one pipeline kind: the program and arguments of
     /// each step it asks for, or the reason it refuses the kind.
     fn resolve(
         name: &str,
         kind: PipelineKind,
     ) -> (Result<(), String>, Vec<(String, Vec<String>, String)>) {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
+        let checkout = checkout();
+        let root = checkout.path();
         let ci_config = fixture();
-        let ext = KitharaExt::load(root).expect("the project config parses");
-        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+        let ext = KitharaExt::load(repo()).expect("the project config parses");
+        let project = kithara_devtools::common::project::ProjectConfig::load(repo())
             .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
         let recording = Recording::default().with_reply(
@@ -629,6 +656,17 @@ mod tests {
         assert_eq!(label, "full lint gate");
     }
 
+    /// The conversion runs off what a simulator run leaves behind, so a
+    /// checkout without a result bundle asks `xcrun` for nothing. The snapshot
+    /// resolves the same lane in a checkout that has one.
+    #[test]
+    fn a_checkout_without_a_result_bundle_converts_nothing() {
+        let (outcome, steps) = resolve("apple-ios-test", PipelineKind::Main);
+
+        assert_eq!(outcome, Ok(()));
+        assert!(steps.iter().all(|(program, ..)| program != "xcrun"));
+    }
+
     /// Every command lane, resolved but not run, in every pipeline kind it
     /// accepts. The snapshot is taken from the code that owns the routing
     /// today; moving that routing into configuration has to reproduce it
@@ -636,13 +674,12 @@ mod tests {
     /// the one thing a routing change cannot be verified against.
     #[test]
     fn every_command_lane_resolves_to_its_recorded_commands() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
         let ci_config = fixture();
-        let ext = KitharaExt::load(root).expect("the project config parses");
-        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+        let ext = KitharaExt::load(repo()).expect("the project config parses");
+        let project = kithara_devtools::common::project::ProjectConfig::load(repo())
             .expect("the project config loads");
+        let checkout = checkout_after_a_simulator_run();
+        let root = checkout.path();
         let mut report = String::new();
 
         for name in every_lane() {
@@ -660,7 +697,10 @@ mod tests {
                         &format!("Xcode {}", ci_config.pins.expected_xcode_version),
                     )
                     .with_reply("chromium", &version)
-                    .with_reply("chromedriver", &version);
+                    .with_reply("chromedriver", &version)
+                    // Enough for the conversion to resolve; what it makes of
+                    // real results is pinned where that conversion lives.
+                    .with_reply("xcrun", r#"{"testNodes":[]}"#);
                 let process = Process::recording(root, recording);
                 let outcome = command_lane(
                     &lane,
@@ -948,9 +988,9 @@ mod tests {
             .split_once("linux:coverage:")
             .expect("the coverage job follows Linux test");
         assert!(
-            test_job
-                .lines()
-                .any(|line| line.trim() == "junit: target/nextest/ci/junit.xml"),
+            test_job.lines().any(|line| {
+                line.trim() == "junit: .ci-artifacts/junit/linux-test-simulated-clock.xml"
+            }),
             "linux:test does not publish the nextest JUnit report"
         );
 
@@ -973,9 +1013,9 @@ mod tests {
         assert_eq!(
             reports,
             [
-                "target-flash-off/nextest/ci/junit.xml",
-                "target/nextest/ci/junit.xml",
-                "target/nextest/ci/junit.xml",
+                ".ci-artifacts/junit/apple-test-flash-off.xml",
+                ".ci-artifacts/junit/apple-test.xml",
+                ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
                 "target/nextest/ci/junit.xml",
                 "target/xcresult/ios-test.junit.xml",

@@ -4,7 +4,7 @@ always_on_agents = ["colima", "gitlab-runner"]
 aggressive_cleanup_bytes = 270000000000
 android_home = "/Volumes/KitharaCI/toolchains/android"
 brew_root = "/opt/homebrew"
-build_cache_size = "25GB"
+build_cache_size = "100GB"
 cache_namespaces = [
   ".kithara-ci-sccache-slots",
   "bootstrap",
@@ -20,7 +20,7 @@ ci_uid = 503
 ci_user = "kithara-ci"
 colima_profile = "kithara"
 cores = 10
-job_concurrency = 3
+job_concurrency = 2
 log_limit_bytes = 20000000
 macos_guest_shared_root = "/Volumes/My Shared Files"
 macos_guest_user = "admin"
@@ -32,7 +32,7 @@ host_xcode_developer_dir = "/Applications/Xcode.app/Contents/Developer"
 quota_bytes = 300000000000
 removable_roots = ["cache", "logs", "vm", "workspaces"]
 reject_bytes = 285000000000
-sccache_size = "50G"
+sccache_size = "4G"
 soft_cleanup_bytes = 240000000000
 sync_uid = 504
 sync_user = "kithara-sync"
