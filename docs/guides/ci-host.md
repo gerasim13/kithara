@@ -107,6 +107,12 @@ opens one deduplicated GitLab incident. A rejection is recorded for the exact
 head and base pair and refused on sight; `ci bridge retry` is the only route to
 a rejudgement.
 
+A stopped run is not a verdict. A queue emptied by hand, an auto-cancel or a
+runner taken down leaves the branch unverified rather than rejected, so the
+bridge releases the pipeline and opens the next attempt; the following tick
+publishes a fresh ref and starts a run of its own. Only a run that reported
+takes `ci bridge retry` to be judged again.
+
 A verification branch is removed once nothing will name it again: its base has
 moved, or no open pull request stands on its head. Its queued run is cancelled
 first, because deleting the ref does not release the resource-group slot the run

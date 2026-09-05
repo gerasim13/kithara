@@ -20,6 +20,7 @@ enum VerificationAction {
     Observe(u64),
     Report(String, String),
     Finish(VerificationState),
+    Release(u64),
     Reject(u64),
 }
 
@@ -145,6 +146,7 @@ fn one_later_tick_observes_once_and_running_keeps_testing() {
         },
         |_, _, _| panic!("running is not a new commit-status transition"),
         |_, _, _| panic!("running must stay Testing"),
+        |_| panic!("a running pipeline was not stopped"),
     )
     .unwrap();
     assert_eq!(*calls.borrow(), 1);
@@ -170,6 +172,7 @@ fn success_is_posted_before_verified() {
             actions.borrow_mut().push(VerificationAction::Finish(state));
             Ok(())
         },
+        |_| panic!("a passing pipeline was not stopped"),
     )
     .unwrap();
 
@@ -207,6 +210,7 @@ fn failed_and_invalid_proof_post_a_verdict_before_rejection() {
                 actions.borrow_mut().push(VerificationAction::Finish(state));
                 Ok(())
             },
+            |_| panic!("a verdict is not a stopped run"),
         )
         .unwrap();
         assert_eq!(
@@ -219,6 +223,44 @@ fn failed_and_invalid_proof_post_a_verdict_before_rejection() {
     }
 }
 
+/// Six pull requests were marked failed at once when the queue they sat in was
+/// emptied. Nothing had run, so nothing had been judged, yet the ledger held
+/// every one of them terminal and no tick addressed them again. A cancellation
+/// is the absence of a verdict: the verification stays open and says so.
+#[test]
+fn a_cancelled_pipeline_reopens_the_verification_instead_of_rejecting_it() {
+    let actions = RefCell::new(Vec::new());
+    observe_verification(
+        "head",
+        42,
+        |id| {
+            actions.borrow_mut().push(VerificationAction::Observe(id));
+            Ok(PipelineObservation::Cancelled)
+        },
+        |sha, state, _| {
+            actions
+                .borrow_mut()
+                .push(VerificationAction::Report(sha.into(), state.into()));
+            Ok(())
+        },
+        |_, _, _| panic!("a cancellation is not a verdict"),
+        |id| {
+            actions.borrow_mut().push(VerificationAction::Release(id));
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        *actions.borrow(),
+        [
+            VerificationAction::Observe(42),
+            VerificationAction::Report("head".into(), "pending".into()),
+            VerificationAction::Release(42),
+        ]
+    );
+}
+
 #[test]
 fn transient_observation_errors_do_not_manufacture_rejection() {
     let error = observe_verification(
@@ -227,6 +269,7 @@ fn transient_observation_errors_do_not_manufacture_rejection() {
         |_| bail!("temporary GitLab API failure"),
         |_, _, _| panic!("an API error is not a verdict"),
         |_, _, _| panic!("an API error must leave Testing unchanged"),
+        |_| panic!("an API error did not stop the pipeline"),
     )
     .unwrap_err();
     assert!(error.to_string().contains("temporary GitLab API failure"));

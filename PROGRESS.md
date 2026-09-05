@@ -27,6 +27,13 @@ the change that lands the work, and keep it short.
   verdict, which is what let one network stall hold every pull request;
   that is open.
 
+  Then six pull requests went red at once for a queue someone emptied. The
+  bridge read a cancelled pipeline as a verdict and recorded it terminal, so
+  nothing addressed them again; a cancellation now releases the run and opens
+  the next attempt. The sweep that removes verification branches also kept
+  every ref naming the current base, including the ones whose pull request had
+  moved on, and cancels a ref's queued run before deleting it.
+
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with `readme_shape`:

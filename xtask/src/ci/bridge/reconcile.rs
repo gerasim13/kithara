@@ -277,6 +277,7 @@ impl Bridge {
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
+            |id| ledger.release(&pull.head_sha, base_sha, entry.attempt, id),
         )
     }
 }
@@ -466,12 +467,21 @@ fn reject_control_changes(
     Ok(true)
 }
 
+/// One tick of a verification that already owns a pipeline.
+///
+/// A stopped run is released rather than recorded. Six pull requests were
+/// marked failed at once when the queue holding their runs was emptied: nothing
+/// had been judged, yet every entry went terminal and no later tick addressed
+/// them again. What a cancellation reports is that the branch is still
+/// unverified, which is what the pull request is told while the next attempt
+/// opens.
 fn observe_verification(
     head_sha: &str,
     pipeline_id: u64,
     mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
     mut report: impl FnMut(&str, &str, &str) -> Result<()>,
     mut finish: impl FnMut(u64, VerificationState, Option<String>) -> Result<()>,
+    release: impl FnOnce(u64) -> Result<()>,
 ) -> Result<()> {
     match observe(pipeline_id)? {
         PipelineObservation::Running => Ok(()),
@@ -479,6 +489,12 @@ fn observe_verification(
             let detail = format!("GitLab pipeline {pipeline_id} passed");
             report(head_sha, "success", &detail)?;
             finish(pipeline_id, VerificationState::Verified, Some(detail))
+        }
+        PipelineObservation::Cancelled => {
+            let detail =
+                format!("GitLab pipeline {pipeline_id} was stopped; a new run will be started");
+            report(head_sha, "pending", &detail)?;
+            release(pipeline_id)
         }
         PipelineObservation::Failed(status) => {
             let detail = format!("GitLab pipeline {pipeline_id} finished with {status}");
