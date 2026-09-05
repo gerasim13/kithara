@@ -382,7 +382,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.packaged_audio_signal(AudioCodec::AacHe, sample_rate, channels, signal)
+        self.packaged_audio_codec_source(AudioCodec::AacHe, sample_rate, channels, signal)
     }
 
     #[must_use]
@@ -392,7 +392,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.packaged_audio_signal(AudioCodec::AacHeV2, sample_rate, channels, signal)
+        self.packaged_audio_codec_source(AudioCodec::AacHeV2, sample_rate, channels, signal)
     }
 
     #[must_use]
@@ -402,7 +402,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         patterns: Vec<PcmPattern>,
     ) -> Self {
-        self.packaged_audio_per_variant_pcm(AudioCodec::AacLc, sample_rate, channels, patterns)
+        self.packaged_audio_codec_source(AudioCodec::AacLc, sample_rate, channels, patterns)
     }
 
     #[must_use]
@@ -412,7 +412,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         patterns: Vec<PcmPattern>,
     ) -> Self {
-        self.packaged_audio_per_variant_pcm(AudioCodec::Flac, sample_rate, channels, patterns)
+        self.packaged_audio_codec_source(AudioCodec::Flac, sample_rate, channels, patterns)
     }
 
     #[must_use]
@@ -422,7 +422,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.packaged_audio_signal(AudioCodec::AacLc, sample_rate, channels, signal)
+        self.packaged_audio_codec_source(AudioCodec::AacLc, sample_rate, channels, signal)
     }
 
     #[must_use]
@@ -432,39 +432,7 @@ impl HlsFixtureBuilder {
         channels: u16,
         signal: PackagedSignal,
     ) -> Self {
-        self.packaged_audio_signal(AudioCodec::Flac, sample_rate, channels, signal)
-    }
-
-    fn packaged_audio_signal(
-        mut self,
-        codec: AudioCodec,
-        sample_rate: u32,
-        channels: u16,
-        signal: PackagedSignal,
-    ) -> Self {
-        self.set_packaged_audio_codec_source(
-            codec,
-            sample_rate,
-            channels,
-            PackagedAudioSource::Signal(signal),
-        );
-        self
-    }
-
-    fn packaged_audio_per_variant_pcm(
-        mut self,
-        codec: AudioCodec,
-        sample_rate: u32,
-        channels: u16,
-        patterns: Vec<PcmPattern>,
-    ) -> Self {
-        self.set_packaged_audio_codec_source(
-            codec,
-            sample_rate,
-            channels,
-            PackagedAudioSource::PerVariantPcm { patterns },
-        );
-        self
+        self.packaged_audio_codec_source(AudioCodec::Flac, sample_rate, channels, signal)
     }
 
     #[must_use]
@@ -512,26 +480,27 @@ impl HlsFixtureBuilder {
     /// Configure packaged audio with the given codec + payload source. The
     /// public per-codec helpers are thin wrappers that forward to this fn
     /// with the matching `codec` / `default_bit_rate(codec)` pair.
-    fn set_packaged_audio_codec_source(
-        &mut self,
+    fn packaged_audio_codec_source(
+        mut self,
         codec: AudioCodec,
         sample_rate: u32,
         channels: u16,
-        source: PackagedAudioSource,
-    ) {
+        source: impl Into<PackagedAudioSource>,
+    ) -> Self {
         self.set_packaged_audio(PackagedAudioRequest {
             codec,
             sample_rate,
             channels,
             timescale: Some(sample_rate),
             bit_rate: Some(Self::default_bit_rate(codec)),
-            source,
+            source: source.into(),
             variant_overrides: Vec::new(),
             start_frame: None,
             encoder_delay: None,
             trailing_delay: None,
             gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
         });
+        self
     }
 
     #[must_use]
