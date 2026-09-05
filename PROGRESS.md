@@ -55,32 +55,42 @@ the change that lands the work, and keep it short.
   arrived, and nothing pinned the size-less MP3 read past the download boundary
   as a park rather than an end - the FLAC half of that pair had both.
 
-  The hunt named a third, and it is the reported defect's shape. Every
-  truncating delivery the test server offered advertises the full
-  `Content-Length` first, so the client can always measure what arrived against
-  a declared number. A `200` that names no total was missing, and that is the
-  one case where a body that stops early is framed exactly like a complete one:
-  the net layer reads the end as clean, the file layer commits the bytes it
-  happened to write as the whole file, and a read past them answers `Eof`. The
-  play layer then takes that `Eof` at face value - the trigger's EOF branch
-  returns before it ever consults duration or position - so a track that lost
-  its body two fifths in is announced as having played to its end, and the
-  queue advances with a crossfade. `Delivery::UnsizedEarlyClose` serves that
-  shape, and a test asks the reader to tell the two ends apart using the one
-  number it still has: the length the track's own header names.
+  A third hypothesis was tried against that shape and refuted by measurement.
+  A body served with no `Content-Length` that stops early was thought to be the
+  defect: nothing declares a total, so the net layer reads the end as clean, the
+  file layer commits the bytes it happened to write as the whole file, and a
+  read past them answers `Eof`. A guard was built for it - the reader refusing
+  an announced end that the media's own declared length does not account for -
+  and it does stop that advance. It also breaks ten tests.
+  `handover_uses_buffered_eof_when_duration_is_overestimated` states the
+  opposite contract outright, and seven of the eight `gapless_offline_e2e`
+  cases and `seamless_queue_advance_gapless_when_crossfade_is_zero` fall with
+  it. A declared duration is routinely longer than the audio that decodes: raw
+  ADTS extrapolates its frame count from the first 16 KB, an HLS duration is a
+  sum of `#EXTINF` figures the pipeline may only raise, and heuristic gapless
+  trim shortens the audio by design. The distance between an end and a declared
+  length therefore cannot tell a lost body from an honest one, and the shape
+  itself is undecidable anyway - a body with no declared total that stops is a
+  well-formed complete response. The guard and the delivery mode it was built
+  against are both gone. What stays is an MPEG leg the census never had: a
+  whole streamed body played to its end at both seam settings.
 
-  The play layer now refuses that end. The reader announces how many frames are
-  left once it has seen EOF, and that announcement is what arms the crossfade
-  and what shrinks the visible duration onto itself - both a fade before the
-  end, not at it, which is why a check at the end itself arrived a fade too
-  late. An announcement pointing further from the declared length than the
-  distance the triggers already use to call an end near is refused where it
-  enters, so neither fires; the end that follows is reported as a failure, and
-  the queue leaves the track the way it leaves a failed one - no crossfade. The
-  distance now has one owner, shared by the triggers and the reader.
+  The reported defect is still open, and the hunt has a sharper target. Its
+  seam - an HLS stream handing over to a whole MPEG body on another host - is
+  covered by nothing. `real_playlist` loads each real source as a queue of one,
+  so it never crosses a seam at all, and the census alternates HLS with FLAC
+  but never with MPEG.
 
 ## Next
 
+- The seam the reported defect was seen on: an HLS stream handing over to a
+  whole MPEG body on another host. Two instruments are wanted, sharing the
+  census's provenance half - every track serves its whole length, and two
+  tracks share output frames only inside the crossfade the queue announced. An
+  offline leg puts an `Origin::RemoteMp3` between HLS tracks; a network leg
+  queues the real `silvercomet` HLS master ahead of the real MPEG body, which
+  is the closest a test gets to the report. The acoustic oracles stay out of
+  both: they cannot read a lossy container.
 - A local MPEG leg for the census. Measured against six-second MP3 ramps: the
   probe half passes unchanged - each track serves its whole length and the seams
   overlap by exactly the configured crossfade - but two acoustic oracles cannot

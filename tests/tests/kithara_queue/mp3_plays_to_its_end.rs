@@ -1,8 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! An end is a track finishing only if the media says so, and both halves of
-//! that are pinned here: a body that stopped early must not be heard as the
-//! track's own end, and a body that arrived whole must still be.
+//! A whole MPEG body fetched over HTTP must be heard as ending when it ends.
+//!
+//! The census reads a track through HLS segments, through a local FLAC file
+//! and through a whole FLAC body on a server, but never through MPEG - and
+//! MPEG is the container whose length is least reconciled with its audio: the
+//! figure comes from a Xing frame count, and encoder delay and padding sit
+//! either side of it. A queue that mistakes that seam for a track boundary
+//! cuts the track short, which is what a listener hears as a fade in the
+//! middle of one.
 
 use std::path::Path;
 
@@ -30,11 +36,6 @@ const CROSSFADE_SECS: f32 = 1.0;
 const NO_CROSSFADE_SECS: f32 = 0.0;
 /// Two tracks plus slack; the loop leaves as soon as the queue ends.
 const BLOCK_BUDGET: usize = 3_000;
-/// How much of the first track's body arrives before it stops, as a fraction
-/// of the whole: far enough in that the header and seconds of audio are there,
-/// far enough from the end that no crossfade could reach it.
-const DELIVERED_NUMERATOR: usize = 2;
-const DELIVERED_DENOMINATOR: usize = 5;
 
 async fn open_resource(
     player: &PlayerControl<TestPools>,
@@ -70,31 +71,22 @@ impl QueueLog {
     }
 }
 
-/// A whole body served over HTTP, delivered in full or cut short.
-fn track_src(
-    server: &TestServerHelper,
-    bytes: &'static [u8],
-    content_type: &'static str,
-    name: &'static str,
-    delivery: Delivery,
-) -> ResourceSrc {
+/// One whole MPEG body, served over HTTP as a range-capable response.
+fn track_src(server: &TestServerHelper) -> ResourceSrc {
     let handle = server.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(bytes.to_vec()),
-            content_type: Some(content_type),
+            bytes: Arc::new(assets::signal_mp3_saw_2s().bytes().to_vec()),
+            content_type: Some("audio/mpeg"),
         },
-        delivery,
+        delivery: Delivery::Range,
     });
-    ResourceSrc::parse(handle.child_url(name).as_str()).expect("valid track URL")
+    ResourceSrc::parse(handle.child_url("track.mp3").as_str()).expect("valid track URL")
 }
 
 /// Play a two-track queue from the first track to the end of the queue, and
 /// report what the queue did and which track it moved onto.
-async fn play_queue(
-    srcs: [ResourceSrc; 2],
-    crossfade: f32,
-    temp_dir: &TestTempDir,
-) -> (QueueLog, TrackId) {
+async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackId) {
+    let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(crossfade)
@@ -107,10 +99,10 @@ async fn play_queue(
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config));
 
     let mut tracks = Vec::with_capacity(2);
-    for (index, src) in srcs.into_iter().enumerate() {
+    for index in 0..2 {
         let resource = open_resource(
             harness.player(),
-            src,
+            track_src(&server),
             &temp_dir.path().join(format!("track{index}")),
         )
         .await;
@@ -153,72 +145,13 @@ async fn play_queue(
     (log, second)
 }
 
-/// A body that stops early must not be heard as the track's own end.
-///
-/// A `200` with no `Content-Length` names no total, so a body that stops after
-/// two fifths is framed exactly as a complete one: the net layer reads a clean
-/// end, the file layer commits what it wrote as the whole file, and the reader
-/// announces an end two fifths in. Taken at face value that announcement arms
-/// the crossfade a fade before it and advances the queue after it, which is the
-/// fade a listener hears in the middle of a track. The one number a lost body
-/// cannot move is the length the media itself declares.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(30)
-)]
-async fn a_truncated_body_does_not_advance_the_queue_as_a_natural_end(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let flac = assets::signal_flac_saw_6s().bytes();
-    let truncated = track_src(
-        &server,
-        flac,
-        "audio/flac",
-        "track.flac",
-        Delivery::UnsizedEarlyClose {
-            after_bytes: flac.len() * DELIVERED_NUMERATOR / DELIVERED_DENOMINATOR,
-        },
-    );
-    let successor = track_src(&server, flac, "audio/flac", "track.flac", Delivery::Range);
-
-    let (log, second) = play_queue([truncated, successor], CROSSFADE_SECS, &temp_dir).await;
-    let left_by = log.advances_onto(second);
-
-    assert!(
-        !left_by.is_empty(),
-        "the queue must leave a track whose body stopped, not sit on it: \
-         advances={:?} ended={}",
-        log.advances,
-        log.ended
-    );
-    assert!(
-        !left_by.contains(&AdvanceReason::NaturalEof),
-        "a body that stopped at {DELIVERED_NUMERATOR}/{DELIVERED_DENOMINATOR} of \
-         the track must not advance the queue as a track that played to its \
-         end: left_by={left_by:?}"
-    );
-    assert_eq!(
-        log.crossfades, 0,
-        "a body that stopped must not cross-fade into the next track: \
-         left_by={left_by:?}"
-    );
-}
-
-/// A body that arrived whole must still be heard as the track's own end.
-///
-/// The refusal above weighs an announced end against the length the media
-/// declares, and MPEG is where those two are most likely to disagree on their
-/// own: the length comes from the Xing frame count, and nothing reconciles it
-/// with the audio that decodes. A track that ends a little short of its own
-/// header must still end, not fail.
-async fn a_whole_body_still_ends_the_track(crossfade: f32, temp_dir: &TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let mp3 = assets::signal_mp3_saw_2s().bytes();
-    let first = track_src(&server, mp3, "audio/mpeg", "track.mp3", Delivery::Range);
-    let successor = track_src(&server, mp3, "audio/mpeg", "track.mp3", Delivery::Range);
-
-    let (log, second) = play_queue([first, successor], crossfade, temp_dir).await;
+/// The queue must leave a whole MPEG track the way it leaves a finished one.
+async fn mp3_track_ends_rather_than_fails(
+    crossfade: f32,
+    expected_crossfades: usize,
+    temp_dir: &TestTempDir,
+) {
+    let (log, second) = play_queue(crossfade, temp_dir).await;
     let left_by = log.advances_onto(second);
 
     assert!(
@@ -238,18 +171,23 @@ async fn a_whole_body_still_ends_the_track(crossfade: f32, temp_dir: &TestTempDi
          failure: {:?}",
         log.load_failures
     );
+    assert_eq!(
+        log.crossfades, expected_crossfades,
+        "the seam must carry exactly the crossfade the queue was configured \
+         for: left_by={left_by:?}"
+    );
 }
 
-/// Without a crossfade the distance the refusal allows shrinks to a single
-/// block, which is the configuration a legitimate end would fail in first.
+/// Without a crossfade the queue hands over on the render-block grid alone,
+/// which is the tightest a seam ever gets.
 #[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(30)
 )]
-async fn a_whole_body_still_ends_the_track_without_a_crossfade(temp_dir: TestTempDir) {
-    a_whole_body_still_ends_the_track(NO_CROSSFADE_SECS, &temp_dir).await;
+async fn a_streamed_mp3_ends_its_track_without_a_crossfade(temp_dir: TestTempDir) {
+    mp3_track_ends_rather_than_fails(NO_CROSSFADE_SECS, 0, &temp_dir).await;
 }
 
 #[kithara::test(
@@ -258,6 +196,6 @@ async fn a_whole_body_still_ends_the_track_without_a_crossfade(temp_dir: TestTem
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(30)
 )]
-async fn a_whole_body_still_ends_the_track_with_a_crossfade(temp_dir: TestTempDir) {
-    a_whole_body_still_ends_the_track(CROSSFADE_SECS, &temp_dir).await;
+async fn a_streamed_mp3_ends_its_track_with_a_crossfade(temp_dir: TestTempDir) {
+    mp3_track_ends_rather_than_fails(CROSSFADE_SECS, 1, &temp_dir).await;
 }

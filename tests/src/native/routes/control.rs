@@ -49,7 +49,6 @@ pub(crate) enum DeliverySpec {
     EarlyClose { after_bytes: usize },
     StallAfter { after_bytes: usize },
     Throttle { chunk: usize, delay_ms: u64 },
-    UnsizedEarlyClose { after_bytes: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,9 +116,6 @@ const fn delivery_from_spec(spec: DeliverySpec) -> Delivery {
         DeliverySpec::EarlyClose { after_bytes } => Delivery::EarlyClose { after_bytes },
         DeliverySpec::StallAfter { after_bytes } => Delivery::StallAfter { after_bytes },
         DeliverySpec::Throttle { chunk, delay_ms } => Delivery::Throttle { chunk, delay_ms },
-        DeliverySpec::UnsizedEarlyClose { after_bytes } => {
-            Delivery::UnsizedEarlyClose { after_bytes }
-        }
     }
 }
 

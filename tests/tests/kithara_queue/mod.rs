@@ -19,6 +19,7 @@ mod hls_variant_playlists_concurrent;
 mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
+mod mp3_plays_to_its_end;
 mod non_leading_track_eof;
 mod non_leading_track_failure;
 mod packaged_drm_seek;
@@ -29,7 +30,6 @@ mod rapid_scrub_decode_failure;
 mod select_after_eof;
 mod track_replay_after_switch;
 mod track_switch_race;
-mod truncated_body_is_not_a_natural_end;
 mod user_simulation;
 mod zvuk_cipher_check;
 
