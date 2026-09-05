@@ -61,17 +61,6 @@ fn read_archived_lru_clock(path: &Path) -> u64 {
     archived.clock.to_native()
 }
 
-fn read_archived_lru_keys(path: &Path) -> Vec<String> {
-    let bytes = fs::read(path).expect("read lru.bin");
-    let archived = rkyv::access::<ArchivedLruIndexFile, rkyv::rancor::Error>(&bytes)
-        .expect("lru.bin must be a valid rkyv payload");
-    archived
-        .entries
-        .iter()
-        .map(|(k, _)| k.as_str().to_string())
-        .collect()
-}
-
 struct ArchivedResourceEntry {
     ranges: Vec<(u64, u64)>,
     final_len: Option<u64>,
@@ -152,7 +141,14 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
     assert_eq!(read_archived_pins_version(&pins), 1);
 
-    let lru_keys_now = read_archived_lru_keys(&lru);
+    let lru_bytes = fs::read(&lru).expect("read lru.bin");
+    let archived_lru = rkyv::access::<ArchivedLruIndexFile, rkyv::rancor::Error>(&lru_bytes)
+        .expect("lru.bin must be a valid rkyv payload");
+    let lru_keys_now: Vec<_> = archived_lru
+        .entries
+        .iter()
+        .map(|(key, _)| key.as_str().to_owned())
+        .collect();
     assert!(
         lru_keys_now.contains(&asset_root.to_string()),
         "lru.bin must track our asset_root after acquire; got {lru_keys_now:?}"
