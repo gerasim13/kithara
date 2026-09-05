@@ -256,14 +256,31 @@ fn delay_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
     format!("{hls_token}|v{variant}|s{segment}|delay")
 }
 
+type GateMap<T> = RwLock<HashMap<String, Arc<T>>>;
+
+fn register_gate<T>(map: &GateMap<T>, key: String, gate: T) -> Arc<T> {
+    let gate = Arc::new(gate);
+    map.write()
+        .expect("gate map poisoned")
+        .insert(key, Arc::clone(&gate));
+    gate
+}
+
+fn get_gate<T>(map: &GateMap<T>, key: &str) -> Option<Arc<T>> {
+    map.read()
+        .expect("gate map poisoned")
+        .get(key)
+        .map(Arc::clone)
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
     tokens: RwLock<HashMap<String, Arc<GeneratedHls>>>,
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
-    segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
-    init_gates: RwLock<HashMap<String, Arc<InitGate>>>,
-    delay_gates: RwLock<HashMap<String, Arc<DelayGate>>>,
+    segment_gates: GateMap<SegmentGate>,
+    init_gates: GateMap<InitGate>,
+    delay_gates: GateMap<DelayGate>,
     /// Per-`(hls token, variant, segment)` count of size-probe requests the
     /// server has served: every `HEAD` and every single-byte ranged
     /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
@@ -286,9 +303,9 @@ impl TestServerState {
             hls_cache: RwLock::new(HashMap::new()),
             hls_blobs: RwLock::new(HashMap::new()),
             behaviors: RwLock::new(HashMap::new()),
-            segment_gates: RwLock::new(HashMap::new()),
-            init_gates: RwLock::new(HashMap::new()),
-            delay_gates: RwLock::new(HashMap::new()),
+            segment_gates: GateMap::default(),
+            init_gates: GateMap::default(),
+            delay_gates: GateMap::default(),
             size_probes: RwLock::new(HashMap::new()),
             network_online: AtomicBool::new(true),
         })
@@ -341,13 +358,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Arc<SegmentGate> {
-        let gate = Arc::new(SegmentGate::new());
-        let mut map = self.segment_gates.write().expect("segment gates poisoned");
-        map.insert(
-            segment_gate_key(hls_token, variant, segment),
-            Arc::clone(&gate),
-        );
-        gate
+        let key = segment_gate_key(hls_token, variant, segment);
+        register_gate(&self.segment_gates, key, SegmentGate::new())
     }
 
     pub(crate) fn segment_gate(
@@ -356,9 +368,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Option<Arc<SegmentGate>> {
-        let map = self.segment_gates.read().expect("segment gates poisoned");
-        map.get(&segment_gate_key(hls_token, variant, segment))
-            .map(Arc::clone)
+        let key = segment_gate_key(hls_token, variant, segment);
+        get_gate(&self.segment_gates, &key)
     }
 
     /// Register a withhold gate for one `(hls token, variant)` init
@@ -366,15 +377,15 @@ impl TestServerState {
     /// parks until [`InitGate::release`], holding the owning track's loader in
     /// `Loading`.
     pub(crate) fn register_init_gate(&self, hls_token: &str, variant: usize) -> Arc<InitGate> {
-        let gate = Arc::new(InitGate::new());
-        let mut map = self.init_gates.write().expect("init gates poisoned");
-        map.insert(init_gate_key(hls_token, variant), Arc::clone(&gate));
-        gate
+        register_gate(
+            &self.init_gates,
+            init_gate_key(hls_token, variant),
+            InitGate::new(),
+        )
     }
 
     pub(crate) fn init_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<InitGate>> {
-        let map = self.init_gates.read().expect("init gates poisoned");
-        map.get(&init_gate_key(hls_token, variant)).map(Arc::clone)
+        get_gate(&self.init_gates, &init_gate_key(hls_token, variant))
     }
 
     /// Register a virtual-time delay gate for one `(hls token, variant, segment)`
@@ -387,13 +398,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Arc<DelayGate> {
-        let gate = Arc::new(DelayGate::new());
-        let mut map = self.delay_gates.write().expect("delay gates poisoned");
-        map.insert(
-            delay_gate_key(hls_token, variant, segment),
-            Arc::clone(&gate),
-        );
-        gate
+        let key = delay_gate_key(hls_token, variant, segment);
+        register_gate(&self.delay_gates, key, DelayGate::new())
     }
 
     pub(crate) fn delay_gate(
@@ -402,9 +408,8 @@ impl TestServerState {
         variant: usize,
         segment: usize,
     ) -> Option<Arc<DelayGate>> {
-        let map = self.delay_gates.read().expect("delay gates poisoned");
-        map.get(&delay_gate_key(hls_token, variant, segment))
-            .map(Arc::clone)
+        let key = delay_gate_key(hls_token, variant, segment);
+        get_gate(&self.delay_gates, &key)
     }
 
     /// Record one size-probe (`HEAD` or single-byte ranged `GET`) served for
