@@ -1327,6 +1327,13 @@ kinds = [
 ]
 timeout_minutes = 60
 
+# A CI checkout gives every source file a new mtime. Stable Cargo then rebuilds
+# and relinks all test binaries even when their content is unchanged; sccache
+# cannot cache those links. The pinned nightly Cargo's checksum freshness makes
+# the persistent target content-addressed. Its target is isolated from stable
+# lanes because Cargo fingerprint modes and compiler versions must not alternate
+# in one profile tree.
+#
 # Every Linux test lane caps Cargo at two build jobs. The container has five
 # CPUs and under eight gigabytes, so five compilations at once put the peak past
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
@@ -1344,7 +1351,7 @@ steps = [
     "run",
     "--profile",
     "ci",
-  ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -1606,7 +1613,7 @@ steps = [
     "test",
     "run",
     "--flash=off",
-  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
+  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2019,7 +2026,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", args_by_kind = { quarantine = [
+  ], label = "Apple flash and no-block gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" }, args_by_kind = { quarantine = [
     "test",
     "run",
     "--profile",
@@ -2038,9 +2045,9 @@ kinds = [
 ]
 timeout_minutes = 60
 
-# The off-flash suite owns its own target directory: the two gates differ by
-# feature, and sharing one directory makes each run rebuild what the other just
-# replaced.
+# The off-flash suite owns its own checksum target directory: the two gates
+# differ by feature, and sharing one directory makes each run rebuild what the
+# other just replaced.
 [ext.ci.lanes.apple-test-flash-off]
 cache_group = "macos"
 label = "Apple"
@@ -2059,7 +2066,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "target-flash-off" } },
+  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
