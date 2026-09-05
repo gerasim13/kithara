@@ -1,8 +1,9 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
+    abr::AbrHandle,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -13,6 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    hls_test_helpers::pin_abr_variant,
 };
 use kithara_test_fixtures::signal::{
     self, Pcm, SignalDirection as Direction, Wave, detect_direction,
@@ -64,6 +66,25 @@ fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usiz
 /// reaches it, so a bare count cannot say whether the phase jumped once over a
 /// segment gap or drifted everywhere.
 const MAX_REPORTED_BREAKS: usize = 5;
+
+/// Freeze the ladder on the variant phase 2 left active.
+///
+/// Every variant carries its own waveform so phase 1 can see a switch by
+/// direction, and a promotion crossfades 20 ms across the join - 882 frames
+/// at 44100 Hz that advance by neither `+1` nor `-1`. Phase 3 asks whether
+/// the track reads back intact, not whether ABR still switches, so a
+/// promotion inside it prints a correct blend as corruption: run
+/// 33910610734 blended variant 1 into 2 at frame 1270656 in one attempt of
+/// fifty, and every one of the 882 counted as a break. Pinning to the index
+/// already active drops the pending decision and refuses every later target.
+fn freeze_active_variant(abr: &AbrHandle) -> usize {
+    let active = abr
+        .current_variant_index()
+        .expect("a registered ABR peer names its active variant");
+    pin_abr_variant(abr, active);
+    info!(variant = active, "ladder pinned for the integrity read");
+    active
+}
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
@@ -351,6 +372,11 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
         info!("Phase 3: seek to 0 - full track integrity verification");
 
+        let abr = audio
+            .abr_handle()
+            .expect("an HLS ladder must expose its ABR handle");
+        let pinned = freeze_active_variant(&abr);
+
         audio.seek(Duration::ZERO).expect("seek to 0 must succeed");
 
         let mut total_frames_read = 0u64;
@@ -468,6 +494,13 @@ async fn stress_seek_lifecycle_with_zero_reset(
             frame_diff <= tolerance,
             "frame count mismatch after seek-to-0: got {}, expected ~{} (+-{})",
             total_frames_read, expected_frames, tolerance
+        );
+
+        assert_eq!(
+            abr.current_variant_index(),
+            Some(pinned),
+            "the ladder moved during the integrity read, so the phase check below \
+             is reading a crossfade rather than one variant's waveform"
         );
 
         let max_breaks = 10u64;
