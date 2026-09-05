@@ -254,7 +254,7 @@ impl<'a> HostStorage<'a> {
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
         // successful trim does not throw away review compiler artifacts too.
-        let cache_pressure = self.worst_pressure()?.0;
+        let (cache_pressure, cache_volume) = self.worst_pressure()?;
         match cache_pressure {
             Pressure::Soft => {
                 self.prune_host_trees("cache/quarantine", 7 * Self::DAY)?;
@@ -264,6 +264,10 @@ impl<'a> HostStorage<'a> {
                 self.prune_docker_cache("720h");
             }
             Pressure::Aggressive | Pressure::Reject => {
+                build_cache::reclaim_at_least(
+                    &target_dirs,
+                    self.shortfall_to_the_floor(&cache_volume),
+                )?;
                 self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
                 self.prune_host_trees("cache/review", Duration::ZERO)?;
                 self.prune_host_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
@@ -503,6 +507,18 @@ impl<'a> HostStorage<'a> {
     /// The free space a used-bytes threshold was asking for.
     fn floor(&self, threshold: u64) -> u64 {
         self.config.host.quota_bytes.saturating_sub(threshold)
+    }
+
+    /// What a volume is short of the floor the soft threshold asks for.
+    ///
+    /// The build cache budget is a ceiling, and a ceiling answers a question no
+    /// job asks: it caps one cache without knowing whether the volume has room.
+    /// Two checkouts holding 88 and 95 GB were each under the 100 GB ceiling, so
+    /// every hourly pass reported `bytes_freed=0` while the volume they share
+    /// sat below the floor and jobs were already being refused for space.
+    fn shortfall_to_the_floor(&self, volume: &Volume) -> u64 {
+        self.floor(self.config.host.soft_cleanup_bytes)
+            .saturating_sub(volume.available)
     }
 
     /// Cache namespaces nothing writes to any more, once they have gone quiet
@@ -1637,6 +1653,33 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(review.is_dir());
+    }
+
+    /// The hourly pass this host ran for a day: two checkouts held 88 and 95 GB
+    /// under a 100 GB ceiling, so enforcing the budget freed nothing on every
+    /// pass while the volume they share sat below the floor and jobs were
+    /// already being refused for space.
+    ///
+    /// A ceiling answers "is any one cache too big"; the volume asks "is there
+    /// room", and only the second question has a job waiting on it.
+    #[test]
+    fn a_volume_under_the_floor_reclaims_past_the_build_cache_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let slot = directory.path().join("cache/target-slots/slot-0");
+        fs::create_dir_all(slot.join("debug")).unwrap();
+        fs::write(slot.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
+
+        storage.cleanup().unwrap();
+
+        assert!(
+            !slot.join("debug").exists(),
+            "the pass stopped at the build cache ceiling the caches were already under"
+        );
     }
 
     /// The hourly pass this host actually ran: in at `Aggressive`, every step
