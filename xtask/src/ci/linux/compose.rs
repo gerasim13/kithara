@@ -97,7 +97,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
-        for entry in Container::environment() {
+        for entry in Container::environment(runner) {
             writeln!(yaml, "      - {entry}")?;
         }
         writeln!(yaml, "    volumes:")?;
@@ -152,20 +152,23 @@ mod tests {
         );
     }
 
-    /// The compiler cache was in the image and reaching nothing. Whichever way
-    /// a runner is started, it must be told to use it — otherwise every job
-    /// compiles the workspace from source and the only thing the machine shares
-    /// is a build directory that cannot be shared.
+    /// Whichever way a runner is started, it receives the compiler cache chosen
+    /// for its flavor.
     #[test]
     fn a_runner_is_told_to_use_the_compiler_cache() {
         let yaml = project(&host_fixture(), &fixture().pins, 32).expect("the project must render");
-        for entry in Container::environment() {
+        let host = host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        for entry in Container::environment(runner) {
             assert!(
                 yaml.contains(&format!("      - {entry}")),
                 "{entry}:\n{yaml}"
             );
         }
-        assert!(yaml.contains("kithara-ci-sccache:/cache/sccache"), "{yaml}");
+        assert!(
+            yaml.contains("/var/lib/kithara-ci/cargo-reapi:/cache/cargo-reapi"),
+            "{yaml}"
+        );
         assert!(
             yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
             "{yaml}"

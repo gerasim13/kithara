@@ -288,7 +288,7 @@ fn unit(
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
     )?;
-    for entry in Container::environment() {
+    for entry in Container::environment(runner) {
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
@@ -452,8 +452,7 @@ mod tests {
         }
     }
 
-    /// The same contract as the Compose rendering: a unit that does not name
-    /// the wrapper leaves `sccache` installed and unused.
+    /// The same compiler-cache contract as the Compose rendering.
     #[test]
     fn a_unit_is_told_to_use_the_compiler_cache() {
         let host = host_fixture();
@@ -466,7 +465,8 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        for entry in Container::environment() {
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        for entry in Container::environment(runner) {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
     }
