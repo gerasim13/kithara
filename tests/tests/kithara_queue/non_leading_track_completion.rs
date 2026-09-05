@@ -18,7 +18,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
+    offline::{
+        OfflinePlayerHarness, mean_abs, offline_queue_fixture, resource_from_reader_with_src,
+    },
 };
 
 use crate::bufpool_ext::TestPools;
@@ -61,13 +63,6 @@ fn loaded_track(queue: &QueueControl<TestPools>, value: f32) -> (TrackId, Arc<st
         ),
     );
     (id, src)
-}
-
-fn mean_abs(pcm: &[f32]) -> f32 {
-    if pcm.is_empty() {
-        return 0.0;
-    }
-    pcm.iter().map(|s| s.abs()).sum::<f32>() / pcm.len() as f32
 }
 
 fn render_loop(

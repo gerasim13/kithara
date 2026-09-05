@@ -12,7 +12,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
+    offline::{
+        OfflinePlayerHarness, mean_abs, offline_queue_fixture, resource_from_reader_with_src,
+    },
 };
 
 use crate::bufpool_ext::TestPools;
@@ -38,13 +40,6 @@ fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
         TestPcmReader::with_value(spec, secs, value),
         Arc::from(format!("memory://{label}")),
     )
-}
-
-fn mean_abs(pcm: &[f32]) -> f32 {
-    if pcm.is_empty() {
-        return 0.0;
-    }
-    pcm.iter().map(|s| s.abs()).sum::<f32>() / pcm.len() as f32
 }
 
 fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {

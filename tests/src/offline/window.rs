@@ -65,6 +65,15 @@ pub fn max_silence_run(samples: &[f32], start: usize, end: usize, threshold: f32
     max_run
 }
 
+/// Mean absolute sample value.
+#[must_use]
+pub fn mean_abs(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32
+}
+
 /// Largest absolute sample value.
 #[must_use]
 pub fn peak(samples: &[f32]) -> f32 {
