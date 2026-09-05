@@ -11,7 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
-    offline::{OfflineHostHarness, resource_from_reader},
+    offline::{OfflineHostHarness, peak, resource_from_reader},
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -115,10 +115,6 @@ impl MixHarness {
     async fn steady_peak(&self) -> f32 {
         peak(&self.steady().await)
     }
-}
-
-fn peak(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
 }
 
 fn assert_near(actual: f32, expected: f32, what: &str) {

@@ -65,6 +65,14 @@ pub fn max_silence_run(samples: &[f32], start: usize, end: usize, threshold: f32
     max_run
 }
 
+/// Largest absolute sample value.
+#[must_use]
+pub fn peak(samples: &[f32]) -> f32 {
+    samples
+        .iter()
+        .fold(0.0_f32, |current, sample| current.max(sample.abs()))
+}
+
 /// Root mean square of an interleaved sample slice.
 #[must_use]
 pub fn rms(samples: &[f32]) -> f32 {
