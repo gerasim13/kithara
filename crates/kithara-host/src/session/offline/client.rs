@@ -2,6 +2,7 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::sync::{Mutex, mpsc};
 use kithara_play::{PlayError, SessionDispatcher};
+use kithara_test_utils::kithara;
 use kithara_worker::TaskControl;
 
 use super::{OfflineMsg, OfflineSessionError};
@@ -32,6 +33,8 @@ impl<S> OfflineSessionClient<S> {
         Ok(())
     }
 
+    /// `no_block`: sync command-reply bridge to the dedicated offline session worker.
+    #[kithara::allow_block]
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         let message = OfflineMsg::Host(HostCmdMsg { cmd, reply_tx });
@@ -55,6 +58,8 @@ impl<S> OfflineSessionClient<S> {
         })
     }
 
+    /// `no_block`: sync command-reply bridge to the dedicated offline session worker.
+    #[kithara::allow_block]
     pub(crate) fn position(&self) -> Result<u64, OfflineSessionError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.send(OfflineMsg::Position { reply_tx })
@@ -64,6 +69,8 @@ impl<S> OfflineSessionClient<S> {
             .map_err(|_| OfflineSessionError::SessionGone)
     }
 
+    /// `no_block`: sync command-reply bridge to the dedicated offline session worker.
+    #[kithara::allow_block]
     pub(crate) fn render(
         &self,
         position: u64,

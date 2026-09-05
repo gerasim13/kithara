@@ -114,22 +114,12 @@ where
         })
     }
 
-    /// Drive one command through the product Host under the harness lock.
-    ///
-    /// `no_block`: every Host call from this harness is a synchronous
-    /// command-reply bridge to the dedicated offline session worker, driven
-    /// here from an async test body.
-    #[kithara::allow_block]
-    fn with_host<R>(&self, call: impl FnOnce(&mut HostState<S>) -> R) -> R {
-        call(&mut self.state.lock())
-    }
-
     /// Transfer one configured player facade into the product Host.
     pub fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
-        self.with_host(|state| state.host.insert(player))
+        self.state.lock().host.insert(player)
     }
 
     pub fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
@@ -142,24 +132,24 @@ where
     /// Render the next finite block through the product offline protocol.
     pub fn render(&self, frames: usize) -> Vec<f32> {
         let frames = u64::try_from(frames).expect("offline render frame count fits u64");
-        self.with_host(|state| {
-            let end = state
-                .position
-                .checked_add(frames)
-                .expect("offline render timeline fits u64");
-            let request = OfflineRenderRequest::builder()
-                .spec(self.spec)
-                .frames(state.position..end)
-                .build();
-            let cancel = CancelScope::new(None);
-            let mut sink = VecSink::default();
-            state
-                .host
-                .render(&request, &cancel.token(), &mut sink)
-                .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
-            state.position = end;
-            sink.samples
-        })
+        let mut state = self.state.lock();
+        let end = state
+            .position
+            .checked_add(frames)
+            .expect("offline render timeline fits u64");
+        let request = OfflineRenderRequest::builder()
+            .spec(self.spec)
+            .frames(state.position..end)
+            .build();
+        let cancel = CancelScope::new(None);
+        let mut sink = VecSink::default();
+        state
+            .host
+            .render(&request, &cancel.token(), &mut sink)
+            .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
+        state.position = end;
+        drop(state);
+        sink.samples
     }
 
     /// Current finite-render cursor maintained by this harness.
@@ -200,30 +190,30 @@ where
     }
 
     pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
-        self.with_host(|state| state.host.disable_outputs())
+        self.state.lock().host.disable_outputs()
     }
 
     pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.with_host(|state| state.host.enable_outputs(outputs))
+        self.state.lock().host.enable_outputs(outputs)
     }
 
     pub fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
-        self.with_host(|state| state.host.restart_stream(sample_rate))
+        self.state.lock().host.restart_stream(sample_rate)
     }
 
     pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,
     {
-        self.with_host(|state| state.host.apply_mix(levels))
+        self.state.lock().host.apply_mix(levels)
     }
 
     pub fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        self.with_host(|state| state.host.transport_revision())
+        self.state.lock().host.transport_revision()
     }
 
     pub fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {
-        self.with_host(|state| state.host.invalidate_audio_route(reason))
+        self.state.lock().host.invalidate_audio_route(reason)
     }
 }
 
