@@ -59,22 +59,25 @@ impl TestServer {
         self,
         path,
         "unknown TestServer compatibility path",
-        route_compat_path(
+        route_hls_path(
             &self.plain,
             &self.init,
-            &self.encrypted,
             path,
             ".bin",
             ".bin",
-            |path| match path {
-                "/master-init.m3u8" => Some(self.init.master_url()),
-                "/v0-init.m3u8" => Some(self.init.media_url(0)),
-                "/v1-init.m3u8" => Some(self.init.media_url(1)),
-                "/v2-init.m3u8" => Some(self.init.media_url(2)),
-                "/key.bin" => Some(self.plain.key_url()),
-                "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
-                "/custom/base/" | "/base/" => Some(self._helper.url(path)),
-                _ => None,
+            |plain, path| {
+                match path {
+                    "/master-init.m3u8" => Some(self.init.master_url()),
+                    "/v0-init.m3u8" => Some(self.init.media_url(0)),
+                    "/v1-init.m3u8" => Some(self.init.media_url(1)),
+                    "/v2-init.m3u8" => Some(self.init.media_url(2)),
+                    "/key.bin" => Some(plain.key_url()),
+                    "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
+                    "/custom/base/" | "/base/" => Some(self._helper.url(path)),
+                    _ => None,
+                }
+                .or_else(|| route_compat_alias(plain, &self.encrypted, path))
+                .or_else(|| route_media_playlist_path(plain, path))
             },
         )
     );
@@ -501,17 +504,24 @@ impl HlsTestServer {
         self,
         path,
         "unknown HlsTestServer path",
-        route_hls_path(&self.created, path, ".bin", "_init.bin", |fixture, path| {
-            if path == "/key.bin" {
-                return Some(fixture.key_url());
-            }
-            let variant = path
-                .strip_prefix("/playlist/v")?
-                .strip_suffix(".m3u8")?
-                .parse()
-                .expect("invalid HlsTestServer playlist path");
-            Some(fixture.media_url(variant))
-        })
+        route_hls_path(
+            &self.created,
+            &self.created,
+            path,
+            ".bin",
+            "_init.bin",
+            |fixture, path| {
+                if path == "/key.bin" {
+                    return Some(fixture.key_url());
+                }
+                let variant = path
+                    .strip_prefix("/playlist/v")?
+                    .strip_suffix(".m3u8")?
+                    .parse()
+                    .expect("invalid HlsTestServer playlist path");
+                Some(fixture.media_url(variant))
+            },
+        )
     );
 }
 
@@ -532,18 +542,21 @@ impl PackagedTestServer {
         self,
         path,
         "unknown PackagedTestServer path",
-        route_compat_path(
+        route_hls_path(
             &self.plain,
             &self.plain,
-            &self.encrypted,
             path,
             ".m4s",
             ".mp4",
-            |path| match path {
-                "/master-init.m3u8" => Some(self.plain.master_url()),
-                "/key.bin" => Some(self.encrypted.key_url()),
-                "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
-                _ => None,
+            |plain, path| {
+                match path {
+                    "/master-init.m3u8" => Some(plain.master_url()),
+                    "/key.bin" => Some(self.encrypted.key_url()),
+                    "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
+                    _ => None,
+                }
+                .or_else(|| route_compat_alias(plain, &self.encrypted, path))
+                .or_else(|| route_media_playlist_path(plain, path))
             },
         )
     );
@@ -713,6 +726,7 @@ impl AbrTestServer {
         "unknown AbrTestServer path",
         route_hls_path(
             &self.created,
+            &self.created,
             path,
             ".bin",
             ".bin",
@@ -721,31 +735,19 @@ impl AbrTestServer {
     );
 }
 
-fn route_compat_path(
-    plain: &CreatedHls,
-    init: &CreatedHls,
-    encrypted: &CreatedHls,
-    path: &str,
-    segment_ext: &str,
-    init_ext: &str,
-    unique_alias: impl FnOnce(&str) -> Option<Url>,
-) -> Option<Url> {
-    unique_alias(path)
-        .or_else(|| match path {
-            "/master.m3u8" => Some(plain.master_url()),
-            "/master-encrypted.m3u8" => Some(encrypted.master_url()),
-            "/video/480p/playlist.m3u8" => Some(plain.media_url(1)),
-            "/v0-encrypted.m3u8" => Some(encrypted.media_url(0)),
-            "/aes/key.bin" => Some(encrypted.key_url()),
-            _ => None,
-        })
-        .or_else(|| route_segment_path(plain, path, "/seg/", segment_ext))
-        .or_else(|| route_init_path(init, path, "/init/", init_ext))
-        .or_else(|| route_media_playlist_path(plain, path))
+fn route_compat_alias(plain: &CreatedHls, encrypted: &CreatedHls, path: &str) -> Option<Url> {
+    match path {
+        "/master-encrypted.m3u8" => Some(encrypted.master_url()),
+        "/video/480p/playlist.m3u8" => Some(plain.media_url(1)),
+        "/v0-encrypted.m3u8" => Some(encrypted.media_url(0)),
+        "/aes/key.bin" => Some(encrypted.key_url()),
+        _ => None,
+    }
 }
 
 fn route_hls_path(
     fixture: &CreatedHls,
+    init: &CreatedHls,
     path: &str,
     segment_ext: &str,
     init_ext: &str,
@@ -755,7 +757,7 @@ fn route_hls_path(
         .then(|| fixture.master_url())
         .or_else(|| alias(fixture, path))
         .or_else(|| route_segment_path(fixture, path, "/seg/", segment_ext))
-        .or_else(|| route_init_path(fixture, path, "/init/", init_ext))
+        .or_else(|| route_init_path(init, path, "/init/", init_ext))
 }
 
 /// Resolve a `/<prefix>vX_Y<ext>` segment path on the given fixture.
