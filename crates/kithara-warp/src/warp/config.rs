@@ -2,6 +2,8 @@ use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_stretch::ElasticBackendConfig;
 
 use crate::StretchControls;
 
@@ -15,6 +17,15 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    /// Preparation parameters for the compiled elastic backends.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    #[builder(default)]
+    #[field(get, copy)]
+    backends: ElasticBackendConfig,
+    /// Time-stretch rate smoothing window in output frames.
+    #[builder(default = NonZeroUsize::MIN)]
+    #[field(get, copy)]
+    rate_smooth_frames: NonZeroUsize,
     /// Optional output-frame cap between samples of live temporal controls.
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[field(get, copy)]
