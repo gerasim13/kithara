@@ -16,7 +16,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    offline::OfflinePlayer, temp_dir, test_defaults::Consts as Shared,
+    offline::{OfflinePlayer, WindowStats, rms},
+    temp_dir,
+    test_defaults::Consts as Shared,
 };
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -47,20 +49,6 @@ impl Consts {
 
 const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
 
-/// Outcome of rendering one measurement window.
-struct WindowStats {
-    /// Number of blocks whose peak amplitude was below `ACTIVE_THRESHOLD`.
-    /// Counts **every** silent block in the window, not just the longest run —
-    /// phantom playback (clicks between long silences) drives this up.
-    silent_blocks: u32,
-    /// Total rendered blocks in the window.
-    total_blocks: u32,
-    /// Start index (in samples) into `samples_out` where this window begins.
-    /// Lets callers slice out just the after-seek portion to compute a
-    /// window-local RMS.
-    window_start_sample: usize,
-}
-
 /// Render `blocks` audio blocks, collect the raw interleaved samples,
 /// and return statistics covering exactly this window.
 fn render_and_collect(
@@ -88,11 +76,7 @@ fn render_and_collect(
         thread::sleep(block_budget.saturating_sub(elapsed));
     }
 
-    WindowStats {
-        silent_blocks,
-        total_blocks: blocks,
-        window_start_sample,
-    }
+    WindowStats::new(silent_blocks, blocks, window_start_sample)
 }
 
 fn fresh_downloader() -> Downloader {
@@ -171,19 +155,6 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
     for &s in interleaved {
         file.write_all(&s.to_le_bytes()).expect("sample");
     }
-}
-
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample count precision adequate"
-    )]
-    let n = samples.len() as f32;
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    (sum_sq / n).sqrt()
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]

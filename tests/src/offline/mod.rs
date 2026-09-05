@@ -1,6 +1,7 @@
 pub mod harness;
 pub mod host;
 pub mod player;
+mod window;
 
 pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 pub use host::{
@@ -10,3 +11,4 @@ pub use host::{
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
 };
+pub use window::{WindowStats, rms};
