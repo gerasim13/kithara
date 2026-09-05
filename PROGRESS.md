@@ -16,7 +16,9 @@ the change that lands the work, and keep it short.
   the shell strings the two crates embedded are gone - one Rust binary per crate
   stands in for what a script did. Moving a `const` into a container that
   derives `Default` would have handed the reader zeroes: eleven structs got a
-  written `Default` instead, each listing every field.
+  written `Default` instead, each listing every field. The stand-in binary took
+  `xtask` past what the `cargo xtask` alias can resolve on its own, so the
+  manifest now names `default-run`.
 - Harness and document revision. `AGENTS.md` routes instead of restating, and
   the `style` namespace now budgets documents with `doc_size`, blocks drift with
   `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
