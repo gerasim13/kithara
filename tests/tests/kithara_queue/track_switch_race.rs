@@ -110,59 +110,7 @@ async fn build_hls(
         .expect("create local HLS fixture")
 }
 
-fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::new(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        ),
-    )
-    .expect("create product offline queue");
-    let queue_for_tick = queue.control();
-    let tick_handle =
-        tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
-/// Build a queue WITHOUT the auto-advance tick loop. Auto-advance is driven
-/// solely by `Queue::tick` (the player's own auto-advance is disabled in
-/// `Queue::new`), so omitting the tick task means a track can only become
-/// `current()` via an explicit `select` or a loader-completion's
-/// `select_item` — never via end-of-track auto-advance. The completion-race
-/// test relies on this to isolate a barge-in (slow stomping the current fast)
-/// from the legitimate end-of-`fast` auto-advance to the next queue entry.
-fn build_queue_no_tick(
+fn build_queue(
     temp_dir: &TestTempDir,
 ) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
@@ -278,33 +226,18 @@ async fn wait_for_loader_done(
     }
 }
 
-/// Wait until `expected` becomes `current()`, driven by
-/// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
-/// `current()` (catches an already-current track), then blocks on the event.
-async fn wait_for_current_id(
+async fn wait_for_queue_state<S, E>(
     queue: &QueueControl<TestPools>,
-    expected: TrackId,
     deadline: Duration,
-) -> Result<(), String> {
+    snapshot: S,
+    event: E,
+) -> bool
+where
+    S: FnOnce(&QueueControl<TestPools>) -> bool,
+    E: FnMut(&QueueEvent) -> bool,
+{
     let mut rx = queue.subscribe();
-    if queue.current().map(|e| e.id) == Some(expected) {
-        return Ok(());
-    }
-    let matched = next_queue_event(
-        &mut rx,
-        deadline,
-        |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == expected),
-    )
-    .await;
-    if matched.is_some() {
-        Ok(())
-    } else {
-        Err(format!(
-            "current never became {:?} within {deadline:?} (last={:?})",
-            expected,
-            queue.current().map(|e| e.id),
-        ))
-    }
+    snapshot(queue) || next_queue_event(&mut rx, deadline, event).await.is_some()
 }
 
 /// Poll the gate's in-process `requested()` counter until the withheld init
@@ -324,38 +257,6 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
             ));
         }
         sleep(Consts::STATUS_POLL).await;
-    }
-}
-
-/// Wait until `track_id` reaches `expected`, driven by
-/// [`QueueEvent::TrackStatusChanged`]. Subscribes first, snapshots the
-/// current status (catches an already-applied transition), then blocks on the
-/// event stream under `deadline` as a hard safety cap.
-async fn wait_for_status(
-    queue: &QueueControl<TestPools>,
-    track_id: TrackId,
-    expected: TrackStatus,
-    deadline: Duration,
-) -> Result<(), String> {
-    let mut rx = queue.subscribe();
-    if queue.track(track_id).map(|e| e.status) == Some(expected.clone()) {
-        return Ok(());
-    }
-    let matched = next_queue_event(&mut rx, deadline, |ev| {
-        matches!(
-            ev,
-            QueueEvent::TrackStatusChanged { id, status }
-                if *id == track_id && *status == expected
-        )
-    })
-    .await;
-    if matched.is_some() {
-        Ok(())
-    } else {
-        Err(format!(
-            "status never became {expected:?} within {deadline:?} (last={:?})",
-            queue.track(track_id).map(|e| e.status)
-        ))
     }
 }
 
@@ -427,7 +328,11 @@ async fn supersede_while_loading_cancels_slow_track() {
     let slow_url = slow.master_url();
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store) = build_queue(&temp);
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(
+        queue.control(),
+        Duration::from_millis(50),
+    ));
 
     let fast_id = queue
         .append(TrackSource::Config(Box::new(mk_cfg(
@@ -474,14 +379,25 @@ async fn supersede_while_loading_cancels_slow_track() {
         .expect("select fast");
 
     // Deterministic: the supersede marked slow Cancelled synchronously.
-    wait_for_status(
+    let cancelled = wait_for_queue_state(
         &queue,
-        slow_id,
-        TrackStatus::Cancelled,
         Consts::OBSERVE_DEADLINE,
+        |queue| queue.track(slow_id).map(|entry| entry.status) == Some(TrackStatus::Cancelled),
+        |event| {
+            matches!(
+                event,
+                QueueEvent::TrackStatusChanged { id, status }
+                    if *id == slow_id && *status == TrackStatus::Cancelled
+            )
+        },
     )
-    .await
-    .unwrap_or_else(|e| panic!("supersede must cancel slow: {e}"));
+    .await;
+    assert!(
+        cancelled,
+        "supersede must cancel slow within {:?} (last={:?})",
+        Consts::OBSERVE_DEADLINE,
+        queue.track(slow_id).map(|entry| entry.status),
+    );
 
     // Release the init so slow's loader completes. Its `spawn_apply_after_load`
     // completion must observe the Cancelled status and skip `replace_item`, so
@@ -496,9 +412,24 @@ async fn supersede_while_loading_cancels_slow_track() {
         "cancelled-then-completed slow load must remain Cancelled, not flip to Loaded",
     );
 
-    wait_for_current_id(&queue, fast_id, Consts::OBSERVE_DEADLINE)
-        .await
-        .unwrap_or_else(|e| panic!("fast never became current: {e}"));
+    let fast_current = wait_for_queue_state(
+        &queue,
+        Consts::OBSERVE_DEADLINE,
+        |queue| queue.current().map(|entry| entry.id) == Some(fast_id),
+        |event| {
+            matches!(
+                event,
+                QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == fast_id
+            )
+        },
+    )
+    .await;
+    assert!(
+        fast_current,
+        "fast never became current within {:?} (last={:?})",
+        Consts::OBSERVE_DEADLINE,
+        queue.current().map(|entry| entry.id),
+    );
 
     // Across the whole window — including after fast plays out and
     // auto-advance runs — slow must never become current.
@@ -574,7 +505,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
         let temp = temp_dir();
         // No tick: auto-advance is disabled, so `slow` can only become current
         // via the loader-completion race we are probing.
-        let (queue, downloader, store) = build_queue_no_tick(&temp);
+        let (queue, downloader, store) = build_queue(&temp);
 
         let fast_id = queue
             .append(TrackSource::Config(Box::new(mk_cfg(
