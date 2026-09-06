@@ -184,7 +184,7 @@ fn materialize_one(
     index: usize,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
-    if store::read_entry(namespace, id, def.ext).is_some() {
+    if store::has_entry(namespace, id, def.ext) {
         return None;
     }
     if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
@@ -195,7 +195,7 @@ fn materialize_one(
     }
     let _lock = store::lock_entry(namespace, id)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
-    if store::read_entry(namespace, id, def.ext).is_some() {
+    if store::has_entry(namespace, id, def.ext) {
         return None;
     }
     let dependency_bytes: Vec<_> = def
