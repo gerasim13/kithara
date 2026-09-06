@@ -115,6 +115,12 @@ where
     #[builder(start_fn)]
     #[patch(skip)]
     pub pools: PoolRegion<S>,
+    /// Where resources live. Unset resolves to a disk root under a fresh
+    /// temp directory, which is a different place on every launch.
+    pub backend: Option<StorageBackend>,
+    /// Resources the in-memory cache retains before it evicts the
+    /// least-recently-used one. Applies to both backends.
+    pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
@@ -127,12 +133,6 @@ where
     /// Resource-key layout registry. Empty when absent.
     #[patch(skip)]
     pub layouts: Option<AssetLayoutRegistry>,
-    /// Where resources live. Unset resolves to a disk root under a fresh
-    /// temp directory, which is a different place on every launch.
-    pub backend: Option<StorageBackend>,
-    /// Resources the in-memory cache retains before it evicts the
-    /// least-recently-used one. Applies to both backends.
-    pub cache_capacity: Option<NonZeroUsize>,
     /// Assets the eviction policy keeps before it drops the coldest one.
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.

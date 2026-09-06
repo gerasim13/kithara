@@ -33,6 +33,10 @@ pub struct QueueConfig<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Max concurrent background prefetch loads. Default: 3.
+    #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
+    pub max_concurrent_loads: NonZeroUsize,
+
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
@@ -40,17 +44,13 @@ where
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
 
-    /// Player owned and decorated by this queue.
-    #[patch(skip)]
-    pub player: PlayerImpl<S>,
-
     /// Shared store used for bare URI track sources.
     #[patch(skip)]
     pub store: Option<AssetStore<S>>,
 
-    /// Max concurrent background prefetch loads. Default: 3.
-    #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
-    pub max_concurrent_loads: NonZeroUsize,
+    /// Player owned and decorated by this queue.
+    #[patch(skip)]
+    pub player: PlayerImpl<S>,
 
     /// Whether the queue auto-starts playback once the first registered track
     /// finishes loading. A document cannot name this: the field is read only

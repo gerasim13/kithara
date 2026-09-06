@@ -57,9 +57,9 @@ pub struct DownloaderConfig {
     pub(crate) peer_cmd_channel_capacity: usize,
 }
 
-// Builds a real `HttpClient`, so Miri cannot reach it for the same reason it
-// cannot reach `dl::tests`: the shared client initialises `aws-lc`, a C
-// library Miri cannot enter.
+/// Builds a real `HttpClient`, so Miri cannot reach it for the same reason it
+/// cannot reach `dl::tests`: the shared client initialises `aws-lc`, a C
+/// library Miri cannot enter.
 #[cfg(all(test, not(miri)))]
 mod tests {
     use kithara_abr::AbrSettings;

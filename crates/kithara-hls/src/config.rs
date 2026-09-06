@@ -84,9 +84,6 @@ where
     /// Shared asset store.
     #[patch(skip)]
     pub store: AssetStore<S>,
-    /// Buffer-pool facade shared across all components.
-    #[patch(skip)]
-    pub pools: PoolRegion<S>,
     /// Encryption key handling configuration.
     #[builder(default)]
     #[patch(skip)]
@@ -107,46 +104,6 @@ where
     #[builder(default)]
     #[patch(skip)]
     pub net_options: NetOptions,
-    /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
-    /// never issues these probes; file-like paths use them after a seek needs
-    /// exact prefix offsets.
-    #[builder(default)]
-    pub size_probe_method: SizeProbeMethod,
-    /// Max segments to download per step. Three keep the fetcher busy across
-    /// one round-trip without planning further ahead than a look-ahead cap
-    /// would allow anyway.
-    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
-    pub download_batch_size: usize,
-    /// Acquire attempts a planned segment slot gets before the dispatch
-    /// settles it terminally. A requeue is re-dispatched on the peer's next
-    /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
-    /// by a live sibling writer is exempt — that holder always settles and
-    /// releases, so its retry resolves on its own.
-    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
-    pub acquire_attempt_budget: u8,
-    /// Maximum media-segment prefetch window for ephemeral HLS stores.
-    /// The effective maximum is never lower than
-    /// [`Self::ephemeral_cache_min_media_window`]. Sized for a shared
-    /// 128-entry cache: two concurrent streams each retain 60 media and four
-    /// non-media entries.
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
-    pub ephemeral_cache_max_media_window: usize,
-    /// Minimum media-segment prefetch window for ephemeral HLS stores after
-    /// applying [`Self::ephemeral_cache_non_media_reserve`].
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
-    pub ephemeral_cache_min_media_window: usize,
-    /// Number of non-media HLS cache entries reserved when deriving the
-    /// ephemeral media prefetch window from the store cache capacity.
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
-    pub ephemeral_cache_non_media_reserve: usize,
-    /// Capacity of the event bus channel (used when `bus` is not provided).
-    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
-    pub event_channel_capacity: usize,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    /// `None` falls back to a ~2 `MiB` cap at the consumer site —
-    /// production HLS streams need a downloader
-    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
-    pub look_ahead_bytes: Option<u64>,
     /// Base URL for resolving relative playlist/segment URLs.
     #[patch(skip)]
     pub base_url: Option<Url>,
@@ -170,6 +127,49 @@ where
     /// Additional HTTP headers to include in all requests.
     #[patch(skip)]
     pub headers: Option<Headers>,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    /// `None` falls back to a ~2 `MiB` cap at the consumer site —
+    /// production HLS streams need a downloader
+    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
+    pub look_ahead_bytes: Option<u64>,
+    /// Buffer-pool facade shared across all components.
+    #[patch(skip)]
+    pub pools: PoolRegion<S>,
+    /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
+    /// never issues these probes; file-like paths use them after a seek needs
+    /// exact prefix offsets.
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
+    /// Acquire attempts a planned segment slot gets before the dispatch
+    /// settles it terminally. A requeue is re-dispatched on the peer's next
+    /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
+    /// by a live sibling writer is exempt — that holder always settles and
+    /// releases, so its retry resolves on its own.
+    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    pub acquire_attempt_budget: u8,
+    /// Max segments to download per step. Three keep the fetcher busy across
+    /// one round-trip without planning further ahead than a look-ahead cap
+    /// would allow anyway.
+    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    pub download_batch_size: usize,
+    /// Maximum media-segment prefetch window for ephemeral HLS stores.
+    /// The effective maximum is never lower than
+    /// [`Self::ephemeral_cache_min_media_window`]. Sized for a shared
+    /// 128-entry cache: two concurrent streams each retain 60 media and four
+    /// non-media entries.
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
+    pub ephemeral_cache_max_media_window: usize,
+    /// Minimum media-segment prefetch window for ephemeral HLS stores after
+    /// applying [`Self::ephemeral_cache_non_media_reserve`].
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    pub ephemeral_cache_min_media_window: usize,
+    /// Number of non-media HLS cache entries reserved when deriving the
+    /// ephemeral media prefetch window from the store cache capacity.
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    pub ephemeral_cache_non_media_reserve: usize,
+    /// Capacity of the event bus channel (used when `bus` is not provided).
+    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    pub event_channel_capacity: usize,
 }
 
 impl<S> Clone for HlsConfig<S>

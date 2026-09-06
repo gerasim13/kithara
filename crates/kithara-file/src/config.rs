@@ -36,9 +36,14 @@ where
     /// Shared asset store used by local and remote sources.
     #[patch(skip)]
     pub store: AssetStore<S>,
-    /// Buffer-pool facade shared with storage and fallback transport.
-    #[patch(skip)]
-    pub pools: PoolRegion<S>,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     #[patch(skip)]
@@ -52,11 +57,16 @@ where
     /// Shared downloader (created lazily if not provided).
     #[patch(skip)]
     pub downloader: Option<Downloader>,
+    /// Explicit source-extension hint used before the URL-path extension.
+    pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     #[patch(skip)]
     pub headers: Option<Headers>,
-    /// Explicit source-extension hint used before the URL-path extension.
-    pub extension: Option<String>,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    pub look_ahead_bytes: Option<u64>,
+    /// Buffer-pool facade shared with storage and fallback transport.
+    #[patch(skip)]
+    pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -66,16 +76,6 @@ where
     /// core.
     #[builder(default = 256)]
     pub reader_event_capacity: usize,
-    /// Poll interval while a sibling `AssetStore` instance holds the
-    /// atomic-chunked tmp for this file's canonical path. The default is short
-    /// enough that the observed ~67 ms race window in
-    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
-    /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
-    pub tmp_claim_poll_interval: Duration,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: Option<u64>,
 }
 
 impl<S> Clone for FileConfig<S>

@@ -9,7 +9,7 @@ use std::{
 use counter::BudgetCounter;
 use kithara_platform::sync::{Arc, OnceLock, Weak};
 pub(crate) use pair::{BudgetPair, Reservation, ReserveFailure};
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, de::Error};
 
 pub(crate) trait IdleReclaimer: Send + Sync {
     fn reclaim(&self, bytes: usize) -> usize;
@@ -52,7 +52,7 @@ impl<'de> Deserialize<'de> for Percent {
         if percent.is_valid() {
             Ok(percent)
         } else {
-            Err(de::Error::custom(format!(
+            Err(Error::custom(format!(
                 "percent must be between 0 and 100, got {value}"
             )))
         }

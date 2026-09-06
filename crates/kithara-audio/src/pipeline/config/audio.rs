@@ -57,12 +57,15 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[field(get)]
     #[patch(skip)]
     pub(crate) stream: T::Config,
-    /// Decoder construction settings, including decoder-side resampling. A
-    /// document names it under `audio.decoder`.
+    /// Consumer wake capability for ring pops and reader-event delivery. Not
+    /// a document key: a player-managed resource has this value overwritten
+    /// with its session's wake policy, and declaring `ImmediateOffRt` here
+    /// would make a player-bound resource publish reads inline on the render
+    /// callback.
+    #[field(get, copy)]
     #[builder(default)]
-    #[field(get)]
-    #[patch(nested)]
-    pub(crate) decoder: AudioDecoderConfig<B>,
+    #[patch(skip)]
+    pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
     #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
@@ -83,20 +86,17 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[patch(skip)]
     pub block_on_underrun: bool,
-    /// Consumer wake capability for ring pops and reader-event delivery. Not
-    /// a document key: a player-managed resource has this value overwritten
-    /// with its session's wake policy, and declaring `ImmediateOffRt` here
-    /// would make a player-bound resource publish reads inline on the render
-    /// callback.
-    #[field(get, copy)]
-    #[builder(default)]
-    #[patch(skip)]
-    pub consumer_wake_mode: ConsumerWakeMode,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
     #[field(get, copy)]
     #[builder(default = Consts::AUDIO_BUFFER_CHUNKS)]
     pub audio_buffer_chunks: usize,
+    /// Decoder construction settings, including decoder-side resampling. A
+    /// document names it under `audio.decoder`.
+    #[builder(default)]
+    #[field(get)]
+    #[patch(nested)]
+    pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]
     #[patch(skip)]
