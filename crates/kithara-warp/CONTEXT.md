@@ -45,12 +45,14 @@ contracts for the later actuator integration.
 ## Configuration
 
 `WarpConfig` is built with `bon`, uses `fieldwork` for read access, and carries
-the shared `StretchControls` owned by the resident identity `Warp<S>` and
-consumed by its native renderer. The identity renderer deliberately ignores
-temporal intent while preserving the same stage contract. Every renderer
-receives the caller's configured `PoolRegion<S>`; it never creates a pool region. Source
-ownership, cancellation, and worker resources remain in their canonical
-configs and are not duplicated here.
+the shared `StretchControls` owned by the resident identity `Warp<S>`. On
+native targets it also carries backend preparation, source-block, smoothing,
+and optional render-quantum settings expressed in frames. The identity
+renderer deliberately ignores temporal intent while preserving the same stage
+contract. Every renderer receives the caller's configured `PoolRegion<S>`; it
+never creates a pool region. Source ownership, cancellation, worker resources,
+and response budgets remain in their canonical configs and are not duplicated
+here.
 
 `WarpConfigPatch` is what a configuration document may say about it. The live
 `StretchControls` handle is not a document key: it is shared with the deck and

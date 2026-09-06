@@ -172,7 +172,11 @@ seeking — not from `PlayerImpl::current_index`.
 
 - `HandoverRequested` → `advance_loaded_successor`, which selects the successor only
   if it is already `Loaded`. The queue never consumes `PrefetchRequested` and never
-  calls `arm_next` / `commit_next`.
+  calls `arm_next` / `commit_next`. Gated on `item.track().id == current().id` for the
+  same reason `ItemDidPlayToEnd` is gated on its role: the request names the track that
+  is running out, the advance moves navigation at once, and the outgoing track keeps
+  rendering with its own triggers armed — so its handover can still land after the queue
+  has left it, and applied to the successor it skips that successor unheard.
 - `ItemDidPlayToEnd`: `PlayerImpl::process_notifications` walks every active slot, and one
   slot holds more than one track, so the event names whichever track in the player's
   arena hit EOF — an orphaned slot decoding ahead, or the outgoing half of a crossfade,

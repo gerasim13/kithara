@@ -1,3 +1,5 @@
+use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -13,6 +15,7 @@ impl TrackTriggers {
     pub(crate) fn check(
         &mut self,
         notification_tx: &mut HeapProd<PlayerNotification>,
+        track: TriggerTrack<'_>,
         input: TriggerInput,
     ) {
         let block_frames_f32: f32 = input.block_frames.as_();
@@ -28,7 +31,7 @@ impl TrackTriggers {
                 self.emit_track_requested(notification_tx);
             }
             if remaining <= fade_threshold {
-                self.emit_handover_requested(notification_tx);
+                self.emit_handover_requested(notification_tx, track);
             }
             return;
         }
@@ -44,20 +47,24 @@ impl TrackTriggers {
             self.emit_track_requested(notification_tx);
         }
         if pos + fade_threshold >= dur {
-            self.emit_handover_requested(notification_tx);
+            self.emit_handover_requested(notification_tx, track);
         }
     }
 
     pub(crate) fn emit_handover_requested(
         &mut self,
         notification_tx: &mut HeapProd<PlayerNotification>,
+        track: TriggerTrack<'_>,
     ) {
         if self.notified_track_requested {
             return;
         }
 
         if notification_tx
-            .try_push(PlayerNotification::HandoverRequested)
+            .try_push(PlayerNotification::HandoverRequested {
+                src: Arc::clone(track.src),
+                item_id: track.item_id,
+            })
             .is_ok()
         {
             self.notified_track_requested = true;
@@ -85,6 +92,18 @@ impl TrackTriggers {
         self.notified_prefetch_requested = false;
         self.notified_track_requested = false;
     }
+}
+
+/// The track a trigger speaks for.
+///
+/// A handover request means "*this* track is about to end". Without the
+/// track it is only "something is about to end", and a consumer that has
+/// already moved its cursor on reads it as a statement about whatever it
+/// holds now.
+#[derive(Clone, Copy)]
+pub(crate) struct TriggerTrack<'a> {
+    pub(crate) src: &'a Arc<str>,
+    pub(crate) item_id: TrackId,
 }
 
 #[derive(Clone, Copy)]

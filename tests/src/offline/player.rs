@@ -104,7 +104,7 @@ impl OfflinePlayer {
                     Some(NotificationKind::PlaybackStopped)
                 }
                 Event::Player(PlayerEvent::PrefetchRequested) => Some(NotificationKind::Requested),
-                Event::Player(PlayerEvent::HandoverRequested) => {
+                Event::Player(PlayerEvent::HandoverRequested { .. }) => {
                     Some(NotificationKind::HandoverRequested)
                 }
                 _ => None,

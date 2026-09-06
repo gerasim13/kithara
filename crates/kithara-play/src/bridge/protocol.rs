@@ -27,8 +27,6 @@ pub enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
     SetPrefetchDuration(f32),
-    /// Update the requested playback-rate target for all active tracks.
-    SetPlaybackRate(f32),
 }
 
 impl fmt::Debug for PlayerCmd {
@@ -56,7 +54,6 @@ impl fmt::Debug for PlayerCmd {
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
-            Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
         }
     }
 }
@@ -142,7 +139,13 @@ pub enum PlayerNotification {
     /// observed). Handlers may activate the already-preloaded successor;
     /// when `crossfade_duration == 0` the activation defers to the
     /// playback-stopped path instead.
-    HandoverRequested,
+    ///
+    /// `src` and `item_id` name the track that is running out, for the same
+    /// reason [`PlaybackStopped`](Self::PlaybackStopped) carries them: the
+    /// request is minted by one track while any number of others render, and
+    /// a consumer that has already advanced past it must be able to tell
+    /// that this handover is not about the track it now holds.
+    HandoverRequested { src: Arc<str>, item_id: TrackId },
     /// A track change occurred: old track fading out, new track fading in.
     Changed { src: Arc<str> },
     /// A track started fading in.
@@ -167,11 +170,9 @@ impl PlayerNotification {
             | Self::Changed { src }
             | Self::FadingIn { src }
             | Self::FadingOut { src }
+            | Self::HandoverRequested { src, .. }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. }
-            | Self::Requested
-            | Self::HandoverRequested
-            | Self::RateChanged { .. } => None,
+            Self::PlaybackStarted { .. } | Self::Requested | Self::RateChanged { .. } => None,
         }
     }
 }
@@ -186,7 +187,13 @@ mod tests {
     #[kithara::test]
     #[case(PlayerNotification::Loaded { src: Arc::from("a.mp3") }, "Loaded")]
     #[case(PlayerNotification::Requested, "Requested")]
-    #[case(PlayerNotification::HandoverRequested, "HandoverRequested")]
+    #[case(
+        PlayerNotification::HandoverRequested {
+            src: Arc::from("ending.mp3"),
+            item_id: TrackId::allocate(),
+        },
+        "HandoverRequested"
+    )]
     #[case(PlayerNotification::FadingIn { src: Arc::from("a.mp3") }, "FadingIn")]
     #[case(PlayerNotification::RateChanged { rate: 1.25 }, "RateChanged")]
     #[case(

@@ -1,4 +1,7 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_abr::AbrController;
@@ -21,6 +24,11 @@ fn allocate_grid_id() -> BeatGridId {
     id
 }
 
+const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
+
 /// Configuration for the player.
 ///
 /// Holds the player's own tunables, the engine values it hands to the
@@ -28,8 +36,9 @@ fn allocate_grid_id() -> BeatGridId {
 /// [`PlayerConfigPatch`] is what a configuration document may say about it.
 ///
 /// [`EngineConfig`]: crate::EngineConfig
-#[derive(Builder, Patch)]
+#[derive(Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
@@ -44,6 +53,10 @@ pub struct PlayerConfig<S> {
     #[builder(default = WarpConfig::builder().build())]
     #[patch(nested)]
     pub(crate) warp: WarpConfig,
+    /// Maximum accepted control-to-presented-audio response in output frames.
+    #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    #[field(get, copy)]
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     #[patch(skip)]
@@ -117,6 +130,7 @@ impl<S> Clone for PlayerConfig<S> {
         Self {
             grid_id: self.grid_id,
             warp: self.warp.clone(),
+            response_budget_frames: self.response_budget_frames,
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
             block_on_underrun: self.block_on_underrun,
@@ -139,6 +153,7 @@ impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
             .field("warp", &self.warp)
+            .field("response_budget_frames", &self.response_budget_frames)
             .field("gapless_mode", &self.gapless_mode)
             .field("crossfade_duration", &self.crossfade_duration)
             .field("default_rate", &self.default_rate)
@@ -176,6 +191,13 @@ mod tests {
         assert!((config.default_rate - 1.0).abs() < f32::EPSILON);
         assert!((config.prefetch_duration - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
+    }
+
+    #[kithara::test(native)]
+    fn default_response_budget_matches_product_contract() {
+        let config = config();
+
+        assert_eq!(config.response_budget_frames().get(), 448);
     }
 }
 

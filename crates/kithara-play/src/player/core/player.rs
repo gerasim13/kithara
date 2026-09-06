@@ -67,6 +67,8 @@ impl<S> PlayerImpl<S> {
             .sample_rate(config.sample_rate)
             .max_slots(config.max_slots)
             .eq_layout(config.eq_layout.clone())
+            .response_budget_frames(config.response_budget_frames)
+            .maybe_render_quantum_frames(config.warp.render_quantum_frames())
             .pools(pools)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
@@ -86,6 +88,7 @@ impl<S> PlayerImpl<S> {
             engine_load: Arc::new(EngineLoad::default()),
             params,
             warp: config.warp,
+            response_budget_frames: config.response_budget_frames,
             gapless_mode: config.gapless_mode,
             block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),

@@ -128,10 +128,6 @@ impl PlayerResource {
         })
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
     /// Cached span in seconds: how much of the source is on disk and needs no
     /// further network.
     #[must_use]
@@ -146,11 +142,16 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
     fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
+            let needed = target_frames - self.write_len;
+            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
             if avail == 0 {
                 break;
             }
@@ -208,20 +209,6 @@ impl PlayerResource {
             .min(self.channel_buffers[0].len())
     }
 
-    #[kithara::probe(
-        render_revision = source.render_revision(),
-        session_epoch = u64::from(context.session_epoch()),
-        output_start = i64::from(context.output_frames().start)
-            .saturating_add(i64::try_from(output.start).unwrap_or(i64::MAX)),
-        output_end = i64::from(context.output_frames().start)
-            .saturating_add(i64::try_from(output.end).unwrap_or(i64::MAX)),
-        source_start = source.start(),
-        source_end = source.end()
-    )]
-    fn pcm_consumed(&mut self, context: &RenderContext, output: Range<usize>, source: SourceSpan) {
-        self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
-    }
-
     fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
         let mut output_start = 0usize;
         while frames > 0 {
@@ -232,7 +219,18 @@ impl PlayerResource {
             let output_end = output_start.saturating_add(consumed);
             match (context, span.take(consumed)) {
                 (Some(context), Some(source)) => {
-                    self.pcm_consumed(context, output_start..output_end, source);
+                    kithara::probe_event!(
+                        pcm_consumed,
+                        render_revision = source.render_revision(),
+                        session_epoch = u64::from(context.session_epoch()),
+                        output_start = i64::from(context.output_frames().start)
+                            .saturating_add(i64::try_from(output_start).unwrap_or(i64::MAX)),
+                        output_end = i64::from(context.output_frames().start)
+                            .saturating_add(i64::try_from(output_end).unwrap_or(i64::MAX)),
+                        source_start = source.start(),
+                        source_end = source.end()
+                    );
+                    self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
                 }
                 (_, source) => {
                     self.last_source_end =

@@ -465,6 +465,10 @@ mod tests {
             config.audio.preload_chunks.is_none(),
             "an unnamed audio key must leave kithara-audio's own default standing"
         );
+        assert!(
+            config.audio.audio_buffer_chunks.is_none(),
+            "a direct resource names no output-ring depth, so the platform default stands"
+        );
     }
 
     #[kithara::test]

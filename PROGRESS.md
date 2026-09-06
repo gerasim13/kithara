@@ -8,67 +8,64 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Configuration document for `kithara-app`: `app.yaml` plus an optional overlay,
-  merged and env-expanded before typing, every section carrying the owning crate's
-  own patch type from `#[derive(Patch)]` in the new `kithara-macros`. No patch
-  struct is hand-written any more. Open: three integration harnesses still build
-  pools from `PoolsSection::default()`.
-- Mac CI host cleanup. The host spent a day refusing jobs for space while its
-  hourly pass was gone: the agent hung inside `opendir` on a volume that had
-  stopped answering, and launchd starts no second instance while the first is
-  alive. A watchdog thread now ends a pass at `cleanup_deadline_seconds`. The
-  pass that did run freed nothing, because `build_cache_size` is a ceiling over
-  one cache and says nothing about whether the volume has room; under
-  `Aggressive` or `Reject` it now reclaims what the volume is short of the soft
-  floor as well. Cleanup also judges by the volume it measured rather than
-  reading free space a second time.
+- Configuration document for `kithara-app`: `app.yaml` plus an optional
+  overlay, merged and env-expanded before typing, each section carrying its
+  owning crate's `#[derive(Patch)]` type from the new `kithara-macros`. No
+  patch struct is hand-written. Open: assembly sits in `main.rs` where no test
+  pins it, so `downloader` and `flush` parsed and were dropped until a read
+  found them; twenty-two files still take pools from `PoolsSection::default()`.
 
-  Verifying any of this was blocked by a second defect. `deps:deny` spent
-  twenty-five minutes listing the `boringssl` submodule's refs before its
-  job timed out: `GIT_CONFIG_COUNT` pins the HTTP version for the git
-  binary, and libgit2, which Cargo fetches with, does not read it. Cargo
-  now fetches through the binary, so both halves see one version. The lane
-  still gates a quarantine pipeline directly instead of reporting to the
-  verdict, which is what let one network stall hold every pull request;
-  that is open.
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
 
-  Then six pull requests went red at once for a queue someone emptied. The
-  bridge read a cancelled pipeline as a verdict and recorded it terminal, so
-  nothing addressed them again; a cancellation now releases the run and opens
-  the next attempt. The sweep that removes verification branches also kept
-  every ref naming the current base, including the ones whose pull request had
-  moved on, and cancels a ref's queued run before deleting it.
+- Mac CI host cleanup. The hourly pass hung inside `opendir` on a volume that
+  had stopped answering and launchd starts no second instance, so the host
+  refused jobs for space for a day; a watchdog ends a pass at
+  `cleanup_deadline_seconds`, and under `Aggressive` or `Reject` cleanup
+  reclaims what the volume is short of the soft floor rather than judging by
+  one cache's ceiling. `deps:deny` then spent twenty-five minutes on the
+  `boringssl` submodule's refs because libgit2 ignores the `GIT_CONFIG_COUNT`
+  that pins the HTTP version, so Cargo fetches through the git binary. Open:
+  the lane gates a quarantine pipeline directly instead of reporting to the
+  verdict, so one network stall holds every pull request.
 
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
-  extent per pass in `kithara-analysis`. The grid is published at the tempo
-  level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the
-  reported deck scenario on a release build with the full model, and the size
-  of the resume blob.
+  extent per pass in `kithara-analysis`, published at the tempo the detector
+  reports and tagged `grid_bpm_from_beats_v4`. Left: the deck scenario on a
+  release build with the full model, and the size of the resume blob.
 
-- Harness and document revision. `AGENTS.md` routes instead of restating; the
-  `style` namespace budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every crate README to one shape with
-  `readme_shape`. All three queues are at zero, and `just lint full` runs the
-  namespace on the Apple lint lane.
+- Premature track switch, and the census built to find it.
+  `PlayerEvent::HandoverRequested` was a unit variant, so the queue applied the
+  outgoing track's handover to the successor it had already selected, cutting
+  it a block in. The request now carries `ItemRole` and the queue acts on it
+  only when it names the track it is on, pinned over three tracks by
+  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span`. The
+  census attributes every output frame to the track that produced it over every
+  reader a track arrives through; writing it found `suite_network` dark since
+  `#260`.
 
 ## Next
 
-- The workspace's own crates are still at `"z"` - a per-package glob reaches
-  every third-party package but not them, and raising them is a measured
-  change of its own.
-- No runtime number backs the release optimization. Decode throughput, stretch
-  cost and render-budget headroom were never measured before or after, so the
-  case rests on codegen rather than on a benchmark.
+- The workspace's own crates are still at `"z"`: a per-package glob reaches
+  every third-party package but not them, and raising them is its own
+  measured change.
+- No runtime number backs the release optimization: decode throughput, stretch
+  cost and render-budget headroom were never measured, so the case rests on
+  codegen rather than on a benchmark.
 - `crates/kithara-ffi/.wasm-slim.toml` budgets the wasm bundle at
-  29000/31000/33000 KiB against a May baseline of ~28.2 MiB, while a local
-  `dist` weighs 3565 KiB. Either the gate is an order of magnitude stale or the
-  two numbers weigh different things; the `web-size` lane on GitLab is the only
-  place that settles it.
-- Work the comment queue down by hand: `--fix` is exhausted, so all 668
-  findings are decisions.
-- 439 ordering findings are mechanical; one `just lint style --fix` clears
-  them but rewrites declarations across every crate, so it wants its own
-  change.
+  29000/31000/33000 KiB against a May baseline of ~28.2 MiB while a local
+  `dist` weighs 3565 KiB; the `web-size` lane on GitLab settles whether the
+  gate is stale or the two numbers weigh different things.
+- `block` 0.1.6 is a future-incompat report nothing here can answer: it reaches
+  the tree through `cpal` and has no published successor.
+- `kithara-ui` still warns under `--no-default-features --features render` and
+  `--features vello`, where the widget layer compiles without a host: 627 items.
+- Lint debt is hand work: 668 comment findings are decisions `--fix` cannot
+  make; the 439 mechanical ordering findings clear under one
+  `just lint style --fix` that rewrites declarations across every crate.
 
 ## Blocked
 

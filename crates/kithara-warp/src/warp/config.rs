@@ -11,6 +11,11 @@ use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
 use crate::StretchControls;
 
+const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
+
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
 /// [`WarpConfigPatch`] is what a configuration document may say about it.
@@ -27,10 +32,6 @@ pub struct WarpConfig {
     #[field(get, deref = false)]
     #[patch(skip)]
     stretch: Arc<StretchControls>,
-    /// Optional output-frame cap between samples of live temporal controls.
-    /// Without a cap, Warp consumes the complete source span accepted by its backend.
-    #[field(get, copy)]
-    render_quantum_frames: Option<NonZeroUsize>,
     /// Preparation geometry each compiled stretch backend is built with. Not
     /// the backend selection: which engine runs is a live control on
     /// [`StretchControls`], while this is the geometry the selected engine is
@@ -45,6 +46,18 @@ pub struct WarpConfig {
     #[field(get, copy)]
     #[patch(nested)]
     backends: ElasticBackendConfig,
+    /// Maximum source frames admitted to one elastic render operation.
+    #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
+    #[field(get, copy)]
+    source_block_frames: NonZeroUsize,
+    /// Output-frame window used to smooth live rate changes.
+    #[builder(default = NonZeroUsize::MIN)]
+    #[field(get, copy)]
+    rate_smooth_frames: NonZeroUsize,
+    /// Optional output-frame cap between samples of live temporal controls.
+    /// Without a cap, Warp consumes the complete source span accepted by its backend.
+    #[field(get, copy)]
+    render_quantum_frames: Option<NonZeroUsize>,
 }
 
 #[cfg(test)]

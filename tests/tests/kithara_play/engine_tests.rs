@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     self,
@@ -32,6 +32,10 @@ fn slot_id(value: u64) -> SlotId {
     SlotId::new(value)
 }
 
+fn response_budget() -> NonZeroUsize {
+    NonZeroUsize::new(448).expect("fixture response budget is non-zero")
+}
+
 fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
@@ -39,6 +43,7 @@ fn make_engine() -> EngineImpl<TestPools> {
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(Arc::new(FixtureSession))
             .pools(pools())
+            .response_budget_frames(response_budget())
             .build(),
         EventBus::default(),
     )
@@ -88,6 +93,7 @@ fn engine_config_builder() {
         .channels(1)
         .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
         .pools(pools())
+        .response_budget_frames(response_budget())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.max_slots(), 8);
@@ -143,6 +149,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         .session(Arc::new(FixtureSession))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())
+        .response_budget_frames(response_budget())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);

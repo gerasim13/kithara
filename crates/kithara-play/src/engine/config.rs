@@ -1,4 +1,7 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
@@ -15,6 +18,10 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
+    /// Player-owned response contract used to validate session geometry.
+    pub(crate) response_budget_frames: NonZeroUsize,
+    /// Optional resident Warp render quantum supplied by the owning player.
+    pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
     /// Master cancel token for the engine. The worker scheduler derives a
@@ -48,6 +55,8 @@ pub struct EngineConfig<S> {
 impl<S> Clone for EngineConfig<S> {
     fn clone(&self) -> Self {
         Self {
+            response_budget_frames: self.response_budget_frames,
+            render_quantum_frames: self.render_quantum_frames,
             grid_id: self.grid_id,
             cancel: self.cancel.clone(),
             session: self.session.clone(),
@@ -66,6 +75,8 @@ impl<S> fmt::Debug for EngineConfig<S> {
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
             .field("channels", &self.channels)
+            .field("response_budget_frames", &self.response_budget_frames)
+            .field("render_quantum_frames", &self.render_quantum_frames)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
     }
@@ -75,7 +86,7 @@ impl<S> fmt::Debug for EngineConfig<S> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{BeatGridId, EngineConfig, NonZeroU32};
+    use super::{BeatGridId, EngineConfig, NonZeroU32, NonZeroUsize};
     use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
@@ -84,6 +95,7 @@ mod tests {
             .grid_id(BeatGridId::allocate().expect("a grid identity"))
             .pools(pools())
             .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
+            .response_budget_frames(NonZeroUsize::new(448).expect("448 is not zero"))
             .build();
 
         assert_eq!(config.channels, 2);
