@@ -45,15 +45,10 @@ fn registry() -> &'static CodecRegistry { CODEC_REGISTRY.get_or_init(CodecRegist
 
 ## Build/codegen/LTO
 
-**Size profile starves DSP autovectorization** (PARTLY FIXED) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so the DSP that stays at `"z"` ships scalar.
+**Size profile starves DSP autovectorization** (FIXED) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so anything left at `"z"` ships scalar. Release now optimizes every third-party package for speed and keeps `"z"` for the workspace's own crates:
 
 ```toml
-# the overrides the workspace now carries
-[profile.release.package.signalsmith-stretch]
-opt-level = 3
-[profile.release.package.bungee-sys]
-opt-level = 3
-[profile.release.package.fdk-aac-sys]
+[profile.release.package."*"]
 opt-level = 3
 ```
 
@@ -61,16 +56,24 @@ A per-package override reaches two units, not one: the crate's own codegen, and 
 
 | crate | build system | what the override reaches |
 | --- | --- | --- |
-| `signalsmith-stretch` | `cc` | all of it: `OPT_LEVEL` goes straight to the compiler |
-| `fdk-aac-sys` | `cc` | all of it: 171 files move `-Oz` -> `-O3`, `aacdecoder.cpp` included |
+| `signalsmith-stretch`, `fdk-aac-sys`, `zstd-sys` | `cc` | all of it: `OPT_LEVEL` goes straight to the compiler, and `fdk-aac-sys` moves 171 files `-Oz` -> `-O3`, `aacdecoder.cpp` included |
+| `btls-sys`, `aws-lc-sys` | `cmake` | `CMAKE_BUILD_TYPE` moves `MinSizeRel` (`-Os -DNDEBUG`) -> `Release` (`-O3 -DNDEBUG`) |
 | `bungee-sys` | `cmake` + `cpp_build` | the Rust side and the `cpp_build` wrapper glue only - `build.rs` picks the CMake config from `PROFILE`, not `OPT_LEVEL`, so the vendored bungee core and kissfft were already `Release` |
 
 The rule generalises: before claiming an override moved a native dependency, read its `build.rs` for which environment variable it consults. Capture the result rather than inferring it - `CC_ENABLE_DEBUG_OUTPUT=1 cargo build --release -p <crate> -vv` and grep for `running:`. `cc` invokes the compiler as `cc`/`c++`, never as `clang`, so grepping for the toolchain name finds nothing.
 
-The TLS and decompression natives (`btls-sys`, `aws-lc-sys`, `zstd-sys`) stay at `"z"` for a reason that is not "off the audio path": their symmetric crypto is hand-written assembly (951 `.S` files in `aws-lc-sys`, 165 in `btls-sys`, covering AES, ChaCha20-Poly1305 and SHA), which no `-O` level touches.
+What the glob costs, measured rather than argued:
+
+| lane family | cost |
+| --- | --- |
+| `test-release` (seventeen lanes) | +82% compile CPU on `-p kithara`; the profile inherits the release overrides, moving 319 of 676 units from opt-level 0 to 3 - build scripts, proc-macros, and the build-dependency copies of normal deps |
+| Apple release | 476 -> 1105 CPU-seconds (2.32x); linked `__text` +4.9% |
+| `web-size` | +42% compile CPU; dist 3137 -> 3565 KiB |
+
+Two things the glob reaches that a named list would not. The rebuilt sysroot under `-Z build-std` is non-workspace, so its codegen moves to 3 while `build-std-features = ["optimize_for_size"]` in `crates/kithara-ffi/.cargo/config.toml` still applies. And the TLS natives grow without any symmetric-crypto gain: their AES, ChaCha20-Poly1305 and SHA kernels are hand-written assembly (123 assembled `.S` objects in `btls-sys`, 98 in `aws-lc-sys`), and those objects are byte-identical at `-Os` and `-O3` - assembling is transliteration, not compilation. The growth is all C glue: BoringSSL `libcrypto` `__TEXT` +55%. `[profile.release.package.<name>]` beats the glob, so pinning one back is a three-line change; `build-override` does *not* beat it and cannot be used to keep build scripts cheap.
 
 Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
-*tier: hot | detector: manual (Cargo.toml census) | the native C++ audio path is at 3; the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`, `kithara-audio`/`-decode`/`-resampler`) is still at `"z"`. The `[profile.dev.package.*]` block is the repository's own list of what is hot - release honours only the three native entries so far, and the rest is a measured change of its own: those crates reach the wasm bundle, where `web-size` enforces a budget. The native C++ above does not - wasm builds `kithara-ffi` with `--no-default-features --features wasm`, selecting no decoder and no stretch backend*
+*tier: hot | detector: manual (Cargo.toml census) | every third-party package is at 3, including the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`) the `[profile.dev.package.*]` block names as hot. The workspace's own crates (`kithara-audio`, `-decode`, `-resampler`) stay at `"z"` - moving them is a separate measured change*
 
 **wasm ships scalar** (pairs with the above) - no wasm lane enables `+simd128` and the trunk `wasm-opt` params omit `--enable-simd`.
 

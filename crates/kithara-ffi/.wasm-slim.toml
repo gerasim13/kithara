@@ -2,7 +2,10 @@
 template = "balanced"
 
 [size-budget]
-# Current dist baseline is ~28.2 MiB (~28931 KiB).
-target-size-kb = 29000
-warn-threshold-kb = 31000
-max-size-kb = 33000
+# `xtask` weighs the whole `dist` directory, uncompressed. Measured at 3565 KiB
+# with third-party packages at opt-level 3 (3137 KiB before that change). The
+# previous 29000/31000/33000 came from a May build with no `[profile.release]`
+# at all and default cargo features, and left the gate at ~11% of its ceiling.
+target-size-kb = 3600
+warn-threshold-kb = 4000
+max-size-kb = 4500

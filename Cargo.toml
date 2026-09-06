@@ -518,33 +518,15 @@ debug = false
 panic = "abort"
 strip = "symbols"
 
-# Size is the right default for the orchestration and network crates and the
-# wrong one for the audio path. The dev profile above already names what is
-# hot; release threw all of it away, so the C++ that stretches and decodes
-# every frame shipped compiled for size. A per-package override reaches both
-# the crate's own codegen and the `OPT_LEVEL` its build script reads, which is
-# what carries the change into the C++.
-#
-# `signalsmith-stretch` and `fdk-aac-sys` compile through `cc`, which passes
-# `OPT_LEVEL` straight to the compiler: both move from `-Oz` to `-O3`.
-# `bungee-sys` is a partial case worth stating exactly - its `build.rs` reads
-# `PROFILE`, not `OPT_LEVEL`, and already hands CMake `Release`, so the
-# vendored bungee core and kissfft were never built for size; the override
-# reaches its Rust side and the `cpp_build` wrapper glue, which do read
-# `OPT_LEVEL`.
-#
-# The remaining natives serve TLS and HTTP decompression (`btls-sys`,
-# `aws-lc-sys`, `zstd-sys`). Their symmetric crypto is hand-written assembly
-# that no `-O` level touches, so they keep the size setting.
-#
-# None of these reach the wasm bundle: it builds `kithara-ffi` with
-# `--no-default-features --features wasm`, which selects no decoder and no
-# stretch backend, so the `web-size` budget is unaffected.
-[profile.release.package.signalsmith-stretch]
-opt-level = 3
-[profile.release.package.bungee-sys]
-opt-level = 3
-[profile.release.package.fdk-aac-sys]
+# Every third-party package builds for speed; the workspace's own crates keep
+# the size setting above. `package."*"` is Cargo's glob for every non-workspace
+# package - 329 of them on wasm, 339 on Apple, 405 on Android, 708 across the
+# full workspace - and it reaches two units per package: the crate's own codegen
+# and the `OPT_LEVEL` its build script reads, which is what carries the setting
+# into native C and C++. `test-release` and `bench` inherit it, and so does the
+# rebuilt sysroot under `-Z build-std`. `docs/guides/performance/dispatch-build.md`
+# owns the measured cost and the per-build-system detail.
+[profile.release.package."*"]
 opt-level = 3
 
 # Best-of-both-worlds profile for maximum testing speed.

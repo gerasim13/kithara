@@ -19,27 +19,48 @@ the change that lands the work, and keep it short.
   crate wearing the MIT badge, two crates naming a dead owner, and a logo no
   published crate page could load.
 
-- Release optimization for the native C++ on the audio path. `[profile.release]`
-  sets `opt-level = "z"` workspace-wide, and the `[profile.dev.package.*]` block
-  right above it is the repository's own list of what is too slow unoptimised -
-  release threw that list away. Both time-stretch backends and the AAC decoder
-  shipped compiled for size. Per-package overrides raise `signalsmith-stretch`,
-  `bungee-sys` and `fdk-aac-sys` to 3, which also moves each build script's
-  `OPT_LEVEL`. Captured A/B for `fdk-aac-sys`: 171 files, `-Oz` -> `-O3`, zero
-  crossover, `aacdecoder.cpp` among them. `bungee-sys` is partial by
-  construction - its `build.rs` reads `PROFILE`, not `OPT_LEVEL`, so CMake was
-  already building the vendored core `Release`; the override reaches its Rust
-  side and `cpp_build` wrapper glue. The TLS and decompression natives
-  (`btls-sys`, `aws-lc-sys`, `zstd-sys`) keep the size setting because their
-  symmetric crypto is hand-written assembly no `-O` level touches. None of the
-  three reach the wasm bundle, so the `web-size` budget is untouched.
+- Release optimization for every third-party package. `[profile.release]` sets
+  `opt-level = "z"` workspace-wide, and the `[profile.dev.package.*]` block right
+  above it is the repository's own list of what is too slow unoptimised - release
+  threw that list away, so both time-stretch backends, the AAC decoder and the
+  pure-Rust DSP all shipped compiled for size. `[profile.release.package."*"]`
+  now raises every non-workspace package to 3 (329 on wasm, 339 Apple, 405
+  Android, 708 workspace-wide); the workspace's own crates keep `"z"`. The
+  override moves each build script's `OPT_LEVEL`, which is what reaches native C
+  and C++. Captured A/B for `fdk-aac-sys`: 171 files, `-Oz` -> `-O3`, zero
+  crossover, `aacdecoder.cpp` among them. `bungee-sys` is partial by construction
+  - its `build.rs` reads `PROFILE`, not `OPT_LEVEL`, so CMake was already
+  building the vendored core `Release`.
+
+  Measured cost: `test-release` and `bench` inherit the overrides, so the
+  seventeen lanes on that profile pay ~+82% compile CPU (319 of 676 units move
+  from opt-level 0 to 3); the Apple release graph goes 476 -> 1105 CPU-seconds
+  (2.32x); `web-size` +42% CPU and dist 3137 -> 3565 KiB. `build-override` does
+  not beat the glob - verified in the unit graph - so build scripts cannot be
+  held back while the natives move.
+
+  Two side effects the glob cannot express. The `-Z build-std` sysroot is
+  non-workspace, so its codegen moves to 3 while `optimize_for_size` still
+  applies. And the TLS natives grow for nothing on symmetric crypto: their AES,
+  ChaCha20-Poly1305 and SHA kernels are assembly (123 assembled `.S` objects in
+  `btls-sys`, 98 in `aws-lc-sys`) that is byte-identical at `-Os` and `-O3`, so
+  BoringSSL `libcrypto` `__TEXT` +55% buys throughput nowhere. Named
+  `[profile.release.package.<name>]` entries beat the glob if they are pinned
+  back.
+
+  `crates/kithara-ffi/.wasm-slim.toml` carried a 29000/31000/33000 budget from a
+  May build made with no `[profile.release]` and default features - roughly nine
+  times the real bundle, so the gate could not have caught an eightfold
+  regression. Reset to 3600/4000/4500 against the measured 3565 KiB.
 
 ## Next
 
-- The pure-Rust DSP is still at `"z"`. `rubato`, `rustfft`, `symphonia*`,
-  `kithara-audio`/`-decode`/`-resampler` all reach the wasm bundle, and
-  `web-size` enforces a budget there, so raising them is a measured change with
-  its own before/after numbers rather than a second line in this one.
+- The workspace's own crates are still at `"z"` - `kithara-audio`, `-decode`,
+  `-resampler` and the rest carry the size setting a per-package glob cannot
+  reach. Raising them is a measured change of its own.
+- No runtime number backs the optimization yet. Decode throughput, stretch cost
+  and render-budget headroom were never measured before or after, so the case
+  rests on codegen rather than on a benchmark.
 
 - Work the comment queue down by hand. `--fix` is exhausted for comments - a
   second run on a clean tree changes nothing - so all 668 are decisions: 497
