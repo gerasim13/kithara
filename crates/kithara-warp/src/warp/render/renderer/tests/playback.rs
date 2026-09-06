@@ -61,6 +61,78 @@ fn source_span_is_planned_from_the_output_quantum(
 }
 
 #[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(1.0);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer.prepare(spec());
+    let latency = renderer
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency();
+    let cue = latency.source_frames();
+    assert!(cue > 0, "activation needs backend history");
+
+    let pools = renderer.pools.clone();
+    let source = sine(cue);
+    let unity = render_serviced(&mut renderer, chunk(&pools, &source))
+        .expect("unity history remains byte-exact");
+    assert_eq!(&unity.samples[..], &source);
+
+    let revision = controls.set_speed(2.0);
+    let mut meta = AudioChunkInfo {
+        frame_offset: u64::try_from(cue).expect("cue fits u64"),
+        spec: spec(),
+        timestamp: spec()
+            .duration_for(u64::try_from(cue).expect("cue fits u64"))
+            .expect("cue timestamp fits"),
+        ..AudioChunkInfo::default()
+    };
+    let input_frames = renderer
+        .prepare_quantum(meta, 128)
+        .expect("activation quantum is plannable")
+        .get();
+    assert!(
+        input_frames > 128,
+        "activation includes lookahead and warmup"
+    );
+    let active = sine(input_frames);
+    meta.frames = u32::try_from(input_frames).expect("input frames fit u32");
+    meta.end_timestamp = meta
+        .timestamp
+        .checked_add(
+            spec()
+                .duration_for(u64::try_from(input_frames).expect("input frames fit u64"))
+                .expect("input duration fits"),
+        )
+        .expect("input end timestamp fits");
+
+    let mut input = chunk(&pools, &active);
+    input.meta = meta;
+    let output = renderer
+        .render_quantum(input)
+        .expect("primed activation emits immediately");
+
+    assert_eq!(
+        output.meta.frame_offset,
+        u64::try_from(cue).expect("cue fits u64")
+    );
+    assert_eq!(output.meta.render_revision, revision);
+    assert!(output.frames() > 0);
+}
+
+#[kithara::test]
 fn rendered_quantum_keeps_the_rate_revision_selected_during_planning() {
     let controls = StretchControls::new(1.0);
     let expected_revision = controls.set_speed(1.0);

@@ -579,6 +579,7 @@ where
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
                 if data.spec() == self.spec
+                    && self.prepared_frames.is_none()
                     && self
                         .warp
                         .prepare_quantum(data.meta, data.frames())
