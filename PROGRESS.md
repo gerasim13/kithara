@@ -8,18 +8,37 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Configuration document for `kithara-app`. `app.yaml` plus an optional overlay,
-  merged and env-expanded before typing; every section carries the owning crate's
-  own patch type, so a value is spelled once. `#[derive(Patch)]` in the new
-  `kithara-macros` generates every patch and its `apply`; `struct-patch` and every
-  hand-written patch struct are gone. Secrets stay `$KITHARA_...` references and
-  one resolving nowhere stops startup. The derive carries three forms beyond a
-  plain key: `nested` recurses, `validate`/`fallible` lets a merge refuse what a
-  document said and report it under the key that carried it, and `wire`/`from`
-  gives a key a type of its own where the field holds something a document cannot
-  spell. Every field a document has business naming is a key; what stays skipped
-  is a live object the construction site owns, argued field by field in the owning
-  crate's `CONTEXT.md`. Left: the three integration harnesses.
+- Configuration document for `kithara-app`: `app.yaml` plus an optional overlay,
+  merged and env-expanded before typing, every section carrying the owning crate's
+  own patch type from `#[derive(Patch)]` in the new `kithara-macros`. No patch
+  struct is hand-written any more. Open: three integration harnesses still build
+  pools from `PoolsSection::default()`.
+- Mac CI host cleanup. The host spent a day refusing jobs for space while its
+  hourly pass was gone: the agent hung inside `opendir` on a volume that had
+  stopped answering, and launchd starts no second instance while the first is
+  alive. A watchdog thread now ends a pass at `cleanup_deadline_seconds`. The
+  pass that did run freed nothing, because `build_cache_size` is a ceiling over
+  one cache and says nothing about whether the volume has room; under
+  `Aggressive` or `Reject` it now reclaims what the volume is short of the soft
+  floor as well. Cleanup also judges by the volume it measured rather than
+  reading free space a second time.
+
+  Verifying any of this was blocked by a second defect. `deps:deny` spent
+  twenty-five minutes listing the `boringssl` submodule's refs before its
+  job timed out: `GIT_CONFIG_COUNT` pins the HTTP version for the git
+  binary, and libgit2, which Cargo fetches with, does not read it. Cargo
+  now fetches through the binary, so both halves see one version. The lane
+  still gates a quarantine pipeline directly instead of reporting to the
+  verdict, which is what let one network stall hold every pull request;
+  that is open.
+
+  Then six pull requests went red at once for a queue someone emptied. The
+  bridge read a cancelled pipeline as a verdict and recorded it terminal, so
+  nothing addressed them again; a cancellation now releases the run and opens
+  the next attempt. The sweep that removes verification branches also kept
+  every ref naming the current base, including the ones whose pull request had
+  moved on, and cancels a ref's queued run before deleting it.
+
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`. The grid is published at the tempo
   level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the
@@ -34,8 +53,6 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- Wire the last section end to end: the three integration harnesses still build
-  pools from `PoolsSection::default()`, not from the document they load.
 - The workspace's own crates are still at `"z"` - a per-package glob reaches
   every third-party package but not them, and raising them is a measured
   change of its own.
