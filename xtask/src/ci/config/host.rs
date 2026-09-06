@@ -58,6 +58,11 @@ pub(crate) struct CiHost {
     #[serde(default)]
     pub(crate) build_root: Option<PathBuf>,
     pub(crate) host_xcode_developer_dir: PathBuf,
+    /// How long a job waits for the volume to give back the room it needs
+    /// before refusing to start. Defaulted: installed profiles predate it, and
+    /// refusing to load would refuse every job on the host.
+    #[serde(default = "default_job_room_wait_seconds")]
+    pub(crate) job_room_wait_seconds: u64,
     pub(crate) quota_bytes: u64,
     pub(crate) reject_bytes: u64,
     /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
@@ -253,6 +258,18 @@ impl CiHost {
         self.quota_bytes.saturating_sub(self.reject_bytes)
     }
 
+    /// How long the gate lets a full volume come back before it refuses.
+    ///
+    /// The room a refused job is missing is room its neighbours hold, not room
+    /// that is gone: eight slots share this volume, and a checkout stops being
+    /// active on its own once the job holding it ends. Six merge requests were
+    /// refused in one afternoon, one of them 53 MB short, and every one of them
+    /// passed on a manual retry against unchanged code. Waiting costs the slot
+    /// that retry costs anyway.
+    pub(crate) const fn job_room_wait(&self) -> Duration {
+        Duration::from_secs(self.job_room_wait_seconds)
+    }
+
     /// `tart` resolves VM names under `TART_HOME`, and the configured bundle
     /// is `<TART_HOME>/vms/<name>`. A launch agent inherits none of the
     /// shell's environment, so without this it looks in `~/.tart` and cannot
@@ -332,6 +349,16 @@ pub(crate) fn default_build_cache_size() -> String {
 /// than the day this host lost to one.
 pub(crate) fn default_cleanup_deadline_seconds() -> u64 {
     30 * 60
+}
+
+/// Matched to the heartbeat a dead job leaves behind.
+///
+/// A checkout is held either by a live job or by the stale claim of one that
+/// was killed, and the claim expires after ten minutes. Waiting that long is
+/// what it takes for the worst case to become reclaimable on its own; waiting
+/// longer only holds a slot open against a volume that genuinely has no room.
+pub(crate) const fn default_job_room_wait_seconds() -> u64 {
+    600
 }
 
 pub(crate) fn parse_build_cache_size(value: &str) -> Result<u64, BuildCacheSizeError> {
@@ -473,6 +500,41 @@ mod tests {
         host.cleanup_deadline_seconds = 0;
 
         assert!(host.validate().is_err());
+    }
+
+    /// Installed profiles predate the wait. Loading them without one has to
+    /// yield the wait, not zero, or the gate refuses as instantly as before.
+    #[test]
+    fn ci_host_load_accepts_a_profile_without_a_job_room_wait() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let host = super::super::fixture().host;
+        host.write(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("job_room_wait_seconds"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().job_room_wait(),
+            Duration::from_secs(default_job_room_wait_seconds())
+        );
+    }
+
+    /// A host that wants a different wait gets it, so the policy stays the
+    /// profile's rather than this file's.
+    #[test]
+    fn a_configured_job_room_wait_replaces_the_default() {
+        let mut host = super::super::fixture().host;
+        host.job_room_wait_seconds = default_job_room_wait_seconds() + 45;
+
+        assert_eq!(
+            host.job_room_wait(),
+            Duration::from_secs(default_job_room_wait_seconds() + 45)
+        );
     }
 
     /// Every installed profile predates the guest, and a mac that serves no
