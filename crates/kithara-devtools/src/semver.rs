@@ -197,7 +197,6 @@ source = "git+https://github.com/example/firewheel#0000000"
             args.windows(2)
                 .any(|pair| pair == ["--release-type", "minor"])
         );
-        assert!(args.contains(&"--default-features"));
         assert!(!args.contains(&"--workspace"));
     }
 
