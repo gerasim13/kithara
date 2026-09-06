@@ -9,35 +9,6 @@ use tracing::warn;
 
 use super::renderer::{PreparedActivation, PreparedQuantum, WarpRenderer};
 
-struct PrimeBuffers<'a> {
-    history: &'a [f32],
-    lookahead: &'a [f32],
-    source: &'a [f32],
-    discarded_output: &'a mut [f32],
-}
-
-#[kithara::probe(
-    request_revision,
-    target_rate_bits,
-    source_frames = request.source_frames(),
-    output_frames = request.output_frames()
-)]
-fn prime_activation(
-    engine: &mut dyn kithara_stretch::ElasticEngine,
-    request_revision: u64,
-    target_rate_bits: u32,
-    request: ElasticRequest,
-    buffers: PrimeBuffers<'_>,
-) -> Result<(), ElasticError> {
-    engine.prime(
-        request,
-        buffers.history,
-        buffers.lookahead,
-        buffers.source,
-        buffers.discarded_output,
-    )
-}
-
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
@@ -365,21 +336,17 @@ where
         scratch
             .ensure_len(discard_samples)
             .map_err(|_| ElasticError::PoolCapacity)?;
-        prime_activation(
-            self.engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                .as_mut(),
-            prepared.rate.revision(),
-            prepared.rate.speed().to_bits(),
-            activation.warm,
-            PrimeBuffers {
-                history,
-                lookahead,
-                source: warm,
-                discarded_output: scratch,
-            },
-        )?;
+        kithara::probe_event!(
+            prime_activation,
+            request_revision = prepared.rate.revision(),
+            target_rate_bits = prepared.rate.speed().to_bits(),
+            source_frames = activation.warm.source_frames(),
+            output_frames = activation.warm.output_frames()
+        );
+        self.engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .prime(activation.warm, history, lookahead, warm, scratch)?;
         scratch.clear();
 
         self.clear_pending_source();

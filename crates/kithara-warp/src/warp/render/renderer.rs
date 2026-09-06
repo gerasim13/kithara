@@ -387,7 +387,19 @@ where
         else {
             return;
         };
-        self.render_committed(committed, source_start, output_start);
+        kithara::probe_event!(
+            render_committed,
+            session_epoch = u64::from(committed.context().session_epoch()),
+            transport_revision = committed
+                .context()
+                .transport_revision()
+                .map_or(0, u64::from),
+            output_start,
+            output_end = i64::from(committed.frontier().output()),
+            source_start,
+            source_end = committed.frontier().source()
+        );
+        self.committed = Some(committed);
     }
 
     pub(super) fn commit_rate_render(
@@ -409,50 +421,15 @@ where
         else {
             return;
         };
-        self.rate_applied(
-            committed,
+        kithara::probe_event!(
+            rate_applied,
             request_revision,
-            applied_rate.to_bits(),
+            applied_rate_bits = applied_rate.to_bits(),
+            session_epoch = u64::from(committed.context().session_epoch()),
             session_frame,
             source_start,
-            source_end,
+            source_end
         );
-    }
-
-    #[kithara::probe(
-        session_epoch = u64::from(committed.context().session_epoch()),
-        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
-        output_start,
-        output_end = i64::from(committed.frontier().output()),
-        source_start,
-        source_end = committed.frontier().source()
-    )]
-    fn render_committed(
-        &mut self,
-        committed: RenderSnapshot,
-        source_start: u64,
-        output_start: i64,
-    ) {
-        self.committed = Some(committed);
-    }
-
-    #[kithara::probe(
-        request_revision,
-        applied_rate_bits,
-        session_epoch = u64::from(committed.context().session_epoch()),
-        session_frame,
-        source_start,
-        source_end
-    )]
-    fn rate_applied(
-        &mut self,
-        committed: RenderSnapshot,
-        request_revision: u64,
-        applied_rate_bits: u32,
-        session_frame: i64,
-        source_start: u64,
-        source_end: u64,
-    ) {
         self.committed = Some(committed);
     }
 

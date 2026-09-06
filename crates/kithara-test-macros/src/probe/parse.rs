@@ -5,6 +5,35 @@ use syn::{
     punctuated::Punctuated,
 };
 
+pub(super) struct ProbeEvent {
+    pub name: Ident,
+    pub args: Vec<Ident>,
+    pub computed: Vec<(Ident, Expr)>,
+}
+
+impl Parse for ProbeEvent {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name = input.parse()?;
+        let filter = if input.is_empty() {
+            ProbeFilter::default()
+        } else {
+            input.parse::<Token![,]>()?;
+            parse_entries(input)?
+        };
+        if filter.caller || filter.probe_return {
+            return Err(Error::new_spanned(
+                name,
+                "kithara::probe_event! does not accept attribute-only flags",
+            ));
+        }
+        Ok(Self {
+            name,
+            args: filter.args.unwrap_or_default(),
+            computed: filter.computed,
+        })
+    }
+}
+
 /// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed
 /// `name = expr` values, and the `caller` / `probe_return` flags. See the
 /// crate `CONTEXT.md` "`#[kithara::probe(...)]` arguments" for the syntax.
@@ -48,6 +77,14 @@ pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<ProbeFilter> {
     }
     let parser = Punctuated::<ProbeArg, Token![,]>::parse_terminated;
     let parsed = parser.parse2(attr)?;
+    filter_entries(parsed)
+}
+
+fn parse_entries(input: ParseStream) -> syn::Result<ProbeFilter> {
+    filter_entries(Punctuated::<ProbeArg, Token![,]>::parse_terminated(input)?)
+}
+
+fn filter_entries(parsed: Punctuated<ProbeArg, Token![,]>) -> syn::Result<ProbeFilter> {
     let mut filter = ProbeFilter::default();
     let mut args: Vec<Ident> = Vec::new();
     for entry in parsed {

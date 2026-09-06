@@ -1,6 +1,6 @@
 use kithara_events::RouteDescription;
 use kithara_test_macros as kithara;
-use kithara_warp::{RenderSnapshot, StretchControls};
+use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -11,21 +11,6 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
-    #[kithara::probe(
-        request_revision,
-        target_rate_bits = target.to_bits(),
-        session_epoch = u64::from(snapshot.context().session_epoch()),
-        transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
-        session_frame = i64::from(snapshot.context().output_frames().end),
-        session_beat_bits = snapshot.context().session_beats().map_or(
-            f64::NAN.to_bits(),
-            |beats| f64::from(beats.end).to_bits()
-        )
-    )]
-    fn rate_requested(&self, target: f32, request_revision: u64, snapshot: &RenderSnapshot) {
-        self.core.worker.wake();
-    }
-
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {
@@ -136,10 +121,20 @@ impl<S> PlayerRuntime<S> {
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
         if let Some(snapshot) = snapshot {
-            self.rate_requested(target, revision, &snapshot);
-        } else {
-            self.core.worker.wake();
+            kithara::probe_event!(
+                rate_requested,
+                request_revision = revision,
+                target_rate_bits = target.to_bits(),
+                session_epoch = u64::from(snapshot.context().session_epoch()),
+                transport_revision = snapshot.context().transport_revision().map_or(0, u64::from),
+                session_frame = i64::from(snapshot.context().output_frames().end),
+                session_beat_bits = snapshot
+                    .context()
+                    .session_beats()
+                    .map_or(f64::NAN.to_bits(), |beats| f64::from(beats.end).to_bits())
+            );
         }
+        self.core.worker.wake();
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
