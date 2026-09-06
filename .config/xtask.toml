@@ -1351,6 +1351,7 @@ steps = [
     "run",
     "--profile",
     "ci",
+    "--timings",
   ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
@@ -1613,6 +1614,7 @@ steps = [
     "test",
     "run",
     "--flash=off",
+    "--timings",
   ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
