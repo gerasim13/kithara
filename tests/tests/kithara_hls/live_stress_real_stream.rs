@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex, task::Poll};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
@@ -84,6 +84,8 @@ enum SeekRegression {
     FixedWindow,
     RandomPrefix,
 }
+
+type LiveAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
 
 #[derive(Default)]
 struct LiveStats {
@@ -196,7 +198,7 @@ async fn build_live_audio(
     server: &TestServerHelper,
     encrypted: bool,
     cache_capacity: usize,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> LiveAudio {
     let url = mixed_codec_ladder_url(server, encrypted).await;
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
@@ -218,7 +220,7 @@ async fn build_live_audio(
 }
 
 fn spawn_live_stats_task(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LiveAudio,
 ) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
@@ -278,7 +280,7 @@ fn spawn_live_stats_task(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn warmup_until_variant_switch(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LiveAudio,
     stats: &Arc<Mutex<LiveStats>>,
     stage_prefix: &str,
 ) {
@@ -294,16 +296,10 @@ fn warmup_until_variant_switch(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn next_chunk(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
-    stage: &str,
-) -> Option<AudioChunk> {
+fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
     loop {
-        match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
-            Ok(ChunkOutcome::Eof { .. }) => return None,
-            Ok(ChunkOutcome::Pending { .. }) => {}
-            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
+        if let Poll::Ready(chunk) = poll_chunk(audio, stage) {
+            return chunk;
         }
         thread::sleep(Duration::from_millis(50));
     }
@@ -311,18 +307,21 @@ fn next_chunk(
 
 #[cfg(target_arch = "wasm32")]
 #[kithara::flash(true)]
-async fn next_chunk(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
-    stage: &str,
-) -> Option<AudioChunk> {
+async fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
     loop {
-        match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
-            Ok(ChunkOutcome::Eof { .. }) => return None,
-            Ok(ChunkOutcome::Pending { .. }) => {}
-            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
+        if let Poll::Ready(chunk) = poll_chunk(audio, stage) {
+            return chunk;
         }
         time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
+    match AudioRead::next_chunk(audio) {
+        Ok(ChunkOutcome::Chunk(chunk)) => Poll::Ready(Some(chunk)),
+        Ok(ChunkOutcome::Eof { .. }) => Poll::Ready(None),
+        Ok(ChunkOutcome::Pending { .. }) => Poll::Pending,
+        Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
     }
 }
 
