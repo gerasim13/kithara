@@ -95,6 +95,7 @@ deny = 16000
 [doc_staleness]
 # Platform, upstream, and illustrative names the workspace sources never define.
 allow_terms = [
+  "CMAKE_BUILD_TYPE",
   "Constraints",
   "FuturesUnordered",
   "HTTPMaximumConnectionsPerHost",
@@ -103,9 +104,11 @@ allow_terms = [
   "LOOM_MAX_PREEMPTIONS",
   "LockFileEx",
   "MediaExtractor",
+  "MinSizeRel",
   "MpaDecoder",
   "MyFileAssetLayout",
   "MyHlsAssetLayout",
+  "OPT_LEVEL",
   "SetGlobalDefault",
   "StateFlow",
   "Stretcher",

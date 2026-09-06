@@ -11,6 +11,13 @@ fn git_output(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
+    // Only the web bindings expose build metadata. Emitting it for native
+    // targets changes the crate fingerprint on every CI commit and relinks the
+    // native test harnesses even when no Rust input changed.
+    if env::var("CARGO_CFG_TARGET_ARCH").ok().as_deref() != Some("wasm32") {
+        return;
+    }
+
     println!("cargo:rerun-if-env-changed=CI_COMMIT_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
 
@@ -39,6 +46,4 @@ fn main() {
     {
         println!("cargo:rerun-if-changed={path}");
     }
-    println!("cargo:rerun-if-changed=src/");
-    println!("cargo:rerun-if-changed=build.rs");
 }

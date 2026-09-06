@@ -7,6 +7,7 @@ pub use crate::flash::yield_now;
 use crate::{
     backend::tokio::{backend, runtime::Handle, task as native_task},
     flash::system::credit,
+    maybe_send::MaybeSend,
 };
 
 /// Spawn an async task. Under `flash` (native) the future is wrapped in the
@@ -95,6 +96,15 @@ where
             f()
         }
     })
+}
+
+/// Spawn synchronous work without blocking an async runtime worker.
+pub fn spawn_sync<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + MaybeSend + 'static,
+    R: MaybeSend + 'static,
+{
+    spawn_blocking(f)
 }
 
 /// Spawn a blocking computation on a specific runtime [`Handle`].

@@ -4,6 +4,8 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -17,6 +19,20 @@ use super::{
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
+
+struct Consts;
+
+impl Consts {
+    /// The integration suite opens far more files across its cache and segment
+    /// fixtures than the 256 descriptor soft limit a macOS session starts
+    /// with. The lane raises its own ceiling so every executor gets the same
+    /// budget.
+    const OPEN_FILES: u64 = 65536;
+    /// How often the gate re-asks a volume it is waiting on. What it waits for
+    /// is a neighbouring job ending, so it re-asks on the scale a job finishes
+    /// on rather than the scale a compiler writes files on.
+    const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
+}
 
 struct SccacheSlot {
     index: usize,
@@ -446,18 +462,13 @@ pub(super) fn scratch_root() -> PathBuf {
     PathBuf::from("/tmp/kithara-ci")
 }
 
-/// The integration suite opens far more files across its cache and segment
-/// fixtures than the 256 descriptor soft limit a macOS session starts with.
-/// The lane raises its own ceiling so every executor gets the same budget.
-const OPEN_FILES: u64 = 65536;
-
 #[cfg(unix)]
 fn raise_open_file_limit() -> Result<()> {
     use nix::sys::resource::{Resource, getrlimit, setrlimit};
 
     let (soft, hard) =
         getrlimit(Resource::RLIMIT_NOFILE).context("reading the file descriptor limit")?;
-    let target = hard.min(OPEN_FILES);
+    let target = hard.min(Consts::OPEN_FILES);
     if soft >= target {
         return Ok(());
     }
@@ -529,7 +540,8 @@ fn prepare_build_target(
     Ok((target, lease))
 }
 
-/// Refuse a job only once there is nothing left to reclaim.
+/// Refuse a job only once there is nothing left to reclaim and nothing left to
+/// wait for.
 ///
 /// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
 /// the job arrived when it arrived, so whether a job started came down to how
@@ -538,19 +550,42 @@ fn prepare_build_target(
 /// and the job landing in that window was refused while tens of gigabytes of
 /// evictable compiler cache sat beside it. Growing the disk only moves the
 /// window; asking for the space back closes it.
+///
+/// Asking once does not, because what a reclaim cannot touch is not lost — it
+/// is held. A checkout an active job leases is skipped by design, so a host
+/// whose slots are all compiling offers no candidate at all, and the refusal
+/// reads as "no room" when it means "not yet". Six merge requests were refused
+/// this way in one afternoon while the branches beside them went green on the
+/// same base; one was 53 MB short, and every one passed on a manual retry
+/// against unchanged code. So the gate re-asks until the room appears or the
+/// profile's wait runs out, and the retry it was asking a human for costs a
+/// poll instead of a whole job.
 fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
     let required = config.host.free_bytes_for_a_job();
-    let free = free_bytes(shared_root)?;
-    if !is_ci() || free >= required {
+    if !is_ci() || free_bytes(shared_root)? >= required {
         return Ok(());
     }
     let workspaces = gitlab_workspaces(config.host.build_root());
-    let reclaimed_from = reclaim_build_caches(&workspaces, shared_root, free, required)?;
-    let free = free_bytes(shared_root)?;
-    if free < required {
-        bail!("{}", refusal(free, required, &workspaces, reclaimed_from));
+    let deadline = Instant::now() + config.host.job_room_wait();
+    loop {
+        let free = free_bytes(shared_root)?;
+        let reclaimed_from = reclaim_build_caches(&workspaces, shared_root, free, required)?;
+        let free = free_bytes(shared_root)?;
+        if free >= required {
+            return Ok(());
+        }
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            bail!("{}", refusal(free, required, &workspaces, reclaimed_from));
+        };
+        warn!(
+            free_bytes = free,
+            required_bytes = required,
+            shortfall_bytes = required.saturating_sub(free),
+            seconds_left = left.as_secs(),
+            "waiting for the CI volume to give the job room"
+        );
+        thread::sleep(Consts::JOB_ROOM_POLL.min(left));
     }
-    Ok(())
 }
 
 /// The checkouts whose build caches the budget owns.

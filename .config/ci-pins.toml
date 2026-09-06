@@ -16,6 +16,7 @@ brew_formulae = [
   "docker",
   "docker-buildx",
   "ffmpeg",
+  "ffmpeg@8",
   "gh",
   "git-lfs",
   "gitlab-runner",

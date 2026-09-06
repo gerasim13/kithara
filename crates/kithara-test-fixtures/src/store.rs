@@ -58,6 +58,13 @@ pub fn entry_path(namespace: &Path, id: &str, ext: &str) -> PathBuf {
     namespace.join(format!("{id}.{ext}"))
 }
 
+/// Whether a complete entry is already present without reading its contents.
+#[must_use]
+pub fn has_entry(namespace: &Path, id: &str, ext: &str) -> bool {
+    fs::metadata(entry_path(namespace, id, ext))
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() != 0)
+}
+
 /// Reads one entry. An empty file counts as absent — a half-written entry must
 /// never be served.
 #[must_use]
@@ -165,6 +172,7 @@ mod tests {
         assert!(read_entry(&namespace, "id", "wav").is_none());
         let written = write_entry(&namespace, "id", "wav", b"payload").expect("write entry");
         assert_eq!(written, entry_path(&namespace, "id", "wav"));
+        assert!(has_entry(&namespace, "id", "wav"));
         assert_eq!(
             read_entry(&namespace, "id", "wav").as_deref(),
             Some(b"payload".as_slice()),
@@ -177,6 +185,7 @@ mod tests {
         let namespace = dir.path().join("fingerprint");
         write_entry(&namespace, "id", "wav", b"").expect("write empty entry");
 
+        assert!(!has_entry(&namespace, "id", "wav"));
         assert!(read_entry(&namespace, "id", "wav").is_none());
     }
 

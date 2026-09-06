@@ -8,6 +8,7 @@ use futures::channel::oneshot;
 
 pub use super::backend::task::*;
 use super::{backend::task as tww_task, runtime::Handle};
+use crate::maybe_send::MaybeSend;
 
 /// Forward a `tokio_with_wasm` JoinHandle into our own oneshot-backed
 /// channel, converting any tww join error into our cancelled `JoinError`.
@@ -47,6 +48,15 @@ where
     }
 
     JoinHandle { rx }
+}
+
+/// Spawn synchronous work after yielding the current async step.
+pub fn spawn_sync<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + MaybeSend + 'static,
+    T: MaybeSend + 'static,
+{
+    spawn(async move { f() })
 }
 
 /// Run a blocking closure on a dedicated Web Worker thread.
