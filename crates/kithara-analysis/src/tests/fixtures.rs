@@ -25,7 +25,7 @@ use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
-    beat::{BeatDetectorMock, BeatMark, RawBeats},
+    beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
     waveform::bucket::Waveform,
 };
@@ -37,17 +37,16 @@ pub(super) const MARKER_TOLERANCE: u64 = 64;
 pub(super) type Artifacts = (Waveform, Vec<u64>);
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(super) fn beat_detector() -> Unimock {
-    shareable(Unimock::new(
-        BeatDetectorMock
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(|_, _| {
-                Ok(RawBeats {
-                    beats: vec![BeatMark::at(0.25)],
-                    downbeats: vec![BeatMark::at(0.25)],
-                })
-            })),
-    ))
+struct OneBeatPerWindow;
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+impl BeatDetector for OneBeatPerWindow {
+    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+        Ok(RawBeats {
+            beats: vec![BeatMark::at(0.25)],
+            downbeats: vec![BeatMark::at(0.25)],
+        })
+    }
 }
 
 /// Hand a mocked detector to a component that shares it with a compute pool.
@@ -64,16 +63,30 @@ pub(super) fn shareable(mock: Unimock) -> Unimock {
     mock.no_verify_in_drop()
 }
 
-/// The node drops its detector wherever the compute pool ends, so a detector
-/// this module hands out must outlive the thread that built it.
+/// The node drops its detector wherever the compute pool ends, so a mock
+/// [`shareable`] hands out must outlive the thread that built it.
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
 fn a_detector_survives_a_drop_off_the_thread_that_built_it() {
-    let detector = beat_detector();
+    let detector = shareable(Unimock::new(
+        BeatDetectorMock
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(|_, _| {
+                Ok(RawBeats {
+                    beats: vec![BeatMark::at(0.25)],
+                    downbeats: vec![BeatMark::at(0.25)],
+                })
+            })),
+    ));
 
     thread::spawn(move || drop(detector))
         .join()
         .expect("dropping a detector off-thread must not panic");
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+pub(super) fn beat_detector() -> Box<dyn BeatDetector> {
+    Box::new(OneBeatPerWindow)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
