@@ -36,7 +36,7 @@ where
                     return;
                 }
             };
-            drop(task::spawn_blocking(move || {
+            drop(task::spawn_sync(move || {
                 queue.apply_loaded(id, resource);
             }));
         }));

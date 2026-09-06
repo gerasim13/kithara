@@ -262,15 +262,42 @@ impl Gitlab {
         Ok(ids)
     }
 
+    /// Stop every run still holding a slot on `reference`.
+    ///
+    /// Deleting the branch does not stop its pipeline: a queued run keeps its
+    /// place in the resource group after the ref it names is gone, and on a
+    /// runner that takes one job at a time that slot is the whole cost. A
+    /// finished pipeline refuses the cancel, so only the unfinished are asked.
+    pub(super) fn cancel_pipelines(&self, reference: &str) -> Result<()> {
+        let mut url = self.project_url("pipelines")?;
+        url.query_pairs_mut().append_pair("ref", reference);
+        let response =
+            self.api
+                .request(&Method::GET, &url, ("PRIVATE-TOKEN", &self.token), None)?;
+        let pipelines = response
+            .as_array()
+            .context("GitLab pipeline list response was not an array")?;
+        for pipeline in pipelines {
+            let status = pipeline["status"]
+                .as_str()
+                .context("GitLab pipeline list entry has no status")?;
+            if finished(status) {
+                continue;
+            }
+            let id = pipeline["id"]
+                .as_u64()
+                .context("GitLab pipeline list entry has no numeric id")?;
+            self.request(&Method::POST, &format!("pipelines/{id}/cancel"), None)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn pipeline_observation(&self, pipeline_id: u64) -> Result<PipelineObservation> {
         let parent = self.request(&Method::GET, &format!("pipelines/{pipeline_id}"), None)?;
         let parent_status = parent["status"]
             .as_str()
             .context("GitLab pipeline response has no status")?;
-        if !matches!(
-            parent_status,
-            "success" | "failed" | "canceled" | "skipped" | "manual"
-        ) {
+        if !finished(parent_status) {
             return Ok(PipelineObservation::Running);
         }
         if parent_status != "success" {
@@ -392,6 +419,17 @@ fn pull_request(value: &Value) -> Result<PullRequest> {
         head_sha,
         author,
     })
+}
+
+/// Whether a pipeline has reached a state it will not leave.
+///
+/// A pipeline outside this set is still holding its place in the resource
+/// group, which is what both the observation and the cancel ask about.
+fn finished(status: &str) -> bool {
+    matches!(
+        status,
+        "success" | "failed" | "canceled" | "skipped" | "manual"
+    )
 }
 
 fn verification_variables(value: &Value, head_sha: &str, base_sha: &str) -> Result<()> {

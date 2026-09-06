@@ -2,6 +2,7 @@ use std::panic::Location;
 
 pub use super::backend::task::*;
 use super::runtime::Handle;
+use crate::maybe_send::MaybeSend;
 
 /// Spawn a future on the current runtime through the platform chokepoint.
 #[track_caller]
@@ -32,6 +33,15 @@ where
     R: Send + 'static,
 {
     super::backend::task::spawn_blocking(f)
+}
+
+/// Spawn synchronous work without blocking an async runtime worker.
+pub fn spawn_sync<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + MaybeSend + 'static,
+    R: MaybeSend + 'static,
+{
+    spawn_blocking(f)
 }
 
 /// Spawn a blocking computation on a specific runtime [`Handle`].

@@ -45,18 +45,35 @@ fn registry() -> &'static CodecRegistry { CODEC_REGISTRY.get_or_init(CodecRegist
 
 ## Build/codegen/LTO
 
-**Size profile starves DSP autovectorization** (LIVE) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so the iOS/wasm DSP ships scalar.
+**Size profile starves DSP autovectorization** (FIXED) - the workspace ships `opt-level = "z"`, which disables loop autovectorization and lowers inline thresholds; with no SIMD crate, autovectorization is the *only* vector path, so anything left at `"z"` ships scalar. Release now optimizes every third-party package for speed and keeps `"z"` for the workspace's own crates:
 
 ```toml
-# bad: workspace-wide in [profile.release] and [profile.wasm-release]
-opt-level = "z"
-# good: keep "z" for cold orchestration crates, speed-opt the hot DSP crates
-[profile.release.package.kithara-resampler] # + kithara-decode/-stretch/-audio/-beat
+[profile.release.package."*"]
 opt-level = 3
 ```
 
+A per-package override reaches two units, not one: the crate's own codegen, and its build script's `OPT_LEVEL` environment variable. That second unit is what carries the change into C++ - but only for a build script that reads `OPT_LEVEL`, which is not universal:
+
+| crate | build system | what the override reaches |
+| --- | --- | --- |
+| `signalsmith-stretch`, `fdk-aac-sys`, `zstd-sys` | `cc` | all of it: `OPT_LEVEL` goes straight to the compiler, and `fdk-aac-sys` moves 171 files `-Oz` -> `-O3`, `aacdecoder.cpp` included |
+| `btls-sys`, `aws-lc-sys` | `cmake` | `CMAKE_BUILD_TYPE` moves `MinSizeRel` (`-Os -DNDEBUG`) -> `Release` (`-O3 -DNDEBUG`) |
+| `bungee-sys` | `cmake` + `cpp_build` | the Rust side and the `cpp_build` wrapper glue only - `build.rs` picks the CMake config from `PROFILE`, not `OPT_LEVEL`, so the vendored bungee core and kissfft were already `Release` |
+
+The rule generalises: before claiming an override moved a native dependency, read its `build.rs` for which environment variable it consults. Capture the result rather than inferring it - `CC_ENABLE_DEBUG_OUTPUT=1 cargo build --release -p <crate> -vv` and grep for `running:`. `cc` invokes the compiler as `cc`/`c++`, never as `clang`, so grepping for the toolchain name finds nothing.
+
+What the glob costs, measured rather than argued:
+
+| lane family | cost |
+| --- | --- |
+| `test-release` (seventeen lanes) | +82% compile CPU on `-p kithara`; the profile inherits the release overrides, moving 319 of 676 units from opt-level 0 to 3 - build scripts, proc-macros, and the build-dependency copies of normal deps |
+| Apple release | 476 -> 1105 CPU-seconds (2.32x); linked `__text` +4.9% |
+| `web-size` | +42% compile CPU; dist 3137 -> 3565 KiB |
+
+Two things the glob reaches that a named list would not. The rebuilt sysroot under `-Z build-std` is non-workspace, so its codegen moves to 3 while `build-std-features = ["optimize_for_size"]` in `crates/kithara-ffi/.cargo/config.toml` still applies. And the TLS natives grow without any symmetric-crypto gain: their AES, ChaCha20-Poly1305 and SHA kernels are hand-written assembly (123 assembled `.S` objects in `btls-sys`, 98 in `aws-lc-sys`), and those objects are byte-identical at `-Os` and `-O3` - assembling is transliteration, not compilation. The growth is all C glue: BoringSSL `libcrypto` `__TEXT` +55%. `[profile.release.package.<name>]` beats the glob, so pinning one back is a three-line change; `build-override` does *not* beat it and cannot be used to keep build scripts cheap.
+
 Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
-*tier: hot | detector: manual (Cargo.toml census) | present in kithara (no `[profile.release.package.*]` overrides exist)*
+*tier: hot | detector: manual (Cargo.toml census) | every third-party package is at 3, including the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`) the `[profile.dev.package.*]` block names as hot. The workspace's own crates (`kithara-audio`, `-decode`, `-resampler`) stay at `"z"` - moving them is a separate measured change*
 
 **wasm ships scalar** (pairs with the above) - no wasm lane enables `+simd128` and the trunk `wasm-opt` params omit `--enable-simd`.
 
