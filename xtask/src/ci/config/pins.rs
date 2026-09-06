@@ -250,6 +250,8 @@ fn is_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::ci::config::profile::workspace_root;
 
@@ -315,31 +317,80 @@ mod tests {
     /// A package manager's prefix is machine state: Homebrew answers
     /// `/opt/homebrew` on Apple silicon, `/usr/local` on Intel and
     /// `/home/linuxbrew/.linuxbrew` on Linux, and an install built by hand
-    /// answers none of them. The files that configure a build therefore ask
-    /// the machine where a library lives and never write the answer down,
-    /// because a written one only holds on the machine it was copied from.
+    /// answers none of them. Whoever needs an installed tool therefore asks
+    /// where it lives and never writes the answer down, because a written one
+    /// only holds on the machine it was copied from. The build configuration
+    /// asks the package manager; the executor asks `CiHost::brew_root`, the
+    /// field the machine's own profile fills in.
     #[test]
-    fn the_build_configuration_asks_for_prefixes_instead_of_declaring_them() {
-        const DECLARED: [&str; 3] = ["/opt/homebrew", "/usr/local/opt", "linuxbrew"];
+    fn nothing_writes_down_a_package_managers_prefix() {
+        const DECLARED: [&str; 5] = [
+            "/opt/homebrew",
+            "/usr/local/opt",
+            "/usr/local/Cellar",
+            "linuxbrew",
+            "/opt/local/bin",
+        ];
 
         let root = workspace_root();
-        let mut configs = vec![root.join(".cargo/config.toml"), root.join("justfile")];
+        let mut sources = vec![root.join(".cargo/config.toml"), root.join("justfile")];
         for entry in fs::read_dir(root.join(".config/just")).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|kind| kind == "just") {
-                configs.push(path);
+                sources.push(path);
             }
         }
+        sources.extend(executor_sources(&root.join("xtask/src")));
 
-        for config in configs {
-            let text = fs::read_to_string(&config).unwrap();
+        for source in sources {
+            let text = fs::read_to_string(&source).unwrap();
             for prefix in DECLARED {
                 assert!(
-                    !text.contains(prefix),
+                    !production_text(&source, &text).contains(prefix),
                     "{} writes down {prefix}, which is only one machine's answer",
-                    config.display()
+                    source.display()
                 );
             }
         }
+    }
+
+    /// Every `.rs` under the executor, including the modules a `#[path]`
+    /// attribute pulls in from a file of their own.
+    fn executor_sources(directory: &Path) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources.extend(executor_sources(&path));
+            } else if path.extension().is_some_and(|kind| kind == "rs") {
+                sources.push(path);
+            }
+        }
+        sources
+    }
+
+    /// A test states the answer one machine gave, which is its job: the mac
+    /// fixture says `/opt/homebrew` and the launch agents built from it are
+    /// asserted against that. So the claim is about production text, and a
+    /// module's tests are its tail, from `#[cfg(test)] mod tests` to the end
+    /// of the file. A test module living in a file of its own is named for it.
+    fn production_text(source: &Path, text: &str) -> String {
+        if source
+            .file_stem()
+            .is_some_and(|stem| stem.to_string_lossy().ends_with("_tests"))
+        {
+            return String::new();
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines.iter().enumerate().find_map(|(index, line)| {
+            let opens_tests = lines
+                .get(index + 1..)
+                .unwrap_or_default()
+                .iter()
+                .find(|next| !next.starts_with("#["))
+                .is_some_and(|next| next.starts_with("mod tests"));
+            (*line == "#[cfg(test)]" && opens_tests).then_some(index)
+        });
+        lines[..tail.unwrap_or(lines.len())].join("\n")
     }
 }
