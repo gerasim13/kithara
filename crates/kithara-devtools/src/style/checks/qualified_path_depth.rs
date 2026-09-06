@@ -9,7 +9,8 @@ use anyhow::{Context as _, Result};
 use proc_macro2::{Spacing, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
-    Arm, Field, ImplItem, Item, ItemMod, ItemUse, Macro, Path, Stmt, TraitItem, UseTree, Variant,
+    Arm, Expr, Field, ImplItem, Item, ItemMod, ItemUse, Macro, Path, Stmt, TraitItem, UseTree,
+    Variant,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -1038,13 +1039,14 @@ impl PathVisitor<'_> {
         }
     }
 
-    fn under_cfg(&mut self, attrs: &[syn::Attribute], walk: impl FnOnce(&mut Self)) {
-        let gated = attrs
-            .iter()
-            .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"));
+    fn gate(&mut self, gated: bool, walk: impl FnOnce(&mut Self)) {
         self.gated += usize::from(gated);
         walk(self);
         self.gated -= usize::from(gated);
+    }
+
+    fn under_cfg(&mut self, attrs: &[syn::Attribute], walk: impl FnOnce(&mut Self)) {
+        self.gate(gated_by(attrs), walk);
     }
 }
 
@@ -1110,15 +1112,17 @@ impl<'ast> Visit<'ast> for PathVisitor<'ast> {
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        let attrs: &[syn::Attribute] = match stmt {
+        let gated = match stmt {
             Stmt::Item(Item::Use(_)) => {
                 self.local_use = true;
-                &[]
+                false
             }
-            Stmt::Local(value) => &value.attrs,
-            _ => &[],
+            Stmt::Item(_) => false,
+            Stmt::Local(value) => gated_by(&value.attrs),
+            Stmt::Macro(value) => gated_by(&value.attrs),
+            Stmt::Expr(value, _) => gated_expr(value),
         };
-        self.under_cfg(attrs, |this| visit::visit_stmt(this, stmt));
+        self.gate(gated, |this| visit::visit_stmt(this, stmt));
     }
 
     fn visit_trait_item(&mut self, item: &'ast TraitItem) {
@@ -1129,6 +1133,37 @@ impl<'ast> Visit<'ast> for PathVisitor<'ast> {
     fn visit_variant(&mut self, variant: &'ast Variant) {
         self.under_cfg(&variant.attrs, |this| visit::visit_variant(this, variant));
     }
+}
+
+/// Whether these attributes hold a path only some configurations compile.
+fn gated_by(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+}
+
+/// Whether an expression standing as a statement carries a `#[cfg]`.
+///
+/// A body gates a block or a call the same way an item is gated, and a path
+/// inside one compiles only in some configurations. `syn` keeps an
+/// expression's attributes inside the expression, which is non-exhaustive and
+/// hands out no accessor, so the answer comes off the front of its own tokens,
+/// where an outer attribute always stands.
+fn gated_expr(expr: &Expr) -> bool {
+    let mut tokens = expr.to_token_stream().into_iter().peekable();
+    while matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '#') {
+        tokens.next();
+        let Some(TokenTree::Group(group)) = tokens.next() else {
+            return false;
+        };
+        if matches!(
+            group.stream().into_iter().next(),
+            Some(TokenTree::Ident(name)) if name == "cfg" || name == "cfg_attr"
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 fn absorb_idents(tokens: TokenStream, names: &mut HashSet<String>) {
@@ -1516,6 +1551,33 @@ mod tests {
         let (out, _) = fix(src);
 
         assert_eq!(out, src, "an import the other builds call unused: {out}");
+    }
+
+    #[test]
+    fn a_gated_block_in_a_body_does_not_earn_an_import() {
+        let src = "fn f() {\n    #[cfg(feature = \"render\")]\n    {\n        naga::valid::Validator::new();\n    }\n}\n";
+
+        let (out, _) = fix(src);
+
+        assert_eq!(out, src, "an import the other builds call unused: {out}");
+    }
+
+    #[test]
+    fn a_gated_call_in_a_body_does_not_earn_an_import() {
+        let src = "fn f() {\n    #[cfg(unix)]\n    naga::valid::Validator::new();\n}\n";
+
+        let (out, _) = fix(src);
+
+        assert_eq!(out, src, "an import the other builds call unused: {out}");
+    }
+
+    #[test]
+    fn an_ungated_call_in_a_body_earns_the_import_a_gated_one_refuses() {
+        let src = "fn f() {\n    naga::valid::Validator::new();\n}\n";
+
+        let (out, _) = fix(src);
+
+        assert!(out.contains("use naga::valid::Validator;"), "{out}");
     }
 
     #[test]
