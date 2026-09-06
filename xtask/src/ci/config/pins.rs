@@ -23,6 +23,15 @@ pub(crate) struct CiPins {
     pub(crate) android_ndk_version: String,
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
+    /// Two entries name `FFmpeg` because two consumers want different things
+    /// from it. The unversioned formula keeps the `ffmpeg` binary on `PATH`
+    /// for the reference decoder the fixture tests compare against, and it
+    /// may track whatever release Homebrew ships. The versioned one is
+    /// keg-only and exists for `ffmpeg-next`, which generates its bindings
+    /// against the headers it finds: the root `justfile` asks brew where this
+    /// formula sits and puts it first on `PKG_CONFIG_PATH`, so the crate binds
+    /// to the ABI it declares rather than to whatever the unversioned formula
+    /// became overnight.
     pub(crate) brew_formulae: Vec<String>,
     /// Chromium the browser lane may run, and the version its `chromedriver` must
     /// report. The image installs both from Debian as one version-matched pair,
@@ -241,6 +250,8 @@ fn is_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::ci::config::profile::workspace_root;
 
@@ -271,5 +282,177 @@ mod tests {
             let expected = lab["tools"][tool]["version"].as_str().unwrap();
             assert_eq!(pins.cargo_tool_version(tool).unwrap(), expected, "{tool}");
         }
+    }
+
+    /// `ffmpeg-next` generates its bindings from the `FFmpeg` headers present
+    /// on the build host, so the ABI line the workspace binds to is one fact
+    /// stated twice: the formula the image installs, and the crate version
+    /// itself. A disagreement surfaces deep inside generated code — a missing
+    /// `AV_CODEC_ID_V408`, or a match that stopped being exhaustive — naming
+    /// neither `FFmpeg` nor the pin. Where that formula sits on disk is the
+    /// machine's answer rather than this repository's, so nothing here pins a
+    /// path.
+    #[test]
+    fn the_installed_ffmpeg_line_matches_the_crate_that_binds_to_it() {
+        let pins = CiPins::load(&workspace_root().join(PINS_PATH)).unwrap();
+        let line = pins
+            .brew_formulae
+            .iter()
+            .find_map(|formula| formula.strip_prefix("ffmpeg@"))
+            .expect("the pins install a versioned ffmpeg formula");
+
+        let manifest: toml::Value =
+            toml::from_str(&fs::read_to_string(workspace_root().join("Cargo.toml")).unwrap())
+                .unwrap();
+        let declared = manifest["workspace"]["dependencies"]["ffmpeg-next"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            declared.split('.').next().unwrap(),
+            line,
+            "ffmpeg-next {declared} binds to headers ffmpeg@{line} does not carry"
+        );
+    }
+
+    /// A package manager's prefix is machine state: Homebrew answers
+    /// `/opt/homebrew` on Apple silicon, `/usr/local` on Intel and
+    /// `/home/linuxbrew/.linuxbrew` on Linux, and an install built by hand
+    /// answers none of them. Whoever needs an installed tool therefore asks
+    /// where it lives and never writes the answer down, because a written one
+    /// only holds on the machine it was copied from. The build configuration
+    /// asks the package manager; the executor asks `CiHost::brew_root`, the
+    /// field the machine's own profile fills in.
+    #[test]
+    fn nothing_writes_down_a_package_managers_prefix() {
+        const DECLARED: [&str; 5] = [
+            "/opt/homebrew",
+            "/usr/local/opt",
+            "/usr/local/Cellar",
+            "linuxbrew",
+            "/opt/local/bin",
+        ];
+
+        let root = workspace_root();
+        let mut sources = vec![root.join(".cargo/config.toml"), root.join("justfile")];
+        for entry in fs::read_dir(root.join(".config/just")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|kind| kind == "just") {
+                sources.push(path);
+            }
+        }
+        sources.extend(executor_sources(&root.join("xtask/src")));
+
+        for source in sources {
+            let text = fs::read_to_string(&source).unwrap();
+            for prefix in DECLARED {
+                assert!(
+                    !production_text(&source, &text).contains(prefix),
+                    "{} writes down {prefix}, which is only one machine's answer",
+                    source.display()
+                );
+            }
+        }
+    }
+
+    /// `just` evaluates every assignment before it knows which recipe was
+    /// asked for, so a backtick assignment is on the clock of every
+    /// invocation, the nested ones a test drives included. It may therefore
+    /// read what is already on the machine, but never spawn a program that
+    /// machine might answer slowly or not have at all: `brew --prefix` cost
+    /// the public-runner test its whole timeout budget.
+    #[test]
+    fn no_assignment_in_the_command_surface_spawns_a_program() {
+        const READS_THE_MACHINE: [&str; 7] =
+            ["[", "command", "grep", "printf", "sed", "test", "true"];
+
+        let justfile = fs::read_to_string(workspace_root().join("justfile")).unwrap();
+        for command in assigned_commands(&justfile) {
+            assert!(
+                READS_THE_MACHINE.contains(&command.as_str()),
+                "an assignment spawns `{command}`, which every invocation then waits for"
+            );
+        }
+    }
+
+    /// The leading word of every command a backtick assignment runs. Words
+    /// carrying an `=` are the assignment's own locals, not programs.
+    fn assigned_commands(justfile: &str) -> Vec<String> {
+        let mut scripts = Vec::new();
+        let mut lines = justfile.lines();
+        while let Some(line) = lines.next() {
+            let Some((_, value)) = line.split_once(":=") else {
+                continue;
+            };
+            if let Some(opened) = value.trim().strip_prefix("```") {
+                scripts.push(opened.to_owned());
+                scripts.extend(
+                    lines
+                        .by_ref()
+                        .take_while(|line| !line.contains("```"))
+                        .map(str::to_owned),
+                );
+            } else if let Some(opened) = value.trim().strip_prefix('`') {
+                scripts.push(opened.trim_end_matches('`').to_owned());
+            }
+        }
+
+        scripts
+            .iter()
+            .map(|script| {
+                script
+                    .replace("&&", "\n")
+                    .replace("||", "\n")
+                    .replace("$(", "\n")
+                    .replace(['|', '(', ')'], "\n")
+            })
+            .flat_map(|script| {
+                script
+                    .lines()
+                    .filter_map(|command| command.split_whitespace().next())
+                    .filter(|word| !word.contains('='))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Every `.rs` under the executor, including the modules a `#[path]`
+    /// attribute pulls in from a file of their own.
+    fn executor_sources(directory: &Path) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources.extend(executor_sources(&path));
+            } else if path.extension().is_some_and(|kind| kind == "rs") {
+                sources.push(path);
+            }
+        }
+        sources
+    }
+
+    /// A test states the answer one machine gave, which is its job: the mac
+    /// fixture says `/opt/homebrew` and the launch agents built from it are
+    /// asserted against that. So the claim is about production text, and a
+    /// module's tests are its tail, from `#[cfg(test)] mod tests` to the end
+    /// of the file. A test module living in a file of its own is named for it.
+    fn production_text(source: &Path, text: &str) -> String {
+        if source
+            .file_stem()
+            .is_some_and(|stem| stem.to_string_lossy().ends_with("_tests"))
+        {
+            return String::new();
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines.iter().enumerate().find_map(|(index, line)| {
+            let opens_tests = lines
+                .get(index + 1..)
+                .unwrap_or_default()
+                .iter()
+                .find(|next| !next.starts_with("#["))
+                .is_some_and(|next| next.starts_with("mod tests"));
+            (*line == "#[cfg(test)]" && opens_tests).then_some(index)
+        });
+        lines[..tail.unwrap_or(lines.len())].join("\n")
     }
 }
