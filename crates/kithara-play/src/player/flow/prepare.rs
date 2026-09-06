@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -31,13 +31,18 @@ where
         let warp = self.player.core.warp.clone();
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
+        let stream_shape = self.player.core.engine.stream_shape()?;
+        let output_buffer_frames = warp
+            .render_quantum_frames()
+            .map(|_| {
+                let shape = stream_shape.ok_or(crate::session::SessionError::NoContext)?;
+                NonZeroUsize::try_from(shape.max_block_frames)
+                    .map_err(|_| PlayError::Internal("session output block exceeds usize".into()))
+            })
+            .transpose()?;
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
-            None => self
-                .player
-                .core
-                .engine
-                .stream_shape()?
+            None => stream_shape
                 .map(|shape| {
                     let chunk_size =
                         usize::try_from(shape.max_block_frames.get()).map_err(|_| {
@@ -63,6 +68,9 @@ where
             worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
+            output_buffer_frames,
+            response_budget_frames: output_buffer_frames
+                .map(|_| self.player.core.response_budget_frames),
             host_sample_rate,
             decoder,
             warp,

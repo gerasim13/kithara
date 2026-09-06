@@ -47,7 +47,7 @@ fn response_backends() -> ElasticBackendConfig {
 
 const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 2.0, 2, 0);
 const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
-const EXTREME: ResponseCase = ResponseCase::new(512, 16_384, 64, 64, 441, 0.5, 0, 4.0, 3, 64);
+const EXTREME: ResponseCase = ResponseCase::new(128, 16_384, 64, 64, 441, 0.5, 0, 4.0, 3, 64);
 
 #[derive(Clone, Copy, Debug)]
 struct ResponseCase {
@@ -241,6 +241,10 @@ async fn playing_queue(
                     u32::try_from(case.callback_frames).expect("case callback fits u32"),
                 )
                 .expect("case callback is non-zero"),
+            )
+            .response_budget_frames(
+                NonZeroUsize::new(case.response_budget_frames)
+                    .expect("case response budget is non-zero"),
             )
             .build(),
         SAMPLE_RATE,
@@ -436,7 +440,7 @@ fn assert_response(
         .map(|event| (event.u64("source_frames"), event.u64("output_frames")));
     assert!(
         onset <= case.response_budget_frames,
-        "{backend} target tone began after {onset} frames; budget is {}; primed={primed:?}",
+        "{backend} target tone began after {onset} frames; applied after {applied_response}; presented after {presented_response}; budget is {}; primed={primed:?}",
         case.response_budget_frames
     );
 }

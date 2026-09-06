@@ -1,6 +1,8 @@
 mod lifecycle;
 mod player;
 
+use std::num::NonZeroUsize;
+
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
@@ -33,6 +35,7 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) warp: WarpConfig,
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the

@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     decode::GaplessMode,
@@ -40,6 +40,7 @@ pub struct OfflinePlayerOptions {
     block_on_underrun: bool,
     warp: Option<WarpConfig>,
     output_block_frames: Option<NonZeroU32>,
+    response_budget_frames: Option<NonZeroUsize>,
 }
 
 impl OfflinePlayerHarness {
@@ -66,6 +67,7 @@ impl OfflinePlayerHarness {
             .worker(worker.clone())
             .maybe_eq_layout(options.eq_layout)
             .maybe_warp(options.warp)
+            .maybe_response_budget_frames(options.response_budget_frames)
             .build();
 
         let player = PlayerImpl::new(player_config);
