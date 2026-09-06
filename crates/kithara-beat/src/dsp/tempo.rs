@@ -1,5 +1,3 @@
-//! The tempo the periodicity stage searches.
-
 use std::ops::RangeInclusive;
 
 use bon::bon;

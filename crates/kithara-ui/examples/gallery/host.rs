@@ -1,9 +1,3 @@
-//! The gallery as a toolkit-neutral application.
-//!
-//! Everything here is stated in terms of `kithara_ui::app`; nothing names a
-//! toolkit. Which host shows it is decided by the feature the crate was built
-//! with.
-
 use kithara_ui::{
     app::{App, RunError, Ui},
     module::ViewSet,

@@ -1,5 +1,3 @@
-//! Shared application-shaped pools for test composition roots.
-
 struct Consts;
 
 impl Consts {

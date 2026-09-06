@@ -188,7 +188,7 @@ mod tests {
         let second_slot: Arc<dyn IdleReclaimer> = second.clone();
         budget
             .install_reclaimers([Arc::downgrade(&first_slot), Arc::downgrade(&second_slot)].into())
-            .unwrap_or_else(|_| panic!("reclaimer inventory installs once"));
+            .expect("reclaimer inventory installs once");
 
         assert_eq!(budget.reclaim(7), 7);
         assert_eq!(budget.reclaim(5), 5);

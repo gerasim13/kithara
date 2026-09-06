@@ -112,7 +112,7 @@ pub(crate) mod tests {
             (all_ready, peak)
         })
         .join()
-        .unwrap_or_else(|_| panic!("sample-pool worker panicked"));
+        .expect("sample-pool worker panicked");
 
         assert!(all_ready);
         assert_eq!(peak, initial_peak);

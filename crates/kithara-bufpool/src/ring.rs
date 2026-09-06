@@ -120,12 +120,12 @@ mod tests {
         };
         assert_eq!(rejected, [9]);
         let mut empty = BufferRing::from_prefix(Vec::<i32>::new(), 0)
-            .unwrap_or_else(|_| panic!("an empty prefix fits empty storage"));
+            .expect("an empty prefix fits empty storage");
         assert!(empty.try_pop_into(&mut []));
         assert!(empty.try_push(&[]));
 
         let mut ring = BufferRing::from_prefix(vec![1, 2, 3, 0], 3)
-            .unwrap_or_else(|_| panic!("test prefix fits the backing buffer"));
+            .expect("test prefix fits the backing buffer");
         let mut oversized = [9; 4];
         assert!(!ring.try_pop_into(&mut oversized));
         assert_eq!(oversized, [9; 4]);

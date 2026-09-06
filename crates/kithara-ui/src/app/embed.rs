@@ -1,12 +1,3 @@
-//! The embeddable layer: a UI that owns no window and no GPU device.
-//!
-//! A host that already has both — bevy, a plug-in shell, someone else's winit
-//! loop - drives this directly: hand it a size, hand it input, take the complete
-//! frame, prepare its shader images, draw its Vello scene and then its native
-//! effects. [`super::run`] is a
-//! thin window of its own built on top of this, for an application that has no
-//! host to live in.
-
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},

@@ -1,9 +1,3 @@
-//! Which pages the gallery offers, taken from the screen it ships.
-//!
-//! A page is added by writing it into the screen's tabs and giving it a nav
-//! item. Nothing here lists the pages, so the list cannot disagree with the
-//! document that shows them.
-
 use std::sync::LazyLock;
 
 use kithara_ui::{

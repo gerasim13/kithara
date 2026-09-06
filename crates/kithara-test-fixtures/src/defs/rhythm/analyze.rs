@@ -46,12 +46,12 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
         while results.changed().await.is_ok() {}
         results.borrow().clone()
     })
-    .unwrap_or_else(|| panic!("production rhythm analysis produced no result"));
+    .expect("production rhythm analysis produced no result");
     let analysis = progress.analysis();
     assert!(analysis.is_settled(), "rhythm analysis must cover the WAV");
     analysis
         .beat()
-        .unwrap_or_else(|| panic!("production rhythm analysis produced no beat artifact"))
+        .expect("production rhythm analysis produced no beat artifact")
         .artifact()
         .clone()
 }
