@@ -152,8 +152,13 @@ impl Bridge {
 
     fn verify_open_pulls(&self, base_sha: &str) -> Result<()> {
         let ledger = Ledger::new(&self.config.state_dir)?;
-        for pull in self.github.open_pull_requests()? {
-            if let Err(error) = self.verify_pull(&ledger, &pull, base_sha) {
+        let pulls = self.github.open_pull_requests()?;
+        let live_heads = pulls
+            .iter()
+            .map(|pull| pull.head_sha.clone())
+            .collect::<Vec<_>>();
+        for pull in &pulls {
+            if let Err(error) = self.verify_pull(&ledger, pull, base_sha) {
                 warn!(
                     pull_number = pull.number,
                     head_sha = %pull.head_sha,
@@ -165,7 +170,9 @@ impl Bridge {
         }
         if let Err(error) = sweep_quarantine_refs(
             base_sha,
+            &live_heads,
             || self.repo.gitlab_quarantine_refs(&self.gitlab),
+            |reference| self.gitlab.cancel_pipelines(reference),
             |refs| self.repo.delete_gitlab(&self.gitlab, refs),
         ) {
             warn!(
@@ -270,6 +277,7 @@ impl Bridge {
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
+            |id| ledger.release(&pull.head_sha, base_sha, entry.attempt, id),
         )
     }
 }
@@ -313,42 +321,71 @@ fn abbreviate(sha: &str) -> &str {
 
 /// The verification branches nothing will ever name again.
 ///
-/// A quarantine ref is addressed by the pair it was judged for, so the moment
-/// main moves the bridge writes a new name and the old branch is left behind.
-/// Matching on the base alone covers every naming scheme the bridge has used,
-/// because each one spells the base out abbreviated or in full.
-fn superseded_quarantine_refs<'a>(refs: &'a [String], base_sha: &str) -> Vec<&'a str> {
+/// A quarantine ref is addressed by the pair it was judged for, so either side
+/// moving leaves the old branch behind: the base moves when main advances, and
+/// the head moves whenever the author pushes. Judging the base alone left the
+/// second kind standing - nine of them held slots at once on a runner that
+/// takes one job at a time, ahead of the runs people were waiting on. Each
+/// scheme spells both halves out abbreviated or in full, so matching the
+/// abbreviation covers all of them without parsing any.
+fn superseded_quarantine_refs<'a>(
+    refs: &'a [String],
+    base_sha: &str,
+    live_heads: &[String],
+) -> Vec<&'a str> {
     let base = abbreviate(base_sha);
     refs.iter()
         .map(String::as_str)
-        .filter(|reference| reference.starts_with("quarantine/") && !reference.contains(base))
+        .filter(|reference| {
+            reference.starts_with("quarantine/")
+                && (!reference.contains(base) || !names_a_live_head(reference, live_heads))
+        })
         .collect()
 }
 
-/// Drop the verification branches a moved base left behind.
+/// Whether an open pull request still stands on the head this branch names.
+///
+/// Matching the abbreviation the way the base is matched covers every naming
+/// scheme the bridge has used without parsing any of them.
+fn names_a_live_head(reference: &str, live_heads: &[String]) -> bool {
+    live_heads
+        .iter()
+        .any(|head| reference.contains(abbreviate(head)))
+}
+
+/// Cancel and drop the verification branches nothing will name again.
 ///
 /// The bridge pushes one of these per attempt and never reads it back: the
 /// verdict lives in the ledger, and `verify_pull` reserves against whatever
-/// main is now, so a branch judged for an earlier base is orphaned the moment
-/// main moves. Nothing addresses it again and nothing reads its pipeline, so
-/// what is left is exhaust - 197 of them had piled up on `GitLab` by the time
-/// anyone counted. Cancelling an orphan's pipeline on the way out is a gain on
-/// a runner that takes one job at a time.
+/// head and base are current now. Nothing addresses an orphan again and
+/// nothing reads its pipeline, so what is left is exhaust - 197 of them had
+/// piled up on `GitLab` by the time anyone counted. Deleting the branch does
+/// not stop its run: a queued pipeline keeps its place in the resource group
+/// after the ref it names is gone, so the cancel has to be its own call.
+///
+/// A failed cancel stops the pass before the delete. Removing the branch while
+/// its pipeline still queues is the state this exists to prevent, and the ref
+/// left in place is what the next tick finds it by.
 fn sweep_quarantine_refs(
     base_sha: &str,
+    live_heads: &[String],
     list: impl FnOnce() -> Result<Vec<String>>,
+    cancel: impl Fn(&str) -> Result<()>,
     delete: impl FnOnce(&[&str]) -> Result<()>,
 ) -> Result<()> {
     let listed = list()?;
-    let superseded = superseded_quarantine_refs(&listed, base_sha);
+    let superseded = superseded_quarantine_refs(&listed, base_sha, live_heads);
     if superseded.is_empty() {
         return Ok(());
+    }
+    for reference in &superseded {
+        cancel(reference)?;
     }
     delete(&superseded)?;
     info!(
         dropped = superseded.len(),
         %base_sha,
-        "verification branches left behind by a moved base removed"
+        "verification branches nothing will name again cancelled and removed"
     );
     Ok(())
 }
@@ -430,12 +467,21 @@ fn reject_control_changes(
     Ok(true)
 }
 
+/// One tick of a verification that already owns a pipeline.
+///
+/// A stopped run is released rather than recorded. Six pull requests were
+/// marked failed at once when the queue holding their runs was emptied: nothing
+/// had been judged, yet every entry went terminal and no later tick addressed
+/// them again. What a cancellation reports is that the branch is still
+/// unverified, which is what the pull request is told while the next attempt
+/// opens.
 fn observe_verification(
     head_sha: &str,
     pipeline_id: u64,
     mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
     mut report: impl FnMut(&str, &str, &str) -> Result<()>,
     mut finish: impl FnMut(u64, VerificationState, Option<String>) -> Result<()>,
+    release: impl FnOnce(u64) -> Result<()>,
 ) -> Result<()> {
     match observe(pipeline_id)? {
         PipelineObservation::Running => Ok(()),
@@ -443,6 +489,12 @@ fn observe_verification(
             let detail = format!("GitLab pipeline {pipeline_id} passed");
             report(head_sha, "success", &detail)?;
             finish(pipeline_id, VerificationState::Verified, Some(detail))
+        }
+        PipelineObservation::Cancelled => {
+            let detail =
+                format!("GitLab pipeline {pipeline_id} was stopped; a new run will be started");
+            report(head_sha, "pending", &detail)?;
+            release(pipeline_id)
         }
         PipelineObservation::Failed(status) => {
             let detail = format!("GitLab pipeline {pipeline_id} finished with {status}");
