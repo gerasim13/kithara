@@ -278,61 +278,33 @@ version is bumped, acceptable for a library of stable files.
 
 Two layers: `build.rs` embeds `crates/kithara-app/app.yaml` verbatim and the application parses that same text at
 startup, so the build decides nothing about what a field means, and a `kithara.yaml` beside the executable — or the
-one `--config <path>` names — is laid over it. What merging an overlay does to each kind of node is `document::merge`
-and its tests.
+one `--config <path>` names — is laid over it. `document::merge` and its tests own what merging does to each node.
+`app.yaml` must never name `ui:`, `draw_pool:`, or any future `#[cfg(feature = "gui")]` section: a `lib-only`
+build's `Document` declares no such field, and the integration suites load this exact document.
 
-`app.yaml` must never name `ui:`, `draw_pool:`, or any future `#[cfg(feature = "gui")]` section: a `lib-only` build's
-`Document` declares no such field, and the integration suites load this exact document.
+The pipeline is merge → expand → type, and that order keeps secrets out of the logs. Both earlier steps work on the
+untyped tree, so a schema failure is reported from the *pre*-expansion one, naming `$KITHARA_DRM_PROD_KEY` rather
+than the value behind it, and `Config` keeps that tree for `Config::dump` (`--dump-config`) and its `Debug`. The
+typed tree holds resolved secrets and is therefore deserialize-only: a `Serialize` anywhere in it is a leak.
 
-The pipeline is merge → expand → type, and that order is what keeps secrets out of the logs. Both earlier steps work
-on the untyped tree, so a schema failure is reported from the *pre*-expansion one, naming `$KITHARA_DRM_PROD_KEY`
-rather than the value behind it, and `Config` keeps that same tree for `Config::dump` (`--dump-config`) and its own
-`Debug`. The typed tree holds resolved secrets and is therefore deserialize-only: a `Serialize` anywhere in it is a
-leak. Secrets are never inlined either — a `cipher_key` or header value is a `$KITHARA_...` reference and the values
-live in the gitignored workspace `.env` or the build shell — and `build.rs` wraps each baked value in `obfstr!()` so
-a shipped secret is not a plain run of bytes in `strings` output. Builds that talk to a real key server — today the
-CI `network*` lanes — set `KITHARA_DRM_REQUIRE`, and an upfront pass then fails the build with every missing name
-and its position.
+Secrets are never inlined: a `cipher_key` or header value is a `$KITHARA_...` reference, values live in the
+gitignored workspace `.env` or the build shell, and `build.rs` wraps each baked value in `obfstr!()`. A missing
+reference degrades silently by design — the key bakes empty, headers naming it are dropped, the binary compiles and
+the key server rejects it — which is the intended mode for a build that never talks to one. Builds that do, today
+the CI `network*` lanes, set `KITHARA_DRM_REQUIRE`, and an upfront pass then fails with every missing name.
 
 ### Crate sections
 
-A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
-in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, `play_worker`,
-`worker`, `dispatcher`, and under `gui`, `ui` and `draw_pool`. Which knobs a section may name — and the argument for each left
-out — is the owning crate's contract. The patches travel whole: `AppConfig` carries `hls`, `file` and `audio` to
-`ResourceConfig`, and `main` stops the store builder one step short with `into_config()` to patch `assets_store`.
-Nothing is copied field by field, so a knob those crates add later needs no edit here.
+Every section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled
+once, in the crate that defines it; `document::schema` is the list, and a list repeated here would only rot. Which
+knobs a section may name, and the argument for each left out, is the owning crate's contract. The patches travel
+whole — `AppConfig` carries `hls`, `file` and `audio` to `ResourceConfig`, and `main` stops the store builder one
+step short with `into_config()` to patch `assets_store` — so a knob those crates add later needs no edit here.
 
-Eight sections carry a rule that is not the owning crate's. `net` is applied before `--insecure`, an override that can
-turn verification off and never back on. `assets_store`'s `backend` resolves to `StorageBackend::default` when
-unnamed — a stable root under the system temp directory, deliberately not `AssetStore::open`'s own fallback, which
-takes a fresh directory per launch and would move the cache every run. `pools` is composed here from
-`kithara-bufpool`'s `PoolConfigPatch`, one per pool, because `pool_schema!` generates a region type per consumer and
-leaves no single crate type to carry. `ui` and `draw_pool` are two sections rather than one nested pair because
-`UiConfig.draw_buffers` is a *built* `DrawBuffers` and `DrawPoolLimits` reaches one only through
-`DrawBuffers::try_new`; `Config::ui` therefore reads `draw_pool` before it builds — never onto an already-built
-`UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`. `broadcast` and
-`play_worker` are the two sections no `AppConfig` field carries: both are built in `main`, from the shared worker and
-pools that exist only there, so each section is applied to the built value on the spot. `worker.pool` is a key whose
-document type is not the field's: `PoolConfig` has a variant carrying a live `rayon::ThreadPool`, so the key travels
-as `ComputePool` and `kithara-worker` converts — it used to be a second top-level `worker_pool:` section for want of
-that, and is now one key of the crate it belongs to. `broadcast` is
-`#[cfg(feature = "broadcast")]` on both sides, so a build without the service has no such field and refuses a document
-that names one. `beat` is the one section whose merge can refuse: `BeatAnalysisConfig` holds the caller-owned resampler backend, so
-`AppConfig.beat_analysis` is `#[patch(skip)]` and `Config::beat` merges the section onto the analyzer's own defaults
-before the builder ever sees it. A tempo band the comb never scores is refused there by name, and `main` stops the
-launch on it the way it stops on a `drm:` policy it cannot honour. `dispatcher` travels on `AppConfig` the way
-`player` does and names thread budgets only. `name` is
-not among them: a dispatcher is named where it is built, and one document key would hand every dispatcher the app
-builds the same thread name.
+`pools` is the one section no crate patch can carry: `pool_schema!` leaves no shared region type to derive on, and
+`kithara-bufpool` owns that argument.
 
-`app.palette` names the theme one color at a time, each as its three channel bytes (`accent: [187, 148, 66]`), so a
-document that renames one accent keeps the other fifteen. `app.ui_package` is the middle of three sources: the
-`--ui-package` flag is applied after the merge and wins, and with neither the package a release lays out beside the
-executable draws.
-
-The audio session is the exception `app` carries. `HostConfig` is a session-mode enum, Realtime or Offline, not a
-configuration struct, so it has no patch and a document cannot flip a running application from one mode to the other.
-`app.sample_rate` and `app.output_block_frames` reach the Host builder in `main`, both optional. The rate is still
-spelled once: a Host refuses a player whose rate disagrees, so `Deck::build` reads it back off
-`Host::requested_sample_rate`.
+`app` also carries the audio session. `HostConfig` is a session mode, Realtime or Offline, not a configuration
+struct: it has no patch, and a document cannot flip a running application between them. `app.sample_rate` and
+`app.output_block_frames` reach the Host builder in `main`, both optional; the rate stays spelled once because
+`Deck::build` reads it back off `Host::requested_sample_rate`.

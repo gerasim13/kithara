@@ -10,37 +10,16 @@ the change that lands the work, and keep it short.
 
 - Configuration document for `kithara-app`. `app.yaml` plus an optional overlay,
   merged and env-expanded before typing; every section carries the owning crate's
-  own patch type, so a value is spelled once. `#[derive(Patch)]` in the
-  new `kithara-macros` generates every patch and its `apply`; `struct-patch` and
-  every hand-written patch struct are gone. The output rate is named once,
-  under `app`. Secrets stay `$KITHARA_...` references and one resolving nowhere
-  stops startup. Merged with `production/main`: `broadcast`, `player.warp`, and
-  the stretch backends' preparation geometry under `player.warp.backends` are
-  sections now, and `app.crossfade_seconds` is gone in favour of
-  `player.crossfade_duration`. The two configs that grew thread budgets since
-  carry the derive too: `play_worker` names the one playback worker's budgets and
-  `dispatcher` names every app-owned dispatcher's, minus the thread name each
-  construction site keeps. Merged again over the beat split: the picking policy
-  the `beat:` key writes now lives in `kithara_beat::nn`. The derive learned to
-  refuse, so the `beat-dsp` `Tempo` is a document key too: a struct declares
-  `#[patch(validate = ..., error = ...)]` and its merge stages a whole copy,
-  judges it, and commits only what the check accepted; a parent carries a
-  child's refusal with `#[patch(nested, fallible)]` and reports it under the
-  document key that carried it. The declaration is the struct's, never read off
-  the surviving fields, so `apply` keeps one signature whichever detector a
-  build selects. `beat:` is wired end to end: it was a declared-but-dead
-  section, and now `Config::beat` merges it onto the analyzer's own defaults and
-  a band the comb never scores stops the launch by name. The last four skipped
-  fields are keys now. The derive learned a wire form,
-  `#[patch(wire = <type>, from = <path>)]`, for a field holding something a
-  document cannot spell: the key parses as the wire type and the merge converts,
-  so `worker.pool` names the compute pool minus the variant carrying a live
-  `rayon::ThreadPool`, and the top-level `worker_pool:` section that existed only
-  for want of it is gone. `app.palette` names the theme one colour at a time,
-  `app.ui_package` joins `--ui-package` and the package beside the executable as
-  the middle of three sources, and `audio.decoder` names the backend and the
-  gapless mode. `AudioDecoderConfig::resampler` stays skipped: it carries the
-  backend object the construction site owns.
+  own patch type, so a value is spelled once. `#[derive(Patch)]` in the new
+  `kithara-macros` generates every patch and its `apply`; `struct-patch` and every
+  hand-written patch struct are gone. Secrets stay `$KITHARA_...` references and
+  one resolving nowhere stops startup. The derive carries three forms beyond a
+  plain key: `nested` recurses, `validate`/`fallible` lets a merge refuse what a
+  document said and report it under the key that carried it, and `wire`/`from`
+  gives a key a type of its own where the field holds something a document cannot
+  spell. Every field a document has business naming is a key; what stays skipped
+  is a live object the construction site owns, argued field by field in the owning
+  crate's `CONTEXT.md`. Left: the three integration harnesses.
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`. The grid is published at the tempo
   level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the

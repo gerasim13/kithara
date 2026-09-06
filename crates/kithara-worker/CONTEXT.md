@@ -76,3 +76,7 @@ silence. The conversion lives here, not at the construction site, because
 `ComputePool` is `#[non_exhaustive]`: only this crate can match it
 exhaustively, so only this crate may write it — anywhere else, the match would
 need a wildcard arm that silently swallows a variant added later.
+
+`DispatcherConfigPatch` names thread budgets only. `name` is skipped: a
+dispatcher is named where it is built, and one document key would hand every
+dispatcher an embedder builds the same thread name.
