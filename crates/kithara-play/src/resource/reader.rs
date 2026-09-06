@@ -10,7 +10,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher, StretchControls};
+use kithara_warp::{
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -280,12 +282,16 @@ impl Resource {
         }
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.playback_rate.apply(rate)
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.render_publisher.as_ref().map(RenderPublisher::reader)
     }
 
     pub(crate) fn playback_rate(&self) -> f32 {
         (&self.playback_rate).into()
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.playback_rate.apply(rate)
     }
 
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
@@ -628,6 +634,7 @@ mod tests {
     fn playback_rate_reports_only_a_real_warp_control() {
         let fixed = Resource::from_reader(EofReader::default(), None);
         assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
+        assert_eq!(fixed.playback_rate(), 1.0);
 
         let controls = StretchControls::new(1.0);
         let warped = Resource::from_reader(EofReader::default(), None)

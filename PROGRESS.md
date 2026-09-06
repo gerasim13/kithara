@@ -8,32 +8,64 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Harness and document revision. `AGENTS.md` routes instead of restating, and
-  the `style` namespace now budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every crate README to one shape with `readme_shape`:
-  a header that stays inside the package, badges keyed to `publish` and to the
-  manifest's license, a `# <package name>` title, then `Usage` / `Key Types` /
-  `Features` / `Integration` and nothing else. All three queues are at zero, and
-  the rewrites turned up claims the sources contradict - a wrong feature list, a
-  file that no longer exists, an inverted description of a known leak, an MPL-2.0
-  crate wearing the MIT badge, two crates naming a dead owner, and a logo no
-  published crate page could load.
+- Configuration document for `kithara-app`: `app.yaml` plus an optional
+  overlay, merged and env-expanded before typing, each section carrying its
+  owning crate's `#[derive(Patch)]` type from the new `kithara-macros`. No
+  patch struct is hand-written. Open: assembly sits in `main.rs` where no test
+  pins it, so `downloader` and `flush` parsed and were dropped until a read
+  found them; twenty-two files still take pools from `PoolsSection::default()`.
+
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
+
+- Mac CI host cleanup. The hourly pass hung inside `opendir` on a volume that
+  had stopped answering and launchd starts no second instance, so the host
+  refused jobs for space for a day; a watchdog ends a pass at
+  `cleanup_deadline_seconds`, and under `Aggressive` or `Reject` cleanup
+  reclaims what the volume is short of the soft floor rather than judging by
+  one cache's ceiling. `deps:deny` then spent twenty-five minutes on the
+  `boringssl` submodule's refs because libgit2 ignores the `GIT_CONFIG_COUNT`
+  that pins the HTTP version, so Cargo fetches through the git binary. Open:
+  the lane gates a quarantine pipeline directly instead of reporting to the
+  verdict, so one network stall holds every pull request.
+
+- One owner of track analysis in `kithara-app`, `AnalysisService`, and one
+  extent per pass in `kithara-analysis`, published at the tempo the detector
+  reports and tagged `grid_bpm_from_beats_v4`. Left: the deck scenario on a
+  release build with the full model, and the size of the resume blob.
+
+- Premature track switch, and the census built to find it.
+  `PlayerEvent::HandoverRequested` was a unit variant, so the queue applied the
+  outgoing track's handover to the successor it had already selected, cutting
+  it a block in. The request now carries `ItemRole` and the queue acts on it
+  only when it names the track it is on, pinned over three tracks by
+  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span`. The
+  census attributes every output frame to the track that produced it over every
+  reader a track arrives through; writing it found `suite_network` dark since
+  `#260`.
 
 ## Next
 
-- Work the comment queue down by hand. `--fix` is exhausted for comments - a
-  second run on a clean tree changes nothing - so all 668 are decisions: 497
-  comments carrying prose outside a doc comment, 105 doc blocks past a dozen
-  lines, 50 oversized inline comments, 16 dense functions. A body comment has no
-  mechanical destination.
-- 439 ordering findings are still mechanical: `struct_field_order` 160,
-  `trait_item_order` 188, `struct_init_order` 91. One `just lint style --fix`
-  clears them, but it rewrites declarations across every crate, so it wants its
-  own change.
-- Wire `just lint style` to a gate. Nothing runs it today - not the commit hook,
-  not a CI lane - which is why the ratchet drifted unseen. A warm run is 58 s:
-  too much for every commit, nothing for a lane. The lane catalog owns that
-  change, so it does not belong in this one.
+- The workspace's own crates are still at `"z"`: a per-package glob reaches
+  every third-party package but not them, and raising them is its own
+  measured change.
+- No runtime number backs the release optimization: decode throughput, stretch
+  cost and render-budget headroom were never measured, so the case rests on
+  codegen rather than on a benchmark.
+- `crates/kithara-ffi/.wasm-slim.toml` budgets the wasm bundle at
+  29000/31000/33000 KiB against a May baseline of ~28.2 MiB while a local
+  `dist` weighs 3565 KiB; the `web-size` lane on GitLab settles whether the
+  gate is stale or the two numbers weigh different things.
+- `block` 0.1.6 is a future-incompat report nothing here can answer: it reaches
+  the tree through `cpal` and has no published successor.
+- `kithara-ui` still warns under `--no-default-features --features render` and
+  `--features vello`, where the widget layer compiles without a host: 627 items.
+- Lint debt is hand work: 668 comment findings are decisions `--fix` cannot
+  make; the 439 mechanical ordering findings clear under one
+  `just lint style --fix` that rewrites declarations across every crate.
 
 ## Blocked
 

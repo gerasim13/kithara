@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     decode::GaplessMode,
@@ -40,6 +40,8 @@ pub struct OfflinePlayerOptions {
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,
+    output_block_frames: Option<NonZeroU32>,
+    response_budget_frames: Option<NonZeroUsize>,
 }
 
 /// Build a paused queue with crossfade disabled for deterministic offline tests.
@@ -64,7 +66,10 @@ impl OfflinePlayerHarness {
         let pools = pools();
         let sample_rate =
             NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
-        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
+        let session = HostConfig::offline(pools)
+            .sample_rate(sample_rate)
+            .maybe_max_block_frames(options.output_block_frames)
+            .build();
         Self::new(options, session)
     }
 
@@ -80,6 +85,7 @@ impl OfflinePlayerHarness {
             .worker(worker.clone())
             .maybe_eq_layout(options.eq_layout)
             .maybe_warp(options.warp)
+            .maybe_response_budget_frames(options.response_budget_frames)
             .build();
 
         let player = PlayerImpl::new(player_config);

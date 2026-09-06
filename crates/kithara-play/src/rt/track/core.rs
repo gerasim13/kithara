@@ -4,6 +4,7 @@ use bon::bon;
 use firewheel::dsp::fade::FadeCurve;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
@@ -207,13 +208,14 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
             /// Effective media seconds consumed per output second.
             #[must_use]
             pub(crate) fn playback_rate(&self) -> f32;
-            /// Apply a playback-rate target to this track's resource.
+            /// Apply a playback-rate target directly to this track's Warp controls.
             #[call(apply_playback_rate)]
             pub fn set_playback_rate(&mut self, rate: f32);
             /// Propagate the host sample rate to the owned resource.

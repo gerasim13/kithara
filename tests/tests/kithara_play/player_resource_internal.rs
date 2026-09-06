@@ -245,21 +245,28 @@ async fn read_returns_constant_samples_full() {
 
 #[kithara::test]
 fn full_read_refills_before_the_next_callback_drains_scratch() {
+    const CALLBACK_FRAMES: usize = 512;
+
     let emitted = Arc::new(AtomicU64::new(0));
     let reader = ChunkReader::new(Arc::clone(&emitted));
     let resource = Resource::from_reader(reader, None);
     let mut player = PlayerResource::new(resource, Arc::from("chunked"), &pools())
         .expect("player resource fits the test pool budget");
-    let mut left = vec![0.0f32; 512];
-    let mut right = vec![0.0f32; 512];
+    let mut left = vec![0.0f32; CALLBACK_FRAMES];
+    let mut right = vec![0.0f32; CALLBACK_FRAMES];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
 
-    let result = player.read(&mut output, 0..512, &RtMetrics::default());
+    let result = player.read(&mut output, 0..CALLBACK_FRAMES, &RtMetrics::default());
 
-    assert_eq!(result, BlockReadOutcome::Full { frames: 512 });
+    assert_eq!(
+        result,
+        BlockReadOutcome::Full {
+            frames: CALLBACK_FRAMES
+        }
+    );
     assert_eq!(
         emitted.load(Ordering::Relaxed),
-        2 * ChunkReader::CHUNK_FRAMES as u64,
+        (2 * CALLBACK_FRAMES) as u64,
         "a successful callback must refill while one callback is still buffered",
     );
 }

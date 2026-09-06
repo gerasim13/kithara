@@ -1691,7 +1691,7 @@
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1699,7 +1699,7 @@
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1707,7 +1707,7 @@
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1715,7 +1715,7 @@
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1723,7 +1723,7 @@
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1731,7 +1731,7 @@
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1739,7 +1739,7 @@
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1747,7 +1747,7 @@
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1755,7 +1755,7 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1763,7 +1763,7 @@
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1771,7 +1771,7 @@
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1779,7 +1779,7 @@
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1787,7 +1787,7 @@
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1795,7 +1795,7 @@
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1803,7 +1803,7 @@
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1811,7 +1811,7 @@
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true

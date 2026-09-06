@@ -176,6 +176,20 @@ always = ["symphonia"]
 when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
+# kithara-beat embeds one model and says so with compile_error!.
+# `embed-model` is the marker the three choices share; selected on its own it
+# names no bytes and the re-export it gates resolves to nothing.
+# `embed-full-int8-model` is quantized on a developer machine with onnxruntime
+# and the upstream release publishes only the unquantized model, so no runner
+# can produce its input. It costs no coverage to leave out: it compiles the
+# same `include_bytes!(env!(..))` arm `embed-full-model` does, and that one
+# resolves from the release. cargo-hack refuses a feature named by both lists,
+# so what stays mutually exclusive is what is still selectable.
+[[health.feature_invariants]]
+when_feature = "embed-model"
+never = ["embed-model", "embed-full-int8-model"]
+mutually_exclusive = [["embed-small-model", "embed-full-model"]]
+
 [stress]
 # One run, both clocks. The first collapses the fixtures' artificial
 # delays and is fast; the second keeps them and is the only one where a defect
@@ -1351,6 +1365,7 @@ steps = [
     "run",
     "--profile",
     "ci",
+    "--timings",
   ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
@@ -1613,6 +1628,7 @@ steps = [
     "test",
     "run",
     "--flash=off",
+    "--timings",
   ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"

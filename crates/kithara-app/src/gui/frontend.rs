@@ -5,6 +5,7 @@ use kithara::{
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
+        tokio::task,
     },
     ui::render::fonts,
     worker::{DispatcherConfig, TaskConfig},
@@ -18,6 +19,7 @@ use super::{
     update, view,
 };
 use crate::{
+    analysis::AnalysisService,
     catalog::Catalog,
     config::AppConfig,
     deck::{DeckId, DeckSet},
@@ -89,15 +91,11 @@ fn retained(boot: Boot) -> Result<(), FrontendError> {
     Ok(())
 }
 
-/// The box the app window opens at, in whole logical points. Both hosts open
-/// the same window.
 #[cfg(feature = "masonry")]
 pub(crate) fn window_size() -> (u32, u32) {
     (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height))
 }
 
-/// The smallest box the compiled documents are laid out for, in whole logical
-/// points.
 #[cfg(feature = "masonry")]
 pub(crate) fn window_min(min: Size) -> (u32, u32) {
     (whole(min.width), whole(min.height))
@@ -108,9 +106,6 @@ fn whole(value: f32) -> u32 {
     value.as_()
 }
 
-/// Settings for the app window. The bar draws the window chrome itself, so
-/// the system decorations stay off; close goes through `close_requests()`,
-/// whose handler exits the app.
 pub(crate) fn window_settings(min: Size) -> Settings {
     Settings {
         size: WINDOW_SIZE,
@@ -170,21 +165,26 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
+        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?, &config.ui)?;
         let base_worker = config
             .base_worker
             .clone()
             .ok_or("GUI analysis persistence requires the app base worker")?;
+        let mut dispatcher = DispatcherConfig::builder()
+            .name("kithara-analysis-persistence")
+            .build();
+        dispatcher.apply(config.dispatcher.clone());
         let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             base_worker,
             config.worker.pools().clone(),
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
-            DispatcherConfig::builder()
-                .name("kithara-analysis-persistence")
-                .build(),
+            dispatcher,
             TaskConfig::new(),
         ))?;
+        let (analysis, handle) =
+            AnalysisService::new(&config, persistence, config.shutdown.child());
+        task::spawn(analysis.run());
 
         if let Some(first) = session.decks().first() {
             first
@@ -198,9 +198,8 @@ impl GuiFrontend {
                 let controller = Arc::new(StateController::new(
                     deck.queue.control().clone(),
                     Arc::clone(&deck.timestretch),
-                    config.clone(),
                     deck.cancel_child(),
-                    persistence.clone(),
+                    handle.clone(),
                 ));
                 (deck.id, controller)
             })

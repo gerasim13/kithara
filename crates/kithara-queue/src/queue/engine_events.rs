@@ -81,13 +81,24 @@ where
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
 
-    pub(super) fn handle_handover_requested(&self) {
+    /// Gated on `item` for the same reason as
+    /// [`Self::handle_item_did_play_to_end`]: the request names the track
+    /// that is running out, not the one the queue is on. Committing an
+    /// advance moves the queue's cursor at once while the outgoing track
+    /// keeps rendering and keeps its own triggers armed, so its handover
+    /// can still arrive after the queue has left it — and applied to the
+    /// successor it reads as "this track is about to end" before a single
+    /// block of the successor has been heard.
+    pub(super) fn handle_handover_requested(&self, item: &ItemRole) {
         if self.is_paused() {
             return;
         }
         let Some(entry) = self.current() else {
             return;
         };
+        if entry.id != item.track().id {
+            return;
+        }
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
@@ -170,8 +181,8 @@ where
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
             }
-            Event::Player(PlayerEvent::HandoverRequested) => {
-                self.handle_handover_requested();
+            Event::Player(PlayerEvent::HandoverRequested { item }) => {
+                self.handle_handover_requested(item);
             }
             Event::Audio(AudioEvent::UnderrunStarted { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackStalled);

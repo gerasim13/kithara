@@ -434,7 +434,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
         );
         for notification in collect_notifications(&mut rx) {
             match notification {
-                PlayerNotification::HandoverRequested => {
+                PlayerNotification::HandoverRequested { .. } => {
                     handover_count += 1;
                 }
                 PlayerNotification::PlaybackStopped {
@@ -467,9 +467,10 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
     );
     let notifications = collect_notifications(&mut rx);
     assert!(
-        notifications
-            .iter()
-            .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested)),
+        notifications.iter().all(|notification| !matches!(
+            notification,
+            PlayerNotification::HandoverRequested { .. }
+        )),
         "TrackHandoverRequested must not be emitted twice in one playback cycle"
     );
 }
@@ -512,9 +513,10 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
     ));
     let notifications = collect_notifications(&mut rx);
     assert!(
-        notifications
-            .iter()
-            .any(|notification| matches!(notification, PlayerNotification::HandoverRequested)),
+        notifications.iter().any(|notification| matches!(
+            notification,
+            PlayerNotification::HandoverRequested { .. }
+        )),
         "handover must be emitted before the EOF block when the resource has already observed EOF"
     );
     assert!(
@@ -558,7 +560,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
     let notifications = collect_notifications(&mut rx);
     let handover_count = notifications
         .iter()
-        .filter(|notification| matches!(notification, PlayerNotification::HandoverRequested))
+        .filter(|notification| matches!(notification, PlayerNotification::HandoverRequested { .. }))
         .count();
     let eof_stop_count = notifications
         .iter()
@@ -610,7 +612,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
 
         for notification in collect_notifications(&mut rx) {
             match notification {
-                PlayerNotification::HandoverRequested => {
+                PlayerNotification::HandoverRequested { .. } => {
                     handover_count += 1;
                 }
                 PlayerNotification::PlaybackStopped {
@@ -673,7 +675,7 @@ async fn prefetch_fires_before_handover(
         .any(|notification| matches!(notification, PlayerNotification::Requested));
     let saw_handover = notifications
         .iter()
-        .any(|notification| matches!(notification, PlayerNotification::HandoverRequested));
+        .any(|notification| matches!(notification, PlayerNotification::HandoverRequested { .. }));
     assert!(
         saw_prefetch,
         "TrackRequested (preload) must fire inside the prefetch lead window"
@@ -715,9 +717,10 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             .any(|notification| matches!(notification, PlayerNotification::Requested))
     );
     assert!(
-        after_prefetch
-            .iter()
-            .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested))
+        after_prefetch.iter().all(|notification| !matches!(
+            notification,
+            PlayerNotification::HandoverRequested { .. }
+        ))
     );
 
     track.seek(9.79);
@@ -731,7 +734,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
-            if matches!(notification, PlayerNotification::HandoverRequested) {
+            if matches!(notification, PlayerNotification::HandoverRequested { .. }) {
                 saw_handover = true;
             }
         }
@@ -771,7 +774,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
     let mid = collect_notifications(&mut rx);
     assert!(mid.iter().all(|notification| !matches!(
         notification,
-        PlayerNotification::Requested | PlayerNotification::HandoverRequested
+        PlayerNotification::Requested | PlayerNotification::HandoverRequested { .. }
     )));
 
     track.seek(9.79);
@@ -789,7 +792,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
                 PlayerNotification::Requested => {
                     prefetch_count += 1;
                 }
-                PlayerNotification::HandoverRequested => {
+                PlayerNotification::HandoverRequested { .. } => {
                     handover_count += 1;
                 }
                 _ => {}

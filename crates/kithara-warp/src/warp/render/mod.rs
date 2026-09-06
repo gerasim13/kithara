@@ -18,6 +18,11 @@ mod renderer;
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
+mod renderer_activation;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
 mod renderer_lifecycle;
 #[cfg(all(
     not(target_arch = "wasm32"),

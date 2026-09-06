@@ -41,6 +41,8 @@ use unimock::{MockFn, Unimock, matching};
 use super::super::beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats};
 #[cfg(feature = "analysis-waveform")]
 use super::fixtures::CH;
+#[cfg(feature = "analysis-beat")]
+use super::fixtures::shareable;
 use super::{
     super::{
         analyzer::AnalyzerBuilder,
@@ -188,6 +190,7 @@ fn enqueue(
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
         token: token.into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest,
@@ -235,6 +238,7 @@ fn pending_reader_yields_one_scheduler_tick() {
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
@@ -262,6 +266,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
     let cancel = CancelToken::root();
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
@@ -290,6 +295,7 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
         tx,
         rate,
@@ -342,6 +348,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
             token: token.into(),
+            revision: 0,
             reader: Box::new(FakeReader::stalled(8)),
             tx,
             rate,
@@ -397,6 +404,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(4)),
         tx,
         rate,
@@ -445,6 +453,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -534,7 +543,6 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
 fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     const BLOCK: u64 = 8192;
     const PAST: u64 = 40;
-    /// Enough stalls that the reader outlives every offer below.
     const STALLS: usize = 200;
 
     let rate = super::fixtures::spec().sample_rate;
@@ -544,6 +552,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -658,6 +667,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
@@ -757,6 +767,7 @@ where
     let (tx, mut results) = watch::channel(None);
     jobs.send(Job {
         token: "test-track".into(),
+        revision: 0,
         reader,
         tx,
         rate: super::fixtures::spec().sample_rate,
@@ -803,8 +814,15 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 
     let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
     let out = stages(reader, builder, &CancelToken::root());
-    assert_eq!(out.len(), 1, "waveform-only emits once");
-    let got = out[0]
+    let [.., before_last, last] = out.as_slice() else {
+        panic!("the end of reading publishes, then the settled final: {out:?}");
+    };
+    assert!(
+        !before_last.is_settled(),
+        "the publication at the end of reading is not the settled one"
+    );
+    assert!(last.is_settled(), "the final publication is settled");
+    let got = last
         .waveform()
         .cloned()
         .expect("waveform analyzer fills its slot");
@@ -850,7 +868,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let release_for_detector = Arc::clone(&release_rx);
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, mono| {
@@ -860,7 +878,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
                 }
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let rate = super::fixtures::spec().sample_rate;
     let frames = usize::try_from(SR).expect("test rate fits usize");
@@ -928,14 +946,14 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
 #[kithara::test(native, flash(false))]
 fn saturation_retries_the_exact_detection_payload_once() {
     let (detected, detected_rx) = mpsc::channel();
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, mono| {
                 detected.send(mono.to_vec()).ok();
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let pcm = sine(frames);
@@ -1011,7 +1029,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let release_for_detector = Arc::clone(&release_rx);
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| {
@@ -1024,7 +1042,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
                     Ok(raw_beat(0.75))
                 }
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 1, 1);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
@@ -1103,7 +1121,7 @@ fn final_publication_waits_for_trailing_detection() {
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
-    let detector = Box::new(Unimock::new(
+    let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
             .next_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| {
@@ -1111,7 +1129,7 @@ fn final_publication_waits_for_trailing_detection() {
                 release_rx.lock().recv().ok();
                 Ok(raw_beat(0.5))
             })),
-    ));
+    )));
     let builder = beat_waveform(detector, 2, 2);
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
@@ -1130,10 +1148,21 @@ fn final_publication_waits_for_trailing_detection() {
         .recv_timeout(Instant::now() + Duration::from_secs(2))
         .expect("EOF starts the short trailing window");
     assert_eq!(node.tick(), TickResult::Backpressured);
-    assert!(
-        results.borrow().is_none(),
-        "nothing final is published early"
-    );
+    {
+        let read = results.borrow_and_update();
+        let progress = read
+            .as_ref()
+            .expect("what the pass read is published when the reading ends");
+        assert!(
+            progress.analysis().is_complete(),
+            "the end of reading publishes the whole coverage: {:?}",
+            progress.analysis().missing()
+        );
+        assert!(
+            !progress.analysis().is_settled() && progress.is_resumable(),
+            "a pass still detecting is not settled: a restart resumes the detection"
+        );
+    }
     assert!(
         matches!(results.has_changed(), Ok(false)),
         "the final sender remains alive while detection runs"
@@ -1141,11 +1170,14 @@ fn final_publication_waits_for_trailing_detection() {
 
     release.send(()).expect("release trailing detection");
     drive_until(&mut node, || results.has_changed().is_err());
+    let read = results.borrow_and_update();
+    let progress = read.as_ref().expect("the final publication");
     assert!(
-        results
-            .borrow_and_update()
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.analysis().beat().is_some()),
+        progress.analysis().is_settled(),
+        "the final publication is the settled one"
+    );
+    assert!(
+        progress.analysis().beat().is_some(),
         "the trailing result rides the final publication"
     );
 }
@@ -1206,7 +1238,7 @@ fn beat_slot_fills_the_beat_grid() {
             .next_call(matching!(_))
             .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
     );
-    let detector = Box::new(mock) as Box<dyn BeatDetector>;
+    let detector = Box::new(shareable(mock));
     let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat_detector(detector, GridParams::default());
 
@@ -1308,5 +1340,57 @@ fn pending_is_tolerated_mid_stream() {
         2,
     ));
     let out = stages(reader, builder, &CancelToken::root());
-    assert!(out.len() == 1 && out[0].waveform().is_some());
+    assert!(
+        out.last().is_some_and(|last| last.waveform().is_some()),
+        "the final publication carries the waveform: {out:?}"
+    );
+}
+
+#[cfg(all(
+    feature = "analysis-beat",
+    feature = "analysis-waveform",
+    not(feature = "beat-backend")
+))]
+#[kithara::test]
+fn a_pass_with_no_detector_publishes_the_rest() {
+    let rate = super::fixtures::spec().sample_rate;
+    let (jobs, receiver) = mpsc::channel();
+    let (tx, results) = watch::channel(None);
+    let (writer, ingest) = ring::open_for(rate);
+    let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
+    jobs.send(Job {
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(3)),
+        tx,
+        rate,
+        ingest,
+        cancel: CancelToken::root(),
+        resume: None,
+    })
+    .expect("analysis node accepts the test job");
+    let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
+
+    assert_eq!(
+        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        Ok(())
+    );
+    for _ in 0..128 {
+        let _ = node.tick();
+    }
+
+    let analysis = latest_analysis(&results).expect("a pass with no detector still publishes");
+    assert_eq!(
+        analysis.coverage().runs(),
+        &[FrameRange::new(0, 1024)],
+        "coverage is recorded whether or not a detector ran"
+    );
+    assert!(
+        analysis.waveform().is_some(),
+        "the missing detector does not suppress the waveform"
+    );
+    assert!(
+        analysis.beat().is_none(),
+        "there is no detector, so there is no beat artifact"
+    );
 }

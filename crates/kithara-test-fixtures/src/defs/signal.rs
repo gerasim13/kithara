@@ -16,6 +16,7 @@ impl Consts {
     const FRAMES_2S_44K1: usize = 88_200;
     const FRAMES_30S_44K1: usize = 1_323_000;
     const FRAMES_60S_44K1: usize = 2_646_000;
+    const FRAMES_6S_44K1: usize = 264_600;
     const RATE_44K1: u32 = 44_100;
     const RATE_48K: u32 = 48_000;
     const STEREO: u16 = 2;
@@ -128,6 +129,20 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_2S_44K1,
+    None
+)]
+#[case::saw_6s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1,
+    None
+)]
+#[case::saw_down_6s(
+    Wave::SawtoothDescending,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1,
     None
 )]
 #[case::saw_2s_64k(
@@ -260,6 +275,21 @@ fn signal_mp3_track(
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_1S_44K1
+)]
+// A ramp reads its own direction back out of the decoded audio, and six seconds
+// is long enough for a queue to hand one track to the next inside it. The two
+// directions give a playthrough neighbouring tracks it can tell apart.
+#[case::saw_6s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1
+)]
+#[case::saw_down_6s(
+    Wave::SawtoothDescending,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_6S_44K1
 )]
 #[case::sine1k_48k_1s(
     Wave::sine(1_000.0),

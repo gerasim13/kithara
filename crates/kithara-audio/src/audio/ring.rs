@@ -39,6 +39,7 @@ pub(super) struct RingConsumer {
     pub(super) validator: EpochValidator,
     pub(super) current_chunk: Option<AudioChunk>,
     pub(super) current_source_span: Option<SourceSpan>,
+    rendered_source_head: Option<SourceEnd>,
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
@@ -71,6 +72,7 @@ impl RingConsumer {
             phase: ConsumerPhase::Buffering,
             current_chunk: None,
             current_source_span: None,
+            rendered_source_head: None,
             trash_tx: parts.trash_tx,
             reader_wake: parts.reader_wake,
             _epoch: parts.epoch,
@@ -85,6 +87,7 @@ impl RingConsumer {
     pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) -> bool {
         self.validator.epoch = epoch;
         self.recycle_current();
+        self.rendered_source_head = None;
         cursor.clear();
         self.phase = ConsumerPhase::SeekPending { epoch };
 
@@ -166,7 +169,7 @@ impl RingConsumer {
             Fetch::Data {
                 data, source_end, ..
             } => {
-                let source_span = source_span(&data, source_end);
+                let source_span = self.source_span(&data, source_end);
                 FetchOutcome::Return(Some((data, source_span)))
             }
         }
@@ -283,7 +286,7 @@ impl RingConsumer {
             Fetch::Data {
                 data, source_end, ..
             } => {
-                self.current_source_span = source_span(&data, source_end);
+                self.current_source_span = self.source_span(&data, source_end);
                 cursor.begin_chunk(&data);
                 self.current_chunk = Some(data);
                 self.phase = ConsumerPhase::Playing;
@@ -300,18 +303,28 @@ impl RingConsumer {
             }
         }
     }
-}
 
-fn source_span(data: &AudioChunk, source_end: Option<SourceEnd>) -> Option<SourceSpan> {
-    let source_end = source_end?;
-    if source_end.sample_rate() != data.meta.spec.sample_rate {
-        return None;
+    fn source_span(
+        &mut self,
+        data: &AudioChunk,
+        source_end: Option<SourceEnd>,
+    ) -> Option<SourceSpan> {
+        let Some(source_end) = source_end else {
+            self.rendered_source_head = None;
+            return None;
+        };
+        if source_end.sample_rate() != data.meta.spec.sample_rate {
+            self.rendered_source_head = None;
+            return None;
+        }
+        let source_start = self
+            .rendered_source_head
+            .filter(|head| head.sample_rate() == source_end.sample_rate())
+            .map_or(data.meta.frame_offset, |head| head.frame());
+        self.rendered_source_head = Some(source_end);
+        SourceSpan::new(source_start, source_end.frame(), source_end.sample_rate())
+            .map(|span| span.with_render_revision(data.meta.render_revision))
     }
-    SourceSpan::new(
-        data.meta.frame_offset,
-        source_end.frame(),
-        source_end.sample_rate(),
-    )
 }
 
 pub(super) fn create_channels(
