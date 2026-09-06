@@ -1,3 +1,4 @@
+use js_sys::Reflect;
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
@@ -24,7 +25,7 @@ pub(crate) fn install(observer: Arc<dyn PlayerObserver>, queue_view: Arc<Mutex<Q
     };
     let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
         let data = ev.data();
-        if js_sys::Reflect::get(&data, &JsValue::from_str("scope"))
+        if Reflect::get(&data, &JsValue::from_str("scope"))
             .ok()
             .and_then(|value| value.as_string())
             .as_deref()

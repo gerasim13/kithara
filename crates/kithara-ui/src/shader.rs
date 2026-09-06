@@ -1,3 +1,7 @@
+use naga::{
+    ShaderStage,
+    valid::{Capabilities, ValidationFlags, Validator},
+};
 #[cfg(feature = "render")]
 use {kithara_platform::sync::Arc, std::collections::BTreeMap};
 
@@ -86,15 +90,12 @@ pub(crate) fn compile(
         let source = wgsl::combined(authored, origin, path, fields)?;
         let module = naga::front::wgsl::parse_str(&source)
             .map_err(|cause| error(origin, path, cause.to_string()))?;
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::empty(),
-        )
-        .validate(&module)
-        .map_err(|cause| error(origin, path, cause.to_string()))?;
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .map_err(|cause| error(origin, path, cause.to_string()))?;
         for (stage, name) in [
-            (naga::ShaderStage::Vertex, "vs_main"),
-            (naga::ShaderStage::Fragment, "fs_main"),
+            (ShaderStage::Vertex, "vs_main"),
+            (ShaderStage::Fragment, "fs_main"),
         ] {
             if !module
                 .entry_points

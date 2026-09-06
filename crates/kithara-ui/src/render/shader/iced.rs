@@ -13,6 +13,7 @@ use iced::{
     },
     widget::{Space, shader, shader::Shader},
 };
+use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive as _;
 
@@ -170,7 +171,7 @@ fn offscreen(
 }
 
 struct Pipeline {
-    programs: BTreeMap<kithara_platform::sync::Arc<str>, wgpu::RenderPipeline>,
+    programs: BTreeMap<Arc<str>, wgpu::RenderPipeline>,
     slots: BTreeMap<ImageId, Slot>,
     texture_layout: wgpu::BindGroupLayout,
     uniform_layout: wgpu::BindGroupLayout,
@@ -201,7 +202,7 @@ impl shader::Pipeline for Pipeline {
 }
 
 struct Slot {
-    source: kithara_platform::sync::Arc<str>,
+    source: Arc<str>,
     texture_bind_group: wgpu::BindGroup,
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
@@ -217,7 +218,7 @@ impl Slot {
         uniform_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-        source: kithara_platform::sync::Arc<str>,
+        source: Arc<str>,
         uniform_size: usize,
         size: [u32; 2],
     ) -> Self {

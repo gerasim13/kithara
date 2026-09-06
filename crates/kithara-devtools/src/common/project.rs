@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use toml::Table;
 
@@ -846,7 +847,7 @@ impl ProjectConfig {
             if pattern.is_empty() {
                 bail!("architecture exclusion glob cannot be empty");
             }
-            glob::Pattern::new(pattern)
+            Pattern::new(pattern)
                 .with_context(|| format!("invalid architecture exclusion glob `{pattern}`"))?;
         }
         let mut names = BTreeSet::new();

@@ -27,6 +27,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
+use kithara_test_fixtures::assets;
 use num_traits::cast::AsPrimitive;
 
 use super::{Entry, Request};
@@ -184,21 +185,14 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
 
 pub(crate) fn mp3_track(directory: &Path) -> String {
     let path = directory.join("track.mp3");
-    std::fs::write(
-        &path,
-        kithara_test_fixtures::assets::sine_mp3_a440_2s().bytes(),
-    )
-    .expect("fixture track is written");
+    std::fs::write(&path, assets::sine_mp3_a440_2s().bytes()).expect("fixture track is written");
     format!("file://{}", path.display())
 }
 
 pub(crate) fn mp3_track_48k(directory: &Path) -> String {
     let path = directory.join("track-48k.mp3");
-    std::fs::write(
-        &path,
-        kithara_test_fixtures::assets::rhythm_mp3_deck_a_120bpm_48k().bytes(),
-    )
-    .expect("fixture track is written");
+    std::fs::write(&path, assets::rhythm_mp3_deck_a_120bpm_48k().bytes())
+        .expect("fixture track is written");
     format!("file://{}", path.display())
 }
 

@@ -1,5 +1,6 @@
 use kurbo::{BezPath, PathEl, Point};
 use num_traits::ToPrimitive;
+use roxmltree::{Document, Node};
 
 use super::{
     ir::Pt,
@@ -48,8 +49,8 @@ pub enum SvgError {
 /// # Errors
 /// Returns [`SvgError`] for a document this cannot read.
 pub fn outline(document: &str) -> Result<Outline, SvgError> {
-    let parsed = roxmltree::Document::parse(document)
-        .map_err(|error| SvgError::Malformed(error.to_string()))?;
+    let parsed =
+        Document::parse(document).map_err(|error| SvgError::Malformed(error.to_string()))?;
     let root = parsed.root_element();
     if root.tag_name().name() != "svg" {
         return Err(SvgError::NotSvg(root.tag_name().name().to_owned()));
@@ -58,7 +59,7 @@ pub fn outline(document: &str) -> Result<Outline, SvgError> {
 
     let mut rule: Option<FillRule> = None;
     let mut verbs: Vec<Verb> = Vec::new();
-    for node in root.descendants().filter(roxmltree::Node::is_element) {
+    for node in root.descendants().filter(Node::is_element) {
         if node == root {
             continue;
         }

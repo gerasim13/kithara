@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use kithara_platform::sync::Arc;
+
 use crate::{
     ByteBuffer, PoolConfig, PoolError, PoolStats, PooledString, PooledVec, SampleBuffer,
     pool::Core, region::BuildContext,
@@ -115,7 +117,7 @@ impl<T, const SHARDS: usize> sealed::Sealed for VecKey<T, SHARDS> {}
 
 /// Opaque core for a registered vector key.
 #[doc(hidden)]
-pub struct VecCore<T, const SHARDS: usize>(kithara_platform::sync::Arc<Core<SHARDS, Vec<T>, true>>);
+pub struct VecCore<T, const SHARDS: usize>(Arc<Core<SHARDS, Vec<T>, true>>);
 
 impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS>
 where
@@ -167,7 +169,7 @@ impl<const SHARDS: usize> sealed::Sealed for StringKey<SHARDS> {}
 
 /// Opaque core for a registered string key.
 #[doc(hidden)]
-pub struct StringCore<const SHARDS: usize>(kithara_platform::sync::Arc<Core<SHARDS, String, true>>);
+pub struct StringCore<const SHARDS: usize>(Arc<Core<SHARDS, String, true>>);
 
 impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
     type Buffer = PooledString<SHARDS>;
@@ -196,11 +198,11 @@ impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
 
 /// Opaque core for the built-in byte key.
 #[doc(hidden)]
-pub struct ByteCore(kithara_platform::sync::Arc<Core<32, Vec<u8>, false>>);
+pub struct ByteCore(Arc<Core<32, Vec<u8>, false>>);
 
 /// Opaque core for the built-in decoded-sample key.
 #[doc(hidden)]
-pub struct SampleCore(kithara_platform::sync::Arc<Core<8, Vec<f32>, false>>);
+pub struct SampleCore(Arc<Core<8, Vec<f32>, false>>);
 
 impl sealed::Sealed for u8 {}
 

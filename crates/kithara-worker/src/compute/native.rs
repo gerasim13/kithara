@@ -7,6 +7,7 @@ use kithara_platform::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+use rayon::ThreadPoolBuilder;
 
 use super::{ComputeContext, ComputeRejected, ComputeSubmitError};
 use crate::{RayonConfig, Wake, config::PoolConfig};
@@ -134,7 +135,7 @@ impl ComputePool {
 
 fn build_pool(config: &RayonConfig) -> Result<Arc<rayon::ThreadPool>, String> {
     let prefix = config.name.clone();
-    rayon::ThreadPoolBuilder::new()
+    ThreadPoolBuilder::new()
         .num_threads(config.threads.get())
         .thread_name(move |index| format!("{prefix}-{index}"))
         .build()

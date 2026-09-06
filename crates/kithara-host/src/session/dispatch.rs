@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
+use kithara_output::OutputGroup;
 use kithara_play::{PlayError, StreamShape, player::PlayerMember};
 use kithara_warp::{
     SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
@@ -173,7 +174,7 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::EnableMixTap { writer } => {
-            let mut outputs = kithara_output::OutputGroup::new();
+            let mut outputs = OutputGroup::new();
             outputs.push(writer);
             match tap::enable(state, outputs) {
                 Ok(()) => Reply::Ok,

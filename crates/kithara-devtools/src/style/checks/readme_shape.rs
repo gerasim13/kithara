@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result};
+use toml::Value;
 
 use super::{Check, Context};
 use crate::{
@@ -69,7 +70,7 @@ fn workspace_license(workspace_root: &Path) -> Result<String> {
         .get("workspace")
         .and_then(|workspace| workspace.get("package"))
         .and_then(|package| package.get("license"))
-        .and_then(toml::Value::as_str)
+        .and_then(Value::as_str)
         .with_context(|| {
             format!(
                 "workspace manifest names no license: {}",
@@ -79,7 +80,7 @@ fn workspace_license(workspace_root: &Path) -> Result<String> {
     Ok(license.to_string())
 }
 
-fn manifest_document(manifest: &Path) -> Result<toml::Value> {
+fn manifest_document(manifest: &Path) -> Result<Value> {
     let text = fs::read_to_string(manifest)
         .with_context(|| format!("read crate manifest: {}", manifest.display()))?;
     toml::from_str(&text).with_context(|| format!("parse crate manifest: {}", manifest.display()))
@@ -95,18 +96,18 @@ fn package(manifest: &Path, workspace_license: &str) -> Result<Package> {
     })?;
     let name = package
         .get("name")
-        .and_then(toml::Value::as_str)
+        .and_then(Value::as_str)
         .with_context(|| format!("crate manifest has no package name: {}", manifest.display()))?;
     Ok(Package {
         license: package
             .get("license")
-            .and_then(toml::Value::as_str)
+            .and_then(Value::as_str)
             .unwrap_or(workspace_license)
             .to_string(),
         name: name.to_string(),
         published: package
             .get("publish")
-            .and_then(toml::Value::as_bool)
+            .and_then(Value::as_bool)
             .unwrap_or(true),
     })
 }

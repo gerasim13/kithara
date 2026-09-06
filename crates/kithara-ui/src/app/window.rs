@@ -1,3 +1,4 @@
+use futures_lite::future;
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant, WallInstant},
@@ -306,7 +307,7 @@ where
         let window = Arc::new(window);
         let size = window.inner_size();
         let mut context = RenderContext::new();
-        let mut surface = futures_lite::future::block_on(context.create_surface(
+        let mut surface = future::block_on(context.create_surface(
             Arc::clone(&window),
             size.width.max(1),
             size.height.max(1),

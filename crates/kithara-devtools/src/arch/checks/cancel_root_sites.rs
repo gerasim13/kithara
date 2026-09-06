@@ -1,6 +1,7 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;
+use quote::ToTokens;
 use syn::{Attribute, Item, Meta, meta::ParseNestedMeta, parse_file};
 
 use super::{Check, Context};
@@ -191,7 +192,7 @@ fn meta_contains_test(meta: &ParseNestedMeta<'_>) -> bool {
 }
 
 fn quote_str(meta: &Meta) -> String {
-    quote::ToTokens::to_token_stream(meta).to_string()
+    ToTokens::to_token_stream(meta).to_string()
 }
 
 fn attr_token_contains_test(s: &str) -> bool {
