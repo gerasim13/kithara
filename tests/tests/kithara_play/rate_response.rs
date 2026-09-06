@@ -328,9 +328,11 @@ fn assert_response(
     );
     let onset = first_target_onset(samples, command_frame, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
+    let primed = revision_probe(events, "prime_activation", "request_revision", revision)
+        .map(|event| (event.u64("source_frames"), event.u64("output_frames")));
     assert!(
         onset <= case.response_budget_frames,
-        "{backend} target tone began after {onset} frames; budget is {}",
+        "{backend} target tone began after {onset} frames; budget is {}; primed={primed:?}",
         case.response_budget_frames
     );
 }

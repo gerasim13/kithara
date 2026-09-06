@@ -2,11 +2,13 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stretch::{ElasticBackendConfig, ElasticEngine, ElasticError, StretchKind};
+use kithara_signal::{AudioChunkInfo, AudioSpec};
+use kithara_stretch::{
+    ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
+};
 use kithara_test_macros as kithara;
-use tracing::warn;
 
+use super::renderer_target::PreparedTarget;
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
     temporal::RateTarget,
@@ -17,8 +19,24 @@ mod tests;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
+    pub(super) active_frames: usize,
+    pub(super) activation: Option<PreparedActivation>,
     pub(super) frames: usize,
     pub(super) rate: RateTarget,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PreparedActivation {
+    pub(super) history_frames: usize,
+    pub(super) warm: ElasticRequest,
+}
+
+impl PreparedActivation {
+    pub(super) fn prefix_frames(self) -> Result<usize, ElasticError> {
+        self.history_frames
+            .checked_add(self.warm.source_frames())
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
 }
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
@@ -55,6 +73,8 @@ pub struct WarpRenderer<S> {
     /// Interleaved output scratch prepared by the scheduler shell. A produced
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(super) scratch: Option<SampleBuffer>,
+    /// Latency-sized pooled output discarded while priming an inactive engine.
+    pub(super) activation_scratch: Option<SampleBuffer>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
     pub(super) deferred_scratch: Option<SampleBuffer>,
@@ -70,6 +90,8 @@ pub struct WarpRenderer<S> {
     pub(super) pending_source: Option<SampleBuffer>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<AudioChunkInfo>,
+    /// Oldest sample in the rolling unity history stored in `pending_source`.
+    pub(super) passthrough_history_head: Option<usize>,
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
@@ -77,6 +99,8 @@ pub struct WarpRenderer<S> {
     pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
+    /// Warm source consumed while priming but not yet represented by output.
+    pub(super) primed_source_debt: u64,
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
     pub(super) reset_pending: bool,
@@ -110,9 +134,9 @@ where
             config.source_block_frames(),
             spec,
             &pools,
-            None,
-            None,
+            PreparedTarget::default(),
         );
+        let passthrough_history_head = target.engine.is_some().then_some(0);
         Self {
             context,
             committed: None,
@@ -131,54 +155,21 @@ where
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
+            passthrough_history_head,
             pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
+            primed_source_debt: 0,
             reset_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
             output_start_meta: None,
             scratch: target.scratch,
+            activation_scratch: target.activation_scratch,
             deferred_scratch: None,
             plan,
             region: None,
         }
-    }
-
-    /// Select the next source span that fits the configured output quantum.
-    pub fn prepare_quantum(
-        &mut self,
-        meta: AudioChunkInfo,
-        remaining: usize,
-    ) -> Option<FrameCount> {
-        self.sync_plan();
-        let rate = self.controls.rate_target();
-        match self.source_frames_for_quantum(meta, remaining, rate.speed()) {
-            Ok(frames) => {
-                self.prepared_quantum = Some(PreparedQuantum { frames, rate });
-                Some(FrameCount::new(frames))
-            }
-            Err(error) => {
-                self.prepared_quantum = None;
-                warn!(%error, "time-stretch source quantum sizing failed");
-                None
-            }
-        }
-    }
-
-    /// Shrink a prepared source span at true EOF without sampling controls again.
-    pub fn prepare_terminal_quantum(
-        &mut self,
-        _meta: AudioChunkInfo,
-        frames: usize,
-    ) -> Option<FrameCount> {
-        let mut prepared = self.prepared_quantum.take()?;
-        if frames == 0 || frames > prepared.frames {
-            return None;
-        }
-        prepared.frames = frames;
-        self.prepared_quantum = Some(prepared);
-        Some(FrameCount::new(frames))
     }
 
     /// Whether this target has elastic DSP and needs worker staging.
@@ -206,6 +197,7 @@ where
             source.clear();
         }
         self.pending_meta = None;
+        self.passthrough_history_head = None;
         self.pending_unity_meta = None;
     }
 
@@ -219,6 +211,9 @@ where
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
+        if let Some(scratch) = self.activation_scratch.as_mut() {
+            scratch.clear();
+        }
         self.clear_pending_source();
         self.last_input_meta = None;
         self.output_start_meta = None;
@@ -227,6 +222,7 @@ where
         self.prepared_quantum = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
     }
@@ -274,7 +270,7 @@ where
     }
 
     pub(super) fn pending_frames(&self, channels: usize) -> usize {
-        if self.transition_pending() {
+        if self.transition_pending() || self.passthrough_history_head.is_some() {
             return 0;
         }
         self.pending_source
@@ -312,7 +308,9 @@ where
         let backend_held = u64::try_from(latency)
             .unwrap_or(u64::MAX)
             .min(backend_admitted);
-        pending.saturating_add(backend_held)
+        pending
+            .saturating_add(backend_held)
+            .saturating_add(self.primed_source_debt)
     }
 
     pub(super) fn record_rendered_source_end(

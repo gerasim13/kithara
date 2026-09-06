@@ -320,7 +320,7 @@ where
             if pending_frames > 0 {
                 self.append_pending_source(part, meta, frame)?;
             }
-            if start == 0 {
+            if start == 0 && self.output_start_meta.is_none() {
                 self.output_start_meta = if pending_frames > 0 {
                     self.pending_meta
                 } else {

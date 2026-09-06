@@ -11,6 +11,7 @@ use super::renderer::WarpRenderer;
 
 #[derive(Default)]
 pub(super) struct PreparedTarget {
+    pub(super) activation_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     pub(super) pending_source: Option<SampleBuffer>,
     pub(super) scratch: Option<SampleBuffer>,
@@ -26,9 +27,15 @@ where
         source_block_frames: NonZeroUsize,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
-        reusable_pending: Option<SampleBuffer>,
-        reusable_scratch: Option<SampleBuffer>,
+        reusable: PreparedTarget,
     ) -> PreparedTarget {
+        let PreparedTarget {
+            activation_scratch: reusable_activation_scratch,
+            engine: reusable_engine,
+            pending_source: reusable_pending,
+            scratch: reusable_scratch,
+        } = reusable;
+        drop(reusable_engine);
         let result = Self::config_for(kind, backends, source_block_frames, spec, pools)
             .and_then(build_engine)
             .and_then(|engine| {
@@ -36,6 +43,7 @@ where
                 let pending_samples = SampleCount::new(
                     source_block_frames
                         .get()
+                        .max(engine.capabilities().latency().source_frames())
                         .checked_mul(channels)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 );
@@ -43,17 +51,37 @@ where
                 pending
                     .ensure_len(pending_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
-                pending.clear();
+                let history_samples = engine
+                    .capabilities()
+                    .latency()
+                    .source_frames()
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                pending.truncate(history_samples);
+                pending.fill(0.0);
                 let scratch_samples = Self::scratch_samples(engine.as_ref(), spec)?;
                 let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
                 scratch
                     .ensure_len(scratch_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
                 scratch.clear();
-                Ok((engine, pending, scratch))
+                let activation_samples = engine
+                    .capabilities()
+                    .latency()
+                    .output_frames()
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                let mut activation_scratch =
+                    reusable_activation_scratch.unwrap_or_else(|| pools.get::<f32>());
+                activation_scratch
+                    .ensure_len(activation_samples)
+                    .map_err(|_| ElasticError::PoolCapacity)?;
+                activation_scratch.clear();
+                Ok((engine, pending, scratch, activation_scratch))
             });
         match result {
-            Ok((engine, pending, scratch)) => PreparedTarget {
+            Ok((engine, pending, scratch, activation_scratch)) => PreparedTarget {
+                activation_scratch: Some(activation_scratch),
                 engine: Some(engine),
                 pending_source: Some(pending),
                 scratch: Some(scratch),
@@ -147,20 +175,23 @@ where
             self.rebuild_pending = false;
             drop(self.deferred_scratch.take());
             self.clear_render_state();
-            let reusable_pending = self.pending_source.take();
-            let reusable_scratch = self.scratch.take();
-            drop(self.engine.take());
             let target = Self::prepare_target(
                 kind,
                 self.backends,
                 self.source_block_frames,
                 spec,
                 &self.pools,
-                reusable_pending,
-                reusable_scratch,
+                PreparedTarget {
+                    activation_scratch: self.activation_scratch.take(),
+                    engine: self.engine.take(),
+                    pending_source: self.pending_source.take(),
+                    scratch: self.scratch.take(),
+                },
             );
+            self.activation_scratch = target.activation_scratch;
             self.engine = target.engine;
             self.pending_source = target.pending_source;
+            self.passthrough_history_head = self.engine.is_some().then_some(0);
             self.scratch = target.scratch;
             self.current_kind = kind;
             self.spec = spec;
@@ -180,6 +211,11 @@ where
             warn!(%error, "time-stretch deferred reset failed");
             self.engine = None;
             self.rebuild_pending = true;
+            return;
+        }
+        if let Err(error) = self.reset_passthrough_history() {
+            warn!(%error, "time-stretch history preparation failed");
+            self.clear_pending_source();
         }
     }
 }
