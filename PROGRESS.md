@@ -30,16 +30,17 @@ the change that lands the work, and keep it short.
   pins it, so `downloader` and `flush` parsed and were dropped until a read
   found them; twenty-two files still take pools from `PoolsSection::default()`.
 
-- Mac CI host cleanup. The hourly pass hung inside `opendir` on a volume that
-  had stopped answering and launchd starts no second instance, so the host
-  refused jobs for space for a day; a watchdog ends a pass at
-  `cleanup_deadline_seconds`, and under `Aggressive` or `Reject` cleanup
-  reclaims what the volume is short of the soft floor rather than judging by
-  one cache's ceiling. `deps:deny` then spent twenty-five minutes on the
-  `boringssl` submodule's refs because libgit2 ignores the `GIT_CONFIG_COUNT`
-  that pins the HTTP version, so Cargo fetches through the git binary. Open:
-  the lane gates a quarantine pipeline directly instead of reporting to the
-  verdict, so one network stall holds every pull request.
+- Tooling parameter ownership. Every policy number and list `xtask` and
+  `kithara-devtools` held as a `const` has a config owner, spawned programs
+  resolve through `ToolsConfig`, and Rust binaries replace their embedded
+  shell. Cleanup pruned `target-slots`, every Linux job's `CARGO_TARGET_DIR`,
+  as retired.
+
+- Mac CI host cleanup gave the hourly pass a watchdog at
+  `cleanup_deadline_seconds` and reclaim against the volume's soft floor rather
+  than one cache's ceiling. Open: the lane gates a quarantine pipeline directly
+  instead of reporting to the verdict, so one network stall holds every pull
+  request.
 
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`, published at the tempo the detector
@@ -63,8 +64,8 @@ the change that lands the work, and keep it short.
   the tree through `cpal` and has no published successor.
 - `kithara-ui` warns on 627 items where the widget layer compiles without a
   host: `--no-default-features --features render`, and `--features vello`.
-- Lint debt: 668 comment findings are decisions `--fix` cannot make, and the
-  439 ordering findings clear under one `just lint style --fix` that rewrites
+- Lint debt: 678 comment findings are decisions `--fix` cannot make, and the
+  612 ordering findings clear under one `just lint style --fix` that rewrites
   declarations across every crate.
 
 ## Blocked
