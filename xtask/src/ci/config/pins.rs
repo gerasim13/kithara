@@ -401,6 +401,68 @@ mod tests {
         }
     }
 
+    /// `just` evaluates every assignment before it knows which recipe was
+    /// asked for, so a backtick assignment is on the clock of every
+    /// invocation, the nested ones a test drives included. It may therefore
+    /// read what is already on the machine, but never spawn a program that
+    /// machine might answer slowly or not have at all: `brew --prefix` cost
+    /// the public-runner test its whole timeout budget.
+    #[test]
+    fn no_assignment_in_the_command_surface_spawns_a_program() {
+        const READS_THE_MACHINE: [&str; 7] =
+            ["[", "command", "grep", "printf", "sed", "test", "true"];
+
+        let justfile = fs::read_to_string(workspace_root().join("justfile")).unwrap();
+        for command in assigned_commands(&justfile) {
+            assert!(
+                READS_THE_MACHINE.contains(&command.as_str()),
+                "an assignment spawns `{command}`, which every invocation then waits for"
+            );
+        }
+    }
+
+    /// The leading word of every command a backtick assignment runs. Words
+    /// carrying an `=` are the assignment's own locals, not programs.
+    fn assigned_commands(justfile: &str) -> Vec<String> {
+        let mut scripts = Vec::new();
+        let mut lines = justfile.lines();
+        while let Some(line) = lines.next() {
+            let Some((_, value)) = line.split_once(":=") else {
+                continue;
+            };
+            if let Some(opened) = value.trim().strip_prefix("```") {
+                scripts.push(opened.to_owned());
+                scripts.extend(
+                    lines
+                        .by_ref()
+                        .take_while(|line| !line.contains("```"))
+                        .map(str::to_owned),
+                );
+            } else if let Some(opened) = value.trim().strip_prefix('`') {
+                scripts.push(opened.trim_end_matches('`').to_owned());
+            }
+        }
+
+        scripts
+            .iter()
+            .map(|script| {
+                script
+                    .replace("&&", "\n")
+                    .replace("||", "\n")
+                    .replace("$(", "\n")
+                    .replace(['|', '(', ')'], "\n")
+            })
+            .flat_map(|script| {
+                script
+                    .lines()
+                    .filter_map(|command| command.split_whitespace().next())
+                    .filter(|word| !word.contains('='))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     /// Every `.rs` under the executor, including the modules a `#[path]`
     /// attribute pulls in from a file of their own.
     fn executor_sources(directory: &Path) -> Vec<PathBuf> {

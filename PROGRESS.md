@@ -8,6 +8,12 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
+
 - Mac CI host cleanup. The host spent a day refusing jobs for space while its
   hourly pass was gone: the agent hung inside `opendir` on a volume that had
   stopped answering, and launchd starts no second instance while the first is
@@ -39,15 +45,11 @@ the change that lands the work, and keep it short.
   release build with the full model, and the size of the resume blob.
 
 - Tooling parameter ownership. Every policy number and list `xtask` and
-  `kithara-devtools` carried as a `const` now has a config owner: eight
-  `CiHost` keys, the architecture thresholds, the style checks and the render
-  budgets. Spawned programs resolve through `ToolsConfig`, one Rust binary per
-  crate replaces the shell each embedded, and `xtask/Cargo.toml` names
-  `default-run`. The Windows guest's `qemu` pair moved the same way, onto
-  `CiHost::brew_root`, and the guard against writing a prefix down now reads
-  the executor's sources too. Writing the live cache namespaces down surfaced
-  one the list never held: `target-slots`, every Linux job's
-  `CARGO_TARGET_DIR`, was pruned as retired. Left: nothing.
+  `kithara-devtools` carried as a `const` now has a config owner, spawned
+  programs resolve through `ToolsConfig`, and one Rust binary per crate
+  replaces the shell each embedded. Writing the namespaces down surfaced one
+  it never held: `target-slots`, every Linux job's `CARGO_TARGET_DIR`, was
+  pruned as retired. Left: nothing.
 
 ## Next
 
