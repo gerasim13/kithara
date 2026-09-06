@@ -8,15 +8,20 @@ export RUSTC_WRAPPER := sccache
 # Where this machine keeps the FFmpeg line the workspace binds to. `ffmpeg-next`
 # generates its bindings from the headers pkg-config finds, so a host whose
 # unversioned FFmpeg has moved on has to reach the keg-only formula
-# `.config/ci-pins.toml` installs before it. The prefix is asked of the package
-# manager instead of written down, because it belongs to the machine and differs
-# between them; without brew, or without the formula, this is empty and the
-# machine's own search path stands alone. `xtask` cannot own this: it is itself
-# a cargo build that would need the answer before it could run.
+# `.config/ci-pins.toml` installs before it. Both halves belong to the machine
+# and are read off it: the line from the pins, the prefix from where `brew`
+# itself sits. Nothing here runs the package manager, because `just` evaluates
+# every variable before it knows which recipe was asked for, so this is on the
+# clock of every invocation including the nested ones a test drives. A keg the
+# machine does not have leaves this empty and its own search path stands alone.
+# `xtask` cannot own this: it is itself a cargo build that would need the answer
+# before it could run.
 export PKG_CONFIG_PATH := ```
-    formula=$(grep -om1 'ffmpeg@[0-9][0-9]*' .config/ci-pins.toml || true)
-    prefix=$(command -v brew >/dev/null 2>&1 && brew --prefix "${formula:-none}" 2>/dev/null || true)
-    printf '%s' "${prefix:+$prefix/lib/pkgconfig}:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
+    formula=$(grep -om1 'ffmpeg@[0-9][0-9]*' .config/ci-pins.toml 2>/dev/null || true)
+    brew=$(command -v brew || true)
+    keg="${brew%/bin/brew}/opt/$formula/lib/pkgconfig"
+    [ -n "$brew" ] && [ -n "$formula" ] && [ -d "$keg" ] || keg=
+    printf '%s' "$keg:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
 ```
 
 # sccache refuses incremental compilations, so a wrapper without this is never
