@@ -36,12 +36,9 @@ where
                     return;
                 }
             };
-            #[cfg(not(target_arch = "wasm32"))]
-            drop(task::spawn_blocking(move || {
+            drop(task::spawn_sync(move || {
                 queue.apply_loaded(id, resource);
             }));
-            #[cfg(target_arch = "wasm32")]
-            queue.apply_loaded(id, resource);
         }));
     }
 
