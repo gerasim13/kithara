@@ -28,13 +28,12 @@ pub(super) enum Boot {
 pub(super) struct WindowsHost<'a> {
     guest: &'a WindowsGuest,
     root: PathBuf,
+    qemu: PathBuf,
+    qemu_img: PathBuf,
     process: &'a Process,
 }
 
 impl<'a> WindowsHost<'a> {
-    const QEMU: &'static str = "/opt/homebrew/bin/qemu-system-aarch64";
-    const QEMU_IMG: &'static str = "/opt/homebrew/bin/qemu-img";
-
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
         let guest = config
             .host
@@ -44,6 +43,8 @@ impl<'a> WindowsHost<'a> {
         Ok(Self {
             guest,
             root: config.host.host_root.join("vm/windows"),
+            qemu: config.host.brew_tool("qemu-system-aarch64"),
+            qemu_img: config.host.brew_tool("qemu-img"),
             process,
         })
     }
@@ -66,7 +67,7 @@ impl<'a> WindowsHost<'a> {
             return Ok(());
         }
         self.process.run(
-            Self::QEMU_IMG,
+            &self.qemu_img.display().to_string(),
             &[
                 "create",
                 "-f",
@@ -181,18 +182,12 @@ impl<'a> WindowsHost<'a> {
         }
         let owned = self.boot_arguments(boot);
         let arguments: Vec<&str> = owned.iter().map(String::as_str).collect();
-        self.process
-            .run(Self::QEMU, &arguments, "start the Windows guest")?;
+        self.process.run(
+            &self.qemu.display().to_string(),
+            &arguments,
+            "start the Windows guest",
+        )?;
         Ok(())
-    }
-
-    #[cfg(test)]
-    fn for_test(guest: &'a WindowsGuest, root: &Path, process: &'a Process) -> Self {
-        Self {
-            guest,
-            root: root.to_path_buf(),
-            process,
-        }
     }
 }
 
@@ -201,20 +196,49 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::ci::config::fixture;
 
-    fn guest() -> WindowsGuest {
-        WindowsGuest {
+    /// The tracked fixture describes a mac without a Windows guest, because
+    /// the guest is the one part of a machine profile most hosts do not have.
+    fn config() -> CiConfig {
+        let mut config = fixture();
+        config.host.windows = Some(WindowsGuest {
             vcpus: 4,
             memory_mib: 8192,
             data_disk_gib: 80,
-        }
+        });
+        config
+    }
+
+    fn process() -> Process {
+        Process::new(Path::new("/Volumes/KitharaCI"), BTreeMap::new())
     }
 
     fn arguments(boot: Boot) -> Vec<String> {
-        let guest = guest();
-        let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
-        WindowsHost::for_test(&guest, Path::new("/Volumes/CI/vm/windows"), &process)
+        let config = config();
+        let process = process();
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a Windows guest")
             .boot_arguments(boot)
+    }
+
+    /// `qemu` is installed by Homebrew, whose prefix is machine state: the
+    /// default on Apple silicon is `/opt/homebrew`, but a host is free to
+    /// answer elsewhere and the profile is where it says so. Writing one
+    /// machine's answer into this file would leave the guest unstartable on
+    /// every other, with an error naming neither `qemu` nor the prefix.
+    #[test]
+    fn the_guest_boots_the_qemu_its_profile_points_at() {
+        let mut config = config();
+        config.host.brew_root = PathBuf::from("/opt/elsewhere");
+        let process = process();
+        let host = WindowsHost::new(&config, &process).expect("the profile describes a guest");
+
+        assert_eq!(
+            host.qemu,
+            Path::new("/opt/elsewhere/bin/qemu-system-aarch64")
+        );
+        assert_eq!(host.qemu_img, Path::new("/opt/elsewhere/bin/qemu-img"));
     }
 
     /// The page file and `TEMP` are what grow the system image, and Windows
@@ -222,11 +246,9 @@ mod tests {
     /// image the host cannot shrink in place.
     #[test]
     fn what_the_guest_writes_lands_on_a_disk_of_its_own() {
-        assert!(
-            arguments(Boot::Installed)
-                .iter()
-                .any(|argument| { argument.contains("file=/Volumes/CI/vm/windows/data.qcow2") })
-        );
+        assert!(arguments(Boot::Installed).iter().any(|argument| {
+            argument.contains("file=/Volumes/KitharaCI/vm/windows/data.qcow2")
+        }));
     }
 
     /// Without it a guest that deletes a file keeps the blocks forever, which

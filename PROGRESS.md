@@ -8,6 +8,12 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
+
 - Mac CI host cleanup. The host spent a day refusing jobs for space while its
   hourly pass was gone: the agent hung inside `opendir` on a volume that had
   stopped answering, and launchd starts no second instance while the first is
