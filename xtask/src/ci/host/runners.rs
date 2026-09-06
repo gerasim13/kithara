@@ -586,14 +586,18 @@ mod tests {
     use super::*;
     use crate::ci::{config::fixture, host::testing::install_double};
 
-    /// What the runner is actually handed has to fit the machine. Admission and
-    /// the per-job Cargo budget are rendered into the same file from two
-    /// different constants, and the machine is what pays when they disagree:
-    /// raising admission from two jobs to three while the budget stayed at four
-    /// put twelve compilers on ten cores, leaving the runner, sccache, and the
-    /// linkers nothing to run on.
+    /// The budget has to leave the host a core. It is derived rather than
+    /// written down because the two numbers drifted apart the one time they
+    /// were separate: admission went from two jobs to three while the budget
+    /// stayed at four, and twelve compilers on ten cores left the runner,
+    /// sccache, and the linkers nothing to run on. Dividing admission into
+    /// `cores - 1` is what keeps the remainder, and a formula dividing into
+    /// `cores` would hand every core away and still render.
+    ///
+    /// That every rendered block carries the budget is
+    /// `rendered_runner_configs_are_valid_toml_and_yaml`'s claim.
     #[test]
-    fn the_rendered_runner_config_fits_its_jobs_on_the_host() {
+    fn the_cargo_budget_leaves_the_host_a_spare_core() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -601,32 +605,11 @@ mod tests {
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
 
-        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
-        let admitted = usize::try_from(rendered["concurrent"].as_integer().unwrap()).unwrap();
-        let workers: usize = rendered["runners"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|runner| runner["environment"].as_array().into_iter().flatten())
-            .filter_map(toml::Value::as_str)
-            .find_map(|entry| entry.strip_prefix("CARGO_BUILD_JOBS="))
-            .expect("every runner carries a per-job Cargo budget")
-            .parse()
-            .expect("the Cargo budget is a worker count");
-
+        let admitted = config.host.job_concurrency;
+        let workers = manager.cargo_build_jobs();
         let cores = config.host.cores;
+
         assert!(
             admitted * workers < cores,
             "{admitted} jobs of {workers} workers claim every one of the host's {cores} cores"
