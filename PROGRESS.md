@@ -25,6 +25,21 @@ the change that lands the work, and keep it short.
   incremental by default and registry ones never - and nothing to anyone else.
   No site in the repository sets a non-zero `CARGO_INCREMENTAL` now.
 
+- One owner of track analysis in `kithara-app`, `AnalysisService`, and one
+  extent per pass in `kithara-analysis`. The grid is published at the tempo
+  level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the
+  reported deck scenario on a release build with the full model, and the size
+  of the resume blob.
+
+- `SpectralBeats`, a beat detector needing no model, beside the neural one. It
+  searches the `Tempo` its caller hands it, and a build picks the model it
+  embeds; the cache tag names both. Left: nothing.
+
+- Harness and document revision. `AGENTS.md` routes instead of restating; the
+  `style` namespace budgets documents with `doc_size`, blocks drift with
+  `doc_staleness`, and holds every crate README to one shape with
+  `readme_shape`. All three queues are at zero.
+
 ## Next
 
 - `[profile.release] opt-level = "z"` builds every native and DSP dependency for
