@@ -40,12 +40,14 @@ the change that lands the work, and keep it short.
 
 - Tooling parameter ownership. Every policy number and list `xtask` and
   `kithara-devtools` carried as a `const` now has a config owner: eight
-  `CiHost` keys, the architecture thresholds, the style checks, and the stress,
-  quality and architecture render budgets. Spawned programs resolve through
-  `ToolsConfig`, one Rust binary per crate replaces the shell each embedded,
-  and `xtask/Cargo.toml` names `default-run`. Writing the host's live cache
-  namespaces down surfaced one the list never held: `target-slots`, every Linux
-  job's `CARGO_TARGET_DIR`, was pruned as retired. Left: nothing.
+  `CiHost` keys, the architecture thresholds, the style checks and the render
+  budgets. Spawned programs resolve through `ToolsConfig`, one Rust binary per
+  crate replaces the shell each embedded, and `xtask/Cargo.toml` names
+  `default-run`. The Windows guest's `qemu` pair moved the same way, onto
+  `CiHost::brew_root`, and the guard against writing a prefix down now reads
+  the executor's sources too. Writing the live cache namespaces down surfaced
+  one the list never held: `target-slots`, every Linux job's
+  `CARGO_TARGET_DIR`, was pruned as retired. Left: nothing.
 
 ## Next
 
@@ -62,8 +64,7 @@ the change that lands the work, and keep it short.
   place that settles it.
 - Work the comment queue down by hand: `--fix` is exhausted for comments, so
   all 665 `comment_hygiene` warns are decisions.
-- 593 ordering findings (`struct_field_order` 229, `struct_init_order` 115,
-  `trait_item_order` 249) are mechanical; one `just lint style --fix` clears
+- 593 ordering findings are mechanical; one `just lint style --fix` clears
   them but rewrites declarations across every crate, so it wants its own
   change.
 

@@ -27,9 +27,10 @@ pub(super) enum Boot {
 /// reproducible, or reachable by a fix, which is the same reason the periodic
 /// agents stopped running a binary only an operator could replace.
 pub(super) struct WindowsHost<'a> {
-    config: &'a CiConfig,
     guest: &'a WindowsGuest,
     root: PathBuf,
+    qemu: PathBuf,
+    qemu_img: PathBuf,
     process: &'a Process,
 }
 
@@ -41,9 +42,10 @@ impl<'a> WindowsHost<'a> {
             .as_ref()
             .context("this machine's profile defines no Windows guest")?;
         Ok(Self {
-            config,
             guest,
             root: config.host.host_root.join("vm/windows"),
+            qemu: config.host.brew_tool("qemu-system-aarch64"),
+            qemu_img: config.host.brew_tool("qemu-img"),
             process,
         })
     }
@@ -56,14 +58,6 @@ impl<'a> WindowsHost<'a> {
         self.root.join("data.qcow2")
     }
 
-    fn qemu(&self) -> PathBuf {
-        self.config.host.brew_tool("qemu-system-aarch64")
-    }
-
-    fn qemu_img(&self) -> PathBuf {
-        self.config.host.brew_tool("qemu-img")
-    }
-
     /// Create the data disk if it is not there yet.
     ///
     /// Creating it is cheap and does not start the guest: a `qcow2` allocates
@@ -73,9 +67,8 @@ impl<'a> WindowsHost<'a> {
         if disk.exists() {
             return Ok(());
         }
-        let qemu_img = self.qemu_img();
         self.process.run(
-            path_text(&qemu_img)?,
+            path_text(&self.qemu_img)?,
             &[
                 "create",
                 "-f",
@@ -190,25 +183,12 @@ impl<'a> WindowsHost<'a> {
         }
         let owned = self.boot_arguments(boot);
         let arguments: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let qemu = self.qemu();
-        self.process
-            .run(path_text(&qemu)?, &arguments, "start the Windows guest")?;
+        self.process.run(
+            path_text(&self.qemu)?,
+            &arguments,
+            "start the Windows guest",
+        )?;
         Ok(())
-    }
-
-    #[cfg(test)]
-    fn for_test(
-        config: &'a CiConfig,
-        guest: &'a WindowsGuest,
-        root: &Path,
-        process: &'a Process,
-    ) -> Self {
-        Self {
-            config,
-            guest,
-            root: root.to_path_buf(),
-            process,
-        }
     }
 }
 
@@ -217,62 +197,67 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs};
 
     use super::*;
-    use crate::ci::host::testing::install_double;
+    use crate::ci::{config::fixture, host::testing::install_double};
 
-    fn guest() -> WindowsGuest {
-        WindowsGuest {
+    /// The tracked fixture describes a mac without a Windows guest, because
+    /// the guest is the one part of a machine profile most hosts do not have.
+    fn config() -> CiConfig {
+        let mut config = fixture();
+        config.host.windows = Some(WindowsGuest {
             vcpus: 4,
             memory_mib: 8192,
             data_disk_gib: 80,
-        }
+        });
+        config
+    }
+
+    fn process() -> Process {
+        Process::new(Path::new("/Volumes/KitharaCI"), BTreeMap::new())
     }
 
     fn arguments(boot: Boot) -> Vec<String> {
-        let config = crate::ci::config::fixture();
-        let guest = guest();
-        let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
-        WindowsHost::for_test(
-            &config,
-            &guest,
-            Path::new("/Volumes/CI/vm/windows"),
-            &process,
-        )
-        .boot_arguments(boot)
+        let config = config();
+        let process = process();
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a Windows guest")
+            .boot_arguments(boot)
     }
 
-    /// The Homebrew prefix is a machine fact, not a build-time one: an Intel
-    /// mac installs under `/usr/local`. Both binaries take the same lookup,
-    /// so one test covers the pair.
+    /// `qemu` is installed by Homebrew, whose prefix is machine state: the
+    /// default on Apple silicon is `/opt/homebrew`, but a host is free to
+    /// answer elsewhere and the profile is where it says so. Writing one
+    /// machine's answer into this file would leave the guest unstartable on
+    /// every other, with an error naming neither `qemu` nor the prefix.
     #[test]
-    fn qemu_follows_the_configured_homebrew_root() {
-        let mut config = crate::ci::config::fixture();
-        config.host.brew_root = PathBuf::from("/usr/local");
-        let guest = guest();
-        let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
-        let host = WindowsHost::for_test(
-            &config,
-            &guest,
-            Path::new("/Volumes/CI/vm/windows"),
-            &process,
-        );
+    fn the_guest_boots_the_qemu_its_profile_points_at() {
+        let mut config = config();
+        config.host.brew_root = PathBuf::from("/opt/elsewhere");
+        let process = process();
+        let host = WindowsHost::new(&config, &process).expect("the profile describes a guest");
 
         assert_eq!(
-            host.qemu(),
-            PathBuf::from("/usr/local/bin/qemu-system-aarch64")
+            host.qemu,
+            Path::new("/opt/elsewhere/bin/qemu-system-aarch64")
         );
-        assert_eq!(host.qemu_img(), PathBuf::from("/usr/local/bin/qemu-img"));
+        assert_eq!(host.qemu_img, Path::new("/opt/elsewhere/bin/qemu-img"));
     }
 
-    /// `qemu_follows_the_configured_homebrew_root` pins the accessor, which a
-    /// spawn site is free to ignore. This runs one.
+    /// `the_guest_boots_the_qemu_its_profile_points_at` pins what `new` reads,
+    /// which a spawn site is free to ignore. This runs one.
     #[test]
     fn creating_the_data_disk_runs_the_configured_qemu_img() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::ci::config::fixture();
+        let mut config = config();
         config.host.brew_root = directory.path().join("brew");
+        config.host.host_root = directory.path().to_path_buf();
         install_double(&config.host.brew_root.join("bin"), "qemu-img");
+        let sized = config
+            .host
+            .windows
+            .as_ref()
+            .expect("the profile describes a guest")
+            .data_disk_gib;
         let asked = directory.path().join("asked");
-        let guest = guest();
         let process = Process::new(
             directory.path(),
             BTreeMap::from([(
@@ -280,9 +265,9 @@ mod tests {
                 asked.clone().into_os_string(),
             )]),
         );
-        let root = directory.path().join("vm/windows");
 
-        WindowsHost::for_test(&config, &guest, &root, &process)
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a guest")
             .ensure_data_disk()
             .expect("create the data disk");
 
@@ -292,7 +277,7 @@ mod tests {
             "qemu-img was asked for {arguments} instead of a disk"
         );
         assert!(
-            arguments.contains(&format!("{}G", guest.data_disk_gib)),
+            arguments.contains(&format!("{sized}G")),
             "the disk was not sized from the guest profile: {arguments}"
         );
     }
@@ -301,13 +286,13 @@ mod tests {
     #[test]
     fn starting_the_guest_runs_the_configured_qemu() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::ci::config::fixture();
+        let mut config = config();
         config.host.brew_root = directory.path().join("brew");
+        config.host.host_root = directory.path().to_path_buf();
         let bin = config.host.brew_root.join("bin");
         install_double(&bin, "qemu-img");
         install_double(&bin, "qemu-system-aarch64");
         let asked = directory.path().join("asked");
-        let guest = guest();
         let process = Process::new(
             directory.path(),
             BTreeMap::from([(
@@ -315,9 +300,9 @@ mod tests {
                 asked.clone().into_os_string(),
             )]),
         );
-        let root = directory.path().join("vm/windows");
 
-        WindowsHost::for_test(&config, &guest, &root, &process)
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a guest")
             .start(Boot::Installed)
             .expect("start the guest");
 
@@ -338,11 +323,9 @@ mod tests {
     /// image the host cannot shrink in place.
     #[test]
     fn what_the_guest_writes_lands_on_a_disk_of_its_own() {
-        assert!(
-            arguments(Boot::Installed)
-                .iter()
-                .any(|argument| { argument.contains("file=/Volumes/CI/vm/windows/data.qcow2") })
-        );
+        assert!(arguments(Boot::Installed).iter().any(|argument| {
+            argument.contains("file=/Volumes/KitharaCI/vm/windows/data.qcow2")
+        }));
     }
 
     /// Without it a guest that deletes a file keeps the blocks forever, which
