@@ -142,6 +142,10 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
     fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
         let mut eof_reached = self.eof_seen;
 

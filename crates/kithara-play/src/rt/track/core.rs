@@ -215,6 +215,9 @@ impl PlayerTrack {
             /// Effective media seconds consumed per output second.
             #[must_use]
             pub(crate) fn playback_rate(&self) -> f32;
+            /// Apply a playback-rate target directly to this track's Warp controls.
+            #[call(apply_playback_rate)]
+            pub fn set_playback_rate(&mut self, rate: f32);
             /// Propagate the host sample rate to the owned resource.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
