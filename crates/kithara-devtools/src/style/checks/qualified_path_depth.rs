@@ -126,13 +126,26 @@ fn rewrite(cfg: &QualifiedPathDepthConfig, src: &str) -> Result<Rewrite> {
         rw.replace(leaf, text);
     }
     if !plan.fresh.is_empty() {
-        let anchor = last_use_end(&file).context("no `use` to hang the new import on")?;
-        let text: String = plan
-            .fresh
-            .iter()
-            .map(|import| format!("\nuse {import};"))
-            .collect();
-        rw.replace(anchor..anchor, text);
+        let (at, text) = if let Some(end) = last_use_end(&file) {
+            (
+                end,
+                plan.fresh
+                    .iter()
+                    .map(|import| format!("\nuse {import};"))
+                    .collect(),
+            )
+        } else {
+            let start = first_item_start(&file)
+                .context("no `use` and no item to hang the new import on")?;
+            let mut text: String = plan
+                .fresh
+                .iter()
+                .map(|import| format!("use {import};\n"))
+                .collect();
+            text.push('\n');
+            (start, text)
+        };
+        rw.replace(at..at, text);
     }
     Ok(Rewrite {
         source: Some(rw.finish()?),
@@ -585,7 +598,20 @@ fn resolve(stack: &[Level], head: &str) -> Option<(usize, String)> {
             break;
         }
     }
-    root
+    root.or_else(|| is_crate_name(head).then(|| (0, head.to_owned())))
+}
+
+/// Whether a head nothing in the file binds is the crate it names.
+///
+/// An edition-2018 crate is in scope without a `use`, so most deep paths start
+/// at a name no line of the file mentions. What else could stand there - a
+/// generic parameter, an associated type, a type the file declares - is either
+/// bound already or spelled in camel case, which the rule reads as a name and
+/// leaves alone.
+fn is_crate_name(head: &str) -> bool {
+    let mut chars = head.strip_prefix("r#").unwrap_or(head).chars();
+    chars.next().is_some_and(|first| first.is_ascii_lowercase())
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
 }
 
 /// Whether a name an import would bind already means something else where the
@@ -800,7 +826,7 @@ impl Scope {
         if self.modules.contains(head) {
             return Some(join(&self.prefix, head));
         }
-        if self.roots.contains(head) {
+        if self.roots.contains(head) || is_crate_name(head) {
             return Some(head.to_owned());
         }
         None
@@ -938,6 +964,16 @@ fn last_use_end(file: &syn::File) -> Option<usize> {
             _ => None,
         })
         .max()
+}
+
+/// Where the first item starts, which is where a file with no `use` takes one.
+///
+/// An item spans its own attributes, so the import lands above the doc comment
+/// that introduces the item rather than between the two.
+fn first_item_start(file: &syn::File) -> Option<usize> {
+    file.items
+        .first()
+        .map(|item| item.span().byte_range().start)
 }
 
 /// One path a scope spells out, and whether every configuration compiles it.
@@ -1327,8 +1363,33 @@ mod tests {
     }
 
     #[test]
-    fn a_head_the_file_never_names_keeps_its_path() {
+    fn a_head_no_line_of_the_file_names_is_the_crate_it_names() {
         let src = "use std::fmt;\nfn f() {\n    unknown::Thing::make();\n}\n";
+
+        let (out, skipped) = fix(src);
+
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(out.contains("use unknown::Thing;"), "{out}");
+        assert!(out.contains("Thing::make()"), "{out}");
+        assert!(!out.contains("unknown::Thing::make"), "{out}");
+    }
+
+    #[test]
+    fn a_file_with_no_use_takes_its_first_one_above_the_item() {
+        let src = "/// Doc.\nfn f() {\n    unknown::Thing::make();\n}\n";
+
+        let (out, skipped) = fix(src);
+
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(
+            out, "use unknown::Thing;\n\n/// Doc.\nfn f() {\n    Thing::make();\n}\n",
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_head_that_no_crate_could_be_called_keeps_its_path() {
+        let src = "use std::fmt;\nfn f() {\n    _hidden::Thing::make();\n}\n";
 
         let (out, skipped) = fix(src);
 
