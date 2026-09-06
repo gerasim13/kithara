@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::ci::SCCACHE_SLOT_CONTROL_NAMESPACE;
+use crate::ci::{SCCACHE_SLOT_CONTROL_NAMESPACE, TARGET_SLOT_CACHE_NAMESPACE};
 
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
@@ -434,9 +434,14 @@ fn default_removable_roots() -> Vec<String> {
         .to_vec()
 }
 
-/// The sccache slot control directory is named once, in
-/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`], so a profile that never overrides this
-/// key cannot spell it a second way.
+/// Cleanup takes whole any cache directory this list does not name, so a
+/// namespace that has an owner belongs here even when nothing writes to it for
+/// a week. `target-slots` holds every Linux job's `CARGO_TARGET_DIR` and is
+/// owned by the build-cache budget, which evicts per slot.
+///
+/// The two code-owned names are spelled once, in
+/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] and [`TARGET_SLOT_CACHE_NAMESPACE`], so a
+/// profile that never overrides this key cannot spell either a second way.
 fn default_cache_namespaces() -> Vec<String> {
     [
         SCCACHE_SLOT_CONTROL_NAMESPACE,
@@ -444,6 +449,7 @@ fn default_cache_namespaces() -> Vec<String> {
         "gitlab-runner",
         "quarantine",
         "review",
+        TARGET_SLOT_CACHE_NAMESPACE,
         "trusted",
     ]
     .map(String::from)
@@ -749,16 +755,22 @@ mod tests {
     }
 
     /// The tracked fixture is the operator's field catalogue
-    /// (`docs/guides/ci-host.md`), so it spells the sccache slot directory a
-    /// second time. This is the only place that spelling can drift from
-    /// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] without a compiler error.
+    /// (`docs/guides/ci-host.md`), so it spells the two code-owned cache
+    /// directories a second time. This is the only place either spelling can
+    /// drift from the constant without a compiler error.
     #[test]
-    fn the_fixture_names_the_slot_control_directory_the_way_the_code_does() {
+    fn the_fixture_names_the_code_owned_directories_the_way_the_code_does() {
         let host = super::super::fixture().host;
 
         assert_eq!(
             host.cache_namespaces.first().map(String::as_str),
             Some(SCCACHE_SLOT_CONTROL_NAMESPACE)
+        );
+        assert!(
+            host.cache_namespaces
+                .iter()
+                .any(|namespace| namespace == TARGET_SLOT_CACHE_NAMESPACE),
+            "an operator profile that omits the build cache loses it to cleanup"
         );
     }
 
@@ -834,6 +846,7 @@ mod tests {
                 "gitlab-runner",
                 "quarantine",
                 "review",
+                TARGET_SLOT_CACHE_NAMESPACE,
                 "trusted"
             ]
         );

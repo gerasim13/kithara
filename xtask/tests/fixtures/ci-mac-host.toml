@@ -11,6 +11,7 @@ cache_namespaces = [
   "gitlab-runner",
   "quarantine",
   "review",
+  "target-slots",
   "trusted",
 ]
 cache_root_macos = "/Volumes/My Shared Files/kithara-cache"

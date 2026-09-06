@@ -145,7 +145,11 @@ is the whole answer. What its sweeps cannot show:
   for; every cleanup trims the `colima_profile` instance, whatever the pressure.
 - A cache namespace that stops being written to goes invisible rather than
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
-  live ones and cleanup takes the rest whole.
+  live ones and cleanup takes the rest whole. A namespace with an owner belongs
+  there even when it is quiet: `target-slots` holds every Linux job's
+  `CARGO_TARGET_DIR` and the build-cache budget evicts it one slot at a time.
+  An installed profile carries the list verbatim, so adding a name reaches a
+  running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
 - Build-cache bytes for a lane's claimed checkout still count against the
   ceiling.
 - A macOS job VM clone outlives the runner that cloned it, and age alone cannot

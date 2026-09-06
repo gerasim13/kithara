@@ -1389,6 +1389,25 @@ mod tests {
         assert!(control.join("slot-0.lock").is_file());
     }
 
+    /// Every Linux job's `CARGO_TARGET_DIR` lives under this namespace and the
+    /// build-cache budget evicts it one slot at a time. Taking it whole as a
+    /// retired namespace throws away the caches that budget had just sized.
+    #[test]
+    fn zero_age_prune_preserves_the_build_cache_namespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let slot = directory
+            .path()
+            .join("cache/target-slots/review-linux-aarch64-slot-0");
+        fs::create_dir_all(&slot).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_retired_caches(Duration::ZERO).unwrap();
+
+        assert!(slot.is_dir());
+    }
+
     #[test]
     fn a_retired_namespace_survives_until_it_has_gone_quiet() {
         let directory = tempfile::tempdir().unwrap();
