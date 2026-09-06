@@ -8,7 +8,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
@@ -249,7 +248,7 @@ enum AdvanceTrigger {
 }
 
 struct ScrubObservation<'a> {
-    queue: &'a Queue<AppPools>,
+    queue: &'a QueueControl<AppPools>,
     rx: &'a mut EventReceiver,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,

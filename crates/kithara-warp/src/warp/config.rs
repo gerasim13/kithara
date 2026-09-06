@@ -2,8 +2,18 @@ use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+use kithara_stretch::ElasticBackendConfig;
 
 use crate::StretchControls;
+
+const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 #[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
@@ -15,6 +25,22 @@ pub struct WarpConfig {
     #[builder(default = StretchControls::new(1.0))]
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    /// Preparation parameters for the compiled elastic backends.
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    #[builder(default)]
+    #[field(get, copy)]
+    backends: ElasticBackendConfig,
+    /// Maximum source frames admitted to one elastic render operation.
+    #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
+    #[field(get, copy)]
+    source_block_frames: NonZeroUsize,
+    /// Output-frame window used to smooth live rate changes.
+    #[builder(default = NonZeroUsize::MIN)]
+    #[field(get, copy)]
+    rate_smooth_frames: NonZeroUsize,
     /// Optional output-frame cap between samples of live temporal controls.
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[field(get, copy)]

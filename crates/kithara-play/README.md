@@ -77,9 +77,10 @@ to the single `decoder` field.
   then release the slot and stop the engine.
 - **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
-- **Tempo and key-lock:** a shared `StretchControls` handle is supplied through
-  `PlayerConfig::builder().timestretch(...)`; speed, key-lock, and backend apply
-  live, mid-track.
+- **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the
+  resident `WarpConfig`, including its shared `StretchControls`; speed,
+  key-lock, and backend changes apply live, mid-track. Render quantum and rate
+  smoothing remain optional frame-based Warp settings.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).

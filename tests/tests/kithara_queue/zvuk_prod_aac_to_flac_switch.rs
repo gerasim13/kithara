@@ -18,7 +18,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
-use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer};
+use kithara_integration_tests::{
+    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
+};
 use tracing::info;
 
 #[path = "source_helper.rs"]
@@ -243,7 +245,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     );
 
     let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools())
+        HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
     );

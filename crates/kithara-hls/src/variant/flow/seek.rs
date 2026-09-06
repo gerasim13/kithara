@@ -35,7 +35,7 @@ where
 
     /// Resolve a time seek to its byte anchor on the produce core: lock-free
     /// layout reads plus atomic anchor stores. The fetch plan belongs to the
-    /// download peer (`seek_epoch_reset` -> `rebuild_at_time`).
+    /// download peer (`apply_seek_change` -> `rebuild_at_time`).
     pub(crate) fn prepare_seek_time_anchor(
         &self,
         position: Duration,

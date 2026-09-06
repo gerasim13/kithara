@@ -7,15 +7,25 @@ use kithara_audio::{
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_platform::sync::Arc;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_platform::thread;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_test_utils::kithara;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
+#[cfg(feature = "analysis-beat")]
+use unimock::Unimock;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use unimock::{MockFn, matching};
 
 use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
-    beat::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
+    beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
     waveform::bucket::Waveform,
 };
@@ -37,6 +47,41 @@ impl BeatDetector for OneBeatPerWindow {
             downbeats: vec![BeatMark::at(0.25)],
         })
     }
+}
+
+/// Hand a mocked detector to a component that shares it with a compute pool.
+///
+/// The analysis node clones its detector into a rayon task and nothing joins
+/// that pool, so the last reference dies on whichever thread finishes last.
+/// A unimock original verifies in drop and belongs to the thread that built
+/// it: reached from a pool thread it panics instead of verifying, which is how
+/// run 33752112563 lost
+/// `a_scheduled_route_and_a_linear_one_produce_the_same_artifacts`. What the
+/// clause would have verified, each of these tests asserts for itself.
+#[cfg(feature = "analysis-beat")]
+pub(super) fn shareable(mock: Unimock) -> Unimock {
+    mock.no_verify_in_drop()
+}
+
+/// The node drops its detector wherever the compute pool ends, so a mock
+/// [`shareable`] hands out must outlive the thread that built it.
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn a_detector_survives_a_drop_off_the_thread_that_built_it() {
+    let detector = shareable(Unimock::new(
+        BeatDetectorMock
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(|_, _| {
+                Ok(RawBeats {
+                    beats: vec![BeatMark::at(0.25)],
+                    downbeats: vec![BeatMark::at(0.25)],
+                })
+            })),
+    ));
+
+    thread::spawn(move || drop(detector))
+        .join()
+        .expect("dropping a detector off-thread must not panic");
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
