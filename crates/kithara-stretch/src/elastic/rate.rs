@@ -38,6 +38,27 @@ impl ElasticRateEnvelope {
             && source_frames_per_output <= self.max_source_frames_per_output.next_up()
     }
 
+    /// Largest request whose exact ratio rounds to `source_frames_per_output`.
+    #[must_use]
+    pub fn largest_request_at(
+        self,
+        source_frames_per_output: f64,
+        max_source_frames: usize,
+        max_output_frames: usize,
+    ) -> Option<ElasticRequest> {
+        if !self.contains_rate(source_frames_per_output) {
+            return None;
+        }
+        let minimum = binary_midpoint(
+            source_frames_per_output.next_down(),
+            source_frames_per_output,
+        )?;
+        let maximum =
+            binary_midpoint(source_frames_per_output, source_frames_per_output.next_up())?;
+        largest_request_between(minimum, maximum, max_source_frames, max_output_frames)
+            .filter(|request| self.contains(*request))
+    }
+
     pub(crate) fn has_representable_request(
         self,
         max_source_frames: usize,
@@ -167,7 +188,7 @@ impl TryFrom<RangeInclusive<f64>> for ElasticRateEnvelope {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{ElasticError, ElasticRateEnvelope};
+    use super::{ElasticError, ElasticRateEnvelope, ElasticRequest};
 
     fn envelope() -> ElasticRateEnvelope {
         ElasticRateEnvelope::try_from(2.0 / 3.0..=4.0 / 3.0)
@@ -203,5 +224,22 @@ mod tests {
                 Err(ElasticError::InvalidRateEnvelope { .. })
             ));
         }
+    }
+
+    #[kithara::test]
+    fn largest_request_preserves_exact_rates_inside_frame_limits() {
+        let envelope = ElasticRateEnvelope::try_from(0.05..=4.0)
+            .expect("invariant: practical rate envelope is valid");
+
+        assert_eq!(
+            envelope.largest_request_at(0.05, 8192, 64),
+            ElasticRequest::new(3, 60).ok()
+        );
+        assert_eq!(
+            envelope.largest_request_at(4.0, 8192, 64),
+            ElasticRequest::new(256, 64).ok()
+        );
+        assert_eq!(envelope.largest_request_at(0.05, 8192, 19), None);
+        assert_eq!(envelope.largest_request_at(0.049, 8192, 64), None);
     }
 }

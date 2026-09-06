@@ -1,4 +1,7 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_abr::AbrController;
@@ -20,9 +23,15 @@ fn allocate_grid_id() -> BeatGridId {
     id
 }
 
+const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
+
 /// Configuration for the player.
-#[derive(Builder)]
+#[derive(Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
@@ -31,6 +40,10 @@ pub struct PlayerConfig<S> {
     /// Per-deck Warp resources and live temporal controls.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
+    /// Maximum accepted control-to-presented-audio response in output frames.
+    #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    #[field(get, copy)]
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     pub(crate) worker: PlayWorker<S>,
@@ -80,6 +93,7 @@ impl<S> Clone for PlayerConfig<S> {
         Self {
             grid_id: self.grid_id,
             warp: self.warp.clone(),
+            response_budget_frames: self.response_budget_frames,
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
             block_on_underrun: self.block_on_underrun,
@@ -102,6 +116,7 @@ impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
             .field("warp", &self.warp)
+            .field("response_budget_frames", &self.response_budget_frames)
             .field("gapless_mode", &self.gapless_mode)
             .field("eq_layout", &self.eq_layout)
             .field("auto_advance_enabled", &self.auto_advance_enabled)
@@ -111,5 +126,24 @@ impl<S> fmt::Debug for PlayerConfig<S> {
             .field("max_slots", &self.max_slots)
             .field("worker", &self.worker)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{PlayWorkerConfig, test_pools::pools};
+
+    #[kithara::test(native)]
+    fn default_response_budget_matches_product_contract() {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let config = PlayerConfig::builder()
+            .sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
+            .worker(worker)
+            .build();
+
+        assert_eq!(config.response_budget_frames().get(), 448);
     }
 }
