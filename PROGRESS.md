@@ -15,11 +15,11 @@ the change that lands the work, and keep it short.
   pins it, so `downloader` and `flush` parsed and were dropped until a read
   found them; twenty-two files still take pools from `PoolsSection::default()`.
 
-- Where the machine keeps its tools is asked, not written down, and asking is
-  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
-  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
-  the recipe, so every nested invocation a test drove waited on it; it reads
-  the prefix off where `brew` sits now. A guard holds each half.
+- Tooling parameter ownership. Every policy number and list `xtask` and
+  `kithara-devtools` held as a `const` has a config owner, spawned programs
+  resolve through `ToolsConfig`, and Rust binaries replace their embedded
+  shell. Cleanup pruned `target-slots`, every Linux job's `CARGO_TARGET_DIR`,
+  as retired.
 
 - Mac CI host cleanup. The hourly pass hung inside `opendir` on a volume that
   had stopped answering and launchd starts no second instance, so the host
@@ -63,8 +63,8 @@ the change that lands the work, and keep it short.
   the tree through `cpal` and has no published successor.
 - `kithara-ui` still warns under `--no-default-features --features render` and
   `--features vello`, where the widget layer compiles without a host: 627 items.
-- Lint debt is hand work: 668 comment findings are decisions `--fix` cannot
-  make; the 439 mechanical ordering findings clear under one
+- Lint debt is hand work: 678 comment findings are decisions `--fix` cannot
+  make; the 612 mechanical ordering findings clear under one
   `just lint style --fix` that rewrites declarations across every crate.
 
 ## Blocked
