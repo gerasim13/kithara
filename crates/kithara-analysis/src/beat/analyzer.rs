@@ -558,12 +558,13 @@ mod tests {
     }
 
     impl Pass {
-        fn apply_detection(&mut self, output: super::DetectOutput) {
-            self.analyzer.apply_detection(output);
-        }
-
-        fn held_frames(&self) -> usize {
-            self.analyzer.held_frames()
+        delegate::delegate! {
+            to self.analyzer {
+                fn apply_detection(&mut self, output: super::DetectOutput);
+                fn held_frames(&self) -> usize;
+                fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange>;
+                fn write_resume(&mut self, out: &mut Vec<u8>);
+            }
         }
 
         fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
@@ -599,14 +600,6 @@ mod tests {
             ending: bool,
         ) -> Result<crate::BeatArtifact, BeatDetectError> {
             self.analyzer.snapshot(&self.pools, detector, ending)
-        }
-
-        fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange> {
-            self.analyzer.unanalysed(extent)
-        }
-
-        fn write_resume(&mut self, out: &mut Vec<u8>) {
-            self.analyzer.write_resume(out);
         }
     }
 

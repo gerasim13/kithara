@@ -12,6 +12,8 @@ use num_traits::cast::ToPrimitive;
 
 use crate::test_pools::{Pools, sample_buffer};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct Track {
     spec: AudioSpec,
     bus: EventBus,
@@ -22,6 +24,7 @@ pub(super) struct Track {
     chunk_frames: u64,
     claimed: u64,
     first: u64,
+    #[field(get, vis = "pub(super)")]
     frames: u64,
 }
 
@@ -59,10 +62,6 @@ impl Track {
 
     fn duration_for(&self, frames: u64) -> Duration {
         self.spec.duration_for(frames).expect("representable")
-    }
-
-    pub(super) fn frames(&self) -> u64 {
-        self.frames
     }
 
     pub(super) fn priming(

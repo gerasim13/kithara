@@ -470,7 +470,7 @@ fn abort_join<T>(_handle: &JoinHandle<T>) {}
 fn analysis_persistence_committed(revision: u64, final_len: u64) {}
 
 /// Analysis persistence startup, queue, storage, or archive failure.
-#[derive(Debug)]
+#[derive(Debug, derive_more::From)]
 pub(crate) enum AnalysisPersistenceError {
     RuntimeUnavailable,
     QueueClosed,
@@ -479,8 +479,11 @@ pub(crate) enum AnalysisPersistenceError {
     InvalidChunkDuration,
     InvalidResourceState,
     InvalidWritePlan,
+    #[from]
     Task(TaskError),
+    #[from]
     Analysis(AnalysisFileError),
+    #[from]
     Assets(AssetsError),
     Join(JoinError),
 }
@@ -524,24 +527,6 @@ impl Error for AnalysisPersistenceError {
             | Self::InvalidResourceState
             | Self::InvalidWritePlan => None,
         }
-    }
-}
-
-impl From<TaskError> for AnalysisPersistenceError {
-    fn from(error: TaskError) -> Self {
-        Self::Task(error)
-    }
-}
-
-impl From<AnalysisFileError> for AnalysisPersistenceError {
-    fn from(error: AnalysisFileError) -> Self {
-        Self::Analysis(error)
-    }
-}
-
-impl From<AssetsError> for AnalysisPersistenceError {
-    fn from(error: AssetsError) -> Self {
-        Self::Assets(error)
     }
 }
 

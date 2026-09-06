@@ -186,6 +186,8 @@ impl Decoder for ProfileCountingDecoder {
     fn update_byte_len(&self, _len: u64) {}
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 struct RouteSignalDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
     gapless: Option<GaplessInfo>,
@@ -194,6 +196,7 @@ struct RouteSignalDecoder {
     sample_rate: u32,
     id: u64,
     next_frame: u64,
+    #[field(with, vis = "")]
     timeline_gap: u64,
 }
 
@@ -220,11 +223,6 @@ impl RouteSignalDecoder {
 
     fn audio_spec(&self) -> AudioSpec {
         Consts::spec(self.sample_rate)
-    }
-
-    fn with_timeline_gap(mut self, timeline_gap: u64) -> Self {
-        self.timeline_gap = timeline_gap;
-        self
     }
 }
 
@@ -594,6 +592,8 @@ impl WaitPark {
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
@@ -603,6 +603,7 @@ pub(super) struct TestSource {
     position: Arc<AtomicU64>,
     seek: Arc<SeekState>,
     waits: Arc<Mutex<Vec<Range<u64>>>>,
+    #[field(with = with_peer_wake, option_set_some, vis = "pub(super)")]
     peer: Option<Arc<DeferredWake>>,
 }
 
@@ -636,14 +637,6 @@ impl TestSource {
 
     pub(super) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
         Arc::clone(&self.waits)
-    }
-
-    /// Attach a reader→peer wake, as segmented sources vend one. Opt-in:
-    /// a `Some` peer changes `Stream`'s read-path unit clamping, so only
-    /// tests pinning the peer-wake contract install it.
-    pub(super) fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
-        self.peer = Some(wake);
-        self
     }
 }
 
