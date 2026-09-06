@@ -8,14 +8,6 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- The Windows guest asks the machine's profile where `qemu` is. Both binaries
-  it launches were absolute paths into one Homebrew prefix, so a host whose
-  Homebrew answers elsewhere could not start the guest, and the error named
-  neither `qemu` nor the prefix. `CiHost::brew_root` already owns that answer
-  and fifteen other tools already go through it. The guard that kept the build
-  configuration from writing a prefix down now reads the executor's sources as
-  well, so the class cannot come back through Rust.
-
 - Mac CI host cleanup. The host spent a day refusing jobs for space while its
   hourly pass was gone: the agent hung inside `opendir` on a volume that had
   stopped answering, and launchd starts no second instance while the first is
@@ -48,27 +40,15 @@ the change that lands the work, and keep it short.
   reported deck scenario on a release build with the full model, and the size
   of the resume blob.
 
-- Harness and document revision. `AGENTS.md` routes instead of restating; the
-  `style` namespace budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every crate README to one shape with
-  `readme_shape`. All three queues are at zero, and `just lint full` runs the
-  namespace on the Apple lint lane.
-
 - Premature track switch, and the census built to find it.
   `PlayerEvent::HandoverRequested` was a unit variant, so the queue applied the
-  outgoing track's handover to whatever its cursor held by then - the successor
-  it had just selected, cut a block in. The request now carries `ItemRole`, and
-  the queue acts on it only when it names the track it is on.
-  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span` pins it
-  and needs three tracks: with two there is no successor to jump to, which is why
-  the existing crossfade coverage stayed green.
-
-  The census that framed it plays a queue end to end and attributes every output
-  frame to the track that produced it, through a USDT probe on
-  `PlayerTrack::render`, over HLS segments, a local FLAC, a FLAC body over HTTP
-  and an MPEG body between two HLS tracks, each at cf=0 and cf>0, with a real-CDN
-  counterpart in `real_playlist`. Writing the seam test found `suite_network`
-  dark since `#260`; the lane builds again. Left: nothing.
+  outgoing track's handover to the successor it had already selected, cutting it
+  a block in. The request now carries `ItemRole` and the queue acts on it only
+  when it names the track it is on;
+  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span` pins it,
+  and needs three tracks. The census that framed it attributes every output frame
+  to the track that produced it over every reader a track arrives through, and
+  writing it found `suite_network` dark since `#260`. Left: nothing.
 
 ## Next
 
