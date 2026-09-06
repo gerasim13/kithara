@@ -30,6 +30,31 @@ mod tests {
     use super::derivable_support::{Kind, fix_source};
 
     #[test]
+    fn a_thiserror_enum_takes_the_spelling_thiserror_reads() {
+        let src = "#[derive(Debug, thiserror::Error)]\npub enum E {\n    #[error(\"payload: {0}\")]\n    Payload(#[source] B),\n}\nimpl From<B> for E { fn from(error: B) -> Self { Self::Payload(error) } }\n";
+        let (fixed, _) = fix_source(src, Kind::From).unwrap();
+        assert!(
+            !fixed.contains("derive_more::From"),
+            "thiserror owns the conversion: {fixed}"
+        );
+        assert!(
+            fixed.contains("Payload(#[from] B)"),
+            "`#[from]` replaces the `#[source]` it implies: {fixed}"
+        );
+        assert!(
+            !fixed.contains("impl From<B> for E"),
+            "the manual impl goes: {fixed}"
+        );
+    }
+
+    #[test]
+    fn a_thiserror_field_without_a_source_attribute_gains_from() {
+        let src = "#[derive(thiserror::Error, Debug)]\npub enum E {\n    #[error(\"payload\")]\n    Payload(B),\n}\nimpl From<B> for E { fn from(error: B) -> Self { Self::Payload(error) } }\n";
+        let (fixed, _) = fix_source(src, Kind::From).unwrap();
+        assert!(fixed.contains("Payload(#[from] B)"), "{fixed}");
+    }
+
+    #[test]
     fn fixes_newtype_and_is_idempotent() {
         let src = "// type comment\nstruct Id(u32);\n// impl comment\nimpl From<u32> for Id { fn from(v: u32) -> Self { Self(v) } }\n";
         let (fixed, outcome) = fix_source(src, Kind::From).unwrap();
