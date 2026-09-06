@@ -5,7 +5,10 @@ pub use crate::backend::tokio::task::{JoinError, JoinHandle};
 // UNDER AMBIENT (a flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual clock advance).
 pub use crate::flash::yield_now;
 use crate::{
-    backend::tokio::{backend, runtime::Handle, task as native_task},
+    backend::{
+        maybe_send::MaybeSend,
+        tokio::{backend, runtime::Handle, task as native_task},
+    },
     flash::system::credit,
 };
 
@@ -95,6 +98,21 @@ where
             f()
         }
     })
+}
+
+/// Run a synchronous body away from the async step that produced it.
+///
+/// Native has a pool for exactly this, so the hop goes through
+/// [`spawn_blocking`] and inherits its pacing: under a virtual clock the body
+/// is work in flight, and a hop that skipped the accounting would let the
+/// clock run past it. The bound follows the platform through [`MaybeSend`]
+/// rather than being stated twice.
+pub fn spawn_sync<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + MaybeSend + 'static,
+    R: MaybeSend + 'static,
+{
+    spawn_blocking(f)
 }
 
 /// Spawn a blocking computation on a specific runtime [`Handle`].
