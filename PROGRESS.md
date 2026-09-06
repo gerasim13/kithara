@@ -52,16 +52,16 @@ the change that lands the work, and keep it short.
   `[profile.release.package.<name>]` entries beat the glob if they are pinned
   back.
 
-  `crates/kithara-ffi/.wasm-slim.toml` carried a 29000/31000/33000 budget from a
-  May build made with no `[profile.release]` and default features - roughly nine
-  times the real bundle, so the gate could not have caught an eightfold
-  regression. Reset to 3600/4000/4500 against the measured 3565 KiB.
-
 ## Next
 
 - The workspace's own crates are still at `"z"` - `kithara-audio`, `-decode`,
   `-resampler` and the rest carry the size setting a per-package glob cannot
   reach. Raising them is a measured change of its own.
+- `crates/kithara-ffi/.wasm-slim.toml` budgets the wasm bundle at
+  29000/31000/33000 KiB against a May baseline of ~28.2 MiB, while a local
+  `dist` weighs 3565 KiB. Either the gate is an order of magnitude stale or the
+  two numbers weigh different things; the `web-size` lane on GitLab is the only
+  place that settles it, and nothing here has run it.
 - No runtime number backs the optimization yet. Decode throughput, stretch cost
   and render-budget headroom were never measured before or after, so the case
   rests on codegen rather than on a benchmark.
