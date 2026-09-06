@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    analysis::{AnalysisProgress, FrameRange},
+    analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
     events::{
         AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
         PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
@@ -368,7 +368,7 @@ impl StateController {
 }
 
 fn bpm_info_from_state(
-    beat: &kithara::analysis::BeatSnapshot,
+    beat: &BeatSnapshot,
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {

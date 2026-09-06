@@ -29,6 +29,7 @@ use crate::{
     },
     size::{Dim, SizeSpec, control_size},
     solve,
+    solve::{Alignment, Length, Limits, Size},
 };
 
 /// How one built-in control becomes a leaf of the retained tree.
@@ -66,7 +67,7 @@ pub(super) struct Cx<'a> {
     pub(super) owner: InputOwner,
     pub(super) plan: Option<&'a HostedControlPlan>,
     pub(super) read: Option<&'a Binding>,
-    pub(super) declared: solve::Size<solve::Length>,
+    pub(super) declared: Size<Length>,
 }
 
 impl NodeControl for mount::Summary {
@@ -511,14 +512,14 @@ impl Viewport {
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
-        limits: solve::Limits,
-        declared: solve::Size<solve::Length>,
-    ) -> solve::Size {
+        limits: Limits,
+        declared: Size<Length>,
+    ) -> Size {
         let size = limits.resolve(declared.width, declared.height, limits.max());
-        let inner = normalized(solve::Limits::with_compression(
-            solve::Size::ZERO,
-            solve::Size::new(size.width, f32::MAX),
-            solve::Size::new(false, true),
+        let inner = normalized(Limits::with_compression(
+            Size::ZERO,
+            Size::new(size.width, f32::MAX),
+            Size::new(false, true),
         ));
         let content = children.first_mut().map_or(0.0, |child| {
             Node::set_child_limits(ctx, child, inner);
@@ -576,9 +577,9 @@ impl NodeLayout {
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
-        limits: solve::Limits,
-        declared: solve::Size<solve::Length>,
-    ) -> solve::Size {
+        limits: Limits,
+        declared: Size<Length>,
+    ) -> Size {
         match self {
             Self::Leaf(leaf) => {
                 let intrinsic = leaf.measure(limits);
@@ -630,17 +631,17 @@ impl NodeLayout {
 fn stage(
     ctx: &mut LayoutCtx<'_>,
     children: &mut [WidgetPod<Node>],
-    limits: solve::Limits,
-    declared: solve::Size<solve::Length>,
-) -> solve::Size {
+    limits: Limits,
+    declared: Size<Length>,
+) -> Size {
     let inner = normalized(limits.width(declared.width).height(declared.height).loose());
-    let intrinsic = children.first_mut().map_or(solve::Size::ZERO, |first| {
+    let intrinsic = children.first_mut().map_or(Size::ZERO, |first| {
         Node::set_child_limits(ctx, first, inner);
         let size = ctx.run_layout(first, &box_constraints(inner));
-        solve::Size::new(size.width.as_(), size.height.as_())
+        Size::new(size.width.as_(), size.height.as_())
     });
     let size = limits.resolve(declared.width, declared.height, intrinsic);
-    let loose = solve::Limits::new(solve::Size::ZERO, size);
+    let loose = Limits::new(Size::ZERO, size);
     for child in children {
         Node::set_child_limits(ctx, child, loose);
         ctx.run_layout(child, &box_constraints(loose));
@@ -658,23 +659,23 @@ fn measured(
     plan: &Measured,
     ctx: &mut LayoutCtx<'_>,
     children: &mut [WidgetPod<Node>],
-    limits: solve::Limits,
-    declared: solve::Size<solve::Length>,
-) -> solve::Size {
+    limits: Limits,
+    declared: Size<Length>,
+) -> Size {
     let inner = normalized(limits.width(declared.width).height(declared.height));
     let room = match plan.axis {
         MeasureAxis::Width => inner.max().width,
         MeasureAxis::Height => inner.max().height,
     };
     let drawn = plan.branch(room).min(children.len().saturating_sub(1));
-    let none = solve::Limits::new(solve::Size::ZERO, solve::Size::ZERO);
+    let none = Limits::new(Size::ZERO, Size::ZERO);
     let loose = inner.loose();
-    let mut intrinsic = solve::Size::ZERO;
+    let mut intrinsic = Size::ZERO;
     for (index, child) in children.iter_mut().enumerate() {
         if index == drawn {
             Node::set_child_limits(ctx, child, loose);
             let size = ctx.run_layout(child, &box_constraints(loose));
-            intrinsic = solve::Size::new(size.width.as_(), size.height.as_());
+            intrinsic = Size::new(size.width.as_(), size.height.as_());
         } else {
             Node::set_child_limits(ctx, child, none);
             ctx.run_layout(child, &BoxConstraints::tight(MasonrySize::ZERO));
@@ -687,17 +688,17 @@ fn measured(
 fn stack(
     ctx: &mut LayoutCtx<'_>,
     children: &mut [WidgetPod<Node>],
-    limits: solve::Limits,
-    declared: solve::Size<solve::Length>,
-) -> solve::Size {
+    limits: Limits,
+    declared: Size<Length>,
+) -> Size {
     let inner = normalized(limits.width(declared.width).height(declared.height).loose());
-    let intrinsic = children.first_mut().map_or(solve::Size::ZERO, |first| {
+    let intrinsic = children.first_mut().map_or(Size::ZERO, |first| {
         Node::set_child_limits(ctx, first, inner);
         let size = ctx.run_layout(first, &box_constraints(inner));
-        solve::Size::new(size.width.as_(), size.height.as_())
+        Size::new(size.width.as_(), size.height.as_())
     });
     let size = limits.resolve(declared.width, declared.height, intrinsic);
-    let exact = solve::Limits::new(size, size);
+    let exact = Limits::new(size, size);
     for child in children {
         Node::set_child_limits(ctx, child, exact);
         ctx.run_layout(
@@ -712,60 +713,56 @@ fn stack(
     size
 }
 
-pub(crate) const fn main_length(dim: Dim) -> solve::Length {
+pub(crate) const fn main_length(dim: Dim) -> Length {
     match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Range { .. } | Dim::Fill | Dim::Shrink => solve::Length::Fill,
+        Dim::Fixed(value) => Length::Fixed(value),
+        Dim::Range { .. } | Dim::Fill | Dim::Shrink => Length::Fill,
     }
 }
 
-pub(crate) const fn declared(size: SizeSpec) -> solve::Size<solve::Length> {
-    solve::Size::new(solve::length(size.w), solve::length(size.h))
+pub(crate) const fn declared(size: SizeSpec) -> Size<Length> {
+    Size::new(solve::length(size.w), solve::length(size.h))
 }
 
 pub(crate) fn control_declared(
     spec: &ControlSpec,
     size: Option<SizeSpec>,
     skin: &Skin,
-) -> solve::Size<solve::Length> {
+) -> Size<Length> {
     let intrinsic = match spec {
-        ControlSpec::Button { style, .. } => {
-            solve::Size::new(declared_width(*style, skin), solve::Length::Fill)
-        }
+        ControlSpec::Button { style, .. } => Size::new(declared_width(*style, skin), Length::Fill),
         ControlSpec::TabLarge { .. } => TabLarge::declared_length(skin.tab_large.height),
-        ControlSpec::Text { .. } => solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
+        ControlSpec::Text { .. } => Size::new(Length::Shrink, Length::Fill),
         ControlSpec::Spacer | ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => {
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill)
+            Size::new(Length::Fill, Length::Fill)
         }
         _ => declared(control_size(spec, skin.document())),
     };
     size.map_or(intrinsic, |size| {
-        solve::Size::new(
+        Size::new(
             control_length(size.w, intrinsic.width),
             control_length(size.h, intrinsic.height),
         )
     })
 }
 
-pub(crate) const fn control_length(dim: Dim, intrinsic: solve::Length) -> solve::Length {
+pub(crate) const fn control_length(dim: Dim, intrinsic: Length) -> Length {
     match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Shrink => solve::Length::Shrink,
+        Dim::Fixed(value) => Length::Fixed(value),
+        Dim::Shrink => Length::Shrink,
         Dim::Range { .. } => match intrinsic {
-            solve::Length::FillPortion(portion) => solve::Length::FillPortion(portion),
-            solve::Length::Fill | solve::Length::Shrink | solve::Length::Fixed(_) => {
-                solve::Length::Fill
-            }
+            Length::FillPortion(portion) => Length::FillPortion(portion),
+            Length::Fill | Length::Shrink | Length::Fixed(_) => Length::Fill,
         },
-        Dim::Fill => solve::Length::Fill,
+        Dim::Fill => Length::Fill,
     }
 }
 
-pub(crate) const fn alignment(value: TextAlign) -> solve::Alignment {
+pub(crate) const fn alignment(value: TextAlign) -> Alignment {
     match value {
-        TextAlign::Start => solve::Alignment::Start,
-        TextAlign::Center => solve::Alignment::Center,
-        TextAlign::End => solve::Alignment::End,
+        TextAlign::Start => Alignment::Start,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::End => Alignment::End,
     }
 }
 

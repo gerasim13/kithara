@@ -11,7 +11,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
     ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, SourceProbe,
-    StreamResult,
+    StreamResult, dl::PeerHandle,
 };
 
 use super::coord::{HlsCoord, HlsProbe};
@@ -40,7 +40,7 @@ where
     /// Eviction-subscription guard. Dropping it deregisters this stream's
     /// eviction routing entry from the store (shared or private).
     invalidation_guard: Option<EvictionSubscription>,
-    peer_handle: Option<kithara_stream::dl::PeerHandle>,
+    peer_handle: Option<PeerHandle>,
     /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once it is
     /// bound via [`Self::set_hls_peer`], and returned by [`Source::peer_wake`]
     /// so the reader drivers (`Stream::probe_read` / `read` / `prime_seek_range`
@@ -79,7 +79,7 @@ where
         self.invalidation_guard = Some(guard);
     }
 
-    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
+    pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
         self.peer_handle = Some(handle);
     }
 }

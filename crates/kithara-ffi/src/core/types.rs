@@ -8,6 +8,7 @@ use kithara::{
     },
     platform::{sync::Arc, time::Duration},
     play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
+    queue::{RepeatMode, Transition},
 };
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
@@ -298,18 +299,18 @@ impl From<QueueRepeatMode> for FfiRepeatMode {
     }
 }
 
-impl From<kithara::queue::RepeatMode> for FfiRepeatMode {
-    fn from(value: kithara::queue::RepeatMode) -> Self {
+impl From<RepeatMode> for FfiRepeatMode {
+    fn from(value: RepeatMode) -> Self {
         match value {
-            kithara::queue::RepeatMode::Off => Self::Off,
-            kithara::queue::RepeatMode::One => Self::One,
-            kithara::queue::RepeatMode::All => Self::All,
+            RepeatMode::Off => Self::Off,
+            RepeatMode::One => Self::One,
+            RepeatMode::All => Self::All,
             _ => Self::Unknown,
         }
     }
 }
 
-impl TryFrom<FfiRepeatMode> for kithara::queue::RepeatMode {
+impl TryFrom<FfiRepeatMode> for RepeatMode {
     type Error = FfiRepeatMode;
 
     fn try_from(value: FfiRepeatMode) -> Result<Self, Self::Error> {
@@ -485,7 +486,7 @@ pub enum FfiTransition {
     CrossfadeWith { seconds: f32 },
 }
 
-impl From<FfiTransition> for kithara::queue::Transition {
+impl From<FfiTransition> for Transition {
     fn from(t: FfiTransition) -> Self {
         match t {
             FfiTransition::None => Self::None,
@@ -1306,20 +1307,16 @@ mod tests {
 
     #[kithara::test]
     fn queue_repeat_mode_round_trips_through_ffi() {
-        for expected in [
-            kithara::queue::RepeatMode::Off,
-            kithara::queue::RepeatMode::One,
-            kithara::queue::RepeatMode::All,
-        ] {
+        for expected in [RepeatMode::Off, RepeatMode::One, RepeatMode::All] {
             let ffi = FfiRepeatMode::from(expected);
-            assert_eq!(kithara::queue::RepeatMode::try_from(ffi), Ok(expected));
+            assert_eq!(RepeatMode::try_from(ffi), Ok(expected));
         }
     }
 
     #[kithara::test]
     fn unknown_ffi_repeat_mode_is_rejected() {
         assert_eq!(
-            kithara::queue::RepeatMode::try_from(FfiRepeatMode::Unknown),
+            RepeatMode::try_from(FfiRepeatMode::Unknown),
             Err(FfiRepeatMode::Unknown)
         );
     }

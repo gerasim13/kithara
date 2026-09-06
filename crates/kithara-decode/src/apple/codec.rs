@@ -1,10 +1,10 @@
 use std::{ffi::c_void, mem::size_of};
 
 use kithara_apple::audio_toolbox::{
-    AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, AudioConverter, AudioFormatInfo,
-    AudioFormatListItem, AudioStreamBasicDescription, AudioStreamPacketDescription,
-    AudioToolboxError, SingleAudioBufferList, audio_format_get_property,
-    audio_format_get_property_info, pod_from_prefix,
+    AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, AudioConverter, AudioConverterPrimeInfo,
+    AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
+    AudioStreamPacketDescription, AudioToolboxError, SingleAudioBufferList,
+    audio_format_get_property, audio_format_get_property_info, pod_from_prefix,
 };
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
@@ -39,7 +39,7 @@ pub(crate) struct AppleCodec {
     /// Last `kAudioConverterPrimeInfo` snapshot. Used to detect when
     /// the post-first-chunk refresh changes from the init query (AAC
     /// reports priming only after consuming one input packet).
-    last_prime_info: Option<kithara_apple::audio_toolbox::AudioConverterPrimeInfo>,
+    last_prime_info: Option<AudioConverterPrimeInfo>,
     /// True once a source-rate-changing converter has reported no more
     /// SRC tail frames after true EOF.
     eof_drained: bool,

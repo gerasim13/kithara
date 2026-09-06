@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::{Check, Context, derivable_support};
+use super::{Check, Context, derivable_support, derivable_support::Kind};
 use crate::common::{fix::FixOutcome, violation::Violation};
 
 pub(crate) struct DerivableFrom;
@@ -9,17 +9,17 @@ impl Check for DerivableFrom {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         derivable_support::fix(
             ctx,
-            derivable_support::Kind::From,
+            Kind::From,
             ctx.config.thresholds.derivable_from.enabled,
         )
     }
     fn id(&self) -> &'static str {
-        derivable_support::Kind::From.id()
+        Kind::From.id()
     }
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         derivable_support::run(
             ctx,
-            derivable_support::Kind::From,
+            Kind::From,
             ctx.config.thresholds.derivable_from.enabled,
         )
     }

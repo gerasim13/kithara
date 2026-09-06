@@ -1,11 +1,11 @@
-use iced::Theme;
+use iced::{Theme, theme::Palette};
 
 use crate::theme::gui::GuiPalette;
 
 /// Build the custom dark + gold theme from resolved palette.
 #[must_use]
 pub(crate) fn kithara_theme(p: &GuiPalette) -> Theme {
-    let palette = iced::theme::Palette {
+    let palette = Palette {
         background: p.bg,
         text: p.text,
         primary: p.accent,

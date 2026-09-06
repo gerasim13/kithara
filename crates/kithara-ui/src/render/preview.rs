@@ -1,5 +1,6 @@
 use iced::{
     Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
+    mouse::Cursor,
     widget::{
         Canvas,
         canvas::{self, Frame, Geometry, Stroke},
@@ -50,7 +51,7 @@ impl<Message> canvas::Program<Message> for Preview {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
+        _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.fill_rectangle(

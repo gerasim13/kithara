@@ -4,6 +4,7 @@ use std::{
     rc::Rc,
 };
 
+use masonry::core::NewWidget;
 #[cfg(any(test, feature = "capture"))]
 use masonry::core::WidgetId;
 
@@ -44,6 +45,7 @@ use crate::{
     size::SizeSpec,
     skin::ColorRole,
     solve,
+    solve::{Alignment, Length, Padding, Size},
 };
 
 type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
@@ -193,7 +195,7 @@ where
         &self,
         widget: Box<dyn MountedCustom<HostAction>>,
         kind: Option<&str>,
-        declared: solve::Size<solve::Length>,
+        declared: Size<Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Custom {
@@ -246,10 +248,7 @@ where
         match chrome {
             ChromeStyle::Full if module.collapsed() => MasonryNode::chrome(
                 NodeLayout::Stack,
-                solve::Size::new(
-                    solve::Length::Fill,
-                    solve::Length::Fixed(self.skin.chrome.header_height),
-                ),
+                Size::new(Length::Fill, Length::Fixed(self.skin.chrome.header_height)),
                 vec![self.module_header(module)],
                 panel,
                 frame,
@@ -275,14 +274,14 @@ where
                 MasonryNode::document(
                     NodeLayout::Flex(Flex::new(
                         Axis::Vertical,
-                        solve::Length::Fill,
-                        solve::Length::Fill,
-                        solve::Padding::default(),
+                        Length::Fill,
+                        Length::Fill,
+                        Padding::default(),
                         0.0,
-                        solve::Alignment::Start,
+                        Alignment::Start,
                         layouts,
                     )),
-                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+                    Size::new(Length::Fill, Length::Fill),
                     children,
                     true,
                     panel,
@@ -293,7 +292,7 @@ where
                 let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
                 MasonryNode::document(
                     NodeLayout::Stack,
-                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+                    Size::new(Length::Fill, Length::Fill),
                     vec![child],
                     true,
                     (chrome == ChromeStyle::Frame).then_some(panel).flatten(),
@@ -315,8 +314,8 @@ where
         let mut blocks = Vec::new();
         for cell in children {
             let split_size = match axis {
-                Axis::Horizontal => solve::Size::new(main_length(cell.size.w), solve::Length::Fill),
-                Axis::Vertical => solve::Size::new(solve::Length::Fill, main_length(cell.size.h)),
+                Axis::Horizontal => Size::new(main_length(cell.size.w), Length::Fill),
+                Axis::Vertical => Size::new(Length::Fill, main_length(cell.size.h)),
             };
             let block = self.block(cell.block, &mut blocks);
             layouts.push(
@@ -330,16 +329,16 @@ where
             NodeLayout::Flex(
                 Flex::new(
                     axis,
-                    solve::Length::Fill,
-                    solve::Length::Fill,
-                    solve::Padding::default(),
+                    Length::Fill,
+                    Length::Fill,
+                    Padding::default(),
                     0.0,
-                    solve::Alignment::Start,
+                    Alignment::Start,
                     layouts,
                 )
                 .measure(measure),
             ),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Size::new(Length::Fill, Length::Fill),
             nodes,
             true,
             None,
@@ -353,7 +352,7 @@ where
         &self,
         spec: crate::shader::ShaderSpec,
         path: String,
-        declared: solve::Size<solve::Length>,
+        declared: Size<Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Shader(ShaderLeaf::new(spec, path, self.ctx))),
@@ -373,7 +372,7 @@ where
         &self,
         spec: &mount::Text<'_>,
         content: String,
-        declared: solve::Size<solve::Length>,
+        declared: Size<Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
         let face = |active| {
@@ -428,7 +427,7 @@ where
         &self,
         preset: Option<String>,
         value: Option<ReadValue<'_>>,
-        declared: solve::Size<solve::Length>,
+        declared: Size<Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.ctx))),
@@ -464,7 +463,7 @@ where
             Rc::clone(&pointer),
             Rc::clone(&self.map_event),
         );
-        output.add_layer(masonry::core::NewWidget::new(layer).erased());
+        output.add_layer(NewWidget::new(layer).erased());
         output.set_window_pointer(pointer);
     }
 
@@ -626,7 +625,7 @@ where
                     group.axis(),
                     solve::length(size.w),
                     solve::length(size.h),
-                    solve::Padding {
+                    Padding {
                         top: group.padding_y(),
                         right: group.padding_x(),
                         bottom: group.padding_y(),
@@ -728,7 +727,7 @@ where
             window,
             watched,
         ) = LayerParts::from(content);
-        let layer = masonry::core::NewWidget::new(PopoverLayer::new(
+        let layer = NewWidget::new(PopoverLayer::new(
             content,
             declared,
             Rc::clone(&state),
@@ -807,24 +806,21 @@ where
         children: Vec<GroupMount<Self::Output>>,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        let declared = size.map_or(
-            solve::Size::new(solve::Length::Fill, solve::Length::Shrink),
-            declared,
-        );
+        let declared = size.map_or(Size::new(Length::Fill, Length::Shrink), declared);
         let mut blocks = Vec::new();
         let (layouts, nodes) = self.flow(children, &mut blocks);
         let mut output = MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
                     Axis::Vertical,
-                    solve::Length::Fill,
+                    Length::Fill,
                     declared.height,
-                    solve::Padding::default(),
+                    Padding::default(),
                     self.skin.layout.grid_gap,
-                    solve::Alignment::Start,
+                    Alignment::Start,
                     layouts,
                 )
-                .align_main(solve::Alignment::Center),
+                .align_main(Alignment::Center),
             ),
             declared,
             nodes,
@@ -879,7 +875,7 @@ where
             Rc::clone(&self.map_event),
             self.skin,
         );
-        let layer = masonry::core::NewWidget::new(layer);
+        let layer = NewWidget::new(layer);
         let layer_id = layer.id();
         content.add_layer(layer.erased());
         content.set_window_layer(pointer, layer_id, carried.cloned(), label.is_some());
@@ -890,7 +886,7 @@ where
 fn furniture<Action>(height: f32, background: Option<Rgba>) -> MasonryNode<Action> {
     MasonryNode::furniture(
         NodeLayout::Leaf(Leaf::Empty),
-        solve::Size::new(solve::Length::Fill, solve::Length::Fixed(height)),
+        Size::new(Length::Fill, Length::Fixed(height)),
         background,
     )
 }

@@ -2,7 +2,7 @@ use std::{collections::HashSet, ops::Range};
 
 use anyhow::Result;
 use glob::Pattern;
-use syn::{File, Item, spanned::Spanned, visit::Visit};
+use syn::{File, ImplItem, Item, TraitItem, spanned::Spanned, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -410,7 +410,7 @@ fn collect_macro_spans(file: &File) -> Vec<Range<usize>> {
             if m.mac.path.is_ident("macro_rules") {
                 self.spans.push(m.mac.tokens.span().byte_range());
             }
-            syn::visit::visit_item_macro(self, m);
+            visit::visit_item_macro(self, m);
         }
     }
     let mut v = V { spans: Vec::new() };
@@ -447,7 +447,7 @@ fn walk_items_for_fns(items: &[Item], path: &mut Vec<String>, out: &mut Vec<FnSp
             )),
             Item::Impl(im) => {
                 for it in &im.items {
-                    if let syn::ImplItem::Fn(method) = it {
+                    if let ImplItem::Fn(method) = it {
                         out.push(fn_span_from_block(
                             &qualified(path, &method.sig.ident.to_string()),
                             &method.block,
@@ -457,7 +457,7 @@ fn walk_items_for_fns(items: &[Item], path: &mut Vec<String>, out: &mut Vec<FnSp
             }
             Item::Trait(tr) => {
                 for it in &tr.items {
-                    if let syn::TraitItem::Fn(tf) = it
+                    if let TraitItem::Fn(tf) = it
                         && let Some(block) = &tf.default
                     {
                         out.push(fn_span_from_block(
@@ -688,23 +688,23 @@ fn collect_doc_target_lines(file: &File) -> HashSet<usize> {
     impl<'ast> Visit<'ast> for V {
         fn visit_field(&mut self, f: &'ast syn::Field) {
             self.lines.insert(f.span().start().line);
-            syn::visit::visit_field(self, f);
+            visit::visit_field(self, f);
         }
-        fn visit_impl_item(&mut self, i: &'ast syn::ImplItem) {
+        fn visit_impl_item(&mut self, i: &'ast ImplItem) {
             self.lines.insert(i.span().start().line);
-            syn::visit::visit_impl_item(self, i);
+            visit::visit_impl_item(self, i);
         }
         fn visit_item(&mut self, i: &'ast Item) {
             self.lines.insert(i.span().start().line);
-            syn::visit::visit_item(self, i);
+            visit::visit_item(self, i);
         }
-        fn visit_trait_item(&mut self, i: &'ast syn::TraitItem) {
+        fn visit_trait_item(&mut self, i: &'ast TraitItem) {
             self.lines.insert(i.span().start().line);
-            syn::visit::visit_trait_item(self, i);
+            visit::visit_trait_item(self, i);
         }
         fn visit_variant(&mut self, v: &'ast syn::Variant) {
             self.lines.insert(v.span().start().line);
-            syn::visit::visit_variant(self, v);
+            visit::visit_variant(self, v);
         }
     }
     let mut v = V {

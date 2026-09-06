@@ -4,9 +4,10 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    drm::{KeyRequest, KeyRequestFactory},
+    drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
+    host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -33,10 +34,7 @@ use crate::{
     types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
 };
 
-fn build_processor_closure(
-    processor: Arc<dyn FfiKeyProcessor>,
-    salt: String,
-) -> kithara::drm::KeyProcessor {
+fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
     Arc::new(move |key: Bytes| {
         Ok(Bytes::from(
             processor.process_key(key.to_vec(), salt.clone()),
@@ -167,7 +165,7 @@ pub(crate) struct NativeInner {
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
     queue: FfiQueueControl,
-    queue_owner: kithara::host::HostOwned<FfiQueue>,
+    queue_owner: HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on

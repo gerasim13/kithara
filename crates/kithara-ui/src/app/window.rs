@@ -20,7 +20,7 @@ use winit::{
     },
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key as WinitKey, NamedKey as WinitNamedKey},
-    window::{ResizeDirection, Window, WindowId},
+    window::{Fullscreen, ResizeDirection, Window, WindowId},
 };
 
 use super::{
@@ -431,9 +431,8 @@ where
                 }
                 WindowCommand::ToggleFullScreen => {
                     let full = self.window.fullscreen().is_some();
-                    self.window.set_fullscreen(
-                        (!full).then(|| winit::window::Fullscreen::Borderless(None)),
-                    );
+                    self.window
+                        .set_fullscreen((!full).then(|| Fullscreen::Borderless(None)));
                 }
                 WindowCommand::Close => close = true,
             }

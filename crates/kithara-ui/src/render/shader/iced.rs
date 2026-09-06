@@ -1,8 +1,17 @@
 use std::collections::BTreeMap;
 
 use iced::{
-    Element, Length, Rectangle, wgpu,
-    widget::{Space, shader},
+    Element, Length, Rectangle,
+    mouse::Cursor,
+    wgpu,
+    wgpu::{
+        BindingResource, BindingType, BlendState, BufferBindingType, BufferUsages, Color,
+        ColorWrites, FilterMode, LoadOp, MultisampleState, PipelineCompilationOptions,
+        PrimitiveState, PrimitiveTopology, SamplerBindingType, SamplerDescriptor, ShaderSource,
+        ShaderStages, StoreOp, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+        TextureViewDescriptor, TextureViewDimension,
+    },
+    widget::{Space, shader, shader::Shader},
 };
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive as _;
@@ -22,7 +31,7 @@ pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Eleme
             return Space::new().into();
         }
     };
-    shader::Shader::new(Program(frame))
+    Shader::new(Program(frame))
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -35,12 +44,7 @@ impl shader::Program<UiEvent> for Program {
     type Primitive = Primitive;
     type State = ();
 
-    fn draw(
-        &self,
-        _state: &Self::State,
-        _cursor: iced::mouse::Cursor,
-        _bounds: Rectangle,
-    ) -> Self::Primitive {
+    fn draw(&self, _state: &Self::State, _cursor: Cursor, _bounds: Rectangle) -> Self::Primitive {
         Primitive(self.0.clone())
     }
 }
@@ -150,8 +154,8 @@ fn offscreen(
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
+                    load: LoadOp::Clear(Color::TRANSPARENT),
+                    store: StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: None,
@@ -175,14 +179,14 @@ struct Pipeline {
 }
 
 impl shader::Pipeline for Pipeline {
-    fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: TextureFormat) -> Self {
         let uniform_layout = uniform_layout(device);
         let texture_layout = texture_layout(device);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("kithara_ui.shader.iced.sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..wgpu::SamplerDescriptor::default()
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..SamplerDescriptor::default()
         });
         let composite = composite_pipeline(device, &texture_layout, format);
         Self {
@@ -220,7 +224,7 @@ impl Slot {
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.shader.iced.uniforms"),
             size: uniform_size.as_(),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -273,9 +277,9 @@ fn uniform_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         label: Some("kithara_ui.shader.iced.uniform_layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
@@ -290,16 +294,16 @@ fn texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Sampler(SamplerBindingType::Filtering),
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: true },
+                    view_dimension: TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,
@@ -317,7 +321,7 @@ fn program_pipeline(
         device,
         uniform_layout,
         source,
-        wgpu::TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba8Unorm,
         None,
         "kithara_ui.shader.iced.program",
     )
@@ -326,7 +330,7 @@ fn program_pipeline(
 fn composite_pipeline(
     device: &wgpu::Device,
     texture_layout: &wgpu::BindGroupLayout,
-    format: wgpu::TextureFormat,
+    format: TextureFormat,
 ) -> wgpu::RenderPipeline {
     const COMPOSITE: &str = r#"
 @group(0) @binding(0) var image_sampler: sampler;
@@ -358,7 +362,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         texture_layout,
         COMPOSITE,
         format,
-        Some(wgpu::BlendState::ALPHA_BLENDING),
+        Some(BlendState::ALPHA_BLENDING),
         "kithara_ui.shader.iced.composite",
     )
 }
@@ -367,8 +371,8 @@ fn render_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
     source: &str,
-    format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
+    format: TextureFormat,
+    blend: Option<BlendState>,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -378,7 +382,7 @@ fn render_pipeline(
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: ShaderSource::Wgsl(source.into()),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -386,23 +390,23 @@ fn render_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: PipelineCompilationOptions::default(),
             buffers: &[],
         },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..wgpu::PrimitiveState::default()
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            ..PrimitiveState::default()
         },
         depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
+        multisample: MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
                 blend,
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: ColorWrites::ALL,
             })],
         }),
         multiview: None,
@@ -426,23 +430,23 @@ fn texture(
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&TextureViewDescriptor::default());
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout,
         label: Some(label),
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Sampler(sampler),
+                resource: BindingResource::Sampler(sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(&view),
+                resource: BindingResource::TextureView(&view),
             },
         ],
     });

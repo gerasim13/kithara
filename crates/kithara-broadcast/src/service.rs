@@ -9,7 +9,7 @@ use kithara_platform::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
@@ -294,7 +294,7 @@ pub struct BroadcastHandle {
     url: Arc<str>,
     scope: CancelScope,
     dispatcher: Dispatcher,
-    stop_timeout: kithara_platform::time::Duration,
+    stop_timeout: Duration,
     completed: Mutex<Option<mpsc::Receiver<()>>>,
     task: TaskHandle,
     wake: Wake,

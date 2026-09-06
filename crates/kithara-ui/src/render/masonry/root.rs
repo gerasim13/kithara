@@ -8,9 +8,9 @@ use masonry::{
     accesskit::{Node as AccessNode, Role, TreeUpdate},
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
     core::{
-        AccessCtx, BoxConstraints, ChildrenIds, CursorIcon, EventCtx, Handled, LayoutCtx, PaintCtx,
-        PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Widget,
-        WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
+        AccessCtx, BoxConstraints, ChildrenIds, CursorIcon, ErasedAction, EventCtx, Handled,
+        LayoutCtx, PaintCtx, PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx,
+        TextEvent, Widget, WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
     },
     kurbo::{Point, Rect as MasonryRect, Size},
     ui_events::keyboard::{Key, NamedKey},
@@ -226,7 +226,7 @@ where
         frame_requested(&self.platform) || self.animates || self.moved
     }
 
-    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
+    fn push_action(&mut self, action: ErasedAction) -> Result<(), MasonryRootError> {
         let actual = action.type_name();
         let host = action
             .downcast::<HostAction>()

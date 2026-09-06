@@ -1,6 +1,6 @@
 use kithara_warp::{
-    BeatGridId, BeatGridSnapshot, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMember,
-    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    BeatGridId, BeatGridSnapshot, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent,
+    SyncMember, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
     TopologyRevision, TopologyStamp,
 };
 
@@ -104,7 +104,7 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
             operation,
         ),
         SyncOperation::Sync {
-            intent: kithara_warp::SyncIntent::Disable,
+            intent: SyncIntent::Disable,
             ..
         } => {
             let operation_id = match take_operation(grid.id(), next_operation) {

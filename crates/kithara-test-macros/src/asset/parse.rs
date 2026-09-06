@@ -1,5 +1,5 @@
 use syn::{
-    Ident, LitStr, Token, bracketed,
+    Error, Ident, LitStr, Token, bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -13,7 +13,7 @@ use crate::test::case::Case;
 /// case therefore has to be named.
 pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<String>> {
     if cases.is_empty() {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             fn_name.span(),
             "an asset needs at least one `#[case::name(...)]`",
         ));
@@ -24,14 +24,14 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
             .name
             .as_ref()
             .ok_or_else(|| {
-                syn::Error::new(
+                Error::new(
                     fn_name.span(),
                     "an asset case must be named: write `#[case::some_name(...)]`",
                 )
             })?
             .to_string();
         if names.contains(&name) {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 fn_name.span(),
                 format!("duplicate asset case `{name}`"),
             ));
@@ -80,10 +80,7 @@ impl Parse for AssetArgs {
             };
             if let Some(flag) = flag {
                 if *flag {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!("duplicate key `{key}`"),
-                    ));
+                    return Err(Error::new(key.span(), format!("duplicate key `{key}`")));
                 }
                 *flag = true;
                 if !input.is_empty() {
@@ -99,10 +96,7 @@ impl Parse for AssetArgs {
                     &mut env
                 };
                 if slot.is_some() {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!("duplicate key `{key}`"),
-                    ));
+                    return Err(Error::new(key.span(), format!("duplicate key `{key}`")));
                 }
                 let content;
                 bracketed!(content in input);
@@ -121,7 +115,7 @@ impl Parse for AssetArgs {
                 "content_type" => &mut content_type,
                 "ext" => &mut ext,
                 other => {
-                    return Err(syn::Error::new(
+                    return Err(Error::new(
                         key.span(),
                         format!(
                             "unknown asset key `{other}`; expected `ext`, `content_type`, \
@@ -131,10 +125,7 @@ impl Parse for AssetArgs {
                 }
             };
             if slot.is_some() {
-                return Err(syn::Error::new(
-                    key.span(),
-                    format!("duplicate key `{key}`"),
-                ));
+                return Err(Error::new(key.span(), format!("duplicate key `{key}`")));
             }
             *slot = Some(value);
             if !input.is_empty() {
@@ -148,7 +139,7 @@ impl Parse for AssetArgs {
 
         let ext_value = ext.value();
         if ext_value.is_empty() || ext_value.contains(['/', '\\', '.']) {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 ext.span(),
                 "asset `ext` must be a bare file extension such as \"wav\"",
             ));

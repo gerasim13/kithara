@@ -6,7 +6,7 @@ use std::{
 
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, maybe_send::MaybeSend, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{
     DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare, WorkerWake,
@@ -269,7 +269,7 @@ impl<S> Audio<S> {
     }
 }
 
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
+impl<S: MaybeSend> AudioRead for Audio<S> {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.sync_seek();
         self.ring.preloaded = true;
@@ -341,7 +341,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
     }
 }
 
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
+impl<S: MaybeSend> AudioSession for Audio<S> {
     fn event_bus(&self) -> &EventBus {
         self.events.bus()
     }
@@ -364,7 +364,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
     }
 }
 
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
+impl<S: MaybeSend> AudioControl for Audio<S> {
     fn preload(&mut self) -> Result<(), DecodeError> {
         Self::preload(self)
     }

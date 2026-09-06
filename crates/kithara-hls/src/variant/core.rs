@@ -7,7 +7,7 @@ use bon::{Builder, bon};
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, HlsEvent};
 use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -514,11 +514,9 @@ where
         if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.profile
-            .bus
-            .publish(kithara_events::HlsEvent::CacheComplete {
-                total_bytes: self.authoritative_len(),
-            });
+        self.profile.bus.publish(HlsEvent::CacheComplete {
+            total_bytes: self.authoritative_len(),
+        });
     }
 
     pub(crate) fn variant_index_u32(&self) -> Option<u32> {

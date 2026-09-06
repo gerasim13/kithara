@@ -12,7 +12,7 @@ use iced::{
     Event, Point, Size,
     advanced::{clipboard, graphics::text::font_system, mouse::Cursor},
     event,
-    mouse::{self, Button, ScrollDelta},
+    mouse::{self, Button, Interaction, ScrollDelta},
 };
 use iced_runtime::{
     UserInterface,
@@ -45,7 +45,7 @@ pub(in crate::render) struct Immediate<'a, A> {
     cache: Cache,
     /// The hand the tree last asked the window to show.
     #[field(get(copy), vis = "pub(in crate::render)")]
-    hand: mouse::Interaction,
+    hand: Interaction,
     renderer: iced::Renderer,
     size: Size,
     /// What the tree said of itself when it last answered an event.
@@ -154,7 +154,7 @@ impl<'a, A: App> Immediate<'a, A> {
             skin,
             ui,
             cache: Cache::default(),
-            hand: mouse::Interaction::None,
+            hand: Interaction::None,
             renderer: renderer(),
             size: Size::new(size.0.as_(), size.1.as_()),
             state: State::Outdated,

@@ -7,7 +7,7 @@ use anyhow::Result;
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
-    GenericArgument, Item, ItemImpl, PathArguments, Type, Visibility,
+    Expr, GenericArgument, ImplItem, Item, ItemImpl, Lit, Meta, PathArguments, Type, Visibility,
     visit::{self, Visit},
 };
 
@@ -369,7 +369,7 @@ impl<'ast> Visit<'ast> for RefAnalyzer<'_> {
         self.type_depth -= 1;
         for it in &im.items {
             match it {
-                syn::ImplItem::Fn(method) => {
+                ImplItem::Fn(method) => {
                     for attr in &method.attrs {
                         self.visit_attribute(attr);
                     }
@@ -454,13 +454,13 @@ fn token_stream_mentions(tokens: &TokenStream, name: &str) -> bool {
 
 fn attr_mentions_name(a: &syn::Attribute, name: &str) -> bool {
     match &a.meta {
-        syn::Meta::Path(_) => false,
-        syn::Meta::List(list) => token_stream_mentions(&list.tokens, name),
+        Meta::Path(_) => false,
+        Meta::List(list) => token_stream_mentions(&list.tokens, name),
         // Doc comments and other name-value attrs: scan the value (catches
         // intra-doc links such as `[`NAME`]` in `#[doc = "..."]`).
-        syn::Meta::NameValue(nv) => match &nv.value {
-            syn::Expr::Lit(lit) => match &lit.lit {
-                syn::Lit::Str(s) => s.value().contains(name),
+        Meta::NameValue(nv) => match &nv.value {
+            Expr::Lit(lit) => match &lit.lit {
+                Lit::Str(s) => s.value().contains(name),
                 _ => false,
             },
             other => token_stream_mentions(&other.to_token_stream(), name),
@@ -489,7 +489,7 @@ struct NameCollector<'a> {
 
 impl<'ast> Visit<'ast> for NameCollector<'_> {
     fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        if let syn::Meta::List(list) = &a.meta {
+        if let Meta::List(list) = &a.meta {
             collect_token_idents(&list.tokens, self.names);
         }
         visit::visit_attribute(self, a);

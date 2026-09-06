@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use kithara::{
     platform::sync::{Arc, Mutex},
-    queue::{RepeatMode, Transition},
+    queue::{RepeatMode, TrackId, Transition},
 };
 
 use crate::{
@@ -26,7 +26,7 @@ const EQ_BANDS: usize = 10;
 /// deterministic without a round-trip. Drives `items` / `item_count` /
 /// index-based `select_item` exactly as `NativeInner`'s registry +
 /// `queue.tracks()` order do on native.
-type QueueView = Vec<(kithara::queue::TrackId, Arc<AudioPlayerItem>)>;
+type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 
 /// Wasm implementation of the FFI player engine, parallel to
 /// [`NativeInner`](crate::native::inner::NativeInner). Exposes the same
@@ -145,7 +145,7 @@ impl WasmInner {
         self.eq_gains.get(band as usize).map_or(0.0, load_f32)
     }
 
-    fn id_at(&self, index: u32) -> Option<kithara::queue::TrackId> {
+    fn id_at(&self, index: u32) -> Option<TrackId> {
         self.queue_view
             .lock()
             .get(index as usize)

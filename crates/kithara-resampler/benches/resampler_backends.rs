@@ -1,6 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{
+    BenchmarkId, Criterion, Throughput, criterion_group, criterion_main, measurement::Measurement,
+};
 use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_resampler::apple::AppleAudioConverterBackend;
@@ -56,7 +58,7 @@ fn bench_compiled_backends<M>(
     channels: usize,
     block: usize,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
 {
     #[cfg(feature = "resample-rubato")]
     bench_backend(
@@ -117,7 +119,7 @@ fn bench_backend<M, B>(
     channels: usize,
     block: usize,
 ) where
-    M: criterion::measurement::Measurement,
+    M: Measurement,
     B: ResamplerBackend,
 {
     let mut resampler = build_resampler(backend, source_rate, target_rate, channels, block);

@@ -1,4 +1,4 @@
-use num_traits::cast::AsPrimitive;
+use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use super::custom::{HostAction, Repaint};
 pub(crate) use super::{
@@ -690,8 +690,8 @@ impl Retained for Segmented {
         let ReadValue::Scalar(value) = value else {
             return false;
         };
-        let picked = num_traits::ToPrimitive::to_usize(&value.round())
-            .filter(|index| *index < data.items.len());
+        let picked =
+            ToPrimitive::to_usize(&value.round()).filter(|index| *index < data.items.len());
         std::mem::replace(&mut data.active, picked) != picked
     }
 }

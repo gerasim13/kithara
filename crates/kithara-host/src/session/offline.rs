@@ -21,6 +21,7 @@ mod client;
 
 use backend::{BackendConfig, OfflineBackend};
 pub(crate) use client::OfflineSessionClient;
+use kithara_platform::sync::mpsc::TryRecvError;
 
 const CHANNELS: usize = 2;
 
@@ -174,8 +175,8 @@ where
         };
         match cmd_rx.try_recv() {
             Ok(message) => self.tick_message(message),
-            Err(mpsc::TryRecvError::Disconnected) => TickResult::Done,
-            Err(mpsc::TryRecvError::Empty) => {
+            Err(TryRecvError::Disconnected) => TickResult::Done,
+            Err(TryRecvError::Empty) => {
                 #[cfg(any(test, feature = "probe"))]
                 {
                     self.tick_pacing()

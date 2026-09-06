@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use wasm_safe_thread::Mutex as WasmMutex;
+use wasm_safe_thread::{Mutex as WasmMutex, guard::Guard};
 
 pub use crate::common::error::NotAvailable;
 
@@ -42,7 +42,7 @@ unsafe impl<T> Send for Mutex<T> {}
 unsafe impl<T> Sync for Mutex<T> {}
 
 // WHY: crate-internal: condvar needs the raw guard
-pub struct MutexGuard<'a, T>(pub(crate) wasm_safe_thread::guard::Guard<'a, T>);
+pub struct MutexGuard<'a, T>(pub(crate) Guard<'a, T>);
 
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;

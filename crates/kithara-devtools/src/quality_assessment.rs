@@ -16,6 +16,8 @@ mod summary;
 pub use summary::SummaryArgs;
 pub(crate) use summary::run as run_summary;
 
+use self::model::AnalysisStatus;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssessmentProfile {
@@ -103,7 +105,7 @@ pub(crate) fn run(args: &AssessArgs, ctx: &Ctx) -> Result<()> {
         "==> {}",
         artifacts.document.display()
     )?;
-    if assessment.status == model::AnalysisStatus::Partial {
+    if assessment.status == AnalysisStatus::Partial {
         bail!("quality assessment is partial; preserved artifacts contain the broken stages");
     }
     Ok(())

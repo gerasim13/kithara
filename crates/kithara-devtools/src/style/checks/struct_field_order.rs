@@ -2,7 +2,7 @@ use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
 use proc_macro2::TokenTree;
-use syn::{Attribute, Field, Fields, Item, Type, Visibility, spanned::Spanned};
+use syn::{Attribute, Field, Fields, Item, Meta, Type, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::{
@@ -211,7 +211,7 @@ fn cfg_signature(attrs: &[Attribute]) -> String {
         .iter()
         .filter(|a| a.path().is_ident("cfg"))
         .map(|a| match &a.meta {
-            syn::Meta::List(list) => list.tokens.to_string(),
+            Meta::List(list) => list.tokens.to_string(),
             other => format!("{other:?}"),
         })
         .collect();
@@ -391,7 +391,7 @@ fn builder_bucket(attrs: &[Attribute]) -> BuilderRole {
         .iter()
         .filter(|attr| attr.path().is_ident("builder"))
         .filter_map(|attr| match &attr.meta {
-            syn::Meta::List(list) => list.tokens.clone().into_iter().find_map(|token| {
+            Meta::List(list) => list.tokens.clone().into_iter().find_map(|token| {
                 let TokenTree::Ident(ident) = token else {
                     return None;
                 };

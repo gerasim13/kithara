@@ -1,4 +1,4 @@
-use kithara_platform::{CancelScope, sync::Arc};
+use kithara_platform::{CancelScope, sync::Arc, tokio::runtime::Handle};
 
 use crate::{Dispatcher, DispatcherConfig, WorkerConfig, compute::ComputeRuntime};
 
@@ -46,7 +46,7 @@ impl Worker {
 struct WorkerInner {
     compute: Arc<ComputeRuntime>,
     scope: CancelScope,
-    runtime: Option<kithara_platform::tokio::runtime::Handle>,
+    runtime: Option<Handle>,
 }
 
 impl Drop for WorkerInner {

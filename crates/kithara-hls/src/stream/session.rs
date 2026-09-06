@@ -17,6 +17,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    dl::FetchCmd,
 };
 use tracing::debug;
 
@@ -132,7 +133,7 @@ where
         &self,
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         self.dispatch_capped(ctx, budget, None)
     }
 
@@ -141,7 +142,7 @@ where
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         construction_segment_end: Option<u32>,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         if self.cancel.is_cancelled() {
             return Vec::new();
         }
@@ -169,7 +170,7 @@ where
         &self,
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         let cap = match &self.readiness {
             SessionReadiness::Active => None,
             SessionReadiness::Profiled { preparation, .. } => {
@@ -195,7 +196,7 @@ where
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         latch: Duration,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         let read_end = self
             .find_at_offset(self.projected_position().byte)
             .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));

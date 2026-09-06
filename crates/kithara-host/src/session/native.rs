@@ -1,6 +1,10 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelCtx, backend::AudioBackend};
+use firewheel::{
+    FirewheelCtx,
+    backend::AudioBackend,
+    cpal::{CpalBackend, CpalConfig},
+};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::{
@@ -144,7 +148,7 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
+    ctx: &mut FirewheelCtx<CpalBackend>,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
 ) -> Result<(), String> {
@@ -166,11 +170,8 @@ fn start_stream_cpal(
     }
 }
 
-fn cpal_config(
-    sample_rate: u32,
-    output_block_frames: Option<NonZeroU32>,
-) -> firewheel::cpal::CpalConfig {
-    let mut config = firewheel::cpal::CpalConfig::default();
+fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> CpalConfig {
+    let mut config = CpalConfig::default();
     config.output.desired_sample_rate = NonZeroU32::new(sample_rate).map(NonZeroU32::get);
     if let Some(frames) = output_block_frames {
         config.output.desired_block_frames = Some(frames.get());
@@ -184,7 +185,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
 ) -> Arc<dyn HostDispatcher<S>> {
-    spawn_session_client::<firewheel::cpal::CpalBackend, S>(
+    spawn_session_client::<CpalBackend, S>(
         "kithara-engine",
         root,
         root_view,

@@ -8,10 +8,13 @@ use kithara::{
     analysis::{
         AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate, AnalysisProgress,
     },
-    assets::{AcquisitionResult, AssetReader, AssetWriter, AssetsError, ReadSide, WriteSide},
+    assets::{
+        AcquisitionResult, AssetReader, AssetWriter, AssetsError, ReadSide, ResourceKey, WriteSide,
+    },
     bufpool::ByteBuffer,
     platform::{
         CancelGroup,
+        sync::Arc,
         time::Duration,
         tokio::{
             self,
@@ -63,7 +66,7 @@ impl AnalysisPersistenceConfig {
 /// Cloneable handle to one ordered, bounded analysis persistence actor.
 #[derive(Clone)]
 pub(crate) struct AnalysisPersistence {
-    inner: kithara::platform::sync::Arc<AnalysisPersistenceInner>,
+    inner: Arc<AnalysisPersistenceInner>,
 }
 
 impl AnalysisPersistence {
@@ -90,7 +93,7 @@ impl AnalysisPersistence {
         })?;
 
         Ok(Self {
-            inner: kithara::platform::sync::Arc::new(AnalysisPersistenceInner {
+            inner: Arc::new(AnalysisPersistenceInner {
                 tx,
                 _owner: PersistenceOwner {
                     task,
@@ -293,7 +296,7 @@ async fn persist(
 
 fn write_request(
     store: &AppStore,
-    key: &kithara::assets::ResourceKey,
+    key: &ResourceKey,
     progress: &AnalysisProgress,
     bytes: &mut ByteBuffer,
     chunk_duration: Duration,

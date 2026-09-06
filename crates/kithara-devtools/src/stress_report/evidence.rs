@@ -10,7 +10,10 @@ use std::{
 
 use regex::Regex;
 
-use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
+use self::{
+    attempt::{AttemptKey, AttemptOutcome, attempt_outcomes},
+    envelope::{FlightClusters, Input},
+};
 use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
 use crate::{common::project::StressEvidenceConfig, junit::CaseTiming};
 
@@ -166,12 +169,12 @@ pub(super) fn append_correlated_evidence(
             &mut dossiers,
         );
     }
-    let mut flight = envelope::FlightClusters::default();
+    let mut flight = FlightClusters::default();
     if let Some(path) = &args.envelope_dir {
         complete &= envelope::append(
             out,
             path,
-            envelope::Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
+            Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
             &mut waits,
             &mut flight,
             &mut dossiers,

@@ -3,12 +3,13 @@ use std::{cell::RefCell, collections::HashMap};
 use iced::{
     Color, Font, Point, Radians, Rectangle, Size,
     advanced::{
-        graphics::{Gradient, gradient},
+        graphics::{Gradient, gradient::Linear},
         image::{Handle, Image as IcedImage},
     },
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
         Fill, Frame, Path, Stroke as IcedStroke, fill,
+        fill::Rule,
         path::{Arc, Builder},
         stroke::{LineCap as IcedCap, LineJoin as IcedJoin},
     },
@@ -297,7 +298,7 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
 fn style(paint: Paint) -> Option<fill::Style> {
     match paint {
         Paint::Linear { from, stops, to } => {
-            let mut gradient = gradient::Linear::new(from.into(), to.into());
+            let mut gradient = Linear::new(from.into(), to.into());
             for stop in stops.as_slice() {
                 gradient = gradient.add_stop(stop.offset, Color::from(stop.color));
             }
@@ -310,17 +311,17 @@ fn style(paint: Paint) -> Option<fill::Style> {
 
 /// How a shape decides its own interior. Only an authored outline can ask for
 /// anything but the default.
-fn rule(geom: &Geom) -> fill::Rule {
+fn rule(geom: &Geom) -> Rule {
     match geom {
         Geom::Path(path) => match path.rule() {
-            FillRule::EvenOdd => fill::Rule::EvenOdd,
-            FillRule::NonZero => fill::Rule::NonZero,
+            FillRule::EvenOdd => Rule::EvenOdd,
+            FillRule::NonZero => Rule::NonZero,
         },
         Geom::Arc { .. }
         | Geom::Circle { .. }
         | Geom::Line { .. }
         | Geom::Rect(_)
-        | Geom::RoundedRect { .. } => fill::Rule::NonZero,
+        | Geom::RoundedRect { .. } => Rule::NonZero,
     }
 }
 

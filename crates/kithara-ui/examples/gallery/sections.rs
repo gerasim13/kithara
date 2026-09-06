@@ -4,7 +4,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     source::UiConfig,
-    view::ViewState,
+    view::{PageStanding, ViewState},
 };
 
 use crate::fixture;
@@ -107,7 +107,7 @@ fn offered(ui: &CompiledUi, state: &str) -> Vec<Page> {
         .collect()
 }
 
-fn standing<'a>(ui: &'a CompiledUi, state: &str) -> &'a kithara_ui::view::PageStanding {
+fn standing<'a>(ui: &'a CompiledUi, state: &str) -> &'a PageStanding {
     ui.views()
         .pages()
         .get(state)

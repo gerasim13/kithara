@@ -7,6 +7,7 @@ use ffmpeg::{
     frame::Audio as AudioFrame,
 };
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::filter::Graph;
 use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{EncodeError, EncodeResult, PcmSource};
@@ -130,7 +131,7 @@ pub(crate) fn pump_pcm_frames(
 }
 
 pub(crate) fn send_frame_to_filter(
-    filter: &mut ffmpeg::filter::Graph,
+    filter: &mut Graph,
     audio_frame: &AudioFrame,
 ) -> Result<(), FfmpegError> {
     filter
@@ -140,7 +141,7 @@ pub(crate) fn send_frame_to_filter(
         .add(audio_frame)
 }
 
-pub(crate) fn flush_filter(filter: &mut ffmpeg::filter::Graph) -> Result<(), FfmpegError> {
+pub(crate) fn flush_filter(filter: &mut Graph) -> Result<(), FfmpegError> {
     filter.get("in").ok_or(FfmpegError::Bug)?.source().flush()
 }
 
@@ -149,7 +150,7 @@ pub(crate) fn send_eof_to_encoder(encoder: &mut AudioEncoder) -> Result<(), Ffmp
 }
 
 pub(crate) fn drain_filtered_frames(
-    filter: &mut ffmpeg::filter::Graph,
+    filter: &mut Graph,
     encoder: &mut AudioEncoder,
     mut on_packet_drain: impl FnMut(&mut AudioEncoder) -> Result<(), FfmpegError>,
 ) -> Result<(), FfmpegError> {

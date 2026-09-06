@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;
-use syn::{Attribute, Item, Meta, parse_file};
+use syn::{Attribute, Item, Meta, meta::ParseNestedMeta, parse_file};
 
 use super::{Check, Context};
 use crate::common::{
@@ -176,7 +176,7 @@ fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
     false
 }
 
-fn meta_contains_test(meta: &syn::meta::ParseNestedMeta<'_>) -> bool {
+fn meta_contains_test(meta: &ParseNestedMeta<'_>) -> bool {
     if meta.path.is_ident("test") {
         return true;
     }

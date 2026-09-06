@@ -5,10 +5,14 @@ use iced::{
     advanced::{
         Clipboard, Renderer as _, Shell, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         renderer,
-        widget::{self, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
+    event::Status,
     mouse::{self, Cursor},
     widget::canvas::Action,
 };
@@ -297,16 +301,12 @@ where
 
     /// The box the toolkit settles on: what the painter asks for, resolved
     /// against the room it is offered and the size it measures for itself.
-    fn node(
-        &self,
-        state: &PaintState<ControlKey<Painter>>,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn node(&self, state: &PaintState<ControlKey<Painter>>, limits: &layout::Limits) -> Node {
         let (width, height) = self.length();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
         let measured = self.painter.measure(text, &self.data);
-        layout::Node::new(limits.resolve(
+        Node::new(limits.resolve(
             width,
             height,
             IcedSize::new(measured.width, measured.height),
@@ -479,12 +479,7 @@ where
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         self.node(
             tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
             limits,
@@ -496,12 +491,12 @@ where
         IcedSize::new(width, height)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<ControlKey<Painter>>::default())
+    fn state(&self) -> State {
+        State::new(PaintState::<ControlKey<Painter>>::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<ControlKey<Painter>>>()
+    fn tag(&self) -> Tag {
+        Tag::of::<PaintState<ControlKey<Painter>>>()
     }
 }
 
@@ -764,12 +759,7 @@ where
         }
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         self.paint.node(
             &tree.state.downcast_ref::<GestureState<Painter>>().paint,
             limits,
@@ -803,12 +793,12 @@ where
         IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(GestureState::<Painter>::default())
+    fn state(&self) -> State {
+        State::new(GestureState::<Painter>::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<GestureState<Painter>>()
+    fn tag(&self) -> Tag {
+        Tag::of::<GestureState<Painter>>()
     }
 
     fn update(
@@ -831,7 +821,7 @@ where
         if let Some(message) = message {
             shell.publish(message);
         }
-        if status == iced::event::Status::Captured {
+        if status == Status::Captured {
             shell.capture_event();
         }
     }
@@ -1930,7 +1920,7 @@ mod indexed {
 /// What a press on the shared adapter means, for every control that grips one.
 #[cfg(test)]
 mod pressed {
-    use iced::{Point, event, mouse, window::RedrawRequest};
+    use iced::{Point, event::Status, mouse, window::RedrawRequest};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -1986,7 +1976,7 @@ mod pressed {
                     action: ControlAction::Activate,
                 }),
                 RedrawRequest::Wait,
-                event::Status::Captured,
+                Status::Captured,
             )
         );
     }
@@ -2024,7 +2014,7 @@ mod pressed {
             (
                 Some(UiEvent::OpenSettings),
                 RedrawRequest::Wait,
-                event::Status::Captured,
+                Status::Captured,
             )
         );
     }

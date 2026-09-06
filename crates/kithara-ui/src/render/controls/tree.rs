@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use iced::{
     Element, Event, Rectangle, Renderer, Theme,
-    advanced::widget::Operation,
+    advanced::widget::{Id, Operation},
     mouse::{Cursor, Interaction},
     widget::canvas::{self, Action, Frame, Geometry},
 };
@@ -54,12 +54,7 @@ pub(crate) fn sync_tree_scroll(path: &str, offset: f32) -> impl Operation + '_ {
             operate(self);
         }
 
-        fn custom(
-            &mut self,
-            _id: Option<&iced::advanced::widget::Id>,
-            _bounds: Rectangle,
-            state: &mut dyn std::any::Any,
-        ) {
+        fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
             if let Some(state) = state.downcast_mut::<TreeState>() {
                 state.sync(self.path, self.offset);
             }

@@ -11,6 +11,7 @@ use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
     CancelScope,
     sync::Arc,
+    time::Duration,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
@@ -104,7 +105,7 @@ where
         media_info: Option<&MediaInfo>,
         spec: AudioSpec,
         track_info: &kithara_decode::DecoderTrackInfo,
-        duration: Option<kithara_platform::time::Duration>,
+        duration: Option<Duration>,
     ) {
         bus.publish(decoder_changed_event(DecoderChangedEventData {
             media_info,

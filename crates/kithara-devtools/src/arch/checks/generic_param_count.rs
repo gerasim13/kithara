@@ -1,5 +1,5 @@
 use anyhow::Result;
-use syn::{Generics, ImplItem, Item, ItemImpl};
+use syn::{Generics, ImplItem, Item, ItemImpl, Type};
 
 use super::{Check, Context};
 use crate::common::{
@@ -129,7 +129,7 @@ fn qualified(scope: &[String], name: &str) -> String {
 
 fn self_ty_label(im: &ItemImpl) -> String {
     match im.self_ty.as_ref() {
-        syn::Type::Path(p) => p
+        Type::Path(p) => p
             .path
             .segments
             .last()

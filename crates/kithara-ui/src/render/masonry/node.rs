@@ -40,6 +40,7 @@ use crate::{
         ControlAction, ReadValue, UiEvent, document::Ctx, shader::ShaderDeclaration, vis::VisFrame,
     },
     solve,
+    solve::{Limits, Size},
 };
 
 /// The stepping surface a flow declares over itself: a detent anywhere on it
@@ -126,7 +127,7 @@ pub(crate) struct Node {
     detent: Option<Detent>,
     engine: Option<Rc<HostedEngine>>,
     frame: Option<(FrameSides, Rgba, f32)>,
-    limits: Option<solve::Limits>,
+    limits: Option<Limits>,
     /// The face this flow shows while the flag it named reads true, beside the
     /// one it shows otherwise. A flow that named no flag has one face and keeps
     /// none of this.
@@ -137,7 +138,7 @@ pub(crate) struct Node {
     /// Where this node stands in the stage that holds it, when it is one of
     /// its placements.
     spot: Option<Spot>,
-    declared: solve::Size<solve::Length>,
+    declared: Size<solve::Length>,
     transform: Transform,
     children: Vec<WidgetPod<Self>>,
     double_click: bool,
@@ -149,7 +150,7 @@ pub(crate) struct Node {
 impl Node {
     pub(super) fn new(
         layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
+        declared: Size<solve::Length>,
         children: Vec<WidgetPod<Self>>,
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
@@ -473,7 +474,7 @@ impl Node {
     pub(crate) fn set_child_limits(
         ctx: &mut LayoutCtx<'_>,
         child: &mut WidgetPod<Self>,
-        limits: solve::Limits,
+        limits: Limits,
     ) {
         let (node, mut raw) = ctx.get_raw_mut(child);
         if node.limits != Some(limits) {
@@ -704,12 +705,12 @@ impl Widget for Node {
         constraints: &BoxConstraints,
     ) -> MasonrySize {
         let limits = self.limits.unwrap_or_else(|| {
-            solve::Limits::new(
-                solve::Size::new(
+            Limits::new(
+                Size::new(
                     constraints.min().width.as_(),
                     constraints.min().height.as_(),
                 ),
-                solve::Size::new(
+                Size::new(
                     constraints.max().width.as_(),
                     constraints.max().height.as_(),
                 ),
@@ -908,7 +909,7 @@ mod tests {
     fn framed() -> Node {
         Node::new(
             NodeLayout::Leaf(Leaf::Empty),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
             Some(Fixture::PAPER),
             Some((FrameSides::default(), Fixture::INK, 1.0)),
@@ -1045,7 +1046,7 @@ mod tests {
     fn a_node_with_no_frame_draws_nothing_over_its_children() {
         let node = Node::new(
             NodeLayout::Leaf(Leaf::Empty),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
             Some(Fixture::PAPER),
             None,

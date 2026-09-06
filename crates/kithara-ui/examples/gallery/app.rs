@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use iced::{Element, Task, Theme, theme, window};
+use iced::{Element, Task, Theme, theme, window, window::Id};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
@@ -40,7 +40,7 @@ pub(crate) struct Gallery {
     pub(crate) reads: DemoReads,
     /// How far that clock moves in one frame.
     pub(crate) step: Duration,
-    pub(crate) window_id: window::Id,
+    pub(crate) window_id: Id,
     pub(crate) capture: Option<Capture>,
     /// The screen the gallery shows, and the pages of it compiled before.
     pub(crate) screens: Screens,
@@ -103,7 +103,7 @@ impl Gallery {
                 crate::custom::config().screen_cache,
                 compiled(&resolver, &endpoints, skin, &view),
             ),
-            window_id: window::Id::unique(),
+            window_id: Id::unique(),
             clock: Clock::default(),
             step: Duration::from_millis(Consts::STRESS_TICK_MS),
             reads: DemoReads::default(),
@@ -229,7 +229,7 @@ pub(crate) fn update(state: &mut Gallery, message: Message) -> Task<Message> {
     }
 }
 
-pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
+pub(crate) fn view(state: &Gallery, _window: Id) -> Element<'_, Message> {
     tree::render(
         &state.compiled().root,
         state.compiled(),

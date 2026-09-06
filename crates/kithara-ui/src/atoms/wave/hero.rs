@@ -4,6 +4,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     bars,
+    bars::Played,
     paint::WavePalette,
     zoom_math::{
         bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
@@ -75,7 +76,7 @@ fn draw_bars(
     let Some(grid) = bar_grid(bounds.w.round(), step, data.zoom, window) else {
         return;
     };
-    let played = bars::Played::new(
+    let played = Played::new(
         bounds.x + norm_to_x(data.position.clamp(0.0, 1.0), window, bounds.w),
         metrics.played_alpha,
         palette.trough,

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use kithara_platform::time::Duration;
 use kithara_ui::{
+    app,
     app::{Config, Ui},
     builtin,
     capture::{Film, Geometry, Locate, Offscreen, Stage, shoot_part, shoot_set},
@@ -39,7 +40,7 @@ pub(super) fn show(args: &Args) -> Result<(), String> {
         .min_size(pixels(args.min_size))
         .title("Kithara UI Gallery")
         .build();
-    kithara_ui::app::run(Gallery::default(), config, pixels(args.size))
+    app::run(Gallery::default(), config, pixels(args.size))
         .map_err(|error| format!("gallery did not run: {error}"))
 }
 

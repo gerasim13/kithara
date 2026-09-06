@@ -3,9 +3,14 @@ use iced::{
     advanced::{
         Clipboard, Renderer as _, Shell, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
-        layout::{self, Layout},
-        mouse, overlay, renderer,
-        widget::{self, Operation, Tree},
+        layout::{Layout, Limits, Node},
+        mouse,
+        mouse::Interaction,
+        overlay, renderer,
+        widget::{
+            Operation, Tree,
+            tree::{State, Tag},
+        },
     },
     widget::canvas::Frame,
 };
@@ -115,14 +120,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
     /// child report the content it has rather than claim the window: a
     /// compressed limit would make the content exactly as tall as the window,
     /// and there would be nothing to scroll to.
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
         let size = limits.resolve(self.width, self.height, limits.max());
-        let inner = layout::Limits::with_compression(
+        let inner = Limits::with_compression(
             Size::ZERO,
             Size::new(size.width, f32::INFINITY),
             Size::new(false, true),
@@ -136,7 +136,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
             .downcast_mut::<Window>()
             .measured(child.size().height, size.height);
         child.move_to_mut(Point::new(0.0, -offset));
-        layout::Node::with_children(size, vec![child])
+        Node::with_children(size, vec![child])
     }
 
     fn mouse_interaction(
@@ -146,12 +146,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
         cursor: mouse::Cursor,
         _viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         let bounds = layout.bounds();
         layout
             .children()
             .next()
-            .map_or_else(mouse::Interaction::default, |child| {
+            .map_or_else(Interaction::default, |child| {
                 self.child.as_widget().mouse_interaction(
                     &tree.children[0],
                     child,
@@ -203,12 +203,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
         Size::new(self.width, self.height)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(Window::new())
+    fn state(&self) -> State {
+        State::new(Window::new())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<Window>()
+    fn tag(&self) -> Tag {
+        Tag::of::<Window>()
     }
 
     /// A wheel over the window is the window's own while it still has somewhere

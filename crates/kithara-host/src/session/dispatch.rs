@@ -2,8 +2,10 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
-use kithara_play::{PlayError, StreamShape};
-use kithara_warp::{SyncCapability, SyncGroup, SyncOperation, SyncRejected, TopologyOperation};
+use kithara_play::{PlayError, StreamShape, player::PlayerMember};
+use kithara_warp::{
+    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
+};
 use tracing::{debug, trace, warn};
 
 use super::{
@@ -14,6 +16,7 @@ use super::{
     },
     state::{SessionState, register_player},
     transport,
+    transport::RouteRestartStatus,
 };
 use crate::api::HostLevel;
 
@@ -67,11 +70,11 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
 
 fn transact_root<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
-    operation: SyncOperation<kithara_play::player::PlayerMember>,
-) -> Result<kithara_warp::SyncAdmission, SyncRejected<kithara_play::player::PlayerMember>> {
+    operation: SyncOperation<PlayerMember>,
+) -> Result<kithara_warp::SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
-            kithara_warp::SyncError::CapabilityUnavailable {
+            SyncError::CapabilityUnavailable {
                 capability: SyncCapability::Topology,
             },
             operation,
@@ -82,7 +85,7 @@ fn transact_root<B: AudioBackend, S>(
 
 fn topology_conflicts_with_graph<B: AudioBackend, S>(
     state: &SessionState<B, S>,
-    operation: &SyncOperation<kithara_play::player::PlayerMember>,
+    operation: &SyncOperation<PlayerMember>,
 ) -> bool {
     let SyncOperation::Topology { operations, .. } = operation else {
         return false;
@@ -382,9 +385,7 @@ pub(super) fn restart_stream<B: AudioBackend, S>(
         return Err(SessionError::NoContext);
     }
     debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
-    if transport::prepare_route_restart(state, sample_rate)?
-        == transport::RouteRestartStatus::Pending
-    {
+    if transport::prepare_route_restart(state, sample_rate)? == RouteRestartStatus::Pending {
         trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
         return Ok(());
     }
@@ -742,13 +743,10 @@ mod tests {
         else {
             panic!("live graph projection rejects canonical detach")
         };
-        let (error, _) = <(
-            kithara_warp::SyncError,
-            SyncOperation<kithara_play::player::PlayerMember>,
-        )>::from(rejected);
+        let (error, _) = <(SyncError, SyncOperation<PlayerMember>)>::from(rejected);
         assert_eq!(
             error,
-            kithara_warp::SyncError::CapabilityUnavailable {
+            SyncError::CapabilityUnavailable {
                 capability: SyncCapability::Topology,
             }
         );

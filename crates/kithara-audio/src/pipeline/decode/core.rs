@@ -11,7 +11,7 @@ use kithara_decode::{
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
 };
 use kithara_events::{DeferredBus, Event};
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
@@ -367,7 +367,7 @@ impl ActiveDecode {
         &mut self,
         stream: &SharedStream<T>,
         playhead: &dyn PlayheadWrite,
-        position: kithara_platform::time::Duration,
+        position: Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
         let before = stream.position();
         let outcome = match catch_unwind(AssertUnwindSafe(|| {

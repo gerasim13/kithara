@@ -1,7 +1,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Expr, Token, parse::Parse};
+use syn::{
+    Expr, Token,
+    parse::{Parse, ParseStream},
+};
 
 struct Input {
     expression: Expr,
@@ -10,7 +13,7 @@ struct Input {
 }
 
 impl Parse for Input {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(Self {
             label: input.parse()?,
             _comma: input.parse()?,
