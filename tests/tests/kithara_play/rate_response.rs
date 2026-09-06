@@ -5,8 +5,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
-    play::{Resource, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, Transition},
     stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
 use kithara_test_utils::probe::capture::{self as probe_capture, ProbeEvent, Recorder};
@@ -222,6 +223,14 @@ async fn playing_queue(
             .build(),
         SAMPLE_RATE,
     );
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .player(harness.take_player())
+            .should_autoplay(false)
+            .build(),
+    );
+    let queue = harness.insert(queue);
+    queue.set_default_rate(case.initial_rate);
     let path = signal_mp3_sine880_30s()
         .path()
         .expect("generated sine fixture is stored on disk");
@@ -233,20 +242,11 @@ async fn playing_queue(
         temp_dir.path().join("rate-response-store"),
     ))
     .build();
-    let config = harness
-        .player()
-        .prepare_config(config)
-        .expect("offline player remains open");
-    let resource = Resource::new(config).await.expect("open sine fixture");
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .player(harness.take_player())
-            .should_autoplay(false)
-            .build(),
-    );
-    let queue = harness.insert(queue);
-    queue.set_default_rate(case.initial_rate);
-    let id = queue.insert_loaded_for_test(resource);
+    let mut events = queue.subscribe();
+    let id = queue.append(config).expect("append sine fixture");
+    wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(30))
+        .await
+        .expect("load sine fixture through resident queue");
     queue
         .select(id, Transition::None)
         .expect("select live-rate fixture");
