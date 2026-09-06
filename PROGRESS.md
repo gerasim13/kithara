@@ -54,29 +54,15 @@ the change that lands the work, and keep it short.
 
 - Full-playthrough queue census. A queue is played from the first frame of the
   first track to the last frame of the last, and every output frame is
-  attributed to the track that produced it: `PlayerTrack::render` carries a USDT
-  probe naming the track, the block-relative span it was asked for, and the
-  track's own media clock. Both halves of a premature switch are pinned - a
-  track must serve its whole length, and two tracks may share frames only inside
-  the crossfade the queue announced - and the rendered audio says the same twice
-  more, by ramp provenance and by Cochlea. The census runs over every reader a
-  track arrives through: HLS segments, a local FLAC file, a whole FLAC body over
-  HTTP, and a whole MPEG body between two HLS tracks, each at cf=0 and cf>0.
-  `real_playlist` gained the network counterpart - the real `silvercomet` HLS
-  stream ahead of a real MPEG body, measuring where the outgoing track's clock
-  stood when the queue left it.
-
-  Two negative results, each confirmed twice: an HLS playlist duration is exact
-  float arithmetic over `#EXTINF` and cannot be under-stated, and an MPEG
-  duration is header-derived and can only be over-stated. The wrong-duration
-  family is closed. A guard against an end the declared length does not account
-  for was built and reverted - ten tests state the opposite contract outright,
-  because a declared duration is routinely longer than the audio that decodes.
-
-  The seam test found why nothing had caught the defect: `suite_network` has not
-  compiled since `#260`, so every real-CDN test has been dark for a fortnight.
-  The lane builds again. The reported defect is still open and its mechanism is
-  not known.
+  attributed to the track that produced it, through a USDT probe on
+  `PlayerTrack::render` naming the track and its own media clock. Both halves of
+  a premature switch are pinned - a track must serve its whole length, and two
+  tracks may share frames only inside the crossfade the queue announced - over
+  HLS segments, a local FLAC, a FLAC body over HTTP and an MPEG body between two
+  HLS tracks, each at cf=0 and cf>0, with a real-CDN counterpart in
+  `real_playlist`. The wrong-duration family is closed by two negative results.
+  Writing the seam test found `suite_network` dark since `#260`; the lane builds
+  again. Left: the reported premature switch is open and its mechanism unknown.
 
 ## Next
 
