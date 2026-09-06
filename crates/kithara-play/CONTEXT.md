@@ -120,7 +120,11 @@ reaching its own end seconds into the current item. The five cases are pinned in
 internally. `PlayerConfig::auto_advance_enabled` (default `true`) applies a
 built-in linear policy. **`kithara-queue::Queue` disables that policy and reacts
 to `PlayerEvent::HandoverRequested` through `select_item_with_crossfade`; it
-never calls `arm_next` or `commit_next`.** `select_item_with_crossfade` fails
+never calls `arm_next` or `commit_next`.** `HandoverRequested` carries `ItemRole`
+for the same reason `ItemDidPlayToEnd` does: it is minted by the track that is
+running out while any number of others render, so a consumer that has already
+advanced past that track must be able to tell the request is not about the one it
+now holds. `select_item_with_crossfade` fails
 `PlayError::ItemConsumed` *before any bookkeeping* when the target index is
 neither armed, nor the announced current item, nor still holding a resource - the
 UI must not drift from the audio

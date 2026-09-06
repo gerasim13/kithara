@@ -8,6 +8,14 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Premature track switch in `kithara-app`. `PlayerEvent::HandoverRequested` was
+  a unit variant, so the queue applied the outgoing track's handover to whatever
+  its cursor held by then - the successor it had just selected, cut a block in.
+  The request now carries `ItemRole`, and the queue acts on it only when it names
+  the track it is on. Pinned by
+  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span`; two
+  tracks cannot show it, there is no successor to jump to. Left: nothing.
+
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`. The grid is published at the tempo
   level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the

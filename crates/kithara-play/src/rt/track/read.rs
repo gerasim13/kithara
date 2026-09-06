@@ -8,7 +8,7 @@ use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
     PlayerTrack, ReadOutcome, RtSink,
-    triggers::{TrackTriggers, TriggerInput},
+    triggers::{TrackTriggers, TriggerInput, TriggerTrack},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
@@ -110,9 +110,10 @@ impl PlayerTrack {
     fn check_notifications(
         triggers: &mut TrackTriggers,
         notification_tx: &mut HeapProd<PlayerNotification>,
+        track: TriggerTrack<'_>,
         input: TriggerInput,
     ) {
-        triggers.check(notification_tx, input);
+        triggers.check(notification_tx, track, input);
     }
 
     fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -161,6 +162,10 @@ impl PlayerTrack {
         Self::check_notifications(
             &mut self.triggers,
             sink.notifications,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
             TriggerInput {
                 duration,
                 frames_until_eof,
@@ -203,7 +208,13 @@ impl PlayerTrack {
             return;
         }
         self.triggers.mark_prefetch_requested();
-        self.triggers.emit_handover_requested(notification_tx);
+        self.triggers.emit_handover_requested(
+            notification_tx,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
+        );
         self.set_state(TrackState::Finished);
         self.ended_at_eof = true;
         notification_tx
@@ -240,6 +251,10 @@ impl PlayerTrack {
         Self::check_notifications(
             &mut self.triggers,
             notification_tx,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
             TriggerInput {
                 block_frames,
                 duration,
