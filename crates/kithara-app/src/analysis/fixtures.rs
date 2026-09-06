@@ -22,7 +22,7 @@ use kithara::{
             task,
         },
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::QueueConfig,
     stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
@@ -31,7 +31,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{Entry, Request};
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, AppDrm},
     pools::{self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools},
     sources::build_resource_config,
     state::UiState,
@@ -44,7 +44,7 @@ pub(crate) fn chunk_seconds() -> NonZeroU32 {
 }
 
 pub(crate) fn test_pools() -> Pools {
-    pools::build().expect("valid app pool policy")
+    pools::build(&pools::PoolsSection::default()).expect("valid app pool policy")
 }
 
 pub(crate) fn axis() -> NonZeroU32 {
@@ -149,6 +149,7 @@ pub(crate) fn app_config(cancel: &CancelToken, store: AppStore) -> AppConfig {
     let pools = test_pools();
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     AppConfig::builder()
+        .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .downloader(Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::builder().build(),

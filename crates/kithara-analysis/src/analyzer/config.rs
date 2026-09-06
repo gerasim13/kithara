@@ -1,8 +1,11 @@
 use std::fmt;
 
 use bon::Builder;
+#[cfg(feature = "beat-nn")]
+use kithara_beat::{BeatConfig, BeatConfigPatch};
 #[cfg(feature = "beat-dsp")]
-use kithara_beat::Tempo;
+use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
+use kithara_macros::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
 struct Consts;
@@ -16,29 +19,49 @@ impl Consts {
     const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
-/// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
-#[derive(Clone, Builder, fieldwork::Fieldwork)]
+/// Beat-analysis tunables used by [`super::AnalyzerBuilder`], beside the
+/// resampler backend the caller hands over.
+///
+/// [`BeatAnalysisConfigPatch`] is what a configuration document may say about
+/// it, and [`BeatAnalysisConfigPatchError`] what the merge refuses with. The
+/// refusal is declared here rather than read off the fields, so the merge
+/// keeps one signature whichever detector the build selects.
+#[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
+#[patch(fallible)]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
+    #[patch(skip)]
     resampler_backend: B,
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     #[field(get(copy))]
-    resampler_quality: ResamplerQuality,
+    pub resampler_quality: ResamplerQuality,
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
-    detector_min_window_seconds: u32,
+    pub detector_min_window_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
-    detector_overlap_seconds: u32,
+    pub detector_overlap_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
-    detector_window_seconds: u32,
+    pub detector_window_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
-    target_rate: u32,
+    pub target_rate: u32,
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
-    block_frames: usize,
+    pub block_frames: usize,
+    /// Reaches the detector's peak-picking policy. Nested rather than
+    /// flattened so a document can patch `beat:` on its own.
+    #[cfg(feature = "beat-nn")]
+    #[builder(default)]
+    #[field(get(copy))]
+    #[patch(nested)]
+    pub beat: BeatConfig,
+    /// The tempo the signal detector searches. A document patches it key by
+    /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
+    /// before it is committed, so a band the comb never scores is refused by
+    /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
     #[builder(default)]
     #[field(get(copy))]
+    #[patch(nested, fallible)]
     tempo: Tempo,
 }
 
@@ -86,6 +109,8 @@ where
             )
             .field("detector_window_seconds", &self.detector_window_seconds)
             .field("detector_overlap_seconds", &self.detector_overlap_seconds);
+        #[cfg(feature = "beat-nn")]
+        out.field("beat", &self.beat);
         out
     }
 }
@@ -121,6 +146,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "beat-nn")]
+    use kithara_beat::BeatConfig;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
@@ -199,6 +226,181 @@ mod tests {
         assert!(
             !tag.contains(":detector_audio_seamless_v1:"),
             "a grid built from a track read whole is not the grid v1 cached"
+        );
+    }
+
+    #[cfg(feature = "beat-nn")]
+    #[kithara::test(native, flash(false))]
+    fn a_moved_picking_policy_changes_the_cache_tag() {
+        let tag = |beat: BeatConfig| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .beat(beat)
+                .build()
+                .cache_tag()
+                .expect("beat NN has a cache tag")
+        };
+
+        assert_ne!(
+            tag(BeatConfig::default()),
+            tag(BeatConfig::builder().peak_threshold(0.25).build()),
+            "a moved peak-picking policy must not share a cached grid"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    #[cfg(feature = "beat-nn")]
+    use kithara_beat::BeatConfig;
+    use kithara_resampler::{ResamplerQuality, rubato::RubatoBackend};
+    use kithara_test_utils::kithara;
+
+    use super::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
+    #[cfg(feature = "beat-dsp")]
+    use super::{BeatAnalysisConfigPatchError, Tempo, TempoPatchError};
+
+    fn config() -> BeatAnalysisConfig<RubatoBackend> {
+        BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .build()
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_fields_it_names() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("target_rate: 48000\n").expect("the document types");
+        let mut config = config();
+        // Seeded off the crate default (1024) so a whole-struct `apply` that
+        // resets every unnamed field cannot pass this assertion by chance.
+        config.block_frames = 2048;
+
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
+
+        assert_eq!(config.target_rate, 48_000);
+        assert_eq!(
+            config.block_frames, 2048,
+            "a silent field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_named_resampler_quality_arrives_as_its_variant() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("resampler_quality: fast\n").expect("the document types");
+        let mut config = config();
+        config.resampler_quality = ResamplerQuality::Normal;
+
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
+
+        assert_eq!(
+            config.resampler_quality,
+            ResamplerQuality::Fast,
+            "the document's snake_case name must reach the variant"
+        );
+    }
+
+    #[cfg(feature = "beat-nn")]
+    #[kithara::test(native, flash(false))]
+    fn a_nested_beat_patch_reaches_the_inner_field() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("beat:\n  peak_half_width: 5\n").expect("the document types");
+        let mut config = config();
+        config.beat = BeatConfig::builder().dedup_width(4).build();
+
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
+
+        assert_eq!(config.beat.peak_half_width, 5);
+        assert_eq!(
+            config.beat.dedup_width, 4,
+            "a silent inner field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<BeatAnalysisConfigPatch>("target_rate_hz: 1\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(format!("{error}").contains("target_rate_hz"), "{error}");
+    }
+
+    /// `resampler_backend` is the caller's own object, not a value a document
+    /// can name (see the patch's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_caller_owned_backend_is_not_a_document_key() {
+        let error =
+            serde_yaml_ng::from_str::<BeatAnalysisConfigPatch>("resampler_backend: rubato\n")
+                .expect_err("a passed object must not be settable from a document");
+
+        assert!(format!("{error}").contains("resampler_backend"), "{error}");
+    }
+
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_nested_tempo_patch_reaches_the_searched_band() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("tempo:\n  prior: 100.0\n").expect("the document types");
+        let mut config = config();
+
+        config
+            .apply(patch)
+            .expect("a prior inside the default band");
+
+        assert_eq!(config.tempo().prior(), 100.0);
+        assert_eq!(
+            config.tempo().band(),
+            Tempo::default().band(),
+            "a silent inner key must keep the band already in place"
+        );
+    }
+
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_tempo_the_comb_never_scores_is_refused_under_its_own_key() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("tempo:\n  low: 30.0\n").expect("the document types");
+        let mut config = config();
+
+        let error = config
+            .apply(patch)
+            .expect_err("a band past the scored hypotheses must not merge");
+
+        assert!(
+            matches!(
+                error,
+                BeatAnalysisConfigPatchError::Tempo(TempoPatchError::Invalid(_))
+            ),
+            "{error}"
+        );
+        assert!(
+            format!("{error}").starts_with("tempo: "),
+            "the refusal names the document key that carried it, read as {error}"
+        );
+    }
+
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_refused_tempo_leaves_every_other_key_of_the_document_uncommitted() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("target_rate: 48000\ntempo:\n  low: 30.0\n")
+                .expect("the document types");
+        let mut config = config();
+        let before = config.target_rate;
+
+        config
+            .apply(patch)
+            .expect_err("the band is not one the comb scores");
+
+        assert_eq!(
+            config.target_rate, before,
+            "a refused document commits none of its keys"
         );
     }
 }
