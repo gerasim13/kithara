@@ -518,6 +518,17 @@ debug = false
 panic = "abort"
 strip = "symbols"
 
+# Every third-party package builds for speed; the workspace's own crates keep
+# the size setting above. `package."*"` is Cargo's glob for every non-workspace
+# package - 329 of them on wasm, 339 on Apple, 405 on Android, 708 across the
+# full workspace - and it reaches two units per package: the crate's own codegen
+# and the `OPT_LEVEL` its build script reads, which is what carries the setting
+# into native C and C++. `test-release` and `bench` inherit it, and so does the
+# rebuilt sysroot under `-Z build-std`. `docs/guides/performance/dispatch-build.md`
+# owns the measured cost and the per-build-system detail.
+[profile.release.package."*"]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
