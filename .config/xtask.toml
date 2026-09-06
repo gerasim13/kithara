@@ -176,6 +176,15 @@ always = ["symphonia"]
 when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
+# `beat-backend` is the marker beat-nn and beat-dsp share. Selected on its own it
+# names no detector, so the backend refuses the build with compile_error!; the
+# two detectors that do name one stay selectable. `beat-nn-full-int8` inherits
+# the model kithara-beat cannot produce on a runner.
+[[health.feature_invariants]]
+when_feature = "beat-backend"
+never = ["beat-backend", "beat-nn", "beat-nn-full-int8"]
+mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
+
 # kithara-beat embeds one model and says so with compile_error!.
 # `embed-model` is the marker the three choices share; selected on its own it
 # names no bytes and the re-export it gates resolves to nothing.
