@@ -62,6 +62,12 @@ pub(super) struct PullRequest {
 pub(super) enum PipelineObservation {
     Running,
     Succeeded,
+    /// The run was stopped before it could judge anything.
+    ///
+    /// Carried apart from `Failed` because it is not a verdict: a queue emptied
+    /// by hand, an auto-cancel, or a runner taken down says only that the
+    /// branch has not been verified yet.
+    Cancelled,
     Failed(String),
     Invalid(String),
 }
@@ -75,6 +81,9 @@ pub(super) fn pipeline_observation(
         "success" | "failed" | "canceled" | "skipped" | "manual"
     ) {
         return PipelineObservation::Running;
+    }
+    if parent == "canceled" {
+        return PipelineObservation::Cancelled;
     }
     if parent != "success" {
         return PipelineObservation::Failed(parent.to_owned());
@@ -92,9 +101,8 @@ pub(super) fn pipeline_observation(
     }
     match *child {
         "success" => PipelineObservation::Succeeded,
-        "failed" | "canceled" | "skipped" | "manual" => {
-            PipelineObservation::Failed((*child).to_owned())
-        }
+        "canceled" => PipelineObservation::Cancelled,
+        "failed" | "skipped" | "manual" => PipelineObservation::Failed((*child).to_owned()),
         _ => PipelineObservation::Running,
     }
 }
@@ -226,6 +234,26 @@ mod tests {
             pipeline_observation("success", &[("dispatch:main", Some("success"))]),
             PipelineObservation::Invalid(_)
         ));
+    }
+
+    /// A run someone stopped reports nothing about the branch. Reading it as a
+    /// failure marked six pull requests rejected for a queue that was emptied
+    /// underneath them, so the cancellation is carried apart from a verdict —
+    /// and the parent and the child are stopped by the same hands.
+    #[test]
+    fn a_cancellation_is_carried_apart_from_a_failure() {
+        assert_eq!(
+            pipeline_observation("canceled", &[]),
+            PipelineObservation::Cancelled
+        );
+        assert_eq!(
+            pipeline_observation("success", &[("dispatch:quarantine", Some("canceled"))]),
+            PipelineObservation::Cancelled
+        );
+        assert_eq!(
+            pipeline_observation("failed", &[]),
+            PipelineObservation::Failed("failed".into())
+        );
     }
 
     #[test]
