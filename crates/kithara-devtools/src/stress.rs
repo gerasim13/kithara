@@ -12,9 +12,6 @@ use std::{
 use anyhow::{Context, Error, Result, ensure};
 use clap::{Args, Subcommand};
 
-/// Bounds the distinct sanitizer findings one lane section lists.
-const MAX_FINDING_ROWS: usize = 100;
-
 /// Hands the run's repeat count to a lane that performs its own repeats.
 const REPEATS_ENV: &str = "KITHARA_STRESS_REPEATS";
 
@@ -22,6 +19,7 @@ use crate::{
     Ctx,
     common::project::{
         ProjectConfig, StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
+        StressRenderBudgets,
     },
     lease,
     stress_report::{self, StressReportArgs},
@@ -464,6 +462,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         max_count: config.max_count,
         max_test_threads: config.max_test_threads,
         runner: runner.clone(),
+        render: config.render.clone(),
     };
     if !commanded {
         stress_run::validate(&spec)?;
@@ -575,6 +574,7 @@ fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Resu
         count,
     )
     .with_evidence(config.evidence.clone())
+    .with_render(config.render.clone())
     .with_pressure(paths.pressure.clone())
     .with_optional_envelopes(
         paths
@@ -631,6 +631,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         )
         .with_allow_missing(true)
         .with_evidence(config.evidence.clone())
+        .with_render(config.render.clone())
         .with_pressure(paths.pressure.clone())
         .with_optional_envelopes(
             paths
@@ -643,7 +644,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let lane = if mode.command.is_empty() {
             stress_report::lane_report(&report_args)?
         } else {
-            command_lane_report(&paths, mode, count, &config.evidence)
+            command_lane_report(&paths, mode, count, &config.evidence, &config.render)
         };
         let expectation =
             ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
@@ -680,8 +681,13 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     }
 
     let run = verify_run_result(args.execute_result, &exit_codes);
-    let mut document =
-        stress_report::render_lane_comparison(&measured, &commanded, &excluded, lanes.len());
+    let mut document = stress_report::render_lane_comparison(
+        &measured,
+        &commanded,
+        &excluded,
+        lanes.len(),
+        &config.render,
+    );
     if let Err(error) = &run {
         let _ = writeln!(
             document,
@@ -766,6 +772,7 @@ fn command_lane_report(
     mode: &StressModeConfig,
     count: usize,
     evidence: &StressEvidenceConfig,
+    budgets: &StressRenderBudgets,
 ) -> stress_report::LaneReport {
     let expected = command_lane_attempts(mode, count);
     let attempts = &paths.attempts;
@@ -837,13 +844,14 @@ fn command_lane_report(
             markdown_cell(&codes)
         );
     }
-    stress_report::append_attempt_reports(&mut markdown, &records);
+    stress_report::append_attempt_reports(&mut markdown, &records, budgets);
     append_findings(
         &mut markdown,
         log,
         evidence,
         failed,
         attributable(mode, observed),
+        budgets,
     );
     let verdict = if result == "PASSED" {
         Ok(())
@@ -915,6 +923,7 @@ fn append_findings(
     evidence: &StressEvidenceConfig,
     failed: usize,
     observed: Option<usize>,
+    budgets: &StressRenderBudgets,
 ) {
     let text = match stress_report::read_bounded_utf8(
         log,
@@ -932,7 +941,7 @@ fn append_findings(
             return;
         }
     };
-    let findings = stress_report::sanitizer_findings(&text, evidence);
+    let findings = stress_report::sanitizer_findings(&text, evidence, budgets);
     if findings.is_empty() {
         if failed > 0 {
             let _ = writeln!(
@@ -949,14 +958,15 @@ fn append_findings(
          and the first project frames that reached it."
     );
     if let Some(observed) = observed {
-        append_rated_findings(markdown, &findings, observed);
+        append_rated_findings(markdown, &findings, observed, budgets);
     } else {
-        append_unrated_findings(markdown, &findings);
+        append_unrated_findings(markdown, &findings, budgets);
     }
-    if findings.len() > MAX_FINDING_ROWS {
+    if findings.len() > budgets.finding_rows {
+        let rows = budgets.finding_rows;
         let _ = writeln!(
             markdown,
-            "\nShowing the first {MAX_FINDING_ROWS} of {} distinct findings.",
+            "\nShowing the first {rows} of {} distinct findings.",
             findings.len()
         );
     }
@@ -968,9 +978,10 @@ fn append_rated_findings(
     markdown: &mut String,
     findings: &stress_report::Findings,
     observed: usize,
+    budgets: &StressRenderBudgets,
 ) {
     let _ = writeln!(markdown, "\n| finding | attempts | rate |\n|---|---|---:|");
-    for (signature, attempts) in findings.iter().take(MAX_FINDING_ROWS) {
+    for (signature, attempts) in findings.iter().take(budgets.finding_rows) {
         let listed = attempts
             .iter()
             .map(ToString::to_string)
@@ -987,13 +998,17 @@ fn append_rated_findings(
 }
 
 /// Lists each finding on its own, for a lane whose log cannot place it in time.
-fn append_unrated_findings(markdown: &mut String, findings: &stress_report::Findings) {
+fn append_unrated_findings(
+    markdown: &mut String,
+    findings: &stress_report::Findings,
+    budgets: &StressRenderBudgets,
+) {
     let _ = writeln!(
         markdown,
         "\nThe command performed its own repeats, so the log cannot say which repeat a finding \
          came from — how often each test failed is in the table above.\n\n| finding |\n|---|"
     );
-    for signature in findings.keys().take(MAX_FINDING_ROWS) {
+    for signature in findings.keys().take(budgets.finding_rows) {
         let _ = writeln!(markdown, "| `{}` |", markdown_cell(signature));
     }
 }
@@ -1492,6 +1507,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &per_repeat_mode(),
             4,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1516,6 +1532,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &per_repeat_mode(),
             2,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1546,6 +1563,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &per_repeat_mode(),
             2,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1567,13 +1585,12 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         let record = temp.path().join("repeats.txt");
         let executable = std::env::current_exe().expect("current test executable");
         let mode = StressModeConfig {
-            command: vec![
-                executable.to_string_lossy().into_owned(),
-                child_test_name("record_repeats"),
-                "--exact".to_owned(),
-                "--ignored".to_owned(),
-                "--nocapture".to_owned(),
-            ],
+            command: std::iter::once(executable.to_string_lossy().into_owned())
+                .chain(crate::common::child_test_args(
+                    module_path!(),
+                    "record_repeats",
+                ))
+                .collect(),
             set_env: BTreeMap::from([(
                 REPEATS_RECORD_ENV.to_owned(),
                 record.to_string_lossy().into_owned(),
@@ -1608,12 +1625,6 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             .lines()
             .map(str::to_owned)
             .collect()
-    }
-
-    fn child_test_name(name: &str) -> String {
-        let module = module_path!();
-        let module = module.split_once("::").map_or(module, |(_, module)| module);
-        format!("{module}::{name}")
     }
 
     /// A lane that repeats inside one launch pays for a rebuild and a cold start
@@ -1717,6 +1728,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert_eq!(
@@ -1741,6 +1753,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(report.attempts.is_none());
@@ -1760,6 +1773,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             2,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1825,6 +1839,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &per_repeat_mode(),
             4,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert_eq!(
@@ -1849,6 +1864,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(report.incomplete.is_some(), "{}", report.markdown);
@@ -1868,6 +1884,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
         let reason = exclusion_reason(true, &report).expect("a short lane must be excluded");
 
@@ -1887,6 +1904,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1910,6 +1928,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1930,6 +1949,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &self_repeating_mode(),
             3,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -1956,6 +1976,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             &per_repeat_mode(),
             2,
             &StressEvidenceConfig::default(),
+            &StressRenderBudgets::default(),
         );
 
         assert!(

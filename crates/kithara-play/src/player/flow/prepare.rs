@@ -62,15 +62,17 @@ where
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let stream_shape = self.player.core.engine.stream_shape()?;
-        let (preload_chunks, audio_buffer_chunks) = match warp.render_quantum_frames() {
-            Some(quantum) => {
-                let shape = stream_shape.ok_or(SessionError::NoContext)?;
-                let (preload, ring) =
-                    playback_buffers(shape, quantum, self.player.core.response_budget_frames)?;
-                (preload, Some(ring))
-            }
-            None => (config.preload_chunks, config.audio_buffer_chunks),
-        };
+        // A resident render quantum turns the two buffer depths into geometry
+        // the response budget admits rather than a preference, so the computed
+        // pair overwrites whatever the document said under `audio:`.
+        let mut audio = config.audio;
+        if let Some(quantum) = warp.render_quantum_frames() {
+            let shape = stream_shape.ok_or(SessionError::NoContext)?;
+            let (preload, ring) =
+                playback_buffers(shape, quantum, self.player.core.response_budget_frames)?;
+            audio.preload_chunks = Some(preload);
+            audio.audio_buffer_chunks = Some(ring.get());
+        }
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
             None => stream_shape
@@ -99,8 +101,7 @@ where
             worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
-            preload_chunks,
-            audio_buffer_chunks,
+            audio,
             host_sample_rate,
             decoder,
             warp,
@@ -331,11 +332,11 @@ mod tests {
             .prepare_config(resource_config("https://example.com/song.mp3"))
             .expect("fixture geometry fits the response budget");
 
-        assert_eq!(prepared.preload_chunks.get(), expected_preload);
         assert_eq!(
-            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
-            Some(expected_ring)
+            prepared.audio.preload_chunks.map(NonZeroUsize::get),
+            Some(expected_preload)
         );
+        assert_eq!(prepared.audio.audio_buffer_chunks, Some(expected_ring));
     }
 
     #[kithara::test]

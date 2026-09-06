@@ -86,6 +86,34 @@ stretch changes output frame count, never `AudioSpec.sample_rate`.
 `PreparedAudioLane` carries it, so there is no second route for load to reach a
 node.
 
+## Configuration document
+
+`PlayerConfig<S>` is this crate's one player configuration, tunables and
+per-call wiring together. `#[derive(Patch)]` generates `PlayerConfigPatch`,
+what a document's `player:` section may say: `gapless_mode`,
+`crossfade_duration`, `default_rate`, `max_slots`, `response_budget_frames`, and
+`warp`, which nests `WarpConfigPatch`. `max_slots` is the engine's:
+`PlayerConfig` owns it and hands it to `EngineConfig::builder`, so one value
+stands behind both and `EngineConfig` needs no patch of its own.
+
+`auto_advance_enabled`, `prefetch_duration`, `block_on_underrun`, `eq_layout`
+and `sample_rate` are skipped, and so refused by name rather than dropped. Each
+names the owner that overwrites it in its own field doc, and `document_tests`
+pins the refusal.
+
+`ResourceConfig<S, B>` is where a document's HLS, file, and audio values wait
+for the track that will use them, as `HlsConfigPatch`, `FileConfigPatch` and
+`AudioConfigPatch` rather than built configurations: an `HlsConfig` needs a URL
+and a store, a `FileConfig` a source, so neither can exist before a track does.
+`resource/build.rs` builds the real configuration and applies the patch onto it,
+so a knob either crate adds later needs no edit here. It then overwrites
+`extension` on the file branch: the per-call `hint` and the source's own
+extension name this very track, so either outranks a blanket `file.extension`.
+There is no `resource:` section — `Document`'s `deny_unknown_fields` refuses one
+(`a_resource_section_is_rejected`) — and the three patches arrive from
+`kithara-app`'s `audio:`, `hls:` and `file:` sections through
+`sources::build_resource_config`, the only construction site a document reaches.
+
 ## Live Equalizer Layout
 `PlayerImpl::set_eq_layout` replaces a running player's master EQ, and **the
 session graph is the actuator**: it builds the replacement on the control thread,

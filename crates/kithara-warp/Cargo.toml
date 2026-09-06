@@ -9,6 +9,11 @@ description = "Beat-map alignment and synchronization contracts for Kithara."
 keywords = ["audio", "beatgrid", "dj", "playback", "synchronization"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["serde"]
+
 [features]
 default = []
 perf = ["kithara-stretch?/perf"]
@@ -19,6 +24,7 @@ stretch-bungee = ["dep:firewheel-core", "dep:kithara-stretch", "kithara-stretch/
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -32,6 +38,7 @@ fieldwork = { workspace = true }
 firewheel-core = { workspace = true, optional = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
