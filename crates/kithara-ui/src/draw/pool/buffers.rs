@@ -1,5 +1,5 @@
 use kithara_bufpool::{
-    OverallBudget, PoolAlias, PoolConfig, PoolRegion, StringKey, VecKey, pool_schema,
+    OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey, pool_schema,
 };
 
 use super::{
@@ -43,8 +43,8 @@ pub struct PoolStats {
 /// Shared reusable storage for retained commands, paths, and text.
 #[derive(Clone, Debug)]
 pub struct DrawBuffers {
-    limits: DrawPoolLimits,
     region: PoolRegion<DrawSchema>,
+    limits: DrawPoolLimits,
 }
 
 impl DrawBuffers {
@@ -52,9 +52,26 @@ impl DrawBuffers {
     ///
     /// # Panics
     ///
-    /// Panics if the internally generated schema configuration is invalid.
+    /// Panics if the internally generated schema configuration is invalid. Only
+    /// [`DrawPoolLimits::default`] was ever handed to this until a configuration
+    /// document could name one; a caller building from document-supplied values
+    /// should use [`Self::try_new`] instead, which reports the same failure
+    /// rather than aborting.
     #[must_use]
     pub fn new(limits: DrawPoolLimits) -> Self {
+        match Self::try_new(limits) {
+            Ok(buffers) => buffers,
+            Err(error) => panic!("valid draw buffer configuration failed: {error}"),
+        }
+    }
+
+    /// Builds the registered draw-buffer family under one shared hard budget.
+    ///
+    /// # Errors
+    /// Returns the [`PoolError`] the generated schema configuration failed
+    /// with -- reachable once `limits` comes from a configuration document
+    /// rather than only ever [`DrawPoolLimits::default`].
+    pub fn try_new(limits: DrawPoolLimits) -> Result<Self, PoolError> {
         let max_buffers = limits.max_buffers.max(1);
         let config = |max_retained_capacity| {
             PoolConfig::builder()
@@ -66,21 +83,8 @@ impl DrawBuffers {
             .commands(config(limits.command_capacity))
             .paths(config(limits.path_capacity))
             .text(config(limits.text_capacity))
-            .build();
-        let region = match region {
-            Ok(region) => region,
-            Err(error) => panic!("valid draw buffer configuration failed: {error}"),
-        };
-        Self { limits, region }
-    }
-
-    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
-        Buffer::pooled(self.region.get::<CommandKey>())
-    }
-
-    #[must_use]
-    pub const fn limits(&self) -> DrawPoolLimits {
-        self.limits
+            .build()?;
+        Ok(Self { region, limits })
     }
 
     /// Starts an empty command list backed by this buffer family.
@@ -100,8 +104,15 @@ impl DrawBuffers {
         path
     }
 
-    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
-        path.into_pooled(|| self.region.get::<PathKey>())
+    /// Copies UTF-8 content into a buffer that returns here when unused.
+    #[must_use]
+    pub fn text(&self, content: &str) -> PoolText {
+        PoolText::pooled(content, self.region.get::<TextKey>())
+    }
+
+    #[must_use]
+    pub const fn limits(&self) -> DrawPoolLimits {
+        self.limits
     }
 
     #[must_use]
@@ -119,10 +130,12 @@ impl DrawBuffers {
         }
     }
 
-    /// Copies UTF-8 content into a buffer that returns here when unused.
-    #[must_use]
-    pub fn text(&self, content: &str) -> PoolText {
-        PoolText::pooled(content, self.region.get::<TextKey>())
+    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
+        Buffer::pooled(self.region.get::<CommandKey>())
+    }
+
+    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
+        path.into_pooled(|| self.region.get::<PathKey>())
     }
 }
 

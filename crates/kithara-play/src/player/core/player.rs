@@ -56,10 +56,10 @@ impl<S> PlayerImpl<S> {
         config.cancel = Some(cancel.clone());
 
         let engine_config = EngineConfig::builder()
-            .eq_layout(config.eq_layout.clone())
             .grid_id(config.grid_id)
-            .max_slots(config.max_slots)
             .sample_rate(config.sample_rate)
+            .max_slots(config.max_slots)
+            .eq_layout(config.eq_layout.clone())
             .response_budget_frames(config.response_budget_frames)
             .maybe_render_quantum_frames(config.warp.render_quantum_frames())
             .pools(pools)
