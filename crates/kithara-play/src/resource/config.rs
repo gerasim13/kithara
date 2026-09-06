@@ -5,7 +5,6 @@ use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
 use kithara_bufpool::HasPool;
-use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
@@ -76,12 +75,6 @@ where
     /// Resident Warp resources and live temporal controls.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
-    /// Session-owned output block used to resolve Player ring geometry.
-    #[builder(skip)]
-    pub(crate) output_buffer_frames: Option<NonZeroUsize>,
-    /// Player-owned response budget paired with `output_buffer_frames`.
-    #[builder(skip)]
-    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
@@ -131,68 +124,12 @@ where
             host_sample_rate: self.host_sample_rate,
             look_ahead_bytes: self.look_ahead_bytes,
             warp: self.warp.clone(),
-            output_buffer_frames: self.output_buffer_frames,
-            response_budget_frames: self.response_budget_frames,
             worker: self.worker.clone(),
             consumer_wake_mode: self.consumer_wake_mode,
             block_on_underrun: self.block_on_underrun,
             size_probe_method: self.size_probe_method,
             preferred_peak_bitrate: self.preferred_peak_bitrate,
         }
-    }
-}
-
-impl<S, B> ResourceConfig<S, B>
-where
-    B: Default,
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    pub(crate) fn resolve_output_geometry(&mut self) -> Result<(), DecodeError> {
-        let (Some(output_buffer_frames), Some(response_budget_frames)) =
-            (self.output_buffer_frames, self.response_budget_frames)
-        else {
-            if self.output_buffer_frames.is_some() || self.response_budget_frames.is_some() {
-                return Err(DecodeError::InvalidData {
-                    detail: "incomplete playback response contract",
-                });
-            }
-            return Ok(());
-        };
-        let quantum = self
-            .warp
-            .render_quantum_frames()
-            .ok_or(DecodeError::InvalidData {
-                detail: "playback response contract requires a Warp render quantum",
-            })?
-            .get();
-        let preload_chunks = output_buffer_frames.get().div_ceil(quantum);
-        let ring_chunks = preload_chunks
-            .checked_add(1)
-            .ok_or(DecodeError::InvalidData {
-                detail: "playback output geometry overflow",
-            })?;
-        let stale_frames = ring_chunks
-            .checked_add(1)
-            .and_then(|chunks| chunks.checked_mul(quantum))
-            .and_then(|frames| frames.checked_sub(1))
-            .ok_or(DecodeError::InvalidData {
-                detail: "playback output geometry overflow",
-            })?;
-        if stale_frames > response_budget_frames.get() {
-            return Err(DecodeError::InvalidData {
-                detail: "playback output buffer exceeds the configured response budget",
-            });
-        }
-        self.preload_chunks =
-            NonZeroUsize::new(preload_chunks).ok_or(DecodeError::InvalidData {
-                detail: "playback preload geometry is empty",
-            })?;
-        self.audio_buffer_chunks = Some(NonZeroUsize::new(ring_chunks).ok_or(
-            DecodeError::InvalidData {
-                detail: "playback output geometry is empty",
-            },
-        )?);
-        Ok(())
     }
 }
 
@@ -434,66 +371,6 @@ mod tests {
 
         assert_eq!(config.preload_chunks.get(), DEFAULT_PRELOAD_CHUNKS.get());
         assert_eq!(config.audio_buffer_chunks, None);
-        assert_eq!(config.output_buffer_frames, None);
-        assert_eq!(config.response_budget_frames, None);
-    }
-
-    fn frame_contract_config(
-        quantum: usize,
-        output_buffer: usize,
-        response_budget: usize,
-    ) -> ResourceConfig<TestPools> {
-        let warp = WarpConfig::builder()
-            .render_quantum_frames(NonZeroUsize::new(quantum).expect("fixture quantum is non-zero"))
-            .build();
-        let mut config = ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
-            .store(store())
-            .warp(warp)
-            .build();
-        config.output_buffer_frames =
-            Some(NonZeroUsize::new(output_buffer).expect("fixture output block is non-zero"));
-        config.response_budget_frames =
-            Some(NonZeroUsize::new(response_budget).expect("fixture budget is non-zero"));
-        config
-    }
-
-    #[kithara::test]
-    #[case::industry_budget(32, 128, 441, 4, 5)]
-    #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
-    fn frame_contract_resolves_preload_and_ring_depth(
-        #[case] quantum: usize,
-        #[case] output_buffer: usize,
-        #[case] response_budget: usize,
-        #[case] expected_preload: usize,
-        #[case] expected_ring: usize,
-    ) {
-        let mut config = frame_contract_config(quantum, output_buffer, response_budget);
-
-        config.resolve_output_geometry().expect("valid geometry");
-
-        assert_eq!(config.preload_chunks.get(), expected_preload);
-        assert_eq!(
-            config.audio_buffer_chunks.map(NonZeroUsize::get),
-            Some(expected_ring)
-        );
-    }
-
-    #[kithara::test]
-    #[case::one_frame_over_budget(64, 128, 254)]
-    #[case::large_buffer_over_industry_budget(64, 512, 441)]
-    fn frame_contract_rejects_geometry_over_budget(
-        #[case] quantum: usize,
-        #[case] output_buffer: usize,
-        #[case] response_budget: usize,
-    ) {
-        let mut config = frame_contract_config(quantum, output_buffer, response_budget);
-
-        assert!(matches!(
-            config.resolve_output_geometry(),
-            Err(DecodeError::InvalidData {
-                detail: "playback output buffer exceeds the configured response budget"
-            })
-        ));
     }
 
     #[kithara::test]

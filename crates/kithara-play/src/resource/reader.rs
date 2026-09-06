@@ -169,7 +169,7 @@ impl Resource {
     }
 
     async fn open<S, B>(
-        mut config: ResourceConfig<S, B>,
+        config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> DecodeResult<Self>
     where
@@ -181,7 +181,6 @@ impl Resource {
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
-        config.resolve_output_geometry()?;
         let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
