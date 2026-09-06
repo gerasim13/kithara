@@ -1049,15 +1049,15 @@ impl PathVisitor<'_> {
 }
 
 impl<'ast> Visit<'ast> for PathVisitor<'ast> {
+    fn visit_arm(&mut self, arm: &'ast Arm) {
+        self.under_cfg(&arm.attrs, |this| visit::visit_arm(this, arm));
+    }
+
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
         if attr.path().is_ident("doc") {
             return;
         }
         absorb_idents(attr.to_token_stream(), &mut self.attr_names);
-    }
-
-    fn visit_arm(&mut self, arm: &'ast Arm) {
-        self.under_cfg(&arm.attrs, |this| visit::visit_arm(this, arm));
     }
 
     fn visit_field(&mut self, field: &'ast Field) {

@@ -735,6 +735,16 @@ mod tests {
     }
 
     impl AudioEffect for BufferThenHalveFrames {
+        fn held_source_frames(&self) -> u64 {
+            self.buffered
+                .as_ref()
+                .map_or(0, |chunk| u64::from(chunk.meta.frames))
+        }
+
+        fn reset(&mut self) {
+            self.buffered = None;
+        }
+
         delegate::delegate! {
             to self.buffered {
                 #[expr($.and_then(halve_frames))]
@@ -744,16 +754,6 @@ mod tests {
                 #[call(replace)]
                 fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk>;
             }
-        }
-
-        fn held_source_frames(&self) -> u64 {
-            self.buffered
-                .as_ref()
-                .map_or(0, |chunk| u64::from(chunk.meta.frames))
-        }
-
-        fn reset(&mut self) {
-            self.buffered = None;
         }
     }
 
