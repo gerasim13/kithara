@@ -177,7 +177,28 @@ where
     }
 
     let data_mode = normalize_data_mode(&spec.data_mode, &resolve_blob)?;
-    let init_mode = normalize_init_mode(&spec.init_mode, &resolve_blob)?;
+    let init_mode = match &spec.init_mode {
+        InitMode::None => ResolvedInitMode::None,
+        InitMode::TestInit => ResolvedInitMode::TestInit,
+        InitMode::Custom(data) => {
+            ResolvedInitMode::PerVariantBytes(data.iter().cloned().map(Arc::new).collect())
+        }
+        InitMode::BlobRefs(keys) => ResolvedInitMode::PerVariantBytes(
+            keys.iter()
+                .map(|key| resolve_blob(key))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        InitMode::WavHeader {
+            sample_rate,
+            channels,
+        } => {
+            validate_pcm_shape(*sample_rate, *channels)?;
+            ResolvedInitMode::WavHeader {
+                sample_rate: *sample_rate,
+                channels: *channels,
+            }
+        }
+    };
     let encryption = spec
         .encryption
         .as_ref()
@@ -312,37 +333,6 @@ where
                 sample_rate: *sample_rate,
                 channels: *channels,
                 patterns: patterns.clone(),
-            })
-        }
-    }
-}
-
-fn normalize_init_mode<F>(
-    init_mode: &InitMode,
-    resolve_blob: &F,
-) -> Result<ResolvedInitMode, HlsSpecError>
-where
-    F: Fn(&str) -> Result<Arc<Vec<u8>>, HlsSpecError>,
-{
-    match init_mode {
-        InitMode::None => Ok(ResolvedInitMode::None),
-        InitMode::TestInit => Ok(ResolvedInitMode::TestInit),
-        InitMode::Custom(data) => Ok(ResolvedInitMode::PerVariantBytes(
-            data.iter().cloned().map(Arc::new).collect(),
-        )),
-        InitMode::BlobRefs(keys) => keys
-            .iter()
-            .map(|key| resolve_blob(key))
-            .collect::<Result<Vec<_>, _>>()
-            .map(ResolvedInitMode::PerVariantBytes),
-        InitMode::WavHeader {
-            sample_rate,
-            channels,
-        } => {
-            validate_pcm_shape(*sample_rate, *channels)?;
-            Ok(ResolvedInitMode::WavHeader {
-                sample_rate: *sample_rate,
-                channels: *channels,
             })
         }
     }
