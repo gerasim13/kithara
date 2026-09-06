@@ -5597,6 +5597,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
+ "firewheel-core",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-signal",

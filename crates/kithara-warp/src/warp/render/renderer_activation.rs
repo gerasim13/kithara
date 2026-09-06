@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
@@ -48,9 +50,17 @@ where
     ) -> Option<FrameCount> {
         self.sync_plan();
         let rate = self.controls.rate_target();
+        let preview_frames = self
+            .render_quantum_frames
+            .map_or(remaining, NonZeroUsize::get)
+            .max(1);
         let result = self
-            .prepared_activation(rate.speed())
-            .and_then(|activation| {
+            .preview_speed(rate.speed(), preview_frames)
+            .and_then(|speed| {
+                self.prepared_activation(speed)
+                    .map(|activation| (speed, activation))
+            })
+            .and_then(|(speed, activation)| {
                 let prefix = activation.map_or(Ok(0), PreparedActivation::prefix_frames)?;
                 let frame_offset = meta
                     .frame_offset
@@ -61,7 +71,7 @@ where
                 let active_frames = self.source_frames_for_quantum(
                     Self::meta_at_frame(meta, frame_offset),
                     remaining,
-                    rate.speed(),
+                    speed,
                 )?;
                 let frames = prefix
                     .checked_add(active_frames)
@@ -71,6 +81,7 @@ where
                     activation,
                     frames,
                     rate,
+                    speed,
                 })
             });
         match result {

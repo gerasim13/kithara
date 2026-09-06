@@ -162,6 +162,12 @@ where
         }
         self.sync_plan();
 
+        if spec.sample_rate != self.spec.sample_rate
+            && let Some(applied) = self.applied_speed.as_mut()
+        {
+            applied.update_sample_rate(spec.sample_rate);
+        }
+
         let kind = self.controls.backend();
         let channels = usize::from(self.spec.channels.max(1));
         let entering_unity = spec == self.spec
