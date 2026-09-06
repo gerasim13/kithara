@@ -184,6 +184,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -194,6 +195,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -204,6 +206,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -214,6 +217,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -224,6 +228,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -234,6 +239,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -244,6 +250,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -254,6 +261,7 @@
   just platform apple test --skip-build
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-lint / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -1659,7 +1667,7 @@
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1667,7 +1675,7 @@
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1675,7 +1683,7 @@
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1683,7 +1691,7 @@
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1691,7 +1699,7 @@
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1699,7 +1707,7 @@
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1707,7 +1715,7 @@
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1715,7 +1723,7 @@
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just
-  just test run --flash=off
+  just test run --flash=off --timings
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1723,7 +1731,7 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1731,7 +1739,7 @@
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1739,7 +1747,7 @@
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1747,7 +1755,7 @@
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1755,7 +1763,7 @@
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1763,7 +1771,7 @@
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1771,7 +1779,7 @@
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1779,7 +1787,7 @@
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci
+  just test run --profile ci --timings
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
