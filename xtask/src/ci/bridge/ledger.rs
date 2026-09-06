@@ -177,18 +177,33 @@ impl Ledger {
             if entry.state == VerificationState::Testing {
                 bail!("verification {key} is still testing");
             }
-            entry.attempt = entry
-                .attempt
-                .checked_add(1)
-                .context("verification attempt counter overflowed")?;
-            entry.state = VerificationState::Testing;
-            entry.pipeline_id = None;
-            entry.announced = false;
-            entry.detail = None;
-            entry.updated_at = unix_time()?;
+            reopen(entry)?;
             let retry = entry.clone();
             self.write(data)?;
             Ok(retry)
+        })
+    }
+
+    /// Give a verification its next attempt after the run it owned was stopped.
+    ///
+    /// A cancelled pipeline reports nothing, so there is nothing to record and
+    /// nothing to wait for: the pipeline it names will never move again, and
+    /// the entry would sit on it until someone noticed. The attempt advances
+    /// because the branch a verification runs on is named after it, and the
+    /// pipeline query that recovers a lost create would otherwise hand back the
+    /// stopped run.
+    pub(super) fn release(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        pipeline_id: u64,
+    ) -> Result<()> {
+        self.with_locked_data(|data| {
+            let key = ledger_key(head_sha, base_sha);
+            let entry = testing_pipeline(data, &key, attempt, pipeline_id)?;
+            reopen(entry)?;
+            self.write(data)
         })
     }
 
@@ -271,6 +286,20 @@ fn testing_attempt<'a>(
         bail!("verification {key} attempt {attempt} is terminal");
     }
     Ok(entry)
+}
+
+/// Open the next attempt on an entry, forgetting the run the last one owned.
+fn reopen(entry: &mut LedgerEntry) -> Result<()> {
+    entry.attempt = entry
+        .attempt
+        .checked_add(1)
+        .context("verification attempt counter overflowed")?;
+    entry.state = VerificationState::Testing;
+    entry.pipeline_id = None;
+    entry.announced = false;
+    entry.detail = None;
+    entry.updated_at = unix_time()?;
+    Ok(())
 }
 
 fn require_attempt(entry: &LedgerEntry, key: &str, attempt: u64) -> Result<()> {
@@ -391,6 +420,28 @@ mod tests {
         assert_eq!(retry.attempt, 2);
         assert_eq!(retry.pipeline_id, None);
         assert_eq!(ledger.get("head", "base").unwrap().unwrap().attempt, 2);
+    }
+
+    /// A run someone stopped is released, not recorded. The verification stays
+    /// open on a fresh attempt, so the next tick pushes a branch of its own
+    /// instead of reading a pipeline that will never report again.
+    #[test]
+    fn releasing_a_stopped_pipeline_keeps_the_verification_open_on_a_fresh_attempt() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        ledger.reserve("head", "base").unwrap();
+        ledger.attach("head", "base", 1, 42).unwrap();
+        ledger.announce("head", "base", 1, 42).unwrap();
+
+        assert!(ledger.release("head", "base", 1, 43).is_err());
+        ledger.release("head", "base", 1, 42).unwrap();
+
+        let entry = ledger.get("head", "base").unwrap().unwrap();
+        assert_eq!(entry.state, VerificationState::Testing);
+        assert_eq!(entry.attempt, 2);
+        assert_eq!(entry.pipeline_id, None);
+        assert!(!entry.announced);
+        assert_eq!(entry.detail, None);
     }
 
     #[test]
