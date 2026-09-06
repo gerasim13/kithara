@@ -33,7 +33,8 @@ const BLOCKS_PER_WINDOW: usize = 8;
 /// in production (app.log 2026-05-27).
 const PLAY_SECS: f64 = 90.0;
 /// The committed playhead advances ~one decoded chunk (~0.1 s) per
-/// `write_playhead`. A single forward step beyond this is the production
+/// `write_playhead` event from `PlayheadWrite::advance`. A single forward step
+/// beyond this is the production
 /// swallow — the playhead leaping forward by seconds with no seek (app.log
 /// showed +10.4 s in one step).
 const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
@@ -48,9 +49,9 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// `committed_position` runs ahead of decoded content with no seek (app.log
 /// 2026-05-27: committed +10.4 s in one step, ~50 s ahead of decoded).
 ///
-/// Detector: the `committed_ns` USDT probe on `PlayheadState::write_playhead`
-/// fires on every playhead commit. We capture the firing sequence and fail if
-/// the committed playhead ever jumps forward by more than
+/// Detector: the `committed_ns` `write_playhead` USDT probe emitted by
+/// `PlayheadWrite::advance` fires on every playhead commit. We capture the
+/// firing sequence and fail if the committed playhead ever jumps forward by more than
 /// [`MAX_COMMITTED_STEP_SECS`] in a single commit. The player's served-frame
 /// position does **not** expose this jump — only the source playhead does.
 ///
