@@ -8,14 +8,6 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Premature track switch in `kithara-app`. `PlayerEvent::HandoverRequested` was
-  a unit variant, so the queue applied the outgoing track's handover to whatever
-  its cursor held by then - the successor it had just selected, cut a block in.
-  The request now carries `ItemRole`, and the queue acts on it only when it names
-  the track it is on. Pinned by
-  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span`; two
-  tracks cannot show it, there is no successor to jump to. Left: nothing.
-
 - The Windows guest asks the machine's profile where `qemu` is. Both binaries
   it launches were absolute paths into one Homebrew prefix, so a host whose
   Homebrew answers elsewhere could not start the guest, and the error named
@@ -62,17 +54,21 @@ the change that lands the work, and keep it short.
   `readme_shape`. All three queues are at zero, and `just lint full` runs the
   namespace on the Apple lint lane.
 
-- Full-playthrough queue census. A queue is played from the first frame of the
-  first track to the last frame of the last, and every output frame is
-  attributed to the track that produced it, through a USDT probe on
-  `PlayerTrack::render` naming the track and its own media clock. Both halves of
-  a premature switch are pinned - a track must serve its whole length, and two
-  tracks may share frames only inside the crossfade the queue announced - over
-  HLS segments, a local FLAC, a FLAC body over HTTP and an MPEG body between two
-  HLS tracks, each at cf=0 and cf>0, with a real-CDN counterpart in
-  `real_playlist`. The wrong-duration family is closed by two negative results.
-  Writing the seam test found `suite_network` dark since `#260`; the lane builds
-  again. Left: the reported premature switch is open and its mechanism unknown.
+- Premature track switch, and the census built to find it.
+  `PlayerEvent::HandoverRequested` was a unit variant, so the queue applied the
+  outgoing track's handover to whatever its cursor held by then - the successor
+  it had just selected, cut a block in. The request now carries `ItemRole`, and
+  the queue acts on it only when it names the track it is on.
+  `auto_advance::a_middle_track_is_heard_in_the_middle_of_its_own_span` pins it
+  and needs three tracks: with two there is no successor to jump to, which is why
+  the existing crossfade coverage stayed green.
+
+  The census that framed it plays a queue end to end and attributes every output
+  frame to the track that produced it, through a USDT probe on
+  `PlayerTrack::render`, over HLS segments, a local FLAC, a FLAC body over HTTP
+  and an MPEG body between two HLS tracks, each at cf=0 and cf>0, with a real-CDN
+  counterpart in `real_playlist`. Writing the seam test found `suite_network`
+  dark since `#260`; the lane builds again. Left: nothing.
 
 ## Next
 
