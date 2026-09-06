@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
@@ -7,6 +8,8 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
 };
 use kithara_test_macros as kithara;
+use num_traits::cast::AsPrimitive;
+use tracing::warn;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
@@ -23,6 +26,7 @@ pub(super) struct PreparedQuantum {
     pub(super) activation: Option<PreparedActivation>,
     pub(super) frames: usize,
     pub(super) rate: RateTarget,
+    pub(super) speed: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +72,8 @@ pub struct WarpRenderer<S> {
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
+    /// Renderer-owned applied speed. Shared controls contain only the target.
+    pub(super) applied_speed: Option<SmoothedParam>,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
@@ -128,6 +134,9 @@ where
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
+        let speed = controls.speed();
+        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
+        let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             current_kind,
             config.backends(),
@@ -150,6 +159,16 @@ where
             source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
+            applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
+                SmoothedParam::new(
+                    speed,
+                    SmootherConfig {
+                        smooth_seconds: smooth_frames / sample_rate,
+                        ..SmootherConfig::default()
+                    },
+                    spec.sample_rate,
+                )
+            }),
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -225,6 +244,14 @@ where
         self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
+    }
+
+    pub(super) fn snap_speed(&mut self) {
+        if let Some(applied) = self.applied_speed.as_mut() {
+            applied.set_value(self.controls.speed());
+            applied.reset_to_target();
+        }
+        self.prepared_quantum = None;
     }
 
     pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
@@ -369,7 +396,11 @@ where
         output_frames: usize,
         request_revision: u64,
         applied_rate: f32,
+        target_rate: f32,
     ) {
+        if let Err(error) = self.advance_speed(target_rate, output_frames) {
+            warn!(%error, "time-stretch speed smoothing failed");
+        }
         let Some(snapshot) = snapshot else {
             return;
         };

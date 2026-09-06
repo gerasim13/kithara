@@ -7,7 +7,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
-    stretch::ElasticBackendConfig,
+    stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -27,6 +27,22 @@ const TONES_HZ: [f64; 4] = [440.0, 880.0, 1_760.0, 3_520.0];
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const MIN_SIGNAL_RMS: f64 = 0.003;
 const WARMUP_BLOCK_BUDGET: usize = 200;
+
+fn response_backends() -> ElasticBackendConfig {
+    ElasticBackendConfig::builder()
+        .signalsmith(
+            SignalsmithConfig::builder()
+                .block_frames(NonZeroUsize::new(224).expect("case block is non-zero"))
+                .interval_frames(NonZeroUsize::new(32).expect("case interval is non-zero"))
+                .build(),
+        )
+        .bungee(
+            BungeeConfig::builder()
+                .log2_synthesis_hop_adjust(-4)
+                .build(),
+        )
+        .build()
+}
 
 const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 2.0, 2, 0);
 const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
@@ -298,8 +314,57 @@ fn assert_response(
         .expect("captured output includes the command boundary");
     let applied = revision_probe(events, "rate_applied", "request_revision", revision)
         .unwrap_or_else(|| {
+            let applied: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe_name() == Some("rate_applied"))
+                .map(|event| {
+                    (
+                        event.u64("request_revision"),
+                        event.u64("session_frame"),
+                        event
+                            .u64("applied_rate_bits")
+                            .and_then(|bits| u32::try_from(bits).ok())
+                            .map(f32::from_bits),
+                        event.u64("source_start"),
+                        event.u64("source_end"),
+                    )
+                })
+                .collect();
+            let presented: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe_name() == Some("pcm_consumed"))
+                .filter_map(|event| {
+                    event
+                        .u64("render_revision")
+                        .zip(event.u64("output_start"))
+                        .zip(event.u64("output_end"))
+                })
+                .collect();
+            let rendered: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe_name() == Some("render_committed"))
+                .filter_map(|event| {
+                    event
+                        .u64("source_start")
+                        .zip(event.u64("source_end"))
+                        .zip(event.u64("output_start"))
+                        .zip(event.u64("output_end"))
+                })
+                .collect();
+            let published: Vec<_> = events
+                .iter()
+                .filter(|event| event.probe_name() == Some("publish"))
+                .filter_map(|event| {
+                    event
+                        .u64("source")
+                        .zip(event.u64("presentation_frame"))
+                        .zip(event.u64("output_start"))
+                        .zip(event.u64("output_end"))
+                })
+                .collect();
+            let target_onset = first_target_onset(samples, command_frame, case.target_tone);
             panic!(
-                "{backend} did not apply revision {revision} within {observed_frames} rendered output frames; response budget is {budget}"
+                "{backend} did not apply revision {revision} within {observed_frames} rendered output frames; response budget is {budget}; target_onset={target_onset:?}; applied={applied:?}; presented={presented:?}; rendered={rendered:?}; published={published:?}"
             )
         });
     let consumed = revision_probe(events, "pcm_consumed", "render_revision", revision)
@@ -308,6 +373,11 @@ fn assert_response(
         .u64("session_frame")
         .and_then(|frame| i64::try_from(frame).ok())
         .unwrap_or_else(|| panic!("{backend} apply probe has no session frame"));
+    let applied_rate = applied
+        .u64("applied_rate_bits")
+        .and_then(|bits| u32::try_from(bits).ok())
+        .map(f32::from_bits)
+        .unwrap_or_else(|| panic!("{backend} apply probe has no rate"));
     let consumed_frame = consumed
         .u64("output_start")
         .and_then(|frame| i64::try_from(frame).ok())
@@ -326,6 +396,17 @@ fn assert_response(
         presented_response <= budget,
         "{backend} presented revision {revision} after {presented_response} frames; budget is {budget}"
     );
+    if case.smooth_frames > 1 {
+        let low = case.initial_rate.min(case.target_rate);
+        let high = case.initial_rate.max(case.target_rate);
+        assert!(
+            applied_rate > low && applied_rate < high,
+            "{backend} jumped from {} directly to {} instead of smoothing over {} output frames",
+            case.initial_rate,
+            applied_rate,
+            case.smooth_frames
+        );
+    }
     let onset = first_target_onset(samples, command_frame, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
     let primed = revision_probe(events, "prime_activation", "request_revision", revision)
@@ -401,20 +482,20 @@ async fn run_case(
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
-#[case::signalsmith_minimum(StretchKind::Signalsmith, ElasticBackendConfig::default(), MINIMUM)]
-#[case::signalsmith_product(StretchKind::Signalsmith, ElasticBackendConfig::default(), PRODUCT)]
-#[case::signalsmith_extreme(StretchKind::Signalsmith, ElasticBackendConfig::default(), EXTREME)]
+#[case::signalsmith_minimum(StretchKind::Signalsmith, response_backends(), MINIMUM)]
+#[case::signalsmith_product(StretchKind::Signalsmith, response_backends(), PRODUCT)]
+#[case::signalsmith_extreme(StretchKind::Signalsmith, response_backends(), EXTREME)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_minimum(StretchKind::Bungee, ElasticBackendConfig::default(), MINIMUM)
+    case::bungee_minimum(StretchKind::Bungee, response_backends(), MINIMUM)
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_product(StretchKind::Bungee, ElasticBackendConfig::default(), PRODUCT)
+    case::bungee_product(StretchKind::Bungee, response_backends(), PRODUCT)
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_extreme(StretchKind::Bungee, ElasticBackendConfig::default(), EXTREME)
+    case::bungee_extreme(StretchKind::Bungee, response_backends(), EXTREME)
 )]
 async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     temp_dir: TestTempDir,

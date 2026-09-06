@@ -59,6 +59,7 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
     }
@@ -74,6 +75,7 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.reset_pending = false;
         self.active = false;
         self.region = None;
@@ -360,8 +362,15 @@ where
         let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.controls.rate_target();
+        let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
+            Ok(speed) => speed,
+            Err(error) => {
+                warn!(%error, "time-stretch speed smoothing failed");
+                return None;
+            }
+        };
         chunk.meta.render_revision = rate.revision();
-        self.render_at(chunk, rate.speed(), snapshot, None)
+        self.render_at(chunk, speed, snapshot, None, rate.speed())
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
@@ -372,7 +381,13 @@ where
         }
         let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(chunk, prepared.rate.speed(), snapshot, Some(prepared))
+        self.render_at(
+            chunk,
+            prepared.speed,
+            snapshot,
+            Some(prepared),
+            prepared.rate.speed(),
+        )
     }
 
     fn render_at(
@@ -381,6 +396,7 @@ where
         speed: f32,
         snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
+        target_speed: f32,
     ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
@@ -420,6 +436,7 @@ where
                 output.frames(),
                 output.meta.render_revision,
                 speed,
+                target_speed,
             );
         }
         output
@@ -430,5 +447,6 @@ where
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
+        self.snap_speed();
     }
 }
