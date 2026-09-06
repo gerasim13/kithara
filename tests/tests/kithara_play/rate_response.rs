@@ -47,7 +47,7 @@ fn response_backends() -> ElasticBackendConfig {
 
 const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 2.0, 2, 0);
 const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
-const EXTREME: ResponseCase = ResponseCase::new(128, 16_384, 64, 64, 441, 0.5, 0, 4.0, 3, 64);
+const EXTREME: ResponseCase = ResponseCase::new(64, 16_384, 32, 64, 441, 0.5, 0, 4.0, 3, 64);
 
 #[derive(Clone, Copy, Debug)]
 struct ResponseCase {
@@ -168,17 +168,24 @@ async fn capture_command_boundary(
     callback_frames: usize,
 ) -> Vec<f32> {
     let mut publish_seq = latest_probe_seq(&recorder.snapshot(), "publish");
-    let mut last_block = Vec::new();
+    let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         let block = capture_frames(harness, callback_frames, callback_frames).await;
+        samples.extend_from_slice(&block);
         let after = recorder.snapshot();
         let current_publish_seq = latest_probe_seq(&after, "publish");
         let published = current_publish_seq > publish_seq;
         publish_seq = current_publish_seq;
-        if published && tone_is_dominant(&block, target) {
-            return block;
+        let frames = samples.len() / usize::from(CHANNELS);
+        if published
+            && frames >= TARGET_WINDOW_FRAMES
+            && tone_is_dominant(
+                &samples[(frames - TARGET_WINDOW_FRAMES) * usize::from(CHANNELS)..],
+                target,
+            )
+        {
+            return samples;
         }
-        last_block = block;
     }
     let events = recorder.snapshot();
     let publish = events
@@ -199,7 +206,7 @@ async fn capture_command_boundary(
         .count();
     panic!(
         "precondition: no callback presented the initial tone at a transport boundary; publish={publish}, rendered={rendered}, rate_applied={applied}, pcm_consumed={consumed}, last_rms={}",
-        signal_rms(&last_block)
+        signal_rms(&samples)
     );
 }
 
