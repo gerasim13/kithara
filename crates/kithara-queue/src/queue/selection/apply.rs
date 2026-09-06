@@ -36,7 +36,7 @@ where
                     return;
                 }
             };
-            drop(task::spawn_blocking(move || {
+            drop(task::spawn_sync(move || {
                 queue.apply_loaded(id, resource);
             }));
         }));
@@ -46,7 +46,8 @@ where
     ///
     /// Takes the admission lock and dispatches through the session's
     /// synchronous command bridge, so the caller waits for a reply. On a
-    /// runtime worker that wait parks the executor thread.
+    /// runtime worker that wait parks the executor thread, which is why the
+    /// caller hands this to the platform rather than awaiting it in place.
     fn apply_loaded(&self, id: TrackId, resource: Resource) {
         let _admission = self.lock_admission();
         if self.is_closed() {
