@@ -52,9 +52,9 @@ struct PersistentEofSource {
 }
 
 struct CommitSource {
-    chunk: Option<AudioChunk>,
     commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
     seek: Arc<SeekState>,
+    chunk: Option<AudioChunk>,
     source_end: SourceEnd,
 }
 
@@ -401,10 +401,10 @@ fn source_end_commits_only_after_final_port_admission() {
     );
     let commits = Arc::new(Mutex::new(Vec::new()));
     let source = CommitSource {
+        source_end,
         chunk: Some(empty_chunk(&pools)),
         commits: Arc::clone(&commits),
         seek: Arc::new(SeekState::new()),
-        source_end,
     };
     let mut node = test_node(
         source,

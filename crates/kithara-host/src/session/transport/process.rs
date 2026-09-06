@@ -21,8 +21,8 @@ struct RenderBoundary {
 #[derive(Debug)]
 pub(super) struct TransportFrame {
     pub(super) session_beats: Option<Range<SessionBeat>>,
-    pub(super) session_epoch: SessionEpoch,
     pub(super) transport_revision: Option<TransportRevision>,
+    pub(super) session_epoch: SessionEpoch,
 }
 
 #[derive(Debug)]

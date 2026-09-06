@@ -11,9 +11,9 @@ pub(crate) struct OwnedBuffer<const SHARDS: usize, B, const OBSERVE: bool>
 where
     B: Storage,
 {
+    pub(super) value: B,
     core: Arc<Core<SHARDS, B, OBSERVE>>,
     shard_idx: usize,
-    pub(super) value: B,
 }
 
 impl<const SHARDS: usize, B, const OBSERVE: bool> OwnedBuffer<SHARDS, B, OBSERVE>
@@ -22,10 +22,23 @@ where
 {
     pub(crate) fn new(core: Arc<Core<SHARDS, B, OBSERVE>>, value: B, shard_idx: usize) -> Self {
         Self {
+            value,
             core,
             shard_idx,
-            value,
         }
+    }
+
+    fn grow(&mut self, new_len: usize) -> Result<(), PoolError> {
+        self.core.grow(&mut self.value, new_len, self.shard_idx)
+    }
+
+    pub(super) fn normalize(&mut self) {
+        self.core.normalize(&mut self.value, self.shard_idx);
+    }
+
+    pub(super) fn renew(&mut self) {
+        let value = mem::take(&mut self.value);
+        self.core.put(value, self.shard_idx);
     }
 
     delegate::delegate! {
@@ -34,22 +47,19 @@ where
             pub(super) fn clear(&mut self);
         }
     }
-
-    pub(super) fn renew(&mut self) {
-        let value = mem::take(&mut self.value);
-        self.core.put(value, self.shard_idx);
-    }
-
-    pub(super) fn normalize(&mut self) {
-        self.core.normalize(&mut self.value, self.shard_idx);
-    }
-
-    fn grow(&mut self, new_len: usize) -> Result<(), PoolError> {
-        self.core.grow(&mut self.value, new_len, self.shard_idx)
-    }
 }
 
 impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OBSERVE> {
+    fn checked_extended_len(&self, additional: usize) -> Result<usize, PoolError> {
+        self.value
+            .len()
+            .checked_add(additional)
+            .ok_or(PoolError::CapacityOverflow {
+                elements: usize::MAX,
+                element_size: size_of::<T>(),
+            })
+    }
+
     pub(super) fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, T>
     where
         R: RangeBounds<usize>,
@@ -107,16 +117,6 @@ impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OB
         self.grow(new_len)?;
         self.value.push(value);
         Ok(())
-    }
-
-    fn checked_extended_len(&self, additional: usize) -> Result<usize, PoolError> {
-        self.value
-            .len()
-            .checked_add(additional)
-            .ok_or(PoolError::CapacityOverflow {
-                elements: usize::MAX,
-                element_size: size_of::<T>(),
-            })
     }
 
     delegate::delegate! {

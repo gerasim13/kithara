@@ -48,9 +48,9 @@ const MENU: &str = "demo/menu";
 /// What one gesture left behind: where each press landed, what the document
 /// published, and whether the menu stands open at the end of it.
 struct Played {
-    open: bool,
     points: Vec<Pt>,
     published: Vec<UiEvent>,
+    open: bool,
 }
 
 /// An application that answers nothing and keeps every event published to it:
@@ -165,9 +165,9 @@ fn retained(steps: &[&str]) -> Played {
         }
     }
     Played {
+        points,
         open: ui.view().flag(MENU),
         published: ui.app().published.clone(),
-        points,
     }
 }
 

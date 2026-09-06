@@ -13,7 +13,7 @@ use kithara::{
         tokio::task::spawn as task_spawn,
     },
     play::{
-        PlayError, ResourceSrc,
+        PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, TrackId},
@@ -93,11 +93,10 @@ pub(crate) fn worker_main(
     task_spawn(async move {
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
-        let worker =
-            FfiWorker::new(kithara::play::PlayWorkerConfig::builder(state.pools.clone()).build());
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(state.pools.clone()).build());
         let queue_store = state.store.clone();
-        let player = kithara::play::PlayerImpl::new(
-            kithara::play::PlayerConfig::builder()
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
                 .sample_rate(host.requested_sample_rate())
                 .worker(worker)
                 .build(),
@@ -213,7 +212,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
             let result = replace_track(
                 queue,
                 &build_state.borrow(),
-                ReplaceTrackArgs { index, id, url },
+                ReplaceTrackArgs { url, id, index },
             );
             crate::web::interop::send_reply(request_id, result);
         }
@@ -253,10 +252,10 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
             register_key_rule(
                 &mut build_state.borrow_mut(),
                 SetupHlsAesArgs {
-                    salt,
-                    domains,
                     headers,
                     query_params,
+                    salt,
+                    domains,
                 },
             );
         }

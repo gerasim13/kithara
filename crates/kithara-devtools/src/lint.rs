@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::{arch, common::style::bold_cyan, idioms, style};
+use crate::{
+    arch, arch::ArchArgs, common::style::bold_cyan, idioms, idioms::IdiomsArgs, style,
+    style::StyleArgs,
+};
 
 #[derive(Debug, Args)]
 pub struct LintArgs {
@@ -30,11 +33,11 @@ pub struct LintArgs {
 #[derive(Debug, Subcommand)]
 pub enum LintCommand {
     /// Architectural fitness functions (topology, layers, file size, …).
-    Arch(arch::ArchArgs),
+    Arch(ArchArgs),
     /// Code-style fitness functions (const locality, field/item ordering, …).
-    Style(style::StyleArgs),
+    Style(StyleArgs),
     /// Idiomatic-construction fitness functions (branch chains, accumulators, …).
-    Idioms(idioms::IdiomsArgs),
+    Idioms(IdiomsArgs),
 }
 
 pub(crate) fn run(args: &LintArgs) -> Result<()> {
@@ -48,27 +51,27 @@ pub(crate) fn run(args: &LintArgs) -> Result<()> {
 
 fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -> Result<()> {
     let mut failures: Vec<&'static str> = Vec::new();
-    let arch_args = arch::ArchArgs {
+    let arch_args = ArchArgs {
         config_dir: ".config/arch".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
-        ..arch::ArchArgs::default()
+        ..ArchArgs::default()
     };
-    let style_args = style::StyleArgs {
+    let style_args = StyleArgs {
         config_dir: ".config/style".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
         fix,
         allow_dirty,
-        ..style::StyleArgs::default()
+        ..StyleArgs::default()
     };
-    let idioms_args = idioms::IdiomsArgs {
+    let idioms_args = IdiomsArgs {
         config_dir: ".config/idioms".into(),
         crates: crates.to_vec(),
         paths: paths.to_vec(),
         fix,
         allow_dirty,
-        ..idioms::IdiomsArgs::default()
+        ..IdiomsArgs::default()
     };
 
     println!("{}", bold_cyan("══ arch ══"));

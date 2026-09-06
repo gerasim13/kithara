@@ -39,22 +39,16 @@ impl PartSinkFactory for TestFactory {
 }
 
 struct TestSink {
-    bytes: Vec<u8>,
     parts: Parts,
+    bytes: Vec<u8>,
 }
 
 impl RecordingSink for TestSink {
     type Error = io::Error;
     type Output = ();
 
-    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
-        let offset = usize::try_from(offset).map_err(io::Error::other)?;
-        let end = offset
-            .checked_add(bytes.len())
-            .ok_or_else(|| io::Error::other("test sink length overflow"))?;
-        self.bytes.resize(self.bytes.len().max(end), 0);
-        self.bytes[offset..end].copy_from_slice(bytes);
-        Ok(())
+    fn abort(&mut self) {
+        self.bytes.clear();
     }
 
     fn commit(&mut self, final_len: u64) -> Result<Self::Output, Self::Error> {
@@ -64,8 +58,14 @@ impl RecordingSink for TestSink {
         Ok(())
     }
 
-    fn abort(&mut self) {
-        self.bytes.clear();
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
+        let offset = usize::try_from(offset).map_err(io::Error::other)?;
+        let end = offset
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("test sink length overflow"))?;
+        self.bytes.resize(self.bytes.len().max(end), 0);
+        self.bytes[offset..end].copy_from_slice(bytes);
+        Ok(())
     }
 }
 
@@ -157,27 +157,27 @@ impl PartSinkFactory for LifecycleFactory {
 }
 
 struct LifecycleSink {
-    fail_write: bool,
     lifecycle: Lifecycle,
+    fail_write: bool,
 }
 
 impl RecordingSink for LifecycleSink {
     type Error = io::Error;
     type Output = ();
 
-    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
-        if self.fail_write {
-            return Err(io::Error::other("injected sink failure"));
-        }
-        Ok(())
+    fn abort(&mut self) {
+        self.lifecycle.aborted.store(true, Ordering::Release);
     }
 
     fn commit(&mut self, _final_len: u64) -> Result<Self::Output, Self::Error> {
         Ok(())
     }
 
-    fn abort(&mut self) {
-        self.lifecycle.aborted.store(true, Ordering::Release);
+    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
+        if self.fail_write {
+            return Err(io::Error::other("injected sink failure"));
+        }
+        Ok(())
     }
 }
 

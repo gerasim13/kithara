@@ -10,10 +10,10 @@ const FAST_CHANNELS: usize = 8;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct PlanarBuffer {
-    frames: FrameCount,
-    samples: SampleBuffer,
     spec: AudioSpec,
+    frames: FrameCount,
     stride: FrameCount,
+    samples: SampleBuffer,
 }
 
 impl PlanarBuffer {
@@ -32,29 +32,13 @@ impl PlanarBuffer {
     {
         spec.channel_count()?;
         let mut buffer = Self {
+            spec,
             frames: FrameCount::default(),
             samples: pools.get::<f32>(),
-            spec,
             stride: FrameCount::default(),
         };
         buffer.resize_frames(frames)?;
         Ok(buffer)
-    }
-
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    #[must_use]
-    pub const fn frames(&self) -> FrameCount {
-        self.frames
-    }
-
-    /// Per-channel storage stride, including reserved frames beyond the logical end.
-    #[must_use]
-    pub const fn stride(&self) -> FrameCount {
-        self.stride
     }
 
     /// Complete channel-major storage, including reserved stride.
@@ -67,6 +51,41 @@ impl PlanarBuffer {
     #[must_use]
     pub fn as_samples_mut(&mut self) -> &mut [f32] {
         &mut self.samples
+    }
+
+    /// Borrow one logical channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `channel` is out of range.
+    pub fn channel(&self, channel: usize) -> Result<&[f32], SignalError> {
+        self.view().channel(channel)
+    }
+
+    /// Mutably borrow one logical channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `channel` is out of range.
+    pub fn channel_mut(&mut self, channel: usize) -> Result<&mut [f32], SignalError> {
+        let range = channel_range(
+            channel,
+            self.spec.channel_count()?.get(),
+            self.stride.get(),
+            0,
+            self.frames.get(),
+        )?;
+        Ok(&mut self.samples[range])
+    }
+
+    /// Reset the logical queue while retaining pooled storage and stride.
+    pub const fn clear(&mut self) {
+        self.frames = FrameCount::new(0);
+    }
+
+    #[must_use]
+    pub const fn frames(&self) -> FrameCount {
+        self.frames
     }
 
     fn reserve_frames(&mut self, frames: FrameCount) -> Result<(), SignalError> {
@@ -132,9 +151,15 @@ impl PlanarBuffer {
         Ok(())
     }
 
-    /// Reset the logical queue while retaining pooled storage and stride.
-    pub const fn clear(&mut self) {
-        self.frames = FrameCount::new(0);
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
+    }
+
+    /// Per-channel storage stride, including reserved frames beyond the logical end.
+    #[must_use]
+    pub const fn stride(&self) -> FrameCount {
+        self.stride
     }
 
     /// Remove frames from the front of every channel without reallocating.
@@ -165,31 +190,6 @@ impl PlanarBuffer {
         Ok(())
     }
 
-    /// Borrow one logical channel.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when `channel` is out of range.
-    pub fn channel(&self, channel: usize) -> Result<&[f32], SignalError> {
-        self.view().channel(channel)
-    }
-
-    /// Mutably borrow one logical channel.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when `channel` is out of range.
-    pub fn channel_mut(&mut self, channel: usize) -> Result<&mut [f32], SignalError> {
-        let range = channel_range(
-            channel,
-            self.spec.channel_count()?.get(),
-            self.stride.get(),
-            0,
-            self.frames.get(),
-        )?;
-        Ok(&mut self.samples[range])
-    }
-
     #[must_use]
     pub fn view(&self) -> PlanarView<'_> {
         PlanarView {
@@ -206,29 +206,14 @@ impl PlanarBuffer {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct PlanarView<'a> {
-    frames: FrameCount,
     samples: &'a [f32],
     spec: AudioSpec,
-    start: usize,
+    frames: FrameCount,
     stride: FrameCount,
+    start: usize,
 }
 
 impl<'a> PlanarView<'a> {
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    #[must_use]
-    pub const fn frames(&self) -> FrameCount {
-        self.frames
-    }
-
-    #[must_use]
-    pub const fn stride(&self) -> FrameCount {
-        self.stride
-    }
-
     /// Borrow one channel from this view.
     ///
     /// # Errors
@@ -245,20 +230,9 @@ impl<'a> PlanarView<'a> {
         Ok(&self.samples[range])
     }
 
-    /// Select a relative frame range without allocating channel metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when `range` exceeds this view.
-    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
-        let (start, frames) = subrange(self.start, self.frames.get(), range)?;
-        Ok(Self {
-            frames,
-            samples: self.samples,
-            spec: self.spec,
-            start,
-            stride: self.stride,
-        })
+    #[must_use]
+    pub const fn frames(&self) -> FrameCount {
+        self.frames
     }
 
     /// Interleave this view into caller-owned storage.
@@ -300,6 +274,32 @@ impl<'a> PlanarView<'a> {
         }
         InterleavedView::new(output, self.spec, self.frames)
     }
+
+    /// Select a relative frame range without allocating channel metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `range` exceeds this view.
+    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
+        let (start, frames) = subrange(self.start, self.frames.get(), range)?;
+        Ok(Self {
+            frames,
+            start,
+            samples: self.samples,
+            spec: self.spec,
+            stride: self.stride,
+        })
+    }
+
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
+    }
+
+    #[must_use]
+    pub const fn stride(&self) -> FrameCount {
+        self.stride
+    }
 }
 
 fn channel_range(
@@ -316,8 +316,8 @@ fn channel_range(
         .checked_mul(stride)
         .and_then(|base| base.checked_add(start))
         .ok_or(SignalError::SampleCountOverflow {
-            frames: stride,
             channels,
+            frames: stride,
         })?;
     let end = begin
         .checked_add(frames)

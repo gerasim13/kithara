@@ -21,6 +21,7 @@ mod client;
 
 use backend::{BackendConfig, OfflineBackend};
 pub(crate) use client::OfflineSessionClient;
+use kithara_platform::sync::mpsc::TryRecvError;
 
 const CHANNELS: usize = 2;
 
@@ -60,16 +61,29 @@ impl<S> OfflineSessionTask<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn tick_message(&mut self, message: OfflineMsg<S>) -> TickResult {
-        match message {
-            OfflineMsg::Host(message) => self.tick_host(message),
-            OfflineMsg::Position { reply_tx } => self.tick_position(&reply_tx),
-            OfflineMsg::Render {
-                position,
-                frames,
-                reply_tx,
-            } => self.tick_render(position, frames, &reply_tx),
+    fn render(&mut self, position: u64, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
+        if position != self.position {
+            return Err(OfflineSessionError::CursorChanged {
+                expected: position,
+                actual: self.position,
+            });
         }
+        if frames == 0 || frames > self.max_block_frames.get() {
+            return Err(OfflineSessionError::InvalidBlockFrames {
+                requested: frames,
+                maximum: self.max_block_frames.get(),
+            });
+        }
+        let state = self
+            .state
+            .as_mut()
+            .ok_or(OfflineSessionError::SessionGone)?;
+        let output = render_block(state, frames, self.position, &self.pools)?;
+        self.position = self
+            .position
+            .checked_add(u64::from(frames))
+            .ok_or(OfflineSessionError::TimelineOverflow)?;
+        Ok(output)
     }
 
     fn tick_host(&mut self, message: HostCmdMsg<S>) -> TickResult {
@@ -96,49 +110,16 @@ where
         TickResult::Progress
     }
 
-    fn tick_position(&self, reply_tx: &mpsc::Sender<u64>) -> TickResult {
-        if reply_tx.send(self.position).is_err() {
-            warn!("offline position reply receiver dropped");
+    fn tick_message(&mut self, message: OfflineMsg<S>) -> TickResult {
+        match message {
+            OfflineMsg::Host(message) => self.tick_host(message),
+            OfflineMsg::Position { reply_tx } => self.tick_position(&reply_tx),
+            OfflineMsg::Render {
+                position,
+                frames,
+                reply_tx,
+            } => self.tick_render(position, frames, &reply_tx),
         }
-        TickResult::Progress
-    }
-
-    fn tick_render(
-        &mut self,
-        position: u64,
-        frames: u32,
-        reply_tx: &mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
-    ) -> TickResult {
-        let reply = self.render(position, frames);
-        if reply_tx.send(reply).is_err() {
-            warn!("offline render reply receiver dropped");
-        }
-        TickResult::Progress
-    }
-
-    fn render(&mut self, position: u64, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
-        if position != self.position {
-            return Err(OfflineSessionError::CursorChanged {
-                expected: position,
-                actual: self.position,
-            });
-        }
-        if frames == 0 || frames > self.max_block_frames.get() {
-            return Err(OfflineSessionError::InvalidBlockFrames {
-                requested: frames,
-                maximum: self.max_block_frames.get(),
-            });
-        }
-        let state = self
-            .state
-            .as_mut()
-            .ok_or(OfflineSessionError::SessionGone)?;
-        let output = render_block(state, frames, self.position, &self.pools)?;
-        self.position = self
-            .position
-            .checked_add(u64::from(frames))
-            .ok_or(OfflineSessionError::TimelineOverflow)?;
-        Ok(output)
     }
 
     #[cfg(any(test, feature = "probe"))]
@@ -158,6 +139,26 @@ where
             }
         }
     }
+
+    fn tick_position(&self, reply_tx: &mpsc::Sender<u64>) -> TickResult {
+        if reply_tx.send(self.position).is_err() {
+            warn!("offline position reply receiver dropped");
+        }
+        TickResult::Progress
+    }
+
+    fn tick_render(
+        &mut self,
+        position: u64,
+        frames: u32,
+        reply_tx: &mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
+    ) -> TickResult {
+        let reply = self.render(position, frames);
+        if reply_tx.send(reply).is_err() {
+            warn!("offline render reply receiver dropped");
+        }
+        TickResult::Progress
+    }
 }
 
 impl<S> Task for OfflineSessionTask<S>
@@ -174,8 +175,8 @@ where
         };
         match cmd_rx.try_recv() {
             Ok(message) => self.tick_message(message),
-            Err(mpsc::TryRecvError::Disconnected) => TickResult::Done,
-            Err(mpsc::TryRecvError::Empty) => {
+            Err(TryRecvError::Disconnected) => TickResult::Done,
+            Err(TryRecvError::Empty) => {
                 #[cfg(any(test, feature = "probe"))]
                 {
                     self.tick_pacing()

@@ -1,3 +1,4 @@
+use core::num::NonZeroUsize;
 pub use std::time::Duration;
 
 use crate::common::thread_id::thread_id_hash;
@@ -82,6 +83,6 @@ pub fn current_thread_id() -> u64 {
 }
 
 #[must_use]
-pub fn available_parallelism() -> Option<core::num::NonZeroUsize> {
+pub fn available_parallelism() -> Option<NonZeroUsize> {
     std::thread::available_parallelism().ok()
 }

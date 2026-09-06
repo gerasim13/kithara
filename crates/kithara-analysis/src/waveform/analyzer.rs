@@ -30,8 +30,8 @@ impl Consts {
 }
 
 struct Partial {
-    samples: SampleBuffer,
     written: Coverage,
+    samples: SampleBuffer,
     seq: u64,
 }
 
@@ -43,17 +43,17 @@ struct Partial {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    fft_input: SampleBuffer,
-    fft_output: Vec<Complex<f32>>,
-    fft_scratch: Vec<Complex<f32>>,
-    hann: SampleBuffer,
-    downmix: SampleBuffer,
     bands: BTreeMap<u64, [f32; Band::COUNT]>,
     partial: BTreeMap<u64, Partial>,
+    downmix: SampleBuffer,
+    fft_input: SampleBuffer,
+    hann: SampleBuffer,
+    fft_output: Vec<Complex<f32>>,
+    fft_scratch: Vec<Complex<f32>>,
     band_bin_inv: [f32; Band::COUNT],
+    opened: u64,
     low_mid_bin: usize,
     mid_high_bin: usize,
-    opened: u64,
     window_hop: usize,
 }
 
@@ -100,13 +100,13 @@ impl WaveformAnalyzer {
             params,
             fft,
             hann,
-            downmix: pools.get::<f32>(),
             low_mid_bin,
             mid_high_bin,
             band_bin_inv,
             fft_input,
             fft_output,
             fft_scratch,
+            downmix: pools.get::<f32>(),
             window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
             bands: BTreeMap::new(),
             partial: BTreeMap::new(),
@@ -184,6 +184,56 @@ impl WaveformAnalyzer {
         Ok(())
     }
 
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: WaveformResume,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        if resume.partials.len() > Consts::MAX_PARTIAL {
+            return Err(BlobError::Corrupt);
+        }
+
+        let mut bands = BTreeMap::new();
+        for (index, energy) in resume.bands {
+            bands.insert(index, energy);
+        }
+
+        let mut partial = BTreeMap::new();
+        for held in resume.partials {
+            if held.samples.len() != self.window_size()
+                || held.seq >= resume.opened
+                || bands.contains_key(&held.index)
+            {
+                return Err(BlobError::Corrupt);
+            }
+            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
+            if held
+                .written
+                .runs()
+                .iter()
+                .any(|range| range.start() < span.start() || range.end() > span.end())
+            {
+                return Err(BlobError::Corrupt);
+            }
+            partial.insert(
+                held.index,
+                Partial {
+                    samples: sample_buffer(pools, &held.samples)?,
+                    written: held.written,
+                    seq: held.seq,
+                },
+            );
+        }
+
+        self.bands = bands;
+        self.partial = partial;
+        self.opened = resume.opened;
+        Ok(())
+    }
+
     /// Fold the band-energy series into per-bucket band heights, leaving the
     /// pass able to accept further ranges. `extent` is the source length in
     /// frames when it is known: it sets the window count the buckets are
@@ -239,56 +289,6 @@ impl WaveformAnalyzer {
             writer.write_u64(partial.seq);
         }
         writer.write_u64(self.opened);
-    }
-
-    pub(crate) fn restore<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        resume: WaveformResume,
-    ) -> Result<(), BlobError>
-    where
-        S: HasPool<f32>,
-    {
-        if resume.partials.len() > Consts::MAX_PARTIAL {
-            return Err(BlobError::Corrupt);
-        }
-
-        let mut bands = BTreeMap::new();
-        for (index, energy) in resume.bands {
-            bands.insert(index, energy);
-        }
-
-        let mut partial = BTreeMap::new();
-        for held in resume.partials {
-            if held.samples.len() != self.window_size()
-                || held.seq >= resume.opened
-                || bands.contains_key(&held.index)
-            {
-                return Err(BlobError::Corrupt);
-            }
-            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
-            if held
-                .written
-                .runs()
-                .iter()
-                .any(|range| range.start() < span.start() || range.end() > span.end())
-            {
-                return Err(BlobError::Corrupt);
-            }
-            partial.insert(
-                held.index,
-                Partial {
-                    samples: sample_buffer(pools, &held.samples)?,
-                    written: held.written,
-                    seq: held.seq,
-                },
-            );
-        }
-
-        self.bands = bands;
-        self.partial = partial;
-        self.opened = resume.opened;
-        Ok(())
     }
 }
 
@@ -370,8 +370,8 @@ mod tests {
     }
 
     struct Pass {
-        analyzer: WaveformAnalyzer,
         pools: kithara_bufpool::PoolRegion<TestPools>,
+        analyzer: WaveformAnalyzer,
     }
 
     impl Pass {

@@ -36,9 +36,6 @@ pub trait App {
     /// Advances anything that moves on its own. Called once per frame.
     fn tick(&mut self) {}
 
-    /// Applies one event the document published.
-    fn update(&mut self, event: UiEvent);
-
     /// Told what the document turned for itself, after every turn.
     ///
     /// The host owns the screen's own state, so an application that feeds the
@@ -47,6 +44,9 @@ pub trait App {
     fn turned(&mut self, view: &ViewState) {
         let _ = view;
     }
+
+    /// Applies one event the document published.
+    fn update(&mut self, event: UiEvent);
 }
 
 /// Everything a host needs besides the application itself.
@@ -67,15 +67,15 @@ pub struct Config<'a> {
     /// compiled against, so a kind nothing registered is refused there rather
     /// than mounted as a blank box.
     pub kinds: Option<&'a CustomKinds>,
+    /// Smallest window the document is laid out for, in logical points.
+    /// Ignored by a host that does not own a window.
+    pub min_size: Option<(u32, u32)>,
     /// The configuration this host compiles its document against. Absent
     /// defaults to [`UiConfig::default`]. `custom_kinds` on the value here is
     /// ignored either way: [`Ui::new`](super::Ui::new) always overwrites it
     /// from [`Self::kinds`], because registering an extension kind is code's
     /// business, not a passed configuration's.
     pub settings: Option<&'a UiConfig>,
-    /// Smallest window the document is laid out for, in logical points.
-    /// Ignored by a host that does not own a window.
-    pub min_size: Option<(u32, u32)>,
     /// Whether the system draws the window frame. A document that carries its
     /// own title bar, drag region and window buttons wants this off, or the two
     /// frames are drawn one inside the other.

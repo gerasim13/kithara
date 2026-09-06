@@ -38,8 +38,8 @@ impl Consts {
 /// One document, and the leaves it lays out in the order it holds them.
 #[derive(Clone, Copy)]
 struct Case {
-    document: &'static str,
     leaves: &'static [&'static str],
+    document: &'static str,
 }
 
 impl Case {

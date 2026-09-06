@@ -44,6 +44,13 @@ enum MasterEqNodePatchKind {
 impl<S> Patch for MasterEqNode<S> {
     type Patch = MasterEqNodePatch;
 
+    fn apply(&mut self, patch: Self::Patch) {
+        match patch.0 {
+            MasterEqNodePatchKind::Bands(patch) => self.bands.apply(patch),
+            MasterEqNodePatchKind::Enabled(patch) => self.enabled.apply(patch),
+        }
+    }
+
     fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
         match path {
             [0, tail @ ..] => Ok(MasterEqNodePatch(MasterEqNodePatchKind::Bands(<Vec<
@@ -55,13 +62,6 @@ impl<S> Patch for MasterEqNode<S> {
                 bool::patch(data, tail)?,
             ))),
             _ => Err(PatchError::InvalidPath),
-        }
-    }
-
-    fn apply(&mut self, patch: Self::Patch) {
-        match patch.0 {
-            MasterEqNodePatchKind::Bands(patch) => self.bands.apply(patch),
-            MasterEqNodePatchKind::Enabled(patch) => self.enabled.apply(patch),
         }
     }
 }
@@ -133,10 +133,10 @@ where
 }
 
 struct MasterEqProcessor<S> {
-    eq_l: Option<IsolatorEq>,
-    eq_r: Option<IsolatorEq>,
     params: MasterEqNode<S>,
     sample_rate: NonZeroU32,
+    eq_l: Option<IsolatorEq>,
+    eq_r: Option<IsolatorEq>,
 }
 
 impl<S> MasterEqProcessor<S>
@@ -168,10 +168,10 @@ where
         }
 
         Self {
-            eq_l,
-            eq_r,
             params,
             sample_rate,
+            eq_l,
+            eq_r,
         }
     }
 

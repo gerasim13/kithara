@@ -15,6 +15,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_storage::{Atomic, MmapDriver, StorageError};
+use rkyv::rancor::Error;
 
 use super::core::{LruIndex, LruInner, LruState};
 use crate::{
@@ -116,10 +117,8 @@ fn read_state(res: &Atomic<MmapDriver>, buf: &mut ByteBuffer) -> AssetsResult<Lr
         return Ok(LruState::default());
     }
 
-    let file = match rkyv::access::<crate::index::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(
-        &buf[..n],
-    ) {
-        Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
+    let file = match rkyv::access::<crate::index::schema::ArchivedLruIndexFile, Error>(&buf[..n]) {
+        Ok(archived) => rkyv::deserialize::<LruIndexFile, Error>(archived)
             .expect("BUG: LRU archived → owned deserialize"),
         Err(e) => {
             tracing::debug!("Failed to deserialize lru index: {}", e);
@@ -132,7 +131,7 @@ fn read_state(res: &Atomic<MmapDriver>, buf: &mut ByteBuffer) -> AssetsResult<Lr
 
 fn write_state(res: &Atomic<MmapDriver>, state: &LruState, durable: bool) -> AssetsResult<()> {
     let file = LruIndexFile::from(state);
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+    let bytes = rkyv::to_bytes::<Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {
         res.write_all_durable(&bytes)?;

@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::{Args, Subcommand};
+use toml::Value;
 
 use crate::{Ctx, util::ensure_clean_tree};
 
@@ -170,10 +171,10 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
 }
 
 pub(crate) fn add_workspace_dependency(source: &str, dependency: &str) -> Result<Option<String>> {
-    let parsed: toml::Value = toml::from_str(source).context("parse Cargo manifest")?;
+    let parsed: Value = toml::from_str(source).context("parse Cargo manifest")?;
     if parsed
         .get("dependencies")
-        .and_then(toml::Value::as_table)
+        .and_then(Value::as_table)
         .is_some_and(|dependencies| dependencies.contains_key(dependency))
     {
         return Ok(None);

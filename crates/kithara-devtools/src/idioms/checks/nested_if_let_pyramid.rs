@@ -1,5 +1,5 @@
 use anyhow::Result;
-use syn::{Block, Expr, ExprIf, Pat, PatIdent, PatTupleStruct, Stmt, visit::Visit};
+use syn::{Block, Expr, ExprIf, Pat, PatIdent, PatTupleStruct, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -60,7 +60,7 @@ fn analyze_file(
     impl<'ast> Visit<'ast> for V<'_> {
         fn visit_expr_if(&mut self, e: &'ast ExprIf) {
             if self.in_pyramid {
-                syn::visit::visit_expr_if(self, e);
+                visit::visit_expr_if(self, e);
                 return;
             }
             if let Some(depth) = pyramid_depth(e)
@@ -82,11 +82,11 @@ fn analyze_file(
                     ));
                 }
                 self.in_pyramid = true;
-                syn::visit::visit_expr_if(self, e);
+                visit::visit_expr_if(self, e);
                 self.in_pyramid = false;
                 return;
             }
-            syn::visit::visit_expr_if(self, e);
+            visit::visit_expr_if(self, e);
         }
     }
     let mut v = V {

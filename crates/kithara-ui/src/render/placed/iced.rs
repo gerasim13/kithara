@@ -2,9 +2,14 @@ use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     advanced::{
         Clipboard, Shell, Widget as IcedWidget,
-        layout::{self, Layout},
-        mouse, renderer,
-        widget::{Tree, tree},
+        layout::{Layout, Limits, Node},
+        mouse,
+        mouse::Interaction,
+        renderer,
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
 };
 
@@ -93,12 +98,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
         let room = limits.max();
         let child = self
             .child
@@ -106,10 +106,10 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
             .layout(
                 &mut tree.children[0],
                 renderer,
-                &layout::Limits::new(Size::ZERO, room),
+                &Limits::new(Size::ZERO, room),
             )
             .move_to(Point::new(self.at.x, self.at.y));
-        layout::Node::with_children(room, vec![child])
+        Node::with_children(room, vec![child])
     }
 
     fn mouse_interaction(
@@ -119,13 +119,13 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         let carry = tree.state.downcast_ref::<Carry>();
         if self.carried && (carry.is_carried() || cursor.is_over(Self::child_bounds(layout))) {
             return carry.cursor().into();
         }
         let Some(child) = layout.children().next() else {
-            return mouse::Interaction::default();
+            return Interaction::default();
         };
         self.child.as_widget().mouse_interaction(
             &tree.children[0],
@@ -143,12 +143,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
         Size::new(Length::Fill, Length::Fill)
     }
 
-    fn state(&self) -> tree::State {
-        tree::State::new(Carry::default())
+    fn state(&self) -> State {
+        State::new(Carry::default())
     }
 
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<Carry>()
+    fn tag(&self) -> Tag {
+        Tag::of::<Carry>()
     }
 
     fn update(

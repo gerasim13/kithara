@@ -63,11 +63,11 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
 
 /// Exclusive owner and dispatcher for one multi-player output session.
 pub struct Host<S> {
-    id: BeatGridId,
-    owns_session: bool,
-    root_view: RootView,
     dispatcher: Arc<dyn HostDispatcher<S>>,
+    id: BeatGridId,
+    root_view: RootView,
     session: SessionRuntime<S>,
+    owns_session: bool,
 }
 
 enum SessionRuntime<S> {
@@ -80,13 +80,17 @@ enum SessionRuntime<S> {
 }
 
 impl<S> SessionRuntime<S> {
-    const fn realtime(platform: Platform<S>) -> Self {
-        Self::Realtime(platform)
-    }
-
     #[cfg(feature = "offline")]
     const fn offline(platform: Platform<S>, runtime: OfflineRuntime<S>) -> Self {
         Self::Offline { platform, runtime }
+    }
+
+    #[cfg(feature = "offline")]
+    const fn offline_runtime_mut(&mut self) -> Option<&mut OfflineRuntime<S>> {
+        match self {
+            Self::Offline { runtime, .. } => Some(runtime),
+            Self::Realtime(_) => None,
+        }
     }
 
     const fn platform(&self) -> &Platform<S> {
@@ -105,121 +109,19 @@ impl<S> SessionRuntime<S> {
         }
     }
 
-    #[cfg(feature = "offline")]
-    const fn offline_runtime_mut(&mut self) -> Option<&mut OfflineRuntime<S>> {
-        match self {
-            Self::Offline { runtime, .. } => Some(runtime),
-            Self::Realtime(_) => None,
-        }
+    const fn realtime(platform: Platform<S>) -> Self {
+        Self::Realtime(platform)
     }
 }
 
 struct SessionRoot {
     id: BeatGridId,
-    sample_rate: NonZeroU32,
     group: GroupState<PlayerMember>,
+    sample_rate: NonZeroU32,
     view: RootView,
 }
 
 impl<S> Host<S> {
-    fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
-        let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
-        let group = GroupState::unavailable(
-            grid_id,
-            sample_rate,
-            SessionEpoch::new(0),
-            SyncMemberKind::Group,
-        );
-        let view = RootView::new(&group);
-        Ok(SessionRoot {
-            id: grid_id,
-            sample_rate,
-            group,
-            view,
-        })
-    }
-
-    fn owner(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher<S>>,
-        session: SessionRuntime<S>,
-    ) -> Self {
-        Self {
-            id,
-            owns_session: true,
-            root_view,
-            dispatcher,
-            session,
-        }
-    }
-
-    fn bind_player<P>(&self, player: &mut P) -> Result<(BeatGridId, P::Control), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        let grid_id = player.id();
-        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(dispatcher))?;
-        Ok((grid_id, player.control()))
-    }
-
-    /// Returns the session rate used before the output device is measured.
-    #[must_use]
-    pub fn requested_sample_rate(&self) -> NonZeroU32 {
-        self.root_view.grid().axis().sample_rate()
-    }
-
-    fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
-        let operations = Box::new([TopologyOperation::Attach {
-            member: SyncMember::Group {
-                alignment: None,
-                group: Box::new(member),
-            },
-        }]);
-        require_topology_change(self.dispatcher.transact_current(operations))
-    }
-
-    fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
-    where
-        P: PlayerControlSource,
-    {
-        HostOwned {
-            host_id: self.id,
-            id,
-            control,
-            marker: PhantomData,
-        }
-    }
-
-    fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-        S: Send + Sync + 'static,
-    {
-        if player.host_id != self.id {
-            return Err(PlayError::ForeignSession);
-        }
-        let topology = self.topology().map_err(SessionError::from)?;
-        if topology
-            .members()
-            .iter()
-            .any(|member| member.grid().id() == player.id())
-        {
-            return Ok(());
-        }
-        Err(SessionError::from(SyncError::MemberNotFound {
-            group_id: self.id,
-            member_id: player.id(),
-        })
-        .into())
-    }
-
-    fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {
-        let operations = Box::new([TopologyOperation::Detach { member }]);
-        require_topology_change(self.dispatcher.transact_current(operations))
-    }
-
     /// Applies one validated, atomic batch of final player levels.
     ///
     /// # Errors
@@ -242,6 +144,141 @@ impl<S> Host<S> {
         }
     }
 
+    fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
+        let operations = Box::new([TopologyOperation::Attach {
+            member: SyncMember::Group {
+                alignment: None,
+                group: Box::new(member),
+            },
+        }]);
+        require_topology_change(self.dispatcher.transact_current(operations))
+    }
+
+    fn bind_player<P>(&self, player: &mut P) -> Result<(BeatGridId, P::Control), PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        let grid_id = player.id();
+        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
+        player.attach_session(SessionBinding::new(dispatcher))?;
+        Ok((grid_id, player.control()))
+    }
+
+    fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {
+        let operations = Box::new([TopologyOperation::Detach { member }]);
+        require_topology_change(self.dispatcher.transact_current(operations))
+    }
+
+    /// Removes the post-limiter output group.
+    ///
+    /// # Errors
+    /// Returns an error when graph dispatch fails.
+    pub fn disable_outputs(&self) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::DisableMixTap)
+    }
+
+    /// Reads the shared output-session ducking mode.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session cannot answer the query.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
+        match self.dispatcher.exec(Cmd::SessionDucking)? {
+            Reply::SessionDucking(mode) => Ok(mode),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for ducking query".into(),
+            )),
+        }
+    }
+
+    /// Installs one post-limiter group for simultaneous independent outputs.
+    ///
+    /// # Errors
+    /// Returns an error when an output group is active or graph dispatch fails.
+    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::EnableOutput { outputs })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for output group".into(),
+            )),
+        }
+    }
+
+    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
+        match self.dispatcher.exec(cmd)? {
+            Reply::Ok => Ok(()),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for session command".into(),
+            )),
+        }
+    }
+
+    /// Restart the current output route while preserving Host-owned graph state.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot restart its output route.
+    pub fn invalidate_audio_route<R>(&self, reason: R) -> Result<(), PlayError>
+    where
+        R: Into<String>,
+    {
+        self.exec_play_ok(Cmd::InvalidateAudioRoute {
+            reason: reason.into(),
+        })
+    }
+
+    fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
+    where
+        P: PlayerControlSource,
+    {
+        HostOwned {
+            id,
+            control,
+            host_id: self.id,
+            marker: PhantomData,
+        }
+    }
+
+    fn owner(
+        id: BeatGridId,
+        root_view: RootView,
+        dispatcher: Arc<dyn HostDispatcher<S>>,
+        session: SessionRuntime<S>,
+    ) -> Self {
+        Self {
+            id,
+            root_view,
+            dispatcher,
+            session,
+            owns_session: true,
+        }
+    }
+
+    /// Returns the session rate used before the output device is measured.
+    #[must_use]
+    pub fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.root_view.grid().axis().sample_rate()
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::RestartOutput { sample_rate })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for stream restart".into(),
+            )),
+        }
+    }
+
     /// Reads the current output-rate observation without exposing the lower
     /// session handle.
     ///
@@ -255,6 +292,32 @@ impl<S> Host<S> {
                 "unexpected host reply for sample-rate query".into(),
             )),
         }
+    }
+
+    fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
+        let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
+        let group = GroupState::unavailable(
+            grid_id,
+            sample_rate,
+            SessionEpoch::new(0),
+            SyncMemberKind::Group,
+        );
+        let view = RootView::new(&group);
+        Ok(SessionRoot {
+            sample_rate,
+            group,
+            view,
+            id: grid_id,
+        })
+    }
+
+    /// Updates the shared output-session ducking mode.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session rejects the update.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSessionDucking { mode })
     }
 
     /// Change the canonical session tempo at the next render boundary.
@@ -280,90 +343,27 @@ impl<S> Host<S> {
         }
     }
 
-    /// Installs one post-limiter group for simultaneous independent outputs.
-    ///
-    /// # Errors
-    /// Returns an error when an output group is active or graph dispatch fails.
-    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::EnableOutput { outputs })?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for output group".into(),
-            )),
-        }
-    }
-
-    /// Removes the post-limiter output group.
-    ///
-    /// # Errors
-    /// Returns an error when graph dispatch fails.
-    pub fn disable_outputs(&self) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::DisableMixTap)
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::RestartOutput { sample_rate })?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for stream restart".into(),
-            )),
-        }
-    }
-
-    /// Restart the current output route while preserving Host-owned graph state.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot restart its output route.
-    pub fn invalidate_audio_route<R>(&self, reason: R) -> Result<(), PlayError>
+    fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
-        R: Into<String>,
+        P: PlayerControlSource<Schema = S>,
+        S: Send + Sync + 'static,
     {
-        self.exec_play_ok(Cmd::InvalidateAudioRoute {
-            reason: reason.into(),
+        if player.host_id != self.id {
+            return Err(PlayError::ForeignSession);
+        }
+        let topology = self.topology().map_err(SessionError::from)?;
+        if topology
+            .members()
+            .iter()
+            .any(|member| member.grid().id() == player.id())
+        {
+            return Ok(());
+        }
+        Err(SessionError::from(SyncError::MemberNotFound {
+            group_id: self.id,
+            member_id: player.id(),
         })
-    }
-
-    /// Updates the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session rejects the update.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionDucking { mode })
-    }
-
-    /// Reads the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.dispatcher.exec(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for ducking query".into(),
-            )),
-        }
-    }
-
-    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
-        match self.dispatcher.exec(cmd)? {
-            Reply::Ok => Ok(()),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for session command".into(),
-            )),
-        }
+        .into())
     }
 }
 
@@ -438,6 +438,13 @@ impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
 impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
+    fn transact(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        Platform::transact(self.session.platform(), &self.dispatcher, operation)
+    }
+
     delegate::delegate! {
         to self.root_view {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
@@ -446,13 +453,6 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
         to self.dispatcher {
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
         }
-    }
-
-    fn transact(
-        &mut self,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        Platform::transact(self.session.platform(), &self.dispatcher, operation)
     }
 }
 

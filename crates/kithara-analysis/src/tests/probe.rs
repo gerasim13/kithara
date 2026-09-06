@@ -53,12 +53,12 @@ fn a_real_track_reaches_its_end_whole() {
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let (_writer, ingest) = ring::open_for(rate);
     jobs.send(Job {
-        token: "probe".into(),
-        revision: 0,
-        reader: Box::new(track),
         tx,
         rate,
         ingest,
+        token: "probe".into(),
+        revision: 0,
+        reader: Box::new(track),
         cancel: CancelToken::root(),
         resume: None,
     })

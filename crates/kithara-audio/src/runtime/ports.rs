@@ -42,6 +42,11 @@ pub(crate) struct Outlet<T> {
 }
 
 impl<T> Outlet<T> {
+    /// Whether one item can enter the ring without occupying overflow.
+    pub(crate) fn can_push_direct(&self) -> bool {
+        self.overflow.is_none() && !self.producer.is_full()
+    }
+
     /// Try to drain the parked overflow item into the ring buffer.
     ///
     /// Returns `true` if the overflow slot is empty after the call (either
@@ -53,27 +58,6 @@ impl<T> Outlet<T> {
             return true;
         };
         self.push_or_park(item)
-    }
-
-    /// Whether one item can enter the ring without occupying overflow.
-    pub(crate) fn can_push_direct(&self) -> bool {
-        self.overflow.is_none() && !self.producer.is_full()
-    }
-
-    /// Push directly into the ring without using overflow.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the single producer did not reserve ring capacity first.
-    pub(crate) fn push_direct(&mut self, item: T) {
-        assert!(
-            self.overflow.is_none(),
-            "direct ring admission requires an empty overflow slot"
-        );
-        match self.try_push_ring(item) {
-            Ok(()) => {}
-            Err(_) => panic!("direct ring admission requires reserved capacity"),
-        }
     }
 
     /// Flush any deferred work owned by the wake signal.
@@ -92,6 +76,22 @@ impl<T> Outlet<T> {
     fn notify_data_available(&self) {
         if let Some(wake) = &self.wake {
             wake.on_data_available();
+        }
+    }
+
+    /// Push directly into the ring without using overflow.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the single producer did not reserve ring capacity first.
+    pub(crate) fn push_direct(&mut self, item: T) {
+        assert!(
+            self.overflow.is_none(),
+            "direct ring admission requires an empty overflow slot"
+        );
+        match self.try_push_ring(item) {
+            Ok(()) => {}
+            Err(_) => panic!("direct ring admission requires reserved capacity"),
         }
     }
 
@@ -114,20 +114,6 @@ impl<T> Outlet<T> {
         }
     }
 
-    fn try_push_ring(&mut self, item: T) -> Result<(), T> {
-        let was_empty = self.producer.is_empty();
-        match self.producer.try_push(item) {
-            Ok(()) => {
-                self.notify();
-                if was_empty {
-                    self.notify_data_available();
-                }
-                Ok(())
-            }
-            Err(item) => Err(item),
-        }
-    }
-
     /// Push an item into the outlet.
     ///
     /// First tries to drain the overflow slot, then attempts to push `item`
@@ -145,6 +131,20 @@ impl<T> Outlet<T> {
         }
         let _ = self.push_or_park(item);
         Ok(())
+    }
+
+    fn try_push_ring(&mut self, item: T) -> Result<(), T> {
+        let was_empty = self.producer.is_empty();
+        match self.producer.try_push(item) {
+            Ok(()) => {
+                self.notify();
+                if was_empty {
+                    self.notify_data_available();
+                }
+                Ok(())
+            }
+            Err(item) => Err(item),
+        }
     }
 }
 

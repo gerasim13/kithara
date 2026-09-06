@@ -1,11 +1,3 @@
-//! Re-reading a standing tree, which is what this host does instead of
-//! rebuilding one.
-//!
-//! The other host rebuilds its whole element tree every frame, so a value that
-//! moved reaches it for free. This one keeps the tree it mounted, so every
-//! value the document reads has to be carried into the standing widget by
-//! hand, and everything that is carried is named here.
-
 use masonry::core::WidgetId;
 
 use super::{MasonryRoot, Node, Watched, WindowLayer};

@@ -10,8 +10,8 @@ pub(crate) struct Novelty<S>
 where
     S: HasPool<f32>,
 {
-    pools: PoolRegion<S>,
     fft: Arc<dyn RealToComplex<f32>>,
+    pools: PoolRegion<S>,
     hann: SampleBuffer,
 }
 

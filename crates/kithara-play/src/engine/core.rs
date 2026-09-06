@@ -32,9 +32,9 @@ pub struct EngineImpl<S> {
     running: AtomicBool,
     master_volume: AtomicF32,
     config: EngineConfig<S>,
-    eq_layout: Mutex<Vec<EqBandConfig>>,
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
+    eq_layout: Mutex<Vec<EqBandConfig>>,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
@@ -66,10 +66,31 @@ impl<S> EngineImpl<S> {
         }
     }
 
-    pub(crate) fn cancel(&self) {
-        if let Some(cancel) = &self.config.cancel {
-            cancel.cancel();
+    pub fn active_slots(&self) -> Vec<SlotId> {
+        self.slots.lock().ids()
+    }
+
+    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
         }
+
+        {
+            let slots = self.slots.lock();
+            if slots.len() >= self.config.max_slots {
+                return Err(PlayError::ArenaFull);
+            }
+        }
+
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let allocated = self.session.allocate_slot(player_id)?;
+        let slot_id = allocated.slot;
+
+        self.slots.lock().insert(slot_id, allocated.control);
+
+        debug!(?slot_id, player_id, "slot allocated");
+        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
+        Ok(slot_id)
     }
 
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
@@ -77,21 +98,51 @@ impl<S> EngineImpl<S> {
         self.session.bind(binding)
     }
 
-    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
-        let player = self.configured_sample_rate();
-        if player == session {
-            Ok(())
-        } else {
-            Err(PlayError::SessionSampleRateMismatch { player, session })
+    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
+        let slots = self.slots.lock();
+        if let Some(handle) = slots.get(slot) {
+            handle.begin_seek(position);
         }
+        drop(slots);
     }
 
-    pub(crate) const fn pools(&self) -> &PoolRegion<S> {
-        &self.config.pools
+    pub(crate) fn cancel(&self) {
+        if let Some(cancel) = &self.config.cancel {
+            cancel.cancel();
+        }
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
         self.config.cancel.clone()
+    }
+
+    /// Explicitly detach this player from its session.
+    ///
+    /// A failed detach retains the registered identity so the owning Host can
+    /// retry or report the still-live member instead of losing lifecycle
+    /// ownership. Repeated successful calls are no-ops.
+    pub fn close(&self) -> Result<(), PlayError> {
+        let _start = self.start_lock.lock();
+        let Some(player_id) = *self.player_id.lock() else {
+            return Ok(());
+        };
+
+        if self.running.load(Ordering::Acquire) {
+            self.session.stop_player(player_id)?;
+            self.slots.lock().clear();
+            self.running.store(false, Ordering::Release);
+            self.emit(EngineEvent::Stopped);
+        }
+
+        self.session.unregister_player(player_id)?;
+        *self.player_id.lock() = None;
+        Ok(())
+    }
+
+    /// Store the desired gain without dispatching: the mixer batch already
+    /// actuated the graph.
+    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
+        self.master_volume.store(level, Ordering::Relaxed);
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
@@ -100,10 +151,6 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         self.session.consumer_wake_mode()
-    }
-
-    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
-        self.session.stream_shape()
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
@@ -122,10 +169,6 @@ impl<S> EngineImpl<S> {
                 handle.unbind_render(track.item_id(), &render);
             }
         }
-    }
-
-    pub(crate) fn eq_band_count(&self) -> usize {
-        self.eq_layout.lock().len()
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -150,11 +193,78 @@ impl<S> EngineImpl<S> {
         Ok(id)
     }
 
+    pub(crate) fn eq_band_count(&self) -> usize {
+        self.eq_layout.lock().len()
+    }
+
+    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            debug!(
+                reason,
+                "audio route invalidation ignored while engine is stopped"
+            );
+            return Ok(());
+        }
+        self.session.invalidate_audio_route(reason)
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
+    ///
+    /// Returns the config default if the engine is not running yet.
+    /// Used to pre-initialise the resampler in `ResourceConfig` so that
+    /// `make_sincs` runs while the resource is prepared (off the worker thread)
+    /// instead of lazily on the first `step_track()` call.
+    pub fn master_sample_rate(&self) -> u32 {
+        if !self.running.load(Ordering::Acquire) {
+            return self.config.sample_rate.get();
+        }
+        self.session
+            .sample_rate()
+            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
+    }
+
+    pub fn master_volume(&self) -> f32 {
+        self.master_volume.load(Ordering::Relaxed)
+    }
+
+    pub const fn max_slots(&self) -> usize {
+        self.config.max_slots
+    }
+
+    pub(crate) const fn pools(&self) -> &PoolRegion<S> {
+        &self.config.pools
+    }
+
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
         self.slots
             .lock()
             .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
+    }
+    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.slots.lock();
+            if !slots.contains(slot) {
+                return Err(PlayError::SlotNotFound(slot));
+            }
+        }
+
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        self.session.release_slot(player_id, slot)?;
+
+        let _ = self.slots.lock().remove(slot);
+
+        debug!(?slot, player_id, "slot released");
+        self.emit(EngineEvent::SlotReleased { slot });
+        Ok(())
     }
 
     /// Runtime handle captured at engine creation.
@@ -203,12 +313,9 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
-        let slots = self.slots.lock();
-        if let Some(handle) = slots.get(slot) {
-            handle.begin_seek(position);
-        }
-        drop(slots);
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
+        &self.session
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
@@ -233,145 +340,6 @@ impl<S> EngineImpl<S> {
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session
             .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
-    }
-
-    delegate::delegate! {
-        to self.slots.lock() {
-            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
-            #[call(playback)]
-            pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
-            #[call(render_snapshot)]
-            pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
-        }
-    }
-
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.session.tick()
-    }
-    pub fn active_slots(&self) -> Vec<SlotId> {
-        self.slots.lock().ids()
-    }
-
-    /// Explicitly detach this player from its session.
-    ///
-    /// A failed detach retains the registered identity so the owning Host can
-    /// retry or report the still-live member instead of losing lifecycle
-    /// ownership. Repeated successful calls are no-ops.
-    pub fn close(&self) -> Result<(), PlayError> {
-        let _start = self.start_lock.lock();
-        let Some(player_id) = *self.player_id.lock() else {
-            return Ok(());
-        };
-
-        if self.running.load(Ordering::Acquire) {
-            self.session.stop_player(player_id)?;
-            self.slots.lock().clear();
-            self.running.store(false, Ordering::Release);
-            self.emit(EngineEvent::Stopped);
-        }
-
-        self.session.unregister_player(player_id)?;
-        *self.player_id.lock() = None;
-        Ok(())
-    }
-
-    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if slots.len() >= self.config.max_slots {
-                return Err(PlayError::ArenaFull);
-            }
-        }
-
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(player_id)?;
-        let slot_id = allocated.slot;
-
-        self.slots.lock().insert(slot_id, allocated.control);
-
-        debug!(?slot_id, player_id, "slot allocated");
-        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
-        Ok(slot_id)
-    }
-
-    /// Store the desired gain without dispatching: the mixer batch already
-    /// actuated the graph.
-    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level, Ordering::Relaxed);
-    }
-
-    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            debug!(
-                reason,
-                "audio route invalidation ignored while engine is stopped"
-            );
-            return Ok(());
-        }
-        self.session.invalidate_audio_route(reason)
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
-    /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
-    ///
-    /// Returns the config default if the engine is not running yet.
-    /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs while the resource is prepared (off the worker thread)
-    /// instead of lazily on the first `step_track()` call.
-    pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate.get();
-        }
-        self.session
-            .sample_rate()
-            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
-    }
-
-    pub fn master_volume(&self) -> f32 {
-        self.master_volume.load(Ordering::Relaxed)
-    }
-
-    pub const fn max_slots(&self) -> usize {
-        self.config.max_slots
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
-        &self.session
-    }
-
-    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if !slots.contains(slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
-        let _ = self.slots.lock().remove(slot);
-
-        debug!(?slot, player_id, "slot released");
-        self.emit(EngineEvent::SlotReleased { slot });
-        Ok(())
     }
 
     pub fn start(&self) -> Result<(), PlayError> {
@@ -402,6 +370,11 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
     pub fn stop(&self) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -418,7 +391,34 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
+    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+        self.session.stream_shape()
+    }
+
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
+    }
+
+    pub(crate) fn tick(&self) -> Result<(), PlayError> {
+        self.session.tick()
+    }
+
+    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
+        let player = self.configured_sample_rate();
+        if player == session {
+            Ok(())
+        } else {
+            Err(PlayError::SessionSampleRateMismatch { player, session })
+        }
+    }
+
+    delegate::delegate! {
+        to self.slots.lock() {
+            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
+            #[call(playback)]
+            pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+            #[call(render_snapshot)]
+            pub(crate) fn slot_render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;
+        }
     }
 }

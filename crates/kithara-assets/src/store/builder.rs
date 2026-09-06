@@ -115,6 +115,12 @@ where
     #[builder(start_fn)]
     #[patch(skip)]
     pub pools: PoolRegion<S>,
+    /// Where resources live. Unset resolves to a disk root under a fresh
+    /// temp directory, which is a different place on every launch.
+    pub backend: Option<StorageBackend>,
+    /// Resources the in-memory cache retains before it evicts the
+    /// least-recently-used one. Applies to both backends.
+    pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
@@ -127,12 +133,6 @@ where
     /// Resource-key layout registry. Empty when absent.
     #[patch(skip)]
     pub layouts: Option<AssetLayoutRegistry>,
-    /// Where resources live. Unset resolves to a disk root under a fresh
-    /// temp directory, which is a different place on every launch.
-    pub backend: Option<StorageBackend>,
-    /// Resources the in-memory cache retains before it evicts the
-    /// least-recently-used one. Applies to both backends.
-    pub cache_capacity: Option<NonZeroUsize>,
     /// Assets the eviction policy keeps before it drops the coldest one.
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.
@@ -231,14 +231,14 @@ where
                     pools,
                     event_bus,
                     cache_capacity,
+                    processing_chunk_size,
+                    processing_gate_poll_interval,
+                    segment_reservation,
                     availability: availability.clone(),
                     evict_cfg: EvictConfig {
                         max_assets,
                         max_bytes,
                     },
-                    processing_chunk_size,
-                    processing_gate_poll_interval,
-                    segment_reservation,
                 }),
                 availability,
             });
@@ -265,8 +265,8 @@ where
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
                 active_resources,
-                cancel: cancel.clone(),
                 mem_resource_capacity,
+                cancel: cancel.clone(),
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
                 pools: pools.clone(),
@@ -328,17 +328,17 @@ where
 /// branch is a function instead of another sixty lines in the builder.
 #[cfg(not(target_arch = "wasm32"))]
 struct DiskStoreSetup<S> {
-    root_dir: PathBuf,
-    cancel: Option<CancelToken>,
-    flush_hub: Option<Arc<FlushHub>>,
-    pools: PoolRegion<S>,
-    event_bus: Option<EventBus>,
-    cache_capacity: Option<NonZeroUsize>,
     availability: AvailabilityIndex,
     evict_cfg: EvictConfig,
+    cache_capacity: Option<NonZeroUsize>,
+    cancel: Option<CancelToken>,
+    event_bus: Option<EventBus>,
+    flush_hub: Option<Arc<FlushHub>>,
     processing_chunk_size: Option<usize>,
     processing_gate_poll_interval: Option<Duration>,
     segment_reservation: Option<u64>,
+    root_dir: PathBuf,
+    pools: PoolRegion<S>,
 }
 
 /// Assemble the disk decorator chain: evict over the disk store, processing

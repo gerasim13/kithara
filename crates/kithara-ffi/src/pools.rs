@@ -1,4 +1,9 @@
-use kithara::bufpool::{OverallBudget, Percent, PoolConfig, PoolError, PoolRegion, pool_schema};
+use kithara::{
+    assets::AssetStore,
+    bufpool::{OverallBudget, Percent, PoolConfig, PoolError, PoolRegion, pool_schema},
+    play::{PlayWorker, PlaybackResamplerBackend, ResourceConfig},
+    queue::{Queue, QueueControl, TrackSource},
+};
 
 struct Consts;
 
@@ -23,17 +28,16 @@ pool_schema! {
 /// Concrete buffer-pool facade used by FFI player surfaces.
 pub type Pools = PoolRegion<FfiPools>;
 
-pub(crate) type FfiStore = kithara::assets::AssetStore<FfiPools>;
+pub(crate) type FfiStore = AssetStore<FfiPools>;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type FfiHost = kithara::host::Host<FfiPools>;
 #[cfg(target_arch = "wasm32")]
 pub(crate) type FfiHost = kithara::host::Host<FfiPools>;
-pub(crate) type FfiWorker = kithara::play::PlayWorker<FfiPools>;
-pub(crate) type FfiResourceConfig<B = kithara::play::PlaybackResamplerBackend> =
-    kithara::play::ResourceConfig<FfiPools, B>;
-pub(crate) type FfiQueue = kithara::queue::Queue<FfiPools>;
-pub(crate) type FfiQueueControl = kithara::queue::QueueControl<FfiPools>;
-pub(crate) type FfiTrackSource = kithara::queue::TrackSource<FfiPools>;
+pub(crate) type FfiWorker = PlayWorker<FfiPools>;
+pub(crate) type FfiResourceConfig<B = PlaybackResamplerBackend> = ResourceConfig<FfiPools, B>;
+pub(crate) type FfiQueue = Queue<FfiPools>;
+pub(crate) type FfiQueueControl = QueueControl<FfiPools>;
+pub(crate) type FfiTrackSource = TrackSource<FfiPools>;
 
 /// Build one explicitly registered FFI pool region.
 ///
@@ -91,7 +95,7 @@ mod tests {
             (all_ready, peak)
         })
         .join()
-        .unwrap_or_else(|_| panic!("sample-pool worker panicked"));
+        .expect("sample-pool worker panicked");
 
         assert!(all_ready);
         assert_eq!(peak, initial_peak);

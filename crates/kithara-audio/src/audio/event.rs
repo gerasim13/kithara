@@ -36,18 +36,18 @@ impl Consts {
 /// returns, and the deferred ring keeps the shell as its only flusher.
 pub(super) struct AudioEvents {
     emit: Arc<DeferredBus<Event>>,
-    wake_pending: bool,
     wake_mode: ConsumerWakeMode,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
+    wake_pending: bool,
 }
 
 impl AudioEvents {
     pub(super) const fn new(emit: Arc<DeferredBus<Event>>, wake_mode: ConsumerWakeMode) -> Self {
         Self {
             emit,
-            wake_pending: false,
             wake_mode,
+            wake_pending: false,
             last_progress_emit: None,
             underrun_active: false,
         }
@@ -170,14 +170,14 @@ impl AudioEvents {
         }
     }
 
+    pub(super) const fn reset_underrun(&mut self) {
+        self.underrun_active = false;
+    }
+
     pub(super) const fn take_wake_pending(&mut self) -> bool {
         let pending = self.wake_pending;
         self.wake_pending = false;
         pending
-    }
-
-    pub(super) const fn reset_underrun(&mut self) {
-        self.underrun_active = false;
     }
 
     #[cfg(test)]

@@ -8,10 +8,13 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
-    thread::{self, JoinHandle},
+    thread::{Builder, JoinHandle},
 };
 
-use kithara_platform::time::{Duration, SystemTime};
+use kithara_platform::{
+    flash, logging,
+    time::{Duration, SystemTime},
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -141,7 +144,7 @@ struct DumpEnvelope<'a> {
 }
 
 fn flash_dump(label: &str) -> Option<String> {
-    nonempty_flash_dump(kithara_platform::flash::hang_dump(label))
+    nonempty_flash_dump(flash::hang_dump(label))
 }
 
 fn nonempty_flash_dump(dump: String) -> Option<String> {
@@ -277,7 +280,7 @@ impl PreKillGuard {
         let (cancel, cancelled) = mpsc::channel();
         let test_name = test_name.to_owned();
         let error_name = test_name.clone();
-        let spawn = thread::Builder::new()
+        let spawn = Builder::new()
             .name("kithara-prekill".to_owned())
             .spawn(move || {
                 if prekill_elapsed(&cancelled, timeout) {
@@ -291,7 +294,7 @@ impl PreKillGuard {
         let worker = match spawn {
             Ok(worker) => worker,
             Err(err) => {
-                kithara_platform::logging::log_error(&format!(
+                logging::log_error(&format!(
                     "[kithara_hang_detector] failed to start pre-kill timer for {error_name}: {err}"
                 ));
                 return Self {
@@ -351,13 +354,13 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
     let payload = match serialize_envelope(envelope) {
         Ok(Some(payload)) => payload,
         Ok(None) => {
-            kithara_platform::logging::log_error(&format!(
+            logging::log_error(&format!(
                 "[kithara_hang_detector] bounded hang dump exceeded {MAX_ENVELOPE_BYTES} bytes for {label}"
             ));
             return;
         }
         Err(err) => {
-            kithara_platform::logging::log_error(&format!(
+            logging::log_error(&format!(
                 "[kithara_hang_detector] failed to serialize hang dump for {label}: {err}"
             ));
             return;
@@ -385,14 +388,14 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
         Ok::<(), std::io::Error>(())
     })();
     match write {
-        Ok(()) => kithara_platform::logging::log_error(&format!(
+        Ok(()) => logging::log_error(&format!(
             "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} dump={} [{diagnostic}]",
             file.display()
         )),
         Err(err) => {
             let _ = fs::remove_file(&temp);
             let fallback = bounded_excerpt(&payload, MAX_FALLBACK_LOG_BYTES);
-            kithara_platform::logging::log_error(&format!(
+            logging::log_error(&format!(
                 "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} dump-write-failed={err} [{diagnostic}] payload={fallback}"
             ));
         }

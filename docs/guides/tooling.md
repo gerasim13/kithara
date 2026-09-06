@@ -6,10 +6,10 @@ policy. Keep `AGENTS.md` short; put command details here.
 ## Fast Gate
 
 `.config/just/lint.just` owns what each chain runs. The fact the recipe cannot
-tell you: `just lint fast` is the commit gate and it does not run `style` - and
-neither does any CI lane, so comment, document, and ordering debt accumulates
-silently until someone runs `just lint style` by hand. A warm workspace run of it
-costs under a minute.
+tell you: `style` carries no baseline, so one deny is a new violation and
+the lint lane goes red. `just lint fast` runs it, so the commit gate refuses
+what CI would; a warm run costs under a minute. A merge takes no hook, so a
+document near its budget still crosses it when two branches each add a line.
 
 ## Autofix
 
@@ -31,6 +31,7 @@ count printed ahead of it.
 | --- | --- | --- |
 | `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes short unmarked prose |
 | `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
+| `style` | `qualified_path_depth` | trades a deep path for the `use` that shortens it |
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
 
@@ -40,10 +41,12 @@ namespaces scope with `--crate <name>` or `--path <path>`, which takes a directo
 or a single file; `typos`, `ast-grep`, and `similarity` take their paths
 positionally.
 
-A reordering fix can leave the crate not compiling: sorting a struct's fields does
-not follow through to its literals, and `clippy::inconsistent_struct_constructor`
-then rejects what the ratchet calls a fixpoint. Compile after a `--fix` that
-touched declarations; a second lint pass will not tell you.
+A rewrite answers to the clippy gate as well as to its own rule.
+`struct_init_order` reads an all-shorthand literal in the order its type
+declares, which is what `clippy::inconsistent_struct_constructor` demands;
+`qualified_path_depth` shortens every path its import names and drops the `use`
+that import leaves naming nothing. Compile after a `--fix` all the same: a
+second lint pass calls its own output a fixpoint.
 
 `comment_hygiene --fix` makes only the two rewrites that cannot be wrong. A
 standalone `//` block directly above an item becomes that item's `///`: it already

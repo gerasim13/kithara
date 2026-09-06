@@ -22,20 +22,20 @@ use crate::{bridge::RtMetrics, worker::ServiceClass};
 pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
+    last_source_end: Option<SourceEnd>,
+    source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,
     channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
-    source_spans: VecDeque<SourceWindow>,
-    last_source_end: Option<SourceEnd>,
 }
 
 #[derive(Clone, Copy)]
 struct SourceWindow {
-    frames: usize,
     source: Option<SourceSpan>,
+    frames: usize,
 }
 
 impl SourceWindow {
@@ -116,9 +116,9 @@ impl PlayerResource {
         let right = pools.get_with_len::<f32>(buffer_frames)?;
 
         Ok(Self {
+            src,
             channel_buffers: [left, right],
             source_spans: VecDeque::with_capacity(buffer_frames),
-            src,
             resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
@@ -128,85 +128,15 @@ impl PlayerResource {
         })
     }
 
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
     /// Cached span in seconds: how much of the source is on disk and needs no
     /// further network.
     #[must_use]
     pub fn cached_span(&self) -> f64 {
         self.resource.get().cached_span().as_secs_f64()
-    }
-
-    /// Decoded-ahead frontier in seconds: how much content has been decoded
-    /// and is ready to play (always `>=` the served playback position).
-    #[must_use]
-    pub fn decoded_frontier(&self) -> f64 {
-        self.resource.get().decoded_frontier().as_secs_f64()
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
-    fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
-        let mut eof_reached = self.eof_seen;
-
-        while target_frames > self.write_len && !eof_reached {
-            let needed = target_frames - self.write_len;
-            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
-            if avail == 0 {
-                break;
-            }
-
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let (n, source) = match self.resource.get_mut().read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames {
-                    count, source_span, ..
-                }) => (count.get(), source_span),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, None),
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    self.eof_seen = true;
-                    eof_reached = true;
-                    (0, None)
-                }
-                Err(_) => {
-                    metrics.record_decode_error();
-                    self.failed = true;
-                    (0, None)
-                }
-            };
-            if n == 0 {
-                break;
-            }
-            self.source_spans
-                .push_back(SourceWindow { frames: n, source });
-            self.write_len += n;
-            self.write_pos += n;
-        }
-
-        eof_reached
-    }
-
-    /// Remaining buffered frames when the wrapped reader has reached EOF.
-    ///
-    /// `Some(0)` means the current read drained the last buffered frame exactly;
-    /// the next read will return [`ReadOutcome::Eof`].
-    #[must_use]
-    pub fn frames_until_eof(&self) -> Option<usize> {
-        self.eof_seen.then_some(self.write_len)
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        self.resource.get().playback_rate()
-    }
-
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
     }
 
     fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
@@ -246,6 +176,76 @@ impl PlayerResource {
         if frames > 0 {
             self.last_source_end = None;
         }
+    }
+
+    /// Decoded-ahead frontier in seconds: how much content has been decoded
+    /// and is ready to play (always `>=` the served playback position).
+    #[must_use]
+    pub fn decoded_frontier(&self) -> f64 {
+        self.resource.get().decoded_frontier().as_secs_f64()
+    }
+
+    fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
+        let mut eof_reached = self.eof_seen;
+
+        while target_frames > self.write_len && !eof_reached {
+            let needed = target_frames - self.write_len;
+            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
+            if avail == 0 {
+                break;
+            }
+
+            let channel_buffers = &mut self.channel_buffers;
+            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
+
+            let (n, source) = match self.resource.get_mut().read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames {
+                    count, source_span, ..
+                }) => (count.get(), source_span),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, None),
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    (0, None)
+                }
+                Err(_) => {
+                    metrics.record_decode_error();
+                    self.failed = true;
+                    (0, None)
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            self.source_spans
+                .push_back(SourceWindow { source, frames: n });
+            self.write_len += n;
+            self.write_pos += n;
+        }
+
+        eof_reached
+    }
+
+    /// Remaining buffered frames when the wrapped reader has reached EOF.
+    ///
+    /// `Some(0)` means the current read drained the last buffered frame exactly;
+    /// the next read will return [`ReadOutcome::Eof`].
+    #[must_use]
+    pub fn frames_until_eof(&self) -> Option<usize> {
+        self.eof_seen.then_some(self.write_len)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
+    }
+
+    fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
     }
 
     pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
@@ -350,6 +350,10 @@ impl PlayerResource {
         }
     }
 
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.resource.get().render_reader()
+    }
+
     /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
     /// picks up the epoch itself via `sync_seek`.
     pub fn reset_for_seek(&mut self) {
@@ -371,10 +375,6 @@ impl PlayerResource {
     #[must_use]
     pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
         self.resource.get().seek_handle()
-    }
-
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.resource.get().render_reader()
     }
 
     delegate::delegate! {
@@ -429,7 +429,7 @@ mod tests {
     fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
         let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
-        let mut span = SourceWindow { frames: 10, source };
+        let mut span = SourceWindow { source, frames: 10 };
 
         assert_eq!(
             span.take(4),

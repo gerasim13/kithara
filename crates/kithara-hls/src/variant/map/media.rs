@@ -63,13 +63,6 @@ where
             .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
     }
 
-    /// Whether media segment `seg_idx` is fully on disk.
-    pub(super) fn segment_loaded(&self, seg_idx: u32) -> bool {
-        self.segments
-            .get(seg_idx as usize)
-            .is_some_and(|s| s.state().is_loaded())
-    }
-
     pub(super) fn segment_downloading(&self, seg_idx: u32) -> bool {
         self.segments
             .get(seg_idx as usize)
@@ -91,6 +84,13 @@ where
                 .get(seg_idx as usize)?
                 .resource(&self.segments.scope),
         )
+    }
+
+    /// Whether media segment `seg_idx` is fully on disk.
+    pub(super) fn segment_loaded(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|s| s.state().is_loaded())
     }
 
     /// Read `range` of media segment `seg_idx` into `dst` via the [`Segment`]

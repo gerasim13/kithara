@@ -7,7 +7,7 @@ use bon::{Builder, bon};
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, HlsEvent};
 use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -63,14 +63,14 @@ pub(crate) struct PlanConfig {
     pub(crate) look_ahead_segments: Option<usize>,
     #[builder(default)]
     pub(crate) size_probe_method: SizeProbeMethod,
-    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
-    /// may emit.
-    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
-    pub(crate) prefetch_budget: usize,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
     #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,
+    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
+    /// may emit.
+    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    pub(crate) prefetch_budget: usize,
 }
 
 pub(crate) struct PlanCtx<S>
@@ -158,7 +158,6 @@ pub(super) struct VariantSeek {
     /// to not-ready (never spins) on a write-in-flight. Off-RT completers
     /// CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
-    pub(super) size_demand: Mutex<SizeDemandState>,
     /// `(segment_idx, size)` settles parked while a segment-aware seek
     /// tail is active: a media settle landing behind the tail must not
     /// re-key the byte space the post-seek reader lives in, so its size
@@ -171,6 +170,7 @@ pub(super) struct VariantSeek {
     /// freeze decision and the drain serialize with every frame
     /// publication.
     pub(super) deferred_prefix: Mutex<Vec<(u32, u64)>>,
+    pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
 #[derive(derive_more::Deref)]
@@ -211,14 +211,14 @@ where
     ) -> Self {
         Self {
             scope,
+            init,
+            entries,
             held: HeldReaders {
                 init: Mutex::default(),
                 media: Mutex::default(),
             },
             #[cfg(test)]
             opens: std::sync::atomic::AtomicUsize::new(0),
-            init,
-            entries,
         }
     }
 
@@ -240,16 +240,6 @@ where
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
-    }
-
-    /// Drop the held resource for `key`, so the next read opens it again.
-    pub(super) fn release(&self, key: &ResourceKey) {
-        for slot in [&self.held.init, &self.held.media] {
-            let mut held = slot.lock();
-            if held.as_ref().is_some_and(|h| h.key == *key) {
-                *held = None;
-            }
-        }
     }
 
     /// The slot's open resource, opened and held on first use.
@@ -276,6 +266,16 @@ where
         drop(held);
         Ok(Some(reader))
     }
+
+    /// Drop the held resource for `key`, so the next read opens it again.
+    pub(super) fn release(&self, key: &ResourceKey) {
+        for slot in [&self.held.init, &self.held.media] {
+            let mut held = slot.lock();
+            if held.as_ref().is_some_and(|h| h.key == *key) {
+                *held = None;
+            }
+        }
+    }
 }
 
 /// One slot for the init prefix and one for the media segment, which is what a
@@ -287,8 +287,8 @@ struct HeldReaders<S> {
 }
 
 struct Held<S> {
-    key: ResourceKey,
     reader: AssetReader<S>,
+    key: ResourceKey,
 }
 
 fn serves<S>(reader: &AssetReader<S>) -> bool
@@ -514,11 +514,9 @@ where
         if self.cache_complete_emitted.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.profile
-            .bus
-            .publish(kithara_events::HlsEvent::CacheComplete {
-                total_bytes: self.authoritative_len(),
-            });
+        self.profile.bus.publish(HlsEvent::CacheComplete {
+            total_bytes: self.authoritative_len(),
+        });
     }
 
     pub(crate) fn variant_index_u32(&self) -> Option<u32> {

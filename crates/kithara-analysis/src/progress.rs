@@ -221,8 +221,8 @@ impl WaveformResume {
 
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
-    pub(crate) taken: Vec<(u64, u64)>,
     pub(crate) runs: Vec<BeatRunResume>,
+    pub(crate) taken: Vec<(u64, u64)>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
@@ -305,8 +305,8 @@ impl BeatResume {
         }
         let resume = Self {
             short,
-            taken,
             runs,
+            taken,
             windows,
         };
         resume.validate()?;

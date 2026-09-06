@@ -1,3 +1,4 @@
+use core::num::NonZeroUsize;
 use std::sync::atomic::Ordering;
 
 use crate::{common::thread_id::ACTIVE_NAMED_THREADS, loom::thread as backend};
@@ -135,6 +136,6 @@ pub fn current_thread_id() -> u64 {
 }
 
 #[must_use]
-pub fn available_parallelism() -> Option<core::num::NonZeroUsize> {
+pub fn available_parallelism() -> Option<NonZeroUsize> {
     backend::available_parallelism()
 }

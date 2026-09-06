@@ -20,9 +20,9 @@ impl Consts {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct FfiAssetStore {
+    shutdown: CancelScope,
     #[field(get = handle, vis = "pub(crate)")]
     inner: FfiStore,
-    shutdown: CancelScope,
     #[field(get, vis = "pub(crate)")]
     pools: Pools,
 }
@@ -48,21 +48,21 @@ impl FfiAssetStore {
             .layouts(layouts)
             .build();
         Ok(Self {
-            inner,
             shutdown,
+            inner,
             pools,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cancel_token(&self) -> kithara::platform::CancelToken {
+        self.shutdown.token()
     }
 
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Self::build(None, AssetLayoutRegistry::default())
             .unwrap_or_else(|error| panic!("test FFI asset store initialization failed: {error}"))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn cancel_token(&self) -> kithara::platform::CancelToken {
-        self.shutdown.token()
     }
 }
 

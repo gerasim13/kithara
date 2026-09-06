@@ -48,6 +48,38 @@ pub enum Wave {
 }
 
 impl Wave {
+    /// One 16-bit sample of this waveform.
+    #[must_use]
+    pub fn sample(self, frame: usize, sample_rate: u32) -> i16 {
+        match self {
+            Self::Sawtooth => saw(frame),
+            Self::SawtoothDescending => saw(SAW_PERIOD - 1 - frame % SAW_PERIOD),
+            Self::SawtoothShifted => saw(frame + SAW_PERIOD / 2),
+            Self::Silence => 0,
+            Self::Sine { hz, peak } => {
+                quantize(f64::sin(TAU * hz * seconds(frame, sample_rate)), peak)
+            }
+            Self::Sweep {
+                start_hz,
+                end_hz,
+                total_frames,
+                mode,
+            } => {
+                if frame >= total_frames {
+                    return 0;
+                }
+                let phase = sweep_phase(
+                    seconds(frame, sample_rate),
+                    seconds(total_frames, sample_rate),
+                    start_hz,
+                    end_hz,
+                    mode,
+                );
+                quantize(f64::sin(phase), i16::MAX)
+            }
+        }
+    }
+
     /// A chirp between two frequencies.
     ///
     /// # Panics
@@ -88,38 +120,6 @@ impl Wave {
             end_hz,
             total_frames,
             mode,
-        }
-    }
-
-    /// One 16-bit sample of this waveform.
-    #[must_use]
-    pub fn sample(self, frame: usize, sample_rate: u32) -> i16 {
-        match self {
-            Self::Sawtooth => saw(frame),
-            Self::SawtoothDescending => saw(SAW_PERIOD - 1 - frame % SAW_PERIOD),
-            Self::SawtoothShifted => saw(frame + SAW_PERIOD / 2),
-            Self::Silence => 0,
-            Self::Sine { hz, peak } => {
-                quantize(f64::sin(TAU * hz * seconds(frame, sample_rate)), peak)
-            }
-            Self::Sweep {
-                start_hz,
-                end_hz,
-                total_frames,
-                mode,
-            } => {
-                if frame >= total_frames {
-                    return 0;
-                }
-                let phase = sweep_phase(
-                    seconds(frame, sample_rate),
-                    seconds(total_frames, sample_rate),
-                    start_hz,
-                    end_hz,
-                    mode,
-                );
-                quantize(f64::sin(phase), i16::MAX)
-            }
         }
     }
 }

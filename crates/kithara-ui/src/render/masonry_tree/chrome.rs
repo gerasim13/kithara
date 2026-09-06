@@ -12,7 +12,7 @@ use crate::{
     render::{UiEvent, document::Module},
     shaping::TextContext,
     skin::FrameSkin,
-    solve,
+    solve::{Alignment, Length, Padding, Size},
 };
 
 /// The frame a module wears: the bar across its top, the strip under it, and
@@ -44,7 +44,7 @@ where
                 self.skin,
                 self.ctx.ui.draw_buffers(),
             ),
-            solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
+            Size::new(Length::Shrink, Length::Fill),
         )
     }
 
@@ -52,10 +52,7 @@ where
     /// the module folds.
     fn module_chevron(&self, collapsed: bool) -> MasonryNode<Action> {
         let metrics = self.skin.chrome;
-        let declared = solve::Size::new(
-            solve::Length::Fixed(metrics.chevron_size),
-            solve::Length::Fill,
-        );
+        let declared = Size::new(Length::Fixed(metrics.chevron_size), Length::Fill);
         let mark = MasonryNode::control_leaf(
             Painted::pooled(
                 ChromeChevron::new(self.skin),
@@ -88,10 +85,7 @@ where
                 lit: None,
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
-            solve::Size::new(
-                solve::Length::Fill,
-                solve::Length::Fixed(metrics.footer_height),
-            ),
+            Size::new(Length::Fill, Length::Fixed(metrics.footer_height)),
             Vec::new(),
             Some(self.skin.rgba(metrics.footer_background)),
             self.chrome_frame(metrics.footer_frame),
@@ -112,17 +106,11 @@ where
                 .push(self.chrome_label(ChromeLabel::title(self.skin), self.ctx.ui.resolve(title)));
             children.push(MasonryNode::furniture(
                 NodeLayout::Leaf(Leaf::Empty),
-                solve::Size::new(
-                    solve::Length::Fixed(metrics.inner_line_width),
-                    solve::Length::Fill,
-                ),
+                Size::new(Length::Fixed(metrics.inner_line_width), Length::Fill),
                 Some(self.skin.rgba(metrics.inner_line)),
             ));
         }
-        children.push(MasonryNode::empty(solve::Size::new(
-            solve::Length::Fill,
-            solve::Length::Fill,
-        )));
+        children.push(MasonryNode::empty(Size::new(Length::Fill, Length::Fill)));
         children.extend(module.assign().iter().map(|label| {
             self.chrome_label(ChromeLabel::chip(self.skin), self.ctx.ui.resolve(*label))
         }));
@@ -134,17 +122,14 @@ where
         let mut header = MasonryNode::chrome(
             NodeLayout::Flex(Flex::new(
                 Axis::Horizontal,
-                solve::Length::Fill,
-                solve::Length::Fixed(metrics.header_height),
-                solve::Padding::default(),
+                Length::Fill,
+                Length::Fixed(metrics.header_height),
+                Padding::default(),
                 0.0,
-                solve::Alignment::Center,
+                Alignment::Center,
                 layouts,
             )),
-            solve::Size::new(
-                solve::Length::Fill,
-                solve::Length::Fixed(metrics.header_height),
-            ),
+            Size::new(Length::Fill, Length::Fixed(metrics.header_height)),
             children,
             Some(self.skin.rgba(metrics.header_background)),
             self.chrome_frame(metrics.header_frame),

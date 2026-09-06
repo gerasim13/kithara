@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use syn::{ImplItem, Item, ItemImpl, ReturnType, Type};
+use syn::{GenericArgument, ImplItem, Item, ItemImpl, PathArguments, ReturnType, Type};
 
 use super::{Check, Context};
 use crate::{
@@ -143,11 +143,11 @@ fn is_result_of_self(tp: &syn::TypePath, target: &str) -> bool {
     if seg.ident != "Result" {
         return false;
     }
-    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
         return false;
     };
     args.args.iter().any(|a| match a {
-        syn::GenericArgument::Type(t) => matches_self_or(t, target),
+        GenericArgument::Type(t) => matches_self_or(t, target),
         _ => false,
     })
 }

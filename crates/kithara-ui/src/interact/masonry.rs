@@ -9,6 +9,7 @@ use masonry::{
         pointer::{PointerButton as MasonryPointerButton, PointerEvent},
     },
 };
+use num_traits::cast::AsPrimitive;
 
 use super::{Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
 
@@ -170,8 +171,8 @@ pub(crate) fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> 
     match delta {
         ScrollDelta::LineDelta(x, y) => Some(Scroll::Lines { x, y }),
         ScrollDelta::PixelDelta(delta) => Some(Scroll::Pixels {
-            x: num_traits::cast::AsPrimitive::<f32>::as_(delta.x / scale),
-            y: num_traits::cast::AsPrimitive::<f32>::as_(delta.y / scale),
+            x: AsPrimitive::<f32>::as_(delta.x / scale),
+            y: AsPrimitive::<f32>::as_(delta.y / scale),
         }),
         ScrollDelta::PageDelta(_, _) => None,
     }

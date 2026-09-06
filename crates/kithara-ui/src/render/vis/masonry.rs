@@ -1,5 +1,12 @@
 use kithara_test_macros as kithara;
-use masonry::vello::wgpu;
+use masonry::vello::{
+    wgpu,
+    wgpu::{
+        BindingType, BufferBindingType, BufferUsages, ColorWrites, LoadOp, MultisampleState,
+        PipelineCompilationOptions, PrimitiveState, PrimitiveTopology, ShaderSource, ShaderStages,
+        StoreOp,
+    },
+};
 use num_traits::ToPrimitive;
 
 use super::{SHADER, Uniforms, VisFrame};
@@ -108,9 +115,9 @@ impl VisPass {
             label: Some("kithara_ui.vis.retained.bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -124,7 +131,7 @@ impl VisPass {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kithara_ui.vis.retained.shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: ShaderSource::Wgsl(SHADER.into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("kithara_ui.vis.retained.pipeline"),
@@ -132,23 +139,23 @@ impl VisPass {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..wgpu::PrimitiveState::default()
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..PrimitiveState::default()
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: ColorWrites::ALL,
                 })],
             }),
             multiview: None,
@@ -206,8 +213,8 @@ impl VisPass {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -236,7 +243,7 @@ impl UniformSlot {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.retained.uniforms"),
             size: Uniforms::BUFFER_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -383,8 +390,8 @@ mod tests {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+                        load: LoadOp::Clear(wgpu::Color::BLACK),
+                        store: StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -410,7 +417,7 @@ mod tests {
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.retained.test.readback"),
             size: u64::from(ROW_BYTES * SIDE),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut copy = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

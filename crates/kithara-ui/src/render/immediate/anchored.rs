@@ -2,13 +2,14 @@ use iced::{
     Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector,
     advanced::{
         Clipboard, Layout, Renderer as _, Shell, Widget,
-        layout::{self, Limits},
-        mouse::{self, Cursor},
+        layout::{Limits, Node},
+        mouse::{self, Cursor, Interaction},
         overlay,
+        overlay::Group,
         renderer::{self, Quad},
-        widget::{Operation, Tree, tree},
+        widget::{Operation, Tree, tree, tree::Tag},
     },
-    keyboard::{self, key::Named},
+    keyboard::{self, Key, key::Named},
 };
 
 use crate::{
@@ -134,11 +135,11 @@ fn place(
     Rectangle::new(Point::new(position.x, position.y), surface)
 }
 
-fn claims(content: mouse::Interaction, surface: Rectangle, cursor: Cursor) -> mouse::Interaction {
+fn claims(content: Interaction, surface: Rectangle, cursor: Cursor) -> Interaction {
     if cursor.is_over(surface) {
-        content.max(mouse::Interaction::Idle)
+        content.max(Interaction::Idle)
     } else {
-        mouse::Interaction::None
+        Interaction::None
     }
 }
 
@@ -146,7 +147,7 @@ fn dismisses(event: &Event, popover: Rectangle, cursor: Cursor) -> bool {
     match event {
         Event::Mouse(mouse::Event::ButtonPressed(_)) => !cursor.is_over(popover),
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: keyboard::Key::Named(Named::Escape),
+            key: Key::Named(Named::Escape),
             ..
         }) => true,
         _ => false,
@@ -208,7 +209,7 @@ where
         );
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
         self.anchor
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
@@ -221,7 +222,7 @@ where
         cursor: Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         self.anchor.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -282,17 +283,16 @@ where
         } else {
             None
         };
-        (anchor.is_some() || popover.is_some()).then(|| {
-            overlay::Group::with_children(anchor.into_iter().chain(popover).collect()).overlay()
-        })
+        (anchor.is_some() || popover.is_some())
+            .then(|| Group::with_children(anchor.into_iter().chain(popover).collect()).overlay())
     }
 
     fn state(&self) -> tree::State {
         tree::State::new(State::default())
     }
 
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
+    fn tag(&self) -> Tag {
+        Tag::of::<State>()
     }
 
     fn update(
@@ -387,7 +387,7 @@ where
         }
     }
 
-    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
+    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> Node {
         let chrome = self.chrome;
         let content = self.content.as_widget_mut().layout(
             self.tree,
@@ -401,7 +401,7 @@ where
             bounds,
             self.align,
         );
-        layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
+        Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
             .move_to(surface.position())
     }
 
@@ -410,12 +410,12 @@ where
         layout: Layout<'_>,
         cursor: Cursor,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         let surface = layout.bounds();
         let content = layout
             .children()
             .next()
-            .map_or(mouse::Interaction::None, |content| {
+            .map_or(Interaction::None, |content| {
                 self.content
                     .as_widget()
                     .mouse_interaction(self.tree, content, cursor, &surface, renderer)
@@ -768,8 +768,8 @@ mod tests {
 
     fn escape() -> Event {
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: keyboard::Key::Named(Named::Escape),
-            modified_key: keyboard::Key::Named(Named::Escape),
+            key: Key::Named(Named::Escape),
+            modified_key: Key::Named(Named::Escape),
             physical_key: Physical::Code(keyboard::key::Code::Escape),
             location: Location::Standard,
             modifiers: Modifiers::empty(),
@@ -781,26 +781,18 @@ mod tests {
     #[kithara::test]
     fn the_surface_claims_the_cursor_over_itself_and_nowhere_else() {
         assert_eq!(
-            claims(mouse::Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
-            mouse::Interaction::Idle,
+            claims(Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
+            Interaction::Idle,
             "an inert row still covers what the surface hides"
         );
         assert_eq!(
-            claims(
-                mouse::Interaction::Pointer,
-                Consts::POPOVER,
-                at(100.0, 100.0)
-            ),
-            mouse::Interaction::Pointer,
+            claims(Interaction::Pointer, Consts::POPOVER, at(100.0, 100.0)),
+            Interaction::Pointer,
             "the content keeps the stronger claim"
         );
         assert_eq!(
-            claims(
-                mouse::Interaction::Pointer,
-                Consts::POPOVER,
-                at(600.0, 500.0)
-            ),
-            mouse::Interaction::None,
+            claims(Interaction::Pointer, Consts::POPOVER, at(600.0, 500.0)),
+            Interaction::None,
             "outside the surface the base tree keeps its cursor"
         );
     }

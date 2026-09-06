@@ -93,10 +93,6 @@ impl<B> BeatAnalysisConfig<B>
 where
     B: ResamplerBackend,
 {
-    fn resampler_backend_name(&self) -> &'static str {
-        self.resampler_backend.name()
-    }
-
     fn debug_fields<'f, 'a>(&self, f: &'f mut fmt::Formatter<'a>) -> fmt::DebugStruct<'f, 'a> {
         let mut out = f.debug_struct("BeatAnalysisConfig");
         out.field("block_frames", &self.block_frames)
@@ -112,6 +108,10 @@ where
         #[cfg(feature = "beat-nn")]
         out.field("beat", &self.beat);
         out
+    }
+
+    fn resampler_backend_name(&self) -> &'static str {
+        self.resampler_backend.name()
     }
 }
 

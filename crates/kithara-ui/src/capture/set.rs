@@ -52,8 +52,8 @@ mod tests {
     use crate::capture::{Geometry, read_geometry};
 
     struct Cards {
-        frame: Geometry,
         page: &'static str,
+        frame: Geometry,
         pixels: Vec<u8>,
         ticks: usize,
     }

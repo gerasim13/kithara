@@ -46,12 +46,12 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
         while results.changed().await.is_ok() {}
         results.borrow().clone()
     })
-    .unwrap_or_else(|| panic!("production rhythm analysis produced no result"));
+    .expect("production rhythm analysis produced no result");
     let analysis = progress.analysis();
     assert!(analysis.is_settled(), "rhythm analysis must cover the WAV");
     analysis
         .beat()
-        .unwrap_or_else(|| panic!("production rhythm analysis produced no beat artifact"))
+        .expect("production rhythm analysis produced no beat artifact")
         .artifact()
         .clone()
 }
@@ -70,12 +70,12 @@ fn worker() -> &'static AnalysisWorker {
 }
 
 struct WavReader {
-    bus: EventBus,
-    cursor: usize,
-    metadata: TrackMetadata,
-    pools: Pools,
-    samples: Vec<f32>,
     spec: AudioSpec,
+    bus: EventBus,
+    pools: Pools,
+    metadata: TrackMetadata,
+    samples: Vec<f32>,
+    cursor: usize,
 }
 
 impl WavReader {
@@ -112,23 +112,23 @@ impl WavReader {
             .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / Consts::SAMPLE_SCALE)
             .collect();
         Ok(Self {
+            samples,
             bus: EventBus::default(),
             cursor: 0,
             metadata: TrackMetadata::default(),
             pools: pools(),
-            samples,
             spec: AudioSpec::new(channels, sample_rate),
         })
-    }
-
-    fn total_frames(&self) -> usize {
-        self.samples.len() / usize::from(self.spec.channels)
     }
 
     fn position_at(&self, frame: usize) -> Duration {
         self.spec
             .duration_for(u64::try_from(frame).expect("invariant: fixture frame fits u64"))
             .expect("invariant: fixture duration fits platform duration")
+    }
+
+    fn total_frames(&self) -> usize {
+        self.samples.len() / usize::from(self.spec.channels)
     }
 }
 

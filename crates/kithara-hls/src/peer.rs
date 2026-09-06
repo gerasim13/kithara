@@ -45,9 +45,6 @@ where
     /// activation time. All epoch/target/pending reads use this directly
     /// rather than routing through `coord.timeline`.
     seek_obs: Arc<dyn SeekObserve>,
-    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
-    /// this state constructs for `dispatch`.
-    config: PlanConfig,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -61,6 +58,9 @@ where
     /// Cleared once the reader physically resolves at/after the floor.
     seek_settle_floor: Option<u32>,
     waker: Option<Waker>,
+    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
+    /// this state constructs for `dispatch`.
+    config: PlanConfig,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     last_seek_epoch: u64,
     /// Variant the stored `reader_segment` was resolved against. A
@@ -81,15 +81,15 @@ impl<S> WorkerWake for PeerPollWake<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    fn wake(&self) {
-        if let Some(peer) = self.0.upgrade() {
-            peer.wake_poll();
-        }
-    }
-
     fn defer(&self) {
         if let Some(peer) = self.0.upgrade() {
             peer.reader_advanced.arm();
+        }
+    }
+
+    fn wake(&self) {
+        if let Some(peer) = self.0.upgrade() {
+            peer.wake_poll();
         }
     }
 }
@@ -142,7 +142,6 @@ where
 {
     abr_publisher: AbrPublisher,
     abr: Arc<AbrState>,
-    cancel: CancelToken,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -158,6 +157,7 @@ where
     /// holding a wide seek/playhead aggregate.
     seek_obs: Arc<dyn SeekObserve>,
     state: Arc<Mutex<Option<HlsTrackState<S>>>>,
+    cancel: CancelToken,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`. A free
     /// `CancelToken` used purely as a one-shot latch (cloned to the
@@ -363,8 +363,8 @@ where
         let reader_playback_time = duration_prefix(&durations, reader_idx)?;
         let download_head_playback_time = duration_prefix(&durations, download_head)?;
         Some(AbrProgressSnapshot {
-            reader_playback_time,
             download_head_playback_time,
+            reader_playback_time,
         })
     }
 

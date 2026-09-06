@@ -13,7 +13,7 @@ use kithara_platform::{
 use kithara_stream::{
     OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, StreamError,
     StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
-    VariantTransitionId,
+    VariantTransitionId, dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -202,7 +202,7 @@ where
         &self,
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         let latch = self
             .sessions
             .transition
@@ -236,7 +236,7 @@ where
         &self,
         ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
+    ) -> Vec<FetchCmd> {
         let incoming = self
             .sessions
             .transition

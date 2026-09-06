@@ -20,11 +20,11 @@ impl Consts {
     const RATE_44K1: u32 = 44_100;
     const RATE_48K: u32 = 48_000;
     const STEREO: u16 = 2;
+    /// The sample count occupies the low 36 bits of that field.
+    const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
     /// Offset of STREAMINFO's packed rate/channels/depth/sample-count field:
     /// `fLaC` and the metablock header, then ten bytes into the body.
     const STREAMINFO_COUNT_OFFSET: usize = 18;
-    /// The sample count occupies the low 36 bits of that field.
-    const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
 }
 
 /// Renders the waveform and hands it to one of the byte encoders.
@@ -38,12 +38,25 @@ fn encode(
 ) -> Vec<u8> {
     let pcm = Pcm::new(sample_rate, channels, total_frames, wave);
     EncoderFactory::encode_bytes(&BytesEncodeRequest {
-        pcm: &pcm,
         target,
         bit_rate,
+        pcm: &pcm,
     })
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: {target:?} encode failed: {error}"))
     .bytes
+}
+
+macro_rules! encode_signal {
+    ($target:ident, $wave:ident, $sample_rate:ident, $channels:ident, $total_frames:ident, $bit_rate:ident) => {
+        encode(
+            BytesEncodeTarget::$target,
+            $wave,
+            $sample_rate,
+            $channels,
+            $total_frames,
+            $bit_rate,
+        )
+    };
 }
 
 /// Writes the frame count into STREAMINFO, which the streaming encoder leaves
@@ -227,14 +240,7 @@ fn signal_mp3(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Mp3,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Mp3, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// The full-length MPEG clip in-process decoders read: minutes rather than
@@ -259,14 +265,7 @@ fn signal_mp3_track(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Mp3,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Mp3, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// FLAC bodies the `/signal` route serves.
@@ -368,14 +367,7 @@ fn signal_aac(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::Aac,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(Aac, wave, sample_rate, channels, total_frames, bit_rate)
 }
 
 /// AAC-in-MP4 bodies the `/signal` route serves.
@@ -429,12 +421,5 @@ fn signal_m4a(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    encode(
-        BytesEncodeTarget::M4a,
-        wave,
-        sample_rate,
-        channels,
-        total_frames,
-        bit_rate,
-    )
+    encode_signal!(M4a, wave, sample_rate, channels, total_frames, bit_rate)
 }

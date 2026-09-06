@@ -4,11 +4,11 @@ use crate::{EncodeConfig, EncodeError, EncodeResult, EncodedAccessUnit};
 
 /// Continuous encoder from interleaved `f32` PCM to access units.
 pub struct EncoderSession {
-    channels: usize,
-    next_frame: u64,
-    packet_frames: u32,
-    packet_samples: usize,
     pending: Vec<f32>,
+    packet_frames: u32,
+    next_frame: u64,
+    channels: usize,
+    packet_samples: usize,
 }
 
 impl EncoderSession {
@@ -39,6 +39,23 @@ impl EncoderSession {
             packet_samples,
             pending: Vec::with_capacity(packet_samples),
         })
+    }
+
+    /// Finish the stream and return its final partial access unit.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid input if the final frame count cannot be represented by
+    /// the access-unit duration.
+    pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        if self.pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let frames = self.pending.len() / self.channels;
+        let duration = u32::try_from(frames).map_err(|_| {
+            EncodeError::InvalidInput("final PCM packet duration does not fit into u32".to_owned())
+        })?;
+        Ok(vec![Self::unit(&self.pending, self.next_frame, duration)])
     }
 
     /// Encode complete interleaved frames and return completed access units.
@@ -104,23 +121,6 @@ impl EncoderSession {
         self.pending.extend_from_slice(&remaining[ready_samples..]);
         self.next_frame = end_frame;
         Ok(units)
-    }
-
-    /// Finish the stream and return its final partial access unit.
-    ///
-    /// # Errors
-    ///
-    /// Returns invalid input if the final frame count cannot be represented by
-    /// the access-unit duration.
-    pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        if self.pending.is_empty() {
-            return Ok(Vec::new());
-        }
-        let frames = self.pending.len() / self.channels;
-        let duration = u32::try_from(frames).map_err(|_| {
-            EncodeError::InvalidInput("final PCM packet duration does not fit into u32".to_owned())
-        })?;
-        Ok(vec![Self::unit(&self.pending, self.next_frame, duration)])
     }
 
     fn unit(samples: &[f32], pts: u64, duration: u32) -> EncodedAccessUnit {

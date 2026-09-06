@@ -13,7 +13,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
 use super::peer::PeerEntry;
 use crate::{
@@ -51,7 +51,7 @@ impl AbrPeerId {
     }
 }
 
-impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
+impl IntoProbeArg for AbrPeerId {
     fn into_probe_arg(self) -> u64 {
         self.0.get()
     }

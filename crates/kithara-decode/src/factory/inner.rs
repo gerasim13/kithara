@@ -1034,8 +1034,8 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
-        track_info: DecoderTrackInfo,
         spec: AudioSpec,
+        track_info: DecoderTrackInfo,
         frames_per_call: u32,
     }
 

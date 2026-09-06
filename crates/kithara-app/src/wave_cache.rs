@@ -50,15 +50,15 @@ impl AnalysisTarget {
 }
 
 struct MemoryEntry {
-    target: AnalysisTarget,
     progress: AnalysisProgress,
+    target: AnalysisTarget,
 }
 
 pub(crate) struct TrackAnalysisCache {
+    fingerprint: AnalysisFingerprint,
     bytes: ByteBuffer,
     chunk_duration: Duration,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
-    fingerprint: AnalysisFingerprint,
     order: VecDeque<AnalysisTarget>,
 }
 
@@ -69,9 +69,9 @@ impl TrackAnalysisCache {
         chunk_seconds: NonZeroU32,
     ) -> Self {
         Self {
+            fingerprint,
             bytes: pools.get::<u8>(),
             chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
-            fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
         }
@@ -185,7 +185,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::platform::sync::Arc;
-    // The test macro import shadows the `kithara` crate name; use absolute path.
+    /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
             AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,

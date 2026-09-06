@@ -80,13 +80,13 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     slot: Arc<SegmentSlotState>,
-    planned: PlannedFetch,
     plan_revision: PlanRevision,
-    variant: Weak<HlsVariant<S>>,
+    planned: PlannedFetch,
     /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
     /// settle must wake the peer to take the requeued work, and the claim
     /// outlives every context that could lend it one.
     signal: SizeSignal,
+    variant: Weak<HlsVariant<S>>,
     settled: bool,
 }
 
@@ -194,15 +194,6 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self.data {
-            #[field]
-            pub(crate) const fn planned(&self) -> PlannedFetch;
-            #[field]
-            pub(crate) const fn plan_revision(&self) -> PlanRevision;
-        }
-    }
-
     /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
     /// fetch slow without owning the claim. Cloned before the claim moves into
     /// the `FetchSlot`'s `on_complete`.
@@ -212,6 +203,15 @@ where
 
     pub(crate) fn variant(&self) -> Option<Arc<HlsVariant<S>>> {
         self.data.variant.upgrade()
+    }
+
+    delegate::delegate! {
+        to self.data {
+            #[field]
+            pub(crate) const fn planned(&self) -> PlannedFetch;
+            #[field]
+            pub(crate) const fn plan_revision(&self) -> PlanRevision;
+        }
     }
 }
 

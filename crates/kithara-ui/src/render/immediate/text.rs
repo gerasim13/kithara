@@ -2,10 +2,14 @@ use iced::{
     Element, Length, Rectangle, Renderer, Size, Theme,
     advanced::{
         Widget as IcedWidget,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         mouse, renderer,
-        widget::{self, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
+    widget::Space,
 };
 use kithara_test_macros as kithara;
 
@@ -43,7 +47,7 @@ where
             _ => self.label,
         };
         let Some(value) = value else {
-            return iced::widget::Space::new().into();
+            return Space::new().into();
         };
         let role = self
             .skin
@@ -193,29 +197,24 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let state = tree.state.downcast_mut::<PaintState<Words>>();
         let (width, height) = state.shaped(self.skin.text_resources(), |text| {
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
         });
-        layout::Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))
+        Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))
     }
 
     fn size(&self) -> Size<Length> {
         Size::new(Length::Shrink, Length::Fill)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<Words>::default())
+    fn state(&self) -> State {
+        State::new(PaintState::<Words>::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<Words>>()
+    fn tag(&self) -> Tag {
+        Tag::of::<PaintState<Words>>()
     }
 }
 

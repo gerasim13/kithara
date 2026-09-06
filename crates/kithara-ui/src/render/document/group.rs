@@ -17,9 +17,9 @@ pub struct Group<'a> {
     pub(super) round: FrameCorners,
     pub(super) background: Option<ColorRole>,
     pub(super) background_alpha: Option<f32>,
+    pub(super) frame: Option<FrameSides>,
     /// The face this group shows instead while the flag it names reads true.
     pub(super) lit: Option<Lit<'a>>,
-    pub(super) frame: Option<FrameSides>,
     /// The axis whose room decides which of its children stand, when the
     /// document says its children come and go with the room.
     pub(super) measure: Option<MeasureAxis>,
@@ -135,8 +135,8 @@ impl Group<'_> {
 #[non_exhaustive]
 pub struct Lit<'a> {
     pub(super) flag: &'a Binding,
-    pub(super) background: Option<ColorRole>,
     pub(super) frame_color: ColorRole,
+    pub(super) background: Option<ColorRole>,
 }
 
 impl<'a> Lit<'a> {

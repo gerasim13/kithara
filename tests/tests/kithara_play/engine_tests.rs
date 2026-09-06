@@ -96,6 +96,7 @@ fn engine_config_builder() {
         .response_budget_frames(response_budget())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
+    assert!(!engine.is_running());
     assert_eq!(engine.max_slots(), 8);
     assert_eq!(engine.master_sample_rate(), 48000);
 }

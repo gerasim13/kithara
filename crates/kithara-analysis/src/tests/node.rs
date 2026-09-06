@@ -78,8 +78,8 @@ where
     B: ResamplerBackend,
 {
     node: AnalysisNode<B, S>,
-    _pending: PendingTask,
     _dispatcher: Dispatcher,
+    _pending: PendingTask,
     _worker: Worker,
 }
 
@@ -96,6 +96,15 @@ where
             NonZeroUsize::new(8).expect("test drain limit is non-zero"),
             NonZeroU32::new(5).expect("test publish duration is non-zero"),
         )
+    }
+
+    #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+    fn context(&self) -> &TaskContext {
+        self._pending.context()
+    }
+
+    pub(super) fn tick(&mut self) -> TickResult {
+        self.node.tick()
     }
 
     pub(super) fn with_settings(
@@ -135,15 +144,6 @@ where
             _dispatcher: dispatcher,
             _worker: worker,
         }
-    }
-
-    #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-    fn context(&self) -> &TaskContext {
-        self._pending.context()
-    }
-
-    pub(super) fn tick(&mut self) -> TickResult {
-        self.node.tick()
     }
 }
 
@@ -189,13 +189,13 @@ fn enqueue(
 ) -> watch::Receiver<Option<AnalysisProgress>> {
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
-        token: token.into(),
-        revision: 0,
         tx,
-        rate: super::fixtures::spec().sample_rate,
         ingest,
         reader,
         cancel,
+        token: token.into(),
+        revision: 0,
+        rate: super::fixtures::spec().sample_rate,
         resume: None,
     })
     .expect("analysis node accepts the test job");
@@ -237,9 +237,9 @@ fn pending_reader_yields_one_scheduler_tick() {
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
+        tx,
         token: "test-track".into(),
         revision: 0,
-        tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked_with_pending(
@@ -265,9 +265,9 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
     jobs.send(Job {
+        tx,
         token: "test-track".into(),
         revision: 0,
-        tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked(builder.pools(), &sine(1024), 1)),
@@ -294,12 +294,12 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
         cancel: CancelToken::root(),
         resume: None,
     })
@@ -347,12 +347,12 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
-            token: token.into(),
-            revision: 0,
-            reader: Box::new(FakeReader::stalled(8)),
             tx,
             rate,
             ingest,
+            token: token.into(),
+            revision: 0,
+            reader: Box::new(FakeReader::stalled(8)),
             cancel: CancelToken::root(),
             resume: None,
         })
@@ -403,12 +403,12 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(4)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(4)),
         cancel: CancelToken::root(),
         resume: None,
     })
@@ -452,12 +452,12 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
     })
@@ -551,12 +551,12 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
     })
@@ -666,12 +666,12 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(STALLS)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
     })
@@ -766,10 +766,10 @@ where
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
         reader,
         tx,
+        token: "test-track".into(),
+        revision: 0,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
         cancel: cancel.clone(),
@@ -1359,12 +1359,12 @@ fn a_pass_with_no_detector_publishes_the_rest() {
     let (writer, ingest) = ring::open_for(rate);
     let mut producer = AnalysisProducer::new(writer, rate, "test-track".into());
     jobs.send(Job {
-        token: "test-track".into(),
-        revision: 0,
-        reader: Box::new(FakeReader::stalled(3)),
         tx,
         rate,
         ingest,
+        token: "test-track".into(),
+        revision: 0,
+        reader: Box::new(FakeReader::stalled(3)),
         cancel: CancelToken::root(),
         resume: None,
     })

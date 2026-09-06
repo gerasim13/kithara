@@ -29,21 +29,12 @@ struct Render {
     samples: Vec<f32>,
 }
 
-fn delayed_rebuild_fixture() -> HlsFixtureBuilder {
+fn target_rebuild_fixture(delay_ms: u64) -> HlsFixtureBuilder {
     fixture().delay_rules(vec![DelayRule {
         segment_eq: Some(TARGET_SWITCH_SEGMENT),
         segment_gte: None,
         variant: Some(FLAC),
-        delay_ms: TARGET_SEGMENT_DELAY_MS,
-    }])
-}
-
-fn slow_target_rebuild_fixture() -> HlsFixtureBuilder {
-    fixture().delay_rules(vec![DelayRule {
-        segment_eq: Some(TARGET_SWITCH_SEGMENT),
-        segment_gte: None,
-        variant: Some(FLAC),
-        delay_ms: SLOW_TARGET_SEGMENT_DELAY_MS,
+        delay_ms,
     }])
 }
 
@@ -166,13 +157,7 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
     }
 }
 
-async fn render_tiny_ring_control(
-    master_url: &url::Url,
-    transition: Transition,
-    backend: DecoderBackend,
-) -> Render {
-    let label = format!("{}-tiny-ring-control", transition.label);
-    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
+async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<DecoderObservation>) {
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
@@ -183,6 +168,17 @@ async fn render_tiny_ring_control(
             samples.len() / usize::from(CHANNELS),
         ));
     }
+    (samples, decoder_events)
+}
+
+async fn render_tiny_ring_control(
+    master_url: &url::Url,
+    transition: Transition,
+    backend: DecoderBackend,
+) -> Render {
+    let label = format!("{}-tiny-ring-control", transition.label);
+    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
+    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.from),
@@ -210,16 +206,7 @@ async fn render_tiny_ring_switch(
         .set_mode(AbrMode::manual(transition.to))
         .unwrap_or_else(|error| panic!("request {label}: {error}"));
 
-    let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
-    let mut decoder_events = Vec::new();
-    while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
-        let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, frames).await);
-        decoder_events.extend(drain_decoder_events(
-            &mut prepared.events,
-            samples.len() / usize::from(CHANNELS),
-        ));
-    }
+    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.to),
@@ -248,23 +235,6 @@ async fn render_tiny_ring_switch(
     }
 }
 
-fn longest_silent_run(samples: &[f32]) -> usize {
-    let mut current = 0usize;
-    let mut longest = 0usize;
-    for frame in samples.chunks_exact(usize::from(CHANNELS)) {
-        if frame
-            .iter()
-            .all(|sample| sample.abs() <= ACTIVE_SAMPLE_THRESHOLD)
-        {
-            current = current.saturating_add(1);
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    longest
-}
-
 fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     let audio = ProbeAudio {
         samples: samples.to_vec(),
@@ -287,65 +257,45 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    hang_timeout_secs(3)
-)]
-#[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
-async fn delayed_target_rebuild_keeps_the_player_output_continuous(
-    #[case] backend: DecoderBackend,
-) {
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(delayed_rebuild_fixture())
-        .await
-        .expect("create delayed target quality-switch fixture");
-    let master_url = created.master_url();
-
-    let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
-    let switched = render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend).await;
-    assert_eq!(
-        switched.capture_frame, control.capture_frame,
-        "switch and no-switch control must start at the same source frame",
-    );
-    let control_silence = longest_silent_run(&control.samples);
-    let switched_silence = longest_silent_run(&switched.samples);
-    assert!(
-        switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
-        "delayed target rebuild inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={TARGET_SEGMENT_DELAY_MS}",
-    );
-    let control_buckets = cochlea_silent_buckets(&control.samples);
-    let switched_buckets = cochlea_silent_buckets(&switched.samples);
-    assert!(
-        switched_buckets <= control_buckets,
-        "Cochlea found switch-only silent buckets during delayed target rebuild: switched={switched_buckets}, control={control_buckets}, target_delay_ms={TARGET_SEGMENT_DELAY_MS}",
-    );
-}
-
-#[kithara::test(
-    tokio,
-    multi_thread,
-    native,
-    serial,
-    timeout(Duration::from_secs(180)),
     hang_timeout_secs(3),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
 )]
-#[case::symphonia(DecoderBackend::Symphonia)]
+#[case::delayed_symphonia(
+    DecoderBackend::Symphonia,
+    TARGET_SEGMENT_DELAY_MS,
+    "delayed target rebuild"
+)]
+#[case::slow_symphonia(
+    DecoderBackend::Symphonia,
+    SLOW_TARGET_SEGMENT_DELAY_MS,
+    "manual AAC-to-FLAC switch"
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
+    case::delayed_apple(
+        DecoderBackend::Apple,
+        TARGET_SEGMENT_DELAY_MS,
+        "delayed target rebuild"
+    )
 )]
-async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_decoder_lead(
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::slow_apple(
+        DecoderBackend::Apple,
+        SLOW_TARGET_SEGMENT_DELAY_MS,
+        "manual AAC-to-FLAC switch"
+    )
+)]
+async fn target_rebuild_keeps_player_output_continuous(
     #[case] backend: DecoderBackend,
+    #[case] delay_ms: u64,
+    #[case] label: &str,
 ) {
     let server = TestServerHelper::new().await;
     let created = server
-        .create_hls(slow_target_rebuild_fixture())
+        .create_hls(target_rebuild_fixture(delay_ms))
         .await
-        .expect("create slow AAC-to-FLAC quality-switch fixture");
+        .unwrap_or_else(|error| panic!("create {label} fixture: {error}"));
     let master_url = created.master_url();
 
     let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
@@ -358,13 +308,13 @@ async fn manual_aac_to_flac_switch_has_no_gap_when_target_preparation_exceeds_de
     let switched_silence = longest_silent_run(&switched.samples);
     assert!(
         switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
-        "manual AAC-to-FLAC switch inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={SLOW_TARGET_SEGMENT_DELAY_MS}",
+        "{label} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={delay_ms}",
     );
     let control_buckets = cochlea_silent_buckets(&control.samples);
     let switched_buckets = cochlea_silent_buckets(&switched.samples);
     assert!(
         switched_buckets <= control_buckets,
-        "Cochlea found switch-only silent buckets during manual AAC-to-FLAC switch: switched={switched_buckets}, control={control_buckets}, target_delay_ms={SLOW_TARGET_SEGMENT_DELAY_MS}",
+        "Cochlea found switch-only silent buckets during {label}: switched={switched_buckets}, control={control_buckets}, target_delay_ms={delay_ms}",
     );
 }
 

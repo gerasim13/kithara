@@ -186,14 +186,17 @@ impl Decoder for ProfileCountingDecoder {
     fn update_byte_len(&self, _len: u64) {}
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 struct RouteSignalDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
     gapless: Option<GaplessInfo>,
+    remaining_chunks: Option<usize>,
+    pools: Pools,
+    sample_rate: u32,
     id: u64,
     next_frame: u64,
-    pools: Pools,
-    remaining_chunks: Option<usize>,
-    sample_rate: u32,
+    #[field(with, vis = "")]
     timeline_gap: u64,
 }
 
@@ -210,17 +213,12 @@ impl RouteSignalDecoder {
             drops,
             gapless,
             id,
-            next_frame: 0,
             pools,
             remaining_chunks,
             sample_rate,
+            next_frame: 0,
             timeline_gap: 0,
         }
-    }
-
-    fn with_timeline_gap(mut self, timeline_gap: u64) -> Self {
-        self.timeline_gap = timeline_gap;
-        self
     }
 
     fn audio_spec(&self) -> AudioSpec {
@@ -237,6 +235,10 @@ impl Drop for RouteSignalDecoder {
 impl Decoder for RouteSignalDecoder {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
+    }
+
+    fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
+        GaplessProfile::new(self.audio_spec(), self.gapless, None, 0)
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -283,10 +285,6 @@ impl Decoder for RouteSignalDecoder {
         )))
     }
 
-    fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
-        GaplessProfile::new(self.audio_spec(), self.gapless, None, 0)
-    }
-
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let frame = u64::try_from(
             self.audio_spec()
@@ -321,9 +319,9 @@ impl Decoder for RouteSignalDecoder {
 struct TestWake;
 
 impl WorkerWake for TestWake {
-    fn wake(&self) {}
-
     fn defer(&self) {}
+
+    fn wake(&self) {}
 }
 
 #[derive(Default)]
@@ -338,11 +336,11 @@ impl CountingWake {
 }
 
 impl WorkerWake for CountingWake {
-    fn wake(&self) {
+    fn defer(&self) {
         self.count.fetch_add(1, Ordering::Release);
     }
 
-    fn defer(&self) {
+    fn wake(&self) {
         self.count.fetch_add(1, Ordering::Release);
     }
 }
@@ -414,15 +412,15 @@ impl TestControl {
         self.promote_calls.load(Ordering::Acquire)
     }
 
+    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
+        self.demand_in_flight.store(in_flight, Ordering::Release);
+    }
+
     pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
         *self.exact_plan.lock() = Some(plan);
         *self.prepared_profile.lock() = None;
         self.exact_reader_ready.store(false, Ordering::Release);
         self.exact_reader_taken.store(false, Ordering::Release);
-    }
-
-    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
-        self.demand_in_flight.store(in_flight, Ordering::Release);
     }
 
     pub(super) fn set_exact_reader_ready(&self) {
@@ -504,15 +502,6 @@ impl VariantControl for TestControl {
         promotion
     }
 
-    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.demand_in_flight.load(Ordering::Acquire)
-            && self
-                .exact_plan
-                .lock()
-                .as_ref()
-                .is_some_and(|plan| plan.transition() == transition)
-    }
-
     fn selected_variant_for_seek(&self) -> usize {
         0
     }
@@ -541,6 +530,15 @@ impl VariantControl for TestControl {
             plan, reader,
         )))
     }
+
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.demand_in_flight.load(Ordering::Acquire)
+            && self
+                .exact_plan
+                .lock()
+                .as_ref()
+                .is_some_and(|plan| plan.transition() == transition)
+    }
 }
 
 /// Optional park inside `wait_range`, letting a test hold the stream's
@@ -550,8 +548,8 @@ impl VariantControl for TestControl {
 #[derive(Default)]
 pub(super) struct WaitPark {
     armed: AtomicBool,
-    state: Mutex<WaitParkState>,
     condvar: Condvar,
+    state: Mutex<WaitParkState>,
 }
 
 #[derive(Default)]
@@ -565,22 +563,6 @@ impl WaitPark {
         self.armed.store(true, Ordering::Release);
     }
 
-    /// Block until the holder is inside `wait_range` — i.e. the control
-    /// mutex is held by a parked blocking read.
-    pub(super) fn wait_entered(&self) {
-        let mut state = self.state.lock();
-        while !state.entered {
-            state = self.condvar.wait(state);
-        }
-    }
-
-    pub(super) fn release(&self) {
-        let mut state = self.state.lock();
-        state.released = true;
-        drop(state);
-        self.condvar.notify_all();
-    }
-
     fn enter_if_armed(&self) {
         if !self.armed.load(Ordering::Acquire) {
             return;
@@ -592,18 +574,37 @@ impl WaitPark {
             state = self.condvar.wait(state);
         }
     }
+
+    pub(super) fn release(&self) {
+        let mut state = self.state.lock();
+        state.released = true;
+        drop(state);
+        self.condvar.notify_all();
+    }
+
+    /// Block until the holder is inside `wait_range` — i.e. the control
+    /// mutex is held by a parked blocking read.
+    pub(super) fn wait_entered(&self) {
+        let mut state = self.state.lock();
+        while !state.entered {
+            state = self.condvar.wait(state);
+        }
+    }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
     park: Arc<WaitPark>,
-    peer: Option<Arc<DeferredWake>>,
     phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     seek: Arc<SeekState>,
     waits: Arc<Mutex<Vec<Range<u64>>>>,
+    #[field(with = with_peer_wake, option_set_some, vis = "pub(super)")]
+    peer: Option<Arc<DeferredWake>>,
 }
 
 impl TestSource {
@@ -621,25 +622,17 @@ impl TestSource {
         }
     }
 
-    /// Attach a reader→peer wake, as segmented sources vend one. Opt-in:
-    /// a `Some` peer changes `Stream`'s read-path unit clamping, so only
-    /// tests pinning the peer-wake contract install it.
-    pub(super) fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
-        self.peer = Some(wake);
-        self
-    }
-
-    fn segmented(control: Arc<TestControl>) -> Self {
-        control.enable_byte_map();
-        Self::new(control)
-    }
-
     pub(super) fn park_handle(&self) -> Arc<WaitPark> {
         Arc::clone(&self.park)
     }
 
     pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
         Arc::clone(&self.phase)
+    }
+
+    fn segmented(control: Arc<TestControl>) -> Self {
+        control.enable_byte_map();
+        Self::new(control)
     }
 
     pub(super) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
@@ -650,13 +643,25 @@ impl TestSource {
 /// Byte-space probe sharing the test source's scripted cells — the same
 /// phase, cursor, and byte-map gating as the `Source` impl below.
 struct SharedPhaseProbe {
+    byte_map: Arc<TestByteMap>,
+    control: Arc<TestControl>,
     phase: Arc<Mutex<SourcePhase>>,
     position: Arc<AtomicU64>,
-    control: Arc<TestControl>,
-    byte_map: Arc<TestByteMap>,
 }
 
 impl SourceProbe for SharedPhaseProbe {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        if self.control.byte_map_enabled.load(Ordering::Acquire) {
+            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
+        } else {
+            None
+        }
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(4096)
+    }
+
     fn phase(&self) -> SourcePhase {
         *self.phase.lock()
     }
@@ -672,27 +677,11 @@ impl SourceProbe for SharedPhaseProbe {
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
     }
-
-    fn len(&self) -> Option<u64> {
-        Some(4096)
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        if self.control.byte_map_enabled.load(Ordering::Acquire) {
-            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
-        } else {
-            None
-        }
-    }
 }
 
 impl Source for TestSource {
     fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
-    }
-
-    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        self.peer.clone()
     }
 
     fn advance(&self, n: u64) {
@@ -715,17 +704,12 @@ impl Source for TestSource {
         self.control.media_info.lock().clone()
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        *self.phase.lock()
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer.clone()
     }
 
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(SharedPhaseProbe {
-            phase: Arc::clone(&self.phase),
-            position: Arc::clone(&self.position),
-            control: Arc::clone(&self.control),
-            byte_map: Arc::clone(&self.byte_map),
-        })
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        *self.phase.lock()
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -738,6 +722,15 @@ impl Source for TestSource {
 
     fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(SharedPhaseProbe {
+            phase: Arc::clone(&self.phase),
+            position: Arc::clone(&self.position),
+            control: Arc::clone(&self.control),
+            byte_map: Arc::clone(&self.byte_map),
+        })
     }
 
     fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -981,20 +974,20 @@ struct RouteParams {
     chunks_before_eof: Option<usize>,
     gapless: Option<GaplessInfo>,
     incoming_chunks_before_eof: Option<usize>,
-    active_timeline_gap: u64,
-    incoming_timeline_gap: u64,
     segmented: bool,
     initial_host_rate: u32,
+    active_timeline_gap: u64,
+    incoming_timeline_gap: u64,
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     route_source(RouteParams {
+        initial_host_rate,
         chunks_before_eof: None,
         gapless: None,
         incoming_chunks_before_eof: None,
         active_timeline_gap: 0,
         incoming_timeline_gap: 0,
-        initial_host_rate,
         segmented: false,
     })
     .await
@@ -1005,12 +998,12 @@ pub(super) async fn route_signal_source_with_eof(
     chunks_before_eof: usize,
 ) -> RouteFixture {
     route_source(RouteParams {
+        initial_host_rate,
         chunks_before_eof: Some(chunks_before_eof),
         gapless: None,
         incoming_chunks_before_eof: None,
         active_timeline_gap: 0,
         incoming_timeline_gap: 0,
-        initial_host_rate,
         segmented: false,
     })
     .await
@@ -1021,12 +1014,12 @@ pub(super) async fn route_signal_source_with_gapless(
     gapless: GaplessInfo,
 ) -> RouteFixture {
     route_source(RouteParams {
+        initial_host_rate,
         chunks_before_eof: None,
         gapless: Some(gapless),
         incoming_chunks_before_eof: None,
         active_timeline_gap: 0,
         incoming_timeline_gap: 0,
-        initial_host_rate,
         segmented: false,
     })
     .await
@@ -1038,12 +1031,12 @@ pub(super) async fn route_signal_source_with_gapless_eof(
     chunks_before_eof: usize,
 ) -> RouteFixture {
     route_source(RouteParams {
+        initial_host_rate,
         chunks_before_eof: Some(chunks_before_eof),
         gapless: Some(gapless),
         incoming_chunks_before_eof: None,
         active_timeline_gap: 0,
         incoming_timeline_gap: 0,
-        initial_host_rate,
         segmented: false,
     })
     .await
@@ -1054,12 +1047,12 @@ pub(super) async fn route_signal_source_with_finite_incoming(
     incoming_chunks_before_eof: usize,
 ) -> RouteFixture {
     route_source(RouteParams {
+        initial_host_rate,
         chunks_before_eof: None,
         gapless: None,
         incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
         active_timeline_gap: 0,
         incoming_timeline_gap: 0,
-        initial_host_rate,
         segmented: false,
     })
     .await
@@ -1173,11 +1166,11 @@ pub(super) async fn route_signal_source_with_gaps(
     incoming_timeline_gap: u64,
 ) -> RouteFixture {
     route_source(RouteParams {
+        active_timeline_gap,
+        incoming_timeline_gap,
         chunks_before_eof: None,
         gapless: None,
         incoming_chunks_before_eof: None,
-        active_timeline_gap,
-        incoming_timeline_gap,
         initial_host_rate: Consts::SAMPLE_RATE,
         segmented: false,
     })

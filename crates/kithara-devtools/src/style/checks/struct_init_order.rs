@@ -1,9 +1,16 @@
-use std::{cmp::Ordering, collections::HashSet, ops::Range};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet, hash_map::Entry},
+    mem,
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result};
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenTree};
 use syn::{
-    ExprStruct, FieldValue, Member,
+    ExprStruct, FieldValue, Fields, ItemEnum, ItemImpl, ItemStruct, Member, Token, Type,
+    punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -11,7 +18,7 @@ use syn::{
 use super::{Check, Context};
 use crate::{
     common::{
-        fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
+        fix::{BlockRange, ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
         parse::parse_file,
         violation::Violation,
         walker::{relative_to, workspace_rs_files_scoped},
@@ -27,10 +34,13 @@ impl Check for StructInitOrder {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut outcome = FixOutcome::default();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+        let files = workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)?;
+        let decls = DeclIndex::from_files(ctx.workspace_root, &files);
+        for path in files {
             let rel = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            let krate = crate_of(&rel);
             // Reordering a literal moves nested literals with it, so the
             // visitor defers them (see `visit_expr_struct`) and each write
             // exposes the next nesting level; loop until a clean pass.
@@ -51,6 +61,9 @@ impl Check for StructInitOrder {
                     src: &src,
                     rw: &mut rw,
                     skipped: &mut pass_skipped,
+                    decls: &decls,
+                    krate: &krate,
+                    self_ty: None,
                 };
                 visitor.visit_file(&file);
                 skipped.extend(pass_skipped);
@@ -80,18 +93,24 @@ impl Check for StructInitOrder {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.struct_init_order;
         let mut violations = Vec::new();
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+        let files = workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)?;
+        let decls = DeclIndex::from_files(ctx.workspace_root, &files);
+        for path in &files {
+            let Ok(file) = parse_file(path) else {
                 continue;
             };
-            let rel = relative_to(ctx.workspace_root, &path)
+            let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            let krate = crate_of(&rel);
 
             let mut v = InitVisitor {
                 cfg,
                 rel: &rel,
                 out: &mut violations,
+                decls: &decls,
+                krate: &krate,
+                self_ty: None,
             };
             v.visit_file(&file);
         }
@@ -101,16 +120,25 @@ impl Check for StructInitOrder {
 }
 
 struct FixVisitor<'a, 'src> {
+    decls: &'a DeclIndex,
     rw: &'a mut SourceRewriter<'src>,
     cfg: &'a StructInitOrderConfig,
     skipped: &'a mut Vec<String>,
+    krate: &'a str,
     rel: &'a str,
     src: &'src str,
+    self_ty: Option<String>,
 }
 
 impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
     fn visit_expr_struct(&mut self, e: &'ast ExprStruct) {
-        match try_fix_expr_struct(self.cfg, self.src, e, self.rw) {
+        let order = expected_order(
+            self.cfg,
+            self.decls,
+            (self.krate, self.self_ty.as_deref()),
+            e,
+        );
+        match try_fix_expr_struct(self.src, e, order, self.rw) {
             // Reordered: nested literals travel inside the moved blocks, so
             // touching them now would stage overlapping edits. The caller's
             // fix loop revisits them on the next pass.
@@ -126,6 +154,12 @@ impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
         }
         visit::visit_expr_struct(self, e);
     }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        let outer = mem::replace(&mut self.self_ty, impl_self_name(item));
+        visit::visit_item_impl(self, item);
+        self.self_ty = outer;
+    }
 }
 
 /// Reorder one `Foo { ... }` literal in place. Returns `Ok(true)` when a
@@ -134,9 +168,9 @@ impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
 /// (floating comment, missing trailing comma, `..base` rest, etc.) so the
 /// caller can log it.
 fn try_fix_expr_struct(
-    cfg: &StructInitOrderConfig,
     src: &str,
     e: &ExprStruct,
+    order: ExpectedOrder,
     rw: &mut SourceRewriter<'_>,
 ) -> Result<bool, String> {
     if e.fields.len() < 2 {
@@ -150,17 +184,9 @@ fn try_fix_expr_struct(
         return Err("shorthand field is moved before another field reads it".to_string());
     }
 
-    let actual: Vec<InitKey> = e
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(idx, fv)| InitKey {
-            idx,
-            ..classify(cfg, fv)
-        })
-        .collect();
-    let mut expected = actual.clone();
-    expected.sort_by(cmp_init_key);
+    let ExpectedOrder {
+        actual, expected, ..
+    } = order;
     if actual
         .iter()
         .map(|k| k.idx)
@@ -182,26 +208,7 @@ fn try_fix_expr_struct(
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
 
-    let last_block_text = &src[blocks
-        .last()
-        .expect("invariant: e.fields.len() >= 2 checked above, blocks mirrors fields")
-        .bytes
-        .clone()];
-    if !last_block_text.trim_end().ends_with(',')
-        && !last_block_text.trim_end().ends_with([')', '}', ']'])
-    {
-        let last = blocks
-            .last()
-            .expect("invariant: e.fields.len() >= 2 checked above, blocks mirrors fields");
-        if !src[last.item_bytes.end..last.bytes.end].contains(',') {
-            return Err("last field has no trailing comma".to_string());
-        }
-    }
-
-    let texts: Vec<String> = blocks
-        .iter()
-        .map(|b| src[b.bytes.clone()].to_string())
-        .collect();
+    let texts: Vec<String> = blocks.iter().map(|b| block_with_comma(src, b)).collect();
     for (slot_idx, expected_key) in expected.iter().enumerate() {
         let source_idx = expected_key.idx;
         if source_idx == slot_idx {
@@ -212,16 +219,55 @@ fn try_fix_expr_struct(
     Ok(true)
 }
 
+/// The block's source with a `,` between its field and its trailing trivia,
+/// whether or not the author wrote one there.
+///
+/// The last field of a literal is allowed to go without a comma, and a block
+/// that moves out of the last slot needs one to keep the literal parsing.
+/// The comma goes in ahead of any trailing comment, so the comment stays a
+/// comment and a comma inside it separates nothing, and `just fmt` takes the
+/// trailing one back off a literal that fits on its line.
+fn block_with_comma(src: &str, block: &BlockRange) -> String {
+    let tail = &src[block.item_bytes.end..block.bytes.end];
+    let before_comment = tail
+        .find("//")
+        .or_else(|| tail.find("/*"))
+        .unwrap_or(tail.len());
+    if tail[..before_comment].contains(',') {
+        return src[block.bytes.clone()].to_string();
+    }
+    format!(
+        "{}{},{tail}",
+        &src[block.bytes.start..block.item_bytes.start],
+        &src[block.item_bytes.clone()],
+    )
+}
+
 struct InitVisitor<'a> {
+    decls: &'a DeclIndex,
     cfg: &'a StructInitOrderConfig,
     out: &'a mut Vec<Violation>,
+    krate: &'a str,
     rel: &'a str,
+    self_ty: Option<String>,
 }
 
 impl<'ast> Visit<'ast> for InitVisitor<'_> {
     fn visit_expr_struct(&mut self, e: &'ast ExprStruct) {
-        check_expr_struct(self.cfg, self.rel, e, self.out);
+        let order = expected_order(
+            self.cfg,
+            self.decls,
+            (self.krate, self.self_ty.as_deref()),
+            e,
+        );
+        check_expr_struct(self.rel, e, order, self.out);
         visit::visit_expr_struct(self, e);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        let outer = mem::replace(&mut self.self_ty, impl_self_name(item));
+        visit::visit_item_impl(self, item);
+        self.self_ty = outer;
     }
 }
 
@@ -231,6 +277,195 @@ struct InitKey {
     /// 0 = shorthand, 1 = explicit, 2 = unnamed/positional (sorts last).
     bucket: usize,
     idx: usize,
+}
+
+/// The fields of one literal as written and as they should read, with the
+/// rule that decided the second.
+struct ExpectedOrder {
+    rule: &'static str,
+    actual: Vec<InitKey>,
+    expected: Vec<InitKey>,
+}
+
+/// How the literal's fields should read.
+///
+/// A literal whose fields are all shorthand carries no evaluation order to
+/// preserve, so it reads in the order its type declares — the order
+/// `clippy::inconsistent_struct_constructor` demands and the one
+/// [`super::struct_field_order`] rewrites declarations into. Every other
+/// literal keeps the shorthand-before-explicit rule, which says nothing
+/// about the declaration and so cannot disagree with it.
+fn expected_order(
+    cfg: &StructInitOrderConfig,
+    decls: &DeclIndex,
+    scope: (&str, Option<&str>),
+    e: &ExprStruct,
+) -> ExpectedOrder {
+    let (krate, self_ty) = scope;
+    let actual: Vec<InitKey> = e
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(idx, fv)| InitKey {
+            idx,
+            ..classify(cfg, fv)
+        })
+        .collect();
+    let mut expected = actual.clone();
+    let rule = if let Some(positions) =
+        decls.positions(krate, declared_name(e, self_ty).as_deref(), &e.fields)
+    {
+        expected.sort_by_key(|key| positions[key.idx]);
+        "follow the order its type declares"
+    } else {
+        expected.sort_by(cmp_init_key);
+        "put shorthand fields before explicit ones"
+    };
+    ExpectedOrder {
+        rule,
+        actual,
+        expected,
+    }
+}
+
+/// The field order every named-field declaration in one file gives, keyed by
+/// the name a literal writes in front of the brace.
+///
+/// A name two declarations share resolves to nothing unless they agree: the
+/// literal names one of them and the index cannot say which. A literal whose
+/// fields are not the fields of the declaration found under its name is
+/// reading some other type, and orders by the fallback rule.
+#[derive(Default)]
+struct DeclIndex {
+    by_name: HashMap<(String, String), Option<Vec<String>>>,
+}
+
+impl DeclIndex {
+    fn absorb(&mut self, krate: &str, file: &syn::File) {
+        DeclCollector { krate, index: self }.visit_file(file);
+    }
+
+    /// The declarations of a whole scope. A literal names its type without
+    /// saying where the type lives, and the file it lives in is rarely the
+    /// file that writes the literal.
+    fn from_files(root: &Path, paths: &[PathBuf]) -> Self {
+        let mut index = Self::default();
+        for path in paths {
+            if let Ok(file) = parse_file(path) {
+                let rel = relative_to(root, path).to_string_lossy().replace('\\', "/");
+                index.absorb(&crate_of(&rel), &file);
+            }
+        }
+        index
+    }
+
+    fn insert(&mut self, krate: &str, name: String, fields: &Fields) {
+        let Fields::Named(named) = fields else {
+            return;
+        };
+        let order: Vec<String> = named
+            .named
+            .iter()
+            .filter_map(|field| field.ident.as_ref().map(ToString::to_string))
+            .collect();
+        match self.by_name.entry((krate.to_string(), name)) {
+            Entry::Occupied(mut slot) => {
+                if slot.get().as_ref() != Some(&order) {
+                    slot.insert(None);
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(Some(order));
+            }
+        }
+    }
+
+    /// Where each field of the literal sits in the declaration, or `None`
+    /// when the declaration cannot decide the order: the literal spells an
+    /// initializer out (whose evaluation order is the author's), or names a
+    /// type this file does not declare, or names one it declares twice.
+    fn positions(
+        &self,
+        krate: &str,
+        name: Option<&str>,
+        fields: &Punctuated<FieldValue, Token![,]>,
+    ) -> Option<Vec<usize>> {
+        if fields.iter().any(|fv| fv.colon_token.is_some()) {
+            return None;
+        }
+        let order = self
+            .by_name
+            .get(&(krate.to_string(), name?.to_string()))?
+            .as_ref()?;
+        if fields.len() != order.len() {
+            return None;
+        }
+        fields
+            .iter()
+            .map(|fv| match &fv.member {
+                Member::Named(id) => {
+                    let name = id.to_string();
+                    order.iter().position(|field| *field == name)
+                }
+                Member::Unnamed(_) => None,
+            })
+            .collect()
+    }
+}
+
+struct DeclCollector<'a> {
+    index: &'a mut DeclIndex,
+    krate: &'a str,
+}
+
+/// The crate a workspace-relative path belongs to. A literal resolves against
+/// the declarations of its own crate: a name two crates both spell names two
+/// types, and no literal means both.
+fn crate_of(rel: &str) -> String {
+    let mut parts = rel.split('/');
+    match (parts.next(), parts.next()) {
+        (Some("crates"), Some(name)) => format!("crates/{name}"),
+        (Some(root), _) => root.to_string(),
+        (None, _) => rel.to_string(),
+    }
+}
+
+impl<'ast> Visit<'ast> for DeclCollector<'_> {
+    fn visit_item_enum(&mut self, item: &'ast ItemEnum) {
+        for variant in &item.variants {
+            self.index
+                .insert(self.krate, variant.ident.to_string(), &variant.fields);
+        }
+        visit::visit_item_enum(self, item);
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
+        self.index
+            .insert(self.krate, item.ident.to_string(), &item.fields);
+        visit::visit_item_struct(self, item);
+    }
+}
+
+/// The name under which [`DeclIndex`] holds the literal's declaration, when
+/// the literal names one this file can hold: a bare `Foo { ... }`, or
+/// `Self { ... }` inside an `impl`. A qualified path names a declaration that
+/// may live in another file, where this index cannot see it.
+fn declared_name(e: &ExprStruct, self_ty: Option<&str>) -> Option<String> {
+    if e.path.leading_colon.is_some() || e.path.segments.len() != 1 {
+        return None;
+    }
+    let ident = e.path.segments.first()?.ident.to_string();
+    if ident == "Self" {
+        return self_ty.map(ToString::to_string);
+    }
+    Some(ident)
+}
+
+fn impl_self_name(item: &ItemImpl) -> Option<String> {
+    match item.self_ty.as_ref() {
+        Type::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
 }
 
 fn cmp_init_key(a: &InitKey, b: &InitKey) -> Ordering {
@@ -255,12 +490,7 @@ fn classify(cfg: &StructInitOrderConfig, fv: &FieldValue) -> InitKey {
     }
 }
 
-fn check_expr_struct(
-    cfg: &StructInitOrderConfig,
-    rel: &str,
-    e: &ExprStruct,
-    out: &mut Vec<Violation>,
-) {
+fn check_expr_struct(rel: &str, e: &ExprStruct, order: ExpectedOrder, out: &mut Vec<Violation>) {
     if e.fields.len() < 2 {
         return;
     }
@@ -274,18 +504,11 @@ fn check_expr_struct(
     if has_shorthand_use_def_conflict(&e.fields) {
         return;
     }
-    let actual: Vec<InitKey> = e
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(idx, fv)| InitKey {
-            idx,
-            ..classify(cfg, fv)
-        })
-        .collect();
-
-    let mut expected = actual.clone();
-    expected.sort_by(cmp_init_key);
+    let ExpectedOrder {
+        actual,
+        expected,
+        rule,
+    } = order;
 
     if actual
         .iter()
@@ -313,7 +536,7 @@ fn check_expr_struct(
         .collect::<Vec<_>>()
         .join(", ");
     let msg = format!(
-        "init `{type_name} {{ ... }}` should put shorthand fields before explicit ones: \
+        "init `{type_name} {{ ... }}` should {rule}: \
          expected [{expected_summary}], found [{actual_summary}]"
     );
     out.push(Violation::warn(ID, key, msg));
@@ -325,9 +548,7 @@ fn check_expr_struct(
 /// a compile error or behaviour change. The check is conservative: it
 /// only inspects identifier references, not field-access paths or
 /// method-call receivers (those start with the same identifier).
-fn has_shorthand_use_def_conflict(
-    fields: &syn::punctuated::Punctuated<FieldValue, syn::Token![,]>,
-) -> bool {
+fn has_shorthand_use_def_conflict(fields: &Punctuated<FieldValue, Token![,]>) -> bool {
     let shorthand_names: HashSet<String> = fields
         .iter()
         .filter(|fv| fv.colon_token.is_none())
@@ -382,9 +603,9 @@ impl<'ast> Visit<'ast> for IdentScanner<'_> {
 
 fn tokens_contain_ident(tokens: proc_macro2::TokenStream, names: &HashSet<String>) -> bool {
     tokens.into_iter().any(|tt| match tt {
-        proc_macro2::TokenTree::Ident(id) => names.contains(&id.to_string()),
-        proc_macro2::TokenTree::Group(g) => tokens_contain_ident(g.stream(), names),
-        proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
+        TokenTree::Ident(id) => names.contains(&id.to_string()),
+        TokenTree::Group(g) => tokens_contain_ident(g.stream(), names),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
     })
 }
 
@@ -418,6 +639,8 @@ mod fix_tests {
     fn run_fix(src: &str) -> (String, Vec<String>) {
         let cfg = default_cfg();
         let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
+        let mut decls = DeclIndex::default();
+        decls.absorb("fixture", &file);
         let mut rw = SourceRewriter::new(src);
         let mut skipped = Vec::new();
         let mut visitor = FixVisitor {
@@ -426,6 +649,9 @@ mod fix_tests {
             rel: "fixture.rs",
             rw: &mut rw,
             skipped: &mut skipped,
+            decls: &decls,
+            krate: "fixture",
+            self_ty: None,
         };
         visitor.visit_file(&file);
         let out = if rw.is_empty() {
@@ -446,6 +672,137 @@ mod fix_tests {
             }
         }
         counts
+    }
+
+    #[test]
+    fn a_field_left_without_a_comma_gets_one_when_it_moves() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo { a, b };
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            out.contains("Foo { b, a, }"),
+            "the last field's missing comma must not block the reorder, got: {out}"
+        );
+    }
+
+    #[test]
+    fn a_comma_inside_a_trailing_comment_separates_nothing() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo {
+        a,
+        b // one, two
+    };
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            out.contains("b, // one, two"),
+            "the separator goes in ahead of the comment, got: {out}"
+        );
+        assert_eq!(
+            comment_multiset(&out),
+            comment_multiset(src),
+            "I1: comments are preserved"
+        );
+    }
+
+    #[test]
+    fn an_all_shorthand_literal_follows_its_declaration() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo { a, b, };
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            out.contains("Foo { b, a, }"),
+            "literal must read as the struct declares, got: {out}"
+        );
+    }
+
+    #[test]
+    fn a_self_literal_follows_the_declaration_of_its_impl() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+impl Foo {
+    fn new(a: u8, b: u8) -> Self {
+        Self { a, b, }
+    }
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert!(
+            out.contains("Self { b, a, }"),
+            "`Self` must resolve to the type of the impl, got: {out}"
+        );
+    }
+
+    #[test]
+    fn spelled_out_initializers_keep_their_evaluation_order() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let _ = Foo { a: first(), b: second(), };
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(
+            out, src,
+            "an initializer may have effects the order carries"
+        );
+    }
+
+    #[test]
+    fn a_name_two_declarations_disagree_on_orders_nothing() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+mod other {
+    struct Foo {
+        a: u8,
+        b: u8,
+    }
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo { a, b, };
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(out, src, "the literal names one of two declarations");
     }
 
     #[test]
@@ -580,13 +937,13 @@ fn main() {
     }
 
     #[test]
-    fn missing_trailing_comma_is_skipped() {
+    fn missing_trailing_comma_still_reorders() {
         let src = "fn main() { let _ = Foo { x: 1, y }; }";
         let (out, skipped) = run_fix(src);
-        assert_eq!(out, src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
         assert!(
-            skipped.iter().any(|s| s.contains("trailing comma")),
-            "skipped: {skipped:?}"
+            out.contains("Foo { y, x: 1, }"),
+            "the shorthand rule reaches a literal the author left uncommaed: {out}"
         );
     }
 
@@ -654,14 +1011,53 @@ mod detect_tests {
     fn detect(src: &str) -> Vec<String> {
         let cfg = default_cfg();
         let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
+        let mut decls = DeclIndex::default();
+        decls.absorb("fixture", &file);
         let mut out = Vec::new();
         let mut v = InitVisitor {
             cfg: &cfg,
             rel: "fixture.rs",
             out: &mut out,
+            decls: &decls,
+            krate: "fixture",
+            self_ty: None,
         };
         v.visit_file(&file);
         out.into_iter().map(|viol| viol.key).collect()
+    }
+
+    #[test]
+    fn an_all_shorthand_literal_out_of_declaration_order_is_flagged() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo { a, b, };
+}
+";
+        assert_eq!(
+            detect(src).len(),
+            1,
+            "the order clippy reads must be the order the ratchet reads"
+        );
+    }
+
+    #[test]
+    fn an_all_shorthand_literal_in_declaration_order_is_accepted() {
+        let src = "\
+struct Foo {
+    b: u8,
+    a: u8,
+}
+fn main() {
+    let (a, b) = (1, 2);
+    let _ = Foo { b, a, };
+}
+";
+        assert!(detect(src).is_empty(), "already declaration-ordered");
     }
 
     #[test]

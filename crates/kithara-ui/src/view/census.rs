@@ -40,10 +40,10 @@ impl<'a> From<&'a Write> for ViewWrite<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct PageStanding {
-    pub initial: String,
     /// Every page the screen offers, so what a harness may turn to comes from
     /// the document rather than from a list beside it that can disagree.
     pub offered: BTreeSet<String>,
+    pub initial: String,
     pub shown: String,
 }
 
@@ -54,8 +54,8 @@ pub struct PageStanding {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewWrites {
     by_path: BTreeMap<String, (String, Write)>,
-    named: BTreeSet<String>,
     pages: BTreeMap<String, PageStanding>,
+    named: BTreeSet<String>,
 }
 
 impl ViewWrites {
@@ -67,15 +67,15 @@ impl ViewWrites {
             .map(|(state, write)| (state.as_str(), write.into()))
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_path.is_empty()
+    }
+
     /// Every state this screen names, on either side.
     #[must_use]
     pub const fn named(&self) -> &BTreeSet<String> {
         &self.named
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.by_path.is_empty()
     }
 
     /// Where every page-turning state stood when this screen was compiled.
@@ -96,12 +96,12 @@ impl ViewWrites {
 
 /// One `Tabs` as it compiled: the pages it offers and the one it showed.
 pub(crate) struct Tabs<'a> {
-    pub(crate) initial: &'a str,
     pub(crate) origin: &'a SourceUri,
-    pub(crate) pages: BTreeSet<String>,
+    pub(crate) initial: &'a str,
     pub(crate) path: &'a str,
     pub(crate) shown: &'a str,
     pub(crate) state: &'a str,
+    pub(crate) pages: BTreeSet<String>,
 }
 
 /// Which way one binding runs, which is the slot it fills rather than anything
@@ -130,14 +130,52 @@ struct Named {
 #[derive(Default)]
 pub(crate) struct Census {
     declared: BTreeMap<String, BTreeSet<String>>,
-    named: Vec<Named>,
     origin: BTreeMap<String, (SourceUri, String)>,
     pages: BTreeMap<String, PageStanding>,
-    read: BTreeSet<String>,
     writes: BTreeMap<String, (String, Write)>,
+    read: BTreeSet<String>,
+    named: Vec<Named>,
 }
 
 impl Census {
+    pub(crate) fn finish(self) -> Result<ViewWrites, UiDocError> {
+        if let Some(named) = self.named.iter().find(|named| {
+            !self
+                .declared
+                .get(&named.state)
+                .is_some_and(|pages| pages.contains(&named.page))
+        }) {
+            return Err(UiDocError::UnknownPage {
+                origin: named.origin.clone(),
+                id: named.state.clone(),
+                page: named.page.clone(),
+                path: named.path.clone(),
+            });
+        }
+        if let Some((state, (origin, path))) = self
+            .origin
+            .iter()
+            .find(|(state, _)| !self.read.contains(*state))
+        {
+            return Err(UiDocError::UnreadState {
+                origin: origin.clone(),
+                id: state.clone(),
+                path: path.clone(),
+            });
+        }
+        let named = self
+            .read
+            .iter()
+            .cloned()
+            .chain(self.writes.values().map(|(state, _)| state.clone()))
+            .collect();
+        Ok(ViewWrites {
+            named,
+            by_path: self.writes,
+            pages: self.pages,
+        })
+    }
+
     /// Notes one binding, on the side the slot it fills puts it.
     pub(crate) fn note(
         &mut self,
@@ -226,43 +264,5 @@ impl Census {
                 (id.0.clone(), Write::Flag(ViewSet::Off)),
             );
         }
-    }
-
-    pub(crate) fn finish(self) -> Result<ViewWrites, UiDocError> {
-        if let Some(named) = self.named.iter().find(|named| {
-            !self
-                .declared
-                .get(&named.state)
-                .is_some_and(|pages| pages.contains(&named.page))
-        }) {
-            return Err(UiDocError::UnknownPage {
-                origin: named.origin.clone(),
-                id: named.state.clone(),
-                page: named.page.clone(),
-                path: named.path.clone(),
-            });
-        }
-        if let Some((state, (origin, path))) = self
-            .origin
-            .iter()
-            .find(|(state, _)| !self.read.contains(*state))
-        {
-            return Err(UiDocError::UnreadState {
-                origin: origin.clone(),
-                id: state.clone(),
-                path: path.clone(),
-            });
-        }
-        let named = self
-            .read
-            .iter()
-            .cloned()
-            .chain(self.writes.values().map(|(state, _)| state.clone()))
-            .collect();
-        Ok(ViewWrites {
-            by_path: self.writes,
-            named,
-            pages: self.pages,
-        })
     }
 }

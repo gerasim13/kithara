@@ -13,12 +13,12 @@ pub(crate) struct Extent {
 }
 
 impl Extent {
-    pub(crate) const fn restore(frames: u64) -> Self {
-        Self {
-            claimed: Some(frames),
-            proved: None,
-            delivered: 0,
-        }
+    pub(crate) fn claim(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
+        self.claimed = self.claimed.max(frames_for(duration, rate));
+    }
+
+    pub(crate) fn deliver(&mut self, range: FrameRange) {
+        self.delivered = self.delivered.max(range.end());
     }
 
     pub(crate) fn frames(&self) -> Option<u64> {
@@ -29,16 +29,16 @@ impl Extent {
         Some(known.max(self.delivered))
     }
 
-    pub(crate) fn claim(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
-        self.claimed = self.claimed.max(frames_for(duration, rate));
-    }
-
-    pub(crate) fn deliver(&mut self, range: FrameRange) {
-        self.delivered = self.delivered.max(range.end());
-    }
-
     pub(crate) fn prove_end(&mut self, frame: u64) {
         self.proved = Some(self.proved.map_or(frame, |limit| limit.min(frame)));
+    }
+
+    pub(crate) const fn restore(frames: u64) -> Self {
+        Self {
+            claimed: Some(frames),
+            proved: None,
+            delivered: 0,
+        }
     }
 }
 

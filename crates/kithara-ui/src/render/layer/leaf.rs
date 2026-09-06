@@ -2,10 +2,14 @@ use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
     advanced::{
         Clipboard, Shell, Widget as IcedWidget,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         mouse, overlay, renderer,
-        widget::{self, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
+    event::Status,
 };
 
 use super::contract::WindowLayerProgram;
@@ -42,14 +46,9 @@ where
     ) {
     }
 
-    fn layout(
-        &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let size = self.size();
-        layout::Node::new(limits.resolve(size.width, size.height, Size::ZERO))
+        Node::new(limits.resolve(size.width, size.height, Size::ZERO))
     }
 
     fn overlay<'a>(
@@ -75,12 +74,12 @@ where
         Size::new(iced_length(size.width), iced_length(size.height))
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new((P::State::default(), None::<PointerId>))
+    fn state(&self) -> State {
+        State::new((P::State::default(), None::<PointerId>))
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<(P::State, Option<PointerId>)>()
+    fn tag(&self) -> Tag {
+        Tag::of::<(P::State, Option<PointerId>)>()
     }
 }
 
@@ -123,8 +122,8 @@ where
         }
     }
 
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        layout::Node::new(Size::new(self.bounds.w, self.bounds.h))
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> Node {
+        Node::new(Size::new(self.bounds.w, self.bounds.h))
             .move_to(Point::new(self.bounds.x, self.bounds.y))
     }
 
@@ -196,7 +195,7 @@ where
                 if let Some(message) = message {
                     shell.publish(message);
                 }
-                if status == iced::event::Status::Captured {
+                if status == Status::Captured {
                     shell.capture_event();
                 }
             }

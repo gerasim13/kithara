@@ -551,11 +551,11 @@ async fn decode_to_eof(
     }
 
     DecodeSummary {
+        spec,
         eof,
+        saw_ascending,
         frames,
         non_empty_chunks,
-        saw_ascending,
-        spec,
     }
 }
 

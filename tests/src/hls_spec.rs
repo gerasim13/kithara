@@ -177,7 +177,28 @@ where
     }
 
     let data_mode = normalize_data_mode(&spec.data_mode, &resolve_blob)?;
-    let init_mode = normalize_init_mode(&spec.init_mode, &resolve_blob)?;
+    let init_mode = match &spec.init_mode {
+        InitMode::None => ResolvedInitMode::None,
+        InitMode::TestInit => ResolvedInitMode::TestInit,
+        InitMode::Custom(data) => {
+            ResolvedInitMode::PerVariantBytes(data.iter().cloned().map(Arc::new).collect())
+        }
+        InitMode::BlobRefs(keys) => ResolvedInitMode::PerVariantBytes(
+            keys.iter()
+                .map(|key| resolve_blob(key))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        InitMode::WavHeader {
+            sample_rate,
+            channels,
+        } => {
+            validate_pcm_shape(*sample_rate, *channels)?;
+            ResolvedInitMode::WavHeader {
+                sample_rate: *sample_rate,
+                channels: *channels,
+            }
+        }
+    };
     let encryption = spec
         .encryption
         .as_ref()
@@ -312,37 +333,6 @@ where
                 sample_rate: *sample_rate,
                 channels: *channels,
                 patterns: patterns.clone(),
-            })
-        }
-    }
-}
-
-fn normalize_init_mode<F>(
-    init_mode: &InitMode,
-    resolve_blob: &F,
-) -> Result<ResolvedInitMode, HlsSpecError>
-where
-    F: Fn(&str) -> Result<Arc<Vec<u8>>, HlsSpecError>,
-{
-    match init_mode {
-        InitMode::None => Ok(ResolvedInitMode::None),
-        InitMode::TestInit => Ok(ResolvedInitMode::TestInit),
-        InitMode::Custom(data) => Ok(ResolvedInitMode::PerVariantBytes(
-            data.iter().cloned().map(Arc::new).collect(),
-        )),
-        InitMode::BlobRefs(keys) => keys
-            .iter()
-            .map(|key| resolve_blob(key))
-            .collect::<Result<Vec<_>, _>>()
-            .map(ResolvedInitMode::PerVariantBytes),
-        InitMode::WavHeader {
-            sample_rate,
-            channels,
-        } => {
-            validate_pcm_shape(*sample_rate, *channels)?;
-            Ok(ResolvedInitMode::WavHeader {
-                sample_rate: *sample_rate,
-                channels: *channels,
             })
         }
     }
@@ -565,7 +555,6 @@ impl ResolvedEncryption {
 mod tests {
     use std::{collections::HashMap, num::NonZeroU32};
 
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara::stream::AudioCodec;
 
     use super::*;
@@ -625,9 +614,8 @@ mod tests {
         assert!(err.to_string().contains("variant_count"));
     }
 
-    #[kithara::test]
-    fn rejects_packaged_sine_freq_above_nyquist() {
-        let spec = HlsSpec {
+    fn packaged_signal_spec(signal: PackagedSignal) -> HlsSpec {
+        HlsSpec {
             packaged_audio: Some(PackagedAudioRequest {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
@@ -637,37 +625,27 @@ mod tests {
                 bit_rate: None,
                 encoder_delay: None,
                 trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
+                source: PackagedAudioSource::Signal(signal),
                 gapless_encoding: GaplessEncoding::default(),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()
-        };
+        }
+    }
+
+    #[kithara::test]
+    fn rejects_packaged_sine_freq_above_nyquist() {
+        let spec = packaged_signal_spec(PackagedSignal::Sine { freq_hz: 50_000.0 });
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
     }
 
     #[kithara::test]
     fn resolves_packaged_sweep() {
-        let spec = HlsSpec {
-            packaged_audio: Some(PackagedAudioRequest {
-                codec: AudioCodec::AacLc,
-                sample_rate: 44_100,
-                channels: 2,
-                start_frame: None,
-                timescale: None,
-                bit_rate: None,
-                encoder_delay: None,
-                trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
-                    start_hz: 220.0,
-                    end_hz: 8_000.0,
-                }),
-                gapless_encoding: GaplessEncoding::default(),
-                variant_overrides: Vec::new(),
-            }),
-            ..HlsSpec::default()
-        };
+        let spec = packaged_signal_spec(PackagedSignal::Sweep {
+            start_hz: 220.0,
+            end_hz: 8_000.0,
+        });
         let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
         let packaged = resolved.packaged_audio.unwrap();
         assert!(matches!(
@@ -681,25 +659,10 @@ mod tests {
 
     #[kithara::test]
     fn rejects_packaged_sweep_endpoint_above_nyquist() {
-        let spec = HlsSpec {
-            packaged_audio: Some(PackagedAudioRequest {
-                codec: AudioCodec::AacLc,
-                sample_rate: 44_100,
-                channels: 2,
-                start_frame: None,
-                timescale: None,
-                bit_rate: None,
-                encoder_delay: None,
-                trailing_delay: None,
-                source: PackagedAudioSource::Signal(PackagedSignal::Sweep {
-                    start_hz: 220.0,
-                    end_hz: 50_000.0,
-                }),
-                gapless_encoding: GaplessEncoding::default(),
-                variant_overrides: Vec::new(),
-            }),
-            ..HlsSpec::default()
-        };
+        let spec = packaged_signal_spec(PackagedSignal::Sweep {
+            start_hz: 220.0,
+            end_hz: 50_000.0,
+        });
         let error = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("sweep end_hz"));
         assert!(error.to_string().contains("Nyquist"));

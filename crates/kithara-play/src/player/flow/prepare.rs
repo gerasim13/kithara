@@ -27,9 +27,9 @@ fn playback_buffers(
         .ok_or(SessionError::ResponseGeometryOverflow)?;
     if required_frames > budget.get() {
         return Err(SessionError::ResponseBudgetExceeded {
+            required_frames,
             max_block_frames: shape.max_block_frames.get(),
             render_quantum_frames: quantum.get(),
-            required_frames,
             budget_frames: budget.get(),
         });
     }
@@ -157,12 +157,12 @@ mod tests {
     struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
 
     impl SessionDispatcher<TestPools> for ImmediateSession {
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::ImmediateOffRt
+        }
+
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            self.0.exec(cmd)
         }
     }
 

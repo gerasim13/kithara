@@ -9,8 +9,8 @@ use super::Packager;
 use crate::pools::AppHost;
 
 pub(crate) struct Broadcaster<P: Packager> {
-    config: P::Config,
     pub(super) phase: Phase<P>,
+    config: P::Config,
 }
 
 pub(super) enum Phase<P: Packager> {
@@ -34,14 +34,6 @@ impl<P: Packager> Broadcaster<P> {
     pub(crate) fn complete_stop(&mut self) {
         if matches!(self.phase, Phase::Stopping) {
             self.phase = Phase::Off;
-        }
-    }
-
-    pub(crate) fn release(&mut self, host: &AppHost) {
-        if matches!(self.phase, Phase::Running { .. })
-            && let Err(error) = P::release(host)
-        {
-            tracing::error!(%error, "failed to release broadcast output group during shutdown");
         }
     }
 
@@ -75,6 +67,14 @@ impl<P: Packager> Broadcaster<P> {
                 tracing::error!(%error, "broadcast did not start");
                 self.phase = Phase::Off;
             }
+        }
+    }
+
+    pub(crate) fn release(&mut self, host: &AppHost) {
+        if matches!(self.phase, Phase::Running { .. })
+            && let Err(error) = P::release(host)
+        {
+            tracing::error!(%error, "failed to release broadcast output group during shutdown");
         }
     }
 

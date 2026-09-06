@@ -4,8 +4,10 @@ use iced::{
     Event, Renderer, Size, Theme,
     advanced::{
         Clipboard, Shell,
-        layout::{self, Layout},
-        mouse, overlay, renderer,
+        layout::{Layout, Node},
+        mouse, overlay,
+        overlay::{Element, Nested},
+        renderer,
         widget::Operation,
     },
 };
@@ -13,18 +15,18 @@ use iced::{
 use crate::render::UiEvent;
 
 pub(crate) fn hosted_picker_overlay<'a>(
-    child: overlay::Element<'a, UiEvent, Theme, Renderer>,
+    child: Element<'a, UiEvent, Theme, Renderer>,
     route: impl for<'b> FnMut(&Event, mouse::Cursor, &mut Shell<'b, UiEvent>) -> bool + 'a,
-) -> overlay::Element<'a, UiEvent, Theme, Renderer> {
-    overlay::Element::new(Box::new(HostedPickerPortal {
+) -> Element<'a, UiEvent, Theme, Renderer> {
+    Element::new(Box::new(HostedPickerPortal {
         route,
-        child: RefCell::new(overlay::Nested::new(child)),
+        child: RefCell::new(Nested::new(child)),
     }))
 }
 
 struct HostedPickerPortal<'a, F> {
     route: F,
-    child: RefCell<overlay::Nested<'a, UiEvent, Theme, Renderer>>,
+    child: RefCell<Nested<'a, UiEvent, Theme, Renderer>>,
 }
 
 impl<F> overlay::Overlay<UiEvent, Theme, Renderer> for HostedPickerPortal<'_, F>
@@ -41,16 +43,16 @@ where
     ) {
     }
 
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        layout::Node::new(Size::ZERO)
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> Node {
+        Node::new(Size::ZERO)
     }
 
     fn overlay<'a>(
         &'a mut self,
         _layout: Layout<'a>,
         _renderer: &Renderer,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
-        Some(overlay::Element::new(Box::new(HostedPickerLayer {
+    ) -> Option<Element<'a, UiEvent, Theme, Renderer>> {
+        Some(Element::new(Box::new(HostedPickerLayer {
             child: &self.child,
             route: &mut self.route,
         })))
@@ -59,7 +61,7 @@ where
 
 struct HostedPickerLayer<'a, 'child, F> {
     route: &'a mut F,
-    child: &'a RefCell<overlay::Nested<'child, UiEvent, Theme, Renderer>>,
+    child: &'a RefCell<Nested<'child, UiEvent, Theme, Renderer>>,
 }
 
 impl<F> overlay::Overlay<UiEvent, Theme, Renderer> for HostedPickerLayer<'_, '_, F>
@@ -85,7 +87,7 @@ where
 
     delegate::delegate! {
         to self.child.borrow_mut() {
-            fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node;
+            fn layout(&mut self, renderer: &Renderer, bounds: Size) -> Node;
             fn mouse_interaction(
                 &self,
                 layout: Layout<'_>,

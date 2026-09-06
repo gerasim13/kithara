@@ -21,6 +21,24 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    fn config_for(
+        backend: StretchKind,
+        backends: ElasticBackendConfig,
+        source_block_frames: NonZeroUsize,
+        spec: AudioSpec,
+        pools: &PoolRegion<S>,
+    ) -> Result<ElasticConfig<S>, ElasticError> {
+        ElasticConfig::builder()
+            .backend(backend)
+            .backends(backends)
+            .sample_rate(spec.sample_rate.get())
+            .channels(usize::from(spec.channels.max(1)))
+            .pools(pools.clone())
+            .max_source_frames(source_block_frames.get())
+            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
+            .build()
+    }
+
     pub(super) fn prepare_target(
         kind: StretchKind,
         backends: ElasticBackendConfig,
@@ -91,24 +109,6 @@ where
                 PreparedTarget::default()
             }
         }
-    }
-
-    fn config_for(
-        backend: StretchKind,
-        backends: ElasticBackendConfig,
-        source_block_frames: NonZeroUsize,
-        spec: AudioSpec,
-        pools: &PoolRegion<S>,
-    ) -> Result<ElasticConfig<S>, ElasticError> {
-        ElasticConfig::builder()
-            .backend(backend)
-            .backends(backends)
-            .sample_rate(spec.sample_rate.get())
-            .channels(usize::from(spec.channels.max(1)))
-            .pools(pools.clone())
-            .max_source_frames(source_block_frames.get())
-            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
-            .build()
     }
 
     fn scratch_samples(

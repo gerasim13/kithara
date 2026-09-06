@@ -34,22 +34,22 @@ pub(crate) struct PlayerCore<S> {
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
 
-    pub(crate) warp: WarpConfig,
-    pub(crate) response_budget_frames: NonZeroUsize,
-    /// Undelivered resources unregister before the worker owner drops.
-    pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
     /// worker owner drops.
     pub(crate) engine: EngineImpl<S>,
-    /// Explicit shared playback worker. Declared after both resource owners.
-    pub(crate) worker: PlayWorker<S>,
     pub(crate) gapless_mode: GaplessMode,
-    /// Player-level underrun policy copied into every prepared resource.
-    pub(crate) block_on_underrun: bool,
+    /// Undelivered resources unregister before the worker owner drops.
+    pub(crate) items: ItemQueue,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
+    pub(crate) response_budget_frames: NonZeroUsize,
+    /// Explicit shared playback worker. Declared after both resource owners.
+    pub(crate) worker: PlayWorker<S>,
     pub(crate) params: PlayerParams,
+    pub(crate) warp: WarpConfig,
+    /// Player-level underrun policy copied into every prepared resource.
+    pub(crate) block_on_underrun: bool,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -66,21 +66,133 @@ pub(crate) struct PlayerCore<S> {
 /// drops before `core.engine`.
 #[doc(hidden)]
 pub struct PlayerRuntime<S> {
-    lifecycle: PlayerLifecycle,
-    operations: Mutex<()>,
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,
+    operations: Mutex<()>,
+    lifecycle: PlayerLifecycle,
 }
 
 impl<S> PlayerRuntime<S> {
     /// Minimum playback rate to prevent stalling.
     pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
 
+    pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+        self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
+    }
+
+    pub(super) fn close(&self) -> Result<(), PlayError> {
+        let _admission = self.operations.lock();
+        match self.begin_close()? {
+            CloseAdmission::AlreadyClosed => return Ok(()),
+            CloseAdmission::Begin => {}
+        }
+        if let Err(error) = self.core.engine.close() {
+            self.reopen_controls();
+            return Err(error);
+        }
+        self.finish_close();
+        Ok(())
+    }
+
+    pub(crate) fn enqueue_to_processor(
+        &self,
+        index: usize,
+    ) -> Result<Option<EnqueuedItem>, PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        let Some(item) = self.core.items.take_for_load(
+            index,
+            self.core.engine.master_sample_rate(),
+            self.core.engine.pools(),
+        )?
+        else {
+            return Ok(None);
+        };
+        self.phase.lock().set_abr_handle(item.abr_handle);
+        let src = Arc::clone(item.player_resource.src());
+        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
+            item_id: item.item_id,
+            resource: Box::new(item.player_resource),
+        });
+        Ok(Some((item.item_id, src, item.duration_seconds)))
+    }
+
+    /// Terminal teardown: close the player and cancel its subtree.
+    ///
+    /// Deliberately skips the admission gate. This runs from `Drop`, and a
+    /// player is dropped by whoever last owns it — including a session
+    /// dispatcher unwinding its own state. An admitted operation can be parked
+    /// on a reply from that same dispatcher, so waiting for the gate here
+    /// closes the cycle. Neither step needs it: closing is a store on an
+    /// atomic and cancelling fires a token, and a cancel exists to interrupt
+    /// an admitted operation rather than to queue behind one. `close` still
+    /// takes the gate, so the orderly path keeps its ordering.
+    fn invalidate(&self) {
+        self.finish_close();
+        self.core.engine.cancel();
+    }
+
+    /// Remove all items from the queue.
+    pub fn remove_all_items(&self)
+    where
+        S: HasPool<f32>,
+    {
+        self.unarm_next();
+        self.core.items.clear_all();
+        self.set_status(PlayerStatus::Unknown);
+        let _ = self.send_to_slot(PlayerCmd::Clear);
+        self.enter_stopped();
+        debug!("all items removed");
+    }
+
+    /// Remove item at index. Returns the removed resource, or `None` if out of
+    /// bounds or already consumed.
+    pub fn remove_at(&self, index: usize) -> Option<Resource>
+    where
+        S: HasPool<f32>,
+    {
+        self.unarm_next();
+
+        self.core
+            .items
+            .remove_at(index)
+            .map(|queued| queued.resource)
+    }
+
     /// Rate the player's master bus runs at. Decoded frames handed to an
     /// observer use this axis after decoder-side conversion.
     #[must_use]
     pub fn sample_rate(&self) -> u32 {
         self.core.engine.master_sample_rate()
+    }
+
+    /// Internal: set status and emit event if changed.
+    pub(crate) fn set_status(&self, new_status: PlayerStatus) {
+        let mut status = self.core.status.lock();
+        if *status != new_status {
+            *status = new_status;
+            drop(status);
+            self.core
+                .engine
+                .bus()
+                .publish(PlayerEvent::StatusChanged { status: new_status });
+        }
+    }
+
+    pub(super) fn with_open<T>(&self, operation: impl FnOnce(&Self) -> T) -> Result<T, PlayError> {
+        let _admission = self.operations.lock();
+        if self.is_closed() {
+            return Err(PlayError::Closed);
+        }
+        Ok(operation(self))
+    }
+
+    pub(super) fn with_open_result<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, PlayError>,
+    ) -> Result<T, PlayError> {
+        self.with_open(operation)?
     }
 
     delegate! {
@@ -123,118 +235,6 @@ impl<S> PlayerRuntime<S> {
             /// Typed pool facade used for resources created by this player.
             #[must_use]
             pub fn pools(&self) -> &PoolRegion<S>;
-        }
-    }
-
-    pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-        self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
-    }
-
-    pub(super) fn with_open<T>(&self, operation: impl FnOnce(&Self) -> T) -> Result<T, PlayError> {
-        let _admission = self.operations.lock();
-        if self.is_closed() {
-            return Err(PlayError::Closed);
-        }
-        Ok(operation(self))
-    }
-
-    pub(super) fn with_open_result<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, PlayError>,
-    ) -> Result<T, PlayError> {
-        self.with_open(operation)?
-    }
-
-    pub(super) fn close(&self) -> Result<(), PlayError> {
-        let _admission = self.operations.lock();
-        match self.begin_close()? {
-            CloseAdmission::AlreadyClosed => return Ok(()),
-            CloseAdmission::Begin => {}
-        }
-        if let Err(error) = self.core.engine.close() {
-            self.reopen_controls();
-            return Err(error);
-        }
-        self.finish_close();
-        Ok(())
-    }
-
-    /// Terminal teardown: close the player and cancel its subtree.
-    ///
-    /// Deliberately skips the admission gate. This runs from `Drop`, and a
-    /// player is dropped by whoever last owns it — including a session
-    /// dispatcher unwinding its own state. An admitted operation can be parked
-    /// on a reply from that same dispatcher, so waiting for the gate here
-    /// closes the cycle. Neither step needs it: closing is a store on an
-    /// atomic and cancelling fires a token, and a cancel exists to interrupt
-    /// an admitted operation rather than to queue behind one. `close` still
-    /// takes the gate, so the orderly path keeps its ordering.
-    fn invalidate(&self) {
-        self.finish_close();
-        self.core.engine.cancel();
-    }
-
-    pub(crate) fn enqueue_to_processor(
-        &self,
-        index: usize,
-    ) -> Result<Option<EnqueuedItem>, PlayError>
-    where
-        S: HasPool<f32>,
-    {
-        let Some(item) = self.core.items.take_for_load(
-            index,
-            self.core.engine.master_sample_rate(),
-            self.core.engine.pools(),
-        )?
-        else {
-            return Ok(None);
-        };
-        self.phase.lock().set_abr_handle(item.abr_handle);
-        let src = Arc::clone(item.player_resource.src());
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        });
-        Ok(Some((item.item_id, src, item.duration_seconds)))
-    }
-
-    /// Remove all items from the queue.
-    pub fn remove_all_items(&self)
-    where
-        S: HasPool<f32>,
-    {
-        self.unarm_next();
-        self.core.items.clear_all();
-        self.set_status(PlayerStatus::Unknown);
-        let _ = self.send_to_slot(PlayerCmd::Clear);
-        self.enter_stopped();
-        debug!("all items removed");
-    }
-
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource>
-    where
-        S: HasPool<f32>,
-    {
-        self.unarm_next();
-
-        self.core
-            .items
-            .remove_at(index)
-            .map(|queued| queued.resource)
-    }
-
-    /// Internal: set status and emit event if changed.
-    pub(crate) fn set_status(&self, new_status: PlayerStatus) {
-        let mut status = self.core.status.lock();
-        if *status != new_status {
-            *status = new_status;
-            drop(status);
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::StatusChanged { status: new_status });
         }
     }
 }
@@ -288,15 +288,15 @@ mod tests {
     struct ForeignRateSession;
 
     impl SessionDispatcher<TestPools> for ForeignRateSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(None, 48_000))),
                 _ => Ok(Reply::Ok),
             }
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

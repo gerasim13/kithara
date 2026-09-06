@@ -40,22 +40,6 @@ pub struct PlayWorkerConfig<S> {
     #[field(get, copy)]
     #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) backpressure_poll_interval: Duration,
-    /// Parent cancellation token for this playback dispatcher lifetime. Not a
-    /// document key: the caller owns the token tree.
-    #[patch(skip)]
-    pub(crate) cancel: Option<CancelToken>,
-    /// Optional base worker shared with other domain workers. Not a document
-    /// key: a live worker is an object only code can hand over.
-    #[patch(skip)]
-    pub(crate) worker: Option<Worker>,
-    /// Maximum number of simultaneously registered track render chains.
-    #[builder(default = Consts::CAPACITY)]
-    #[field(get, copy)]
-    pub(crate) capacity: NonZeroUsize,
-    /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
-    #[field(get, copy)]
-    pub(crate) fairness_yield_interval: NonZeroU32,
     /// Park duration when no playback task expects progress.
     #[builder(default = Duration::from_millis(100))]
     #[field(get, copy)]
@@ -66,15 +50,31 @@ pub struct PlayWorkerConfig<S> {
     #[field(get, copy)]
     #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) slow_tick_threshold: Duration,
-    /// Maximum consecutive ticks for one track visit.
-    #[builder(default = Consts::TASK_BURST)]
-    #[field(get, copy)]
-    pub(crate) task_burst: NonZeroU32,
     /// Park duration while live playback tasks are waiting.
     #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
     #[field(get, copy)]
     #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub(crate) wait_timeout: Duration,
+    /// Consecutive progress passes between cooperative thread yields.
+    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
+    #[field(get, copy)]
+    pub(crate) fairness_yield_interval: NonZeroU32,
+    /// Maximum consecutive ticks for one track visit.
+    #[builder(default = Consts::TASK_BURST)]
+    #[field(get, copy)]
+    pub(crate) task_burst: NonZeroU32,
+    /// Maximum number of simultaneously registered track render chains.
+    #[builder(default = Consts::CAPACITY)]
+    #[field(get, copy)]
+    pub(crate) capacity: NonZeroUsize,
+    /// Parent cancellation token for this playback dispatcher lifetime. Not a
+    /// document key: the caller owns the token tree.
+    #[patch(skip)]
+    pub(crate) cancel: Option<CancelToken>,
+    /// Optional base worker shared with other domain workers. Not a document
+    /// key: a live worker is an object only code can hand over.
+    #[patch(skip)]
+    pub(crate) worker: Option<Worker>,
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

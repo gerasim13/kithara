@@ -11,19 +11,19 @@ use crate::{
     layout::Axis,
     module::MeasureAxis,
     render::document::Band,
-    solve::{self, Distribution, Input, Measure},
+    solve::{self, Alignment, Distribution, Input, Item, Limits, Measure, Padding, Size},
 };
 
 pub(crate) struct Flex {
-    alignment: solve::Alignment,
-    main_alignment: solve::Alignment,
+    alignment: Alignment,
+    main_alignment: Alignment,
     axis: Axis,
     height: solve::Length,
     width: solve::Length,
     /// The axis whose room decides which children stand, when they come and go
     /// with the room at all.
     measure: Option<MeasureAxis>,
-    padding: solve::Padding,
+    padding: Padding,
     children: Vec<ChildLayout>,
     /// Which child each item the solver asks about actually is, refilled
     /// beside `stands`.
@@ -43,10 +43,10 @@ pub(crate) struct ChildLayout {
     /// question - whether this child is in the picture - and neither of them
     /// rebuilds the flow to answer it.
     block: Option<Rc<BlockState>>,
-    declared: Option<solve::Size<solve::Length>>,
+    declared: Option<Size<solve::Length>>,
     main_minimum: Option<f32>,
     main_weight: Option<f32>,
-    natural: solve::Size<solve::Length>,
+    natural: Size<solve::Length>,
 }
 
 impl ChildLayout {
@@ -56,10 +56,7 @@ impl ChildLayout {
         self
     }
 
-    pub(crate) const fn natural(
-        natural: solve::Size<solve::Length>,
-        main_minimum: Option<f32>,
-    ) -> Self {
+    pub(crate) const fn natural(natural: Size<solve::Length>, main_minimum: Option<f32>) -> Self {
         Self {
             natural,
             main_minimum,
@@ -71,8 +68,8 @@ impl ChildLayout {
     }
 
     pub(crate) const fn weighted(
-        natural: solve::Size<solve::Length>,
-        declared: solve::Size<solve::Length>,
+        natural: Size<solve::Length>,
+        declared: Size<solve::Length>,
         main_weight: f32,
     ) -> Self {
         Self {
@@ -97,9 +94,9 @@ impl Flex {
         axis: Axis,
         width: solve::Length,
         height: solve::Length,
-        padding: solve::Padding,
+        padding: Padding,
         spacing: f32,
-        alignment: solve::Alignment,
+        alignment: Alignment,
         children: Vec<ChildLayout>,
     ) -> Self {
         Self {
@@ -111,13 +108,13 @@ impl Flex {
             alignment,
             children,
             measure: None,
-            main_alignment: solve::Alignment::Start,
+            main_alignment: Alignment::Start,
             stands: Vec::new(),
             slots: Vec::new(),
         }
     }
 
-    pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {
+    pub(crate) const fn align_main(mut self, alignment: Alignment) -> Self {
         self.main_alignment = alignment;
         self
     }
@@ -126,8 +123,8 @@ impl Flex {
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
-        limits: solve::Limits,
-    ) -> solve::Size {
+        limits: Limits,
+    ) -> Size {
         let outer_limits = limits.width(self.width).height(self.height);
         let inner_limits = outer_limits.shrink(self.padding).loose();
         self.stand(outer_limits);
@@ -149,8 +146,8 @@ impl Flex {
                 let layout = &self.children[*slot];
                 let declared = layout.declared.unwrap_or(layout.natural);
                 layout.main_weight.map_or_else(
-                    || solve::Item::new(declared, layout.main_minimum),
-                    |weight| solve::Item::weighted(declared, weight),
+                    || Item::new(declared, layout.main_minimum),
+                    |weight| Item::weighted(declared, weight),
                 )
             })
             .collect();
@@ -168,7 +165,7 @@ impl Flex {
                 limits: &inner_limits,
                 width: self.width,
                 height: self.height,
-                padding: solve::Padding::default(),
+                padding: Padding::default(),
                 spacing: self.spacing,
                 align_items: self.alignment,
             },
@@ -184,9 +181,9 @@ impl Flex {
         };
         let free = (available_main - content_main).max(0.0);
         let offset = match self.main_alignment {
-            solve::Alignment::Start => 0.0,
-            solve::Alignment::Center => free / 2.0,
-            solve::Alignment::End => free,
+            Alignment::Start => 0.0,
+            Alignment::Center => free / 2.0,
+            Alignment::End => free,
         };
         for item in &mut items {
             match self.axis {
@@ -198,7 +195,7 @@ impl Flex {
         for (index, (slot, item)) in self.slots.iter().zip(items).enumerate() {
             let placed = match measure.stood[index] {
                 Some((limits, size)) if size == item.size => limits,
-                _ => solve::Limits::new(item.size, item.size),
+                _ => Limits::new(item.size, item.size),
             };
             let child = &mut measure.children[*slot];
             Node::set_child_limits(measure.ctx, child, placed);
@@ -226,7 +223,7 @@ impl Flex {
 
     /// Records which children stand: the ones the room reached and the
     /// document did not hide.
-    fn stand(&mut self, limits: solve::Limits) {
+    fn stand(&mut self, limits: Limits) {
         self.stands.clear();
         let room = self.measure.map(|axis| match axis {
             MeasureAxis::Width => limits.max().width,
@@ -257,11 +254,11 @@ struct MasonryMeasure<'a, 'ctx> {
     /// A cell the solver hands exactly the size it answered with is already
     /// standing right, and asking Masonry for that same box again is answered
     /// from its own layout cache rather than by walking the cell again.
-    stood: Vec<Option<(solve::Limits, solve::Size)>>,
+    stood: Vec<Option<(Limits, Size)>>,
 }
 
 impl Measure for MasonryMeasure<'_, '_> {
-    fn measure(&mut self, index: usize, limits: &solve::Limits) -> solve::Size {
+    fn measure(&mut self, index: usize, limits: &Limits) -> Size {
         let slot = self.slots[index];
         let declared = self.layouts[slot].declared;
         let child_limits = declared.map_or(*limits, |declared| {
@@ -271,7 +268,7 @@ impl Measure for MasonryMeasure<'_, '_> {
         let child = &mut self.children[slot];
         Node::set_child_limits(self.ctx, child, child_limits);
         let intrinsic = self.ctx.run_layout(child, &box_constraints(child_limits));
-        let intrinsic = solve::Size::new(intrinsic.width.as_(), intrinsic.height.as_());
+        let intrinsic = Size::new(intrinsic.width.as_(), intrinsic.height.as_());
         self.stood[index] = Some((child_limits, intrinsic));
         declared.map_or(intrinsic, |declared| {
             limits
@@ -282,7 +279,7 @@ impl Measure for MasonryMeasure<'_, '_> {
     }
 }
 
-pub(crate) fn box_constraints(limits: solve::Limits) -> BoxConstraints {
+pub(crate) fn box_constraints(limits: Limits) -> BoxConstraints {
     let limits = normalized(limits);
     BoxConstraints::new(
         MasonrySize::new(
@@ -296,21 +293,21 @@ pub(crate) fn box_constraints(limits: solve::Limits) -> BoxConstraints {
     )
 }
 
-pub(crate) fn normalized(limits: solve::Limits) -> solve::Limits {
-    let min = solve::Size::new(limits.min().width.max(0.0), limits.min().height.max(0.0));
-    let max = solve::Size::new(
+pub(crate) fn normalized(limits: Limits) -> Limits {
+    let min = Size::new(limits.min().width.max(0.0), limits.min().height.max(0.0));
+    let max = Size::new(
         limits.max().width.max(min.width),
         limits.max().height.max(min.height),
     );
-    solve::Limits::with_compression(min, max, limits.compression())
+    Limits::with_compression(min, max, limits.compression())
 }
 
-fn fit_padding(padding: solve::Padding, inner: solve::Size, outer: solve::Size) -> solve::Padding {
+fn fit_padding(padding: Padding, inner: Size, outer: Size) -> Padding {
     let available_width = (outer.width - inner.width).max(0.0);
     let available_height = (outer.height - inner.height).max(0.0);
     let top = padding.top.min(available_height);
     let left = padding.left.min(available_width);
-    solve::Padding {
+    Padding {
         top,
         right: padding.right.min(available_width - left),
         bottom: padding.bottom.min(available_height - top),

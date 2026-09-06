@@ -130,16 +130,16 @@ impl ElasticSpanConfig {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct ElasticConfig<S> {
-    /// Selected compiled implementation.
-    #[field(get(copy))]
-    backend: StretchKind,
-    /// Shared pool region used by engines that need planar scratch.
-    #[field(get)]
-    pools: PoolRegion<S>,
     #[field(get(copy), vis = "pub(crate)")]
     backends: ElasticBackendConfig,
     #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
+    /// Shared pool region used by engines that need planar scratch.
+    #[field(get)]
+    pools: PoolRegion<S>,
+    /// Selected compiled implementation.
+    #[field(get(copy))]
+    backend: StretchKind,
 }
 
 #[bon]
@@ -192,10 +192,10 @@ impl<S> ElasticConfig<S> {
             ElasticRateEnvelope::try_from(rate_envelope)?,
         )?;
         Ok(Self {
-            backend,
-            pools,
             backends,
             shape,
+            pools,
+            backend,
         })
     }
 
@@ -223,12 +223,12 @@ impl<S> ElasticConfig<S> {
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy, vis = "pub(crate)")]
 pub(crate) struct ElasticShape {
-    channels: usize,
-    max_output_frames: usize,
-    max_source_frames: usize,
     #[field(get(copy))]
     rate_envelope: ElasticRateEnvelope,
     sample_rate: u32,
+    channels: usize,
+    max_output_frames: usize,
+    max_source_frames: usize,
 }
 
 impl ElasticShape {
@@ -262,11 +262,11 @@ impl ElasticShape {
         }
 
         Ok(Self {
+            rate_envelope,
+            sample_rate,
             channels,
             max_output_frames,
             max_source_frames,
-            rate_envelope,
-            sample_rate,
         })
     }
 }

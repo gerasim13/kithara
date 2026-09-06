@@ -25,9 +25,9 @@ impl Pass {
 }
 
 struct Window {
+    beats: Vec<f32>,
     at: f64,
     until: f64,
-    beats: Vec<f32>,
 }
 
 fn seconds(frames: usize) -> f64 {

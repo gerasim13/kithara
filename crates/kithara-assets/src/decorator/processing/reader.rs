@@ -15,11 +15,11 @@ use crate::resource::ReadSide;
 /// Read view over a resource that exposes bytes only after processing completes.
 pub struct ProcessedReader<R, S> {
     readiness: Arc<ReadinessGate>,
-    pools: PoolRegion<S>,
-    chunk_size: usize,
     gate_poll_interval: Duration,
     processor: Option<ProcessCtx>,
+    pools: PoolRegion<S>,
     inner: R,
+    chunk_size: usize,
 }
 
 impl<R, S> Clone for ProcessedReader<R, S>
@@ -54,6 +54,30 @@ where
     R: ReadSide,
     S: HasPool<u8>,
 {
+    fn finish_wait(
+        &self,
+        outcome: WaitOutcome,
+        cancel: Option<&CancelToken>,
+    ) -> StorageResult<WaitOutcome> {
+        if self.processor.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        let ready = cancel.map_or_else(
+            || self.readiness.wait_until_ready(&|| self.inner_terminal()),
+            |cancel| {
+                self.readiness
+                    .wait_until_ready_with_cancel(cancel, &|| self.inner_terminal())
+            },
+        );
+        if ready {
+            Ok(WaitOutcome::Ready)
+        } else if cancel.is_some_and(CancelToken::is_cancelled) {
+            Err(StorageError::Cancelled)
+        } else {
+            Ok(WaitOutcome::Interrupted)
+        }
+    }
+
     fn inner_terminal(&self) -> bool {
         self.readiness.is_failed()
             || matches!(
@@ -76,11 +100,11 @@ where
     ) -> Self {
         Self {
             readiness,
-            pools,
-            chunk_size,
             gate_poll_interval,
             processor,
+            pools,
             inner,
+            chunk_size,
         }
     }
 
@@ -103,30 +127,6 @@ where
             processor,
             inner,
             readiness: Arc::new(ReadinessGate::new(ready, gate_poll_interval)),
-        }
-    }
-
-    fn finish_wait(
-        &self,
-        outcome: WaitOutcome,
-        cancel: Option<&CancelToken>,
-    ) -> StorageResult<WaitOutcome> {
-        if self.processor.is_none() || outcome != WaitOutcome::Ready {
-            return Ok(outcome);
-        }
-        let ready = cancel.map_or_else(
-            || self.readiness.wait_until_ready(&|| self.inner_terminal()),
-            |cancel| {
-                self.readiness
-                    .wait_until_ready_with_cancel(cancel, &|| self.inner_terminal())
-            },
-        );
-        if ready {
-            Ok(WaitOutcome::Ready)
-        } else if cancel.is_some_and(CancelToken::is_cancelled) {
-            Err(StorageError::Cancelled)
-        } else {
-            Ok(WaitOutcome::Interrupted)
         }
     }
 }

@@ -525,13 +525,8 @@ impl<S> SourceProbe for HlsProbe<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    delegate! {
-        to self.coord {
-            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            fn position(&self) -> u64;
-            fn set_position(&self, pos: u64);
-            fn len(&self) -> Option<u64>;
-        }
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }
 
     fn phase(&self) -> SourcePhase {
@@ -539,8 +534,13 @@ where
         self.coord.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    delegate! {
+        to self.coord {
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            fn position(&self) -> u64;
+            fn set_position(&self, pos: u64);
+            fn len(&self) -> Option<u64>;
+        }
     }
 }
 
@@ -583,18 +583,18 @@ where
         Self::selected_variant_for_seek(self)
     }
 
-    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.sessions.incoming_session().is_some_and(|session| {
-            session.transition() == Some(transition)
-                && session.wait_phase() == SourcePhase::WaitingDemand
-        })
-    }
-
     fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake> {
         Self::take_prepared_variant_reader(self, transition)
+    }
+
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.sessions.incoming_session().is_some_and(|session| {
+            session.transition() == Some(transition)
+                && session.wait_phase() == SourcePhase::WaitingDemand
+        })
     }
 }
 
@@ -602,6 +602,18 @@ impl<S> ByteMap for HlsCoord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active().descriptor_after_byte(byte)
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.active().descriptor(segment_index as usize)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active().descriptor_at_time(t)
+    }
+
     delegate! {
         to self {
             #[call(seek_time_anchor)]
@@ -620,18 +632,6 @@ where
             #[call(active)]
             fn segment_count(&self) -> Option<u32>;
         }
-    }
-
-    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.active().descriptor_after_byte(byte)
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.active().descriptor(segment_index as usize)
-    }
-
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.active().descriptor_at_time(t)
     }
 }
 

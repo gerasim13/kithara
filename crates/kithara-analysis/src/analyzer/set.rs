@@ -51,10 +51,10 @@ where
     #[must_use]
     pub fn new(pools: PoolRegion<S>) -> Self {
         Self {
+            pools,
             beat: Config::default(),
             waveform: waveform::Config::default(),
             beat_config: None,
-            pools,
         }
     }
 
@@ -65,16 +65,35 @@ where
         revision: u64,
     ) -> Result<TrackAnalyzers<B, S>, PoolError> {
         Ok(TrackAnalyzers {
+            revision,
+            token,
             beat: self.beat.build(rate, &self.pools),
             waveform: waveform::build(&self.waveform, rate, &self.pools)?,
             coverage: Coverage::default(),
             fingerprint: self.fingerprint(),
-            revision,
             settled: false,
             source_sample_rate: rate,
-            token,
             pools: self.pools.clone(),
         })
+    }
+
+    /// What this configuration produces, per artifact. The two tags are
+    /// separate so a waveform resolution change cannot invalidate stored beat
+    /// results.
+    #[must_use]
+    pub fn fingerprint(&self) -> AnalysisFingerprint {
+        AnalysisFingerprint::new(
+            self.beat_config
+                .as_ref()
+                .and_then(BeatAnalysisConfig::cache_tag)
+                .as_deref(),
+            waveform::cache_tag(&self.waveform).as_deref(),
+        )
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        waveform::config_is_empty(&self.waveform) && self.beat.is_empty()
     }
 
     pub(crate) fn restore(
@@ -103,25 +122,6 @@ where
             !waveform::config_is_empty(&self.waveform),
             !self.beat.is_empty(),
         )
-    }
-
-    /// What this configuration produces, per artifact. The two tags are
-    /// separate so a waveform resolution change cannot invalidate stored beat
-    /// results.
-    #[must_use]
-    pub fn fingerprint(&self) -> AnalysisFingerprint {
-        AnalysisFingerprint::new(
-            self.beat_config
-                .as_ref()
-                .and_then(BeatAnalysisConfig::cache_tag)
-                .as_deref(),
-            waveform::cache_tag(&self.waveform).as_deref(),
-        )
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        waveform::config_is_empty(&self.waveform) && self.beat.is_empty()
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {

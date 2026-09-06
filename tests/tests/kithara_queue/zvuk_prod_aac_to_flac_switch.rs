@@ -3,7 +3,6 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    abr::AbrHandle,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
@@ -26,9 +25,6 @@ use kithara_integration_tests::{
     TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
 };
 use tracing::info;
-
-#[path = "source_helper.rs"]
-mod source_helper;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.
 /// The baked `zvuk-prod` provider supplies the DRM keyserver headers.
@@ -72,11 +68,10 @@ fn find_flac_variant_idx(variants: &[VariantInfo]) -> usize {
         )
 }
 
-async fn render_until_position_at_least(
-    player: &mut OfflinePlayer,
-    target_position: f64,
-    label: &str,
-) -> PositionWindow {
+async fn render_until<F>(player: &mut OfflinePlayer, label: &str, mut done: F) -> PositionWindow
+where
+    F: FnMut(f64) -> bool,
+{
     let start = player.position();
     let mut last = start;
     let mut rendered_blocks = 0u32;
@@ -94,7 +89,7 @@ async fn render_until_position_at_least(
             "{label}: playback position regressed from {last:.3}s to {position:.3}s"
         );
 
-        if position >= target_position {
+        if done(position) {
             return PositionWindow {
                 start,
                 end: position,
@@ -109,63 +104,8 @@ async fn render_until_position_at_least(
             stall_ticks = stall_ticks.saturating_add(1);
             assert!(
                 stall_ticks <= MAX_STALL_TICKS,
-                "{label}: playback stalled at {position:.3}s before reaching \
-                 {target_position:.3}s after {rendered_blocks} rendered blocks"
-            );
-            sleep(STALL_TICK).await;
-        }
-    }
-}
-
-async fn render_until_position_gain(
-    player: &mut OfflinePlayer,
-    min_gain: f64,
-    label: &str,
-) -> PositionWindow {
-    let start = player.position();
-    render_until_position_at_least(player, start + min_gain, label).await
-}
-
-async fn render_until_variant_applied(
-    player: &mut OfflinePlayer,
-    abr: &AbrHandle,
-    variant_idx: usize,
-    label: &str,
-) -> PositionWindow {
-    let start = player.position();
-    let mut last = start;
-    let mut rendered_blocks = 0u32;
-    let mut stall_ticks = 0u32;
-
-    loop {
-        for _ in 0..RENDER_BATCH_BLOCKS {
-            let _ = player.render(BLOCK_FRAMES);
-            rendered_blocks = rendered_blocks.saturating_add(1);
-        }
-
-        let position = player.position();
-        assert!(
-            position + POSITION_EPS_SECS >= last,
-            "{label}: playback position regressed from {last:.3}s to {position:.3}s"
-        );
-
-        if abr.current_variant_index() == Some(variant_idx) {
-            return PositionWindow {
-                start,
-                end: position,
-                rendered_blocks,
-            };
-        }
-
-        if position > last {
-            last = position;
-            stall_ticks = 0;
-        } else {
-            stall_ticks = stall_ticks.saturating_add(1);
-            assert!(
-                stall_ticks <= MAX_STALL_TICKS,
-                "{label}: variant {variant_idx} was not applied; \
-                 playback stalled at {position:.3}s after {rendered_blocks} rendered blocks"
+                "{label}: target condition was not met; playback stalled at \
+                 {position:.3}s after {rendered_blocks} rendered blocks"
             );
             sleep(STALL_TICK).await;
         }
@@ -220,10 +160,10 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         .build();
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(cfg) = source_helper::app_track_source(
+    let TrackSource::Config(cfg) = super::source_helper::app_track_source(
         PROD_TRACK,
         &config,
-        source_helper::app_disk_asset_store(&config, temp.path()),
+        super::source_helper::app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),
@@ -261,11 +201,9 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     );
     player.load_and_fadein(resource);
 
-    let pre = render_until_position_at_least(
-        &mut player,
-        PRE_SWITCH_POSITION_SECS,
-        "AAC warmup before FLAC switch",
-    )
+    let pre = render_until(&mut player, "AAC warmup before FLAC switch", |position| {
+        position >= PRE_SWITCH_POSITION_SECS
+    })
     .await;
     assert!(
         pre.end >= PRE_SWITCH_POSITION_SECS,
@@ -283,8 +221,10 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         "forced runtime AAC->FLAC variant switch"
     );
 
-    let applied =
-        render_until_variant_applied(&mut player, &abr, flac_idx, "FLAC variant apply").await;
+    let applied = render_until(&mut player, "FLAC variant apply", |_| {
+        abr.current_variant_index() == Some(flac_idx)
+    })
+    .await;
     assert_eq!(
         abr.current_variant_index(),
         Some(flac_idx),
@@ -297,9 +237,11 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         "FLAC variant applied"
     );
 
-    let post =
-        render_until_position_gain(&mut player, POST_SWITCH_MIN_GAIN_SECS, "post-switch FLAC")
-            .await;
+    let post_target = player.position() + POST_SWITCH_MIN_GAIN_SECS;
+    let post = render_until(&mut player, "post-switch FLAC", |position| {
+        position >= post_target
+    })
+    .await;
     let post_gain = post.end - post.start;
     assert!(
         post_gain >= POST_SWITCH_MIN_GAIN_SECS,

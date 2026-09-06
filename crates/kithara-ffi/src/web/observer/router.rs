@@ -1,9 +1,10 @@
+use js_sys::Reflect;
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
 };
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
-use web_sys::{BroadcastChannel, MessageEvent};
+use web_sys::{BroadcastChannel, MessageEvent, console};
 
 use super::{decode::decode, decode_item::decode_item_event, marshal::get_id_req};
 use crate::{
@@ -17,14 +18,14 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 
 pub(crate) fn install(observer: Arc<dyn PlayerObserver>, queue_view: Arc<Mutex<QueueView>>) {
     let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
-        web_sys::console::warn_1(&JsValue::from_str(
+        console::warn_1(&JsValue::from_str(
             "kithara: BroadcastChannel unavailable; player observer disabled",
         ));
         return;
     };
     let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
         let data = ev.data();
-        if js_sys::Reflect::get(&data, &JsValue::from_str("scope"))
+        if Reflect::get(&data, &JsValue::from_str("scope"))
             .ok()
             .and_then(|value| value.as_string())
             .as_deref()

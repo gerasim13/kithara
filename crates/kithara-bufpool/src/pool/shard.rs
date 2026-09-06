@@ -20,17 +20,15 @@ where
         trim_capacity: usize,
     ) -> Self {
         Self {
-            free: ArrayQueue::new(max_buffers.min(Self::MAX_SLOTS)),
             max_retained_capacity,
             trim_capacity,
+            free: ArrayQueue::new(max_buffers.min(Self::MAX_SLOTS)),
         }
     }
 
-    delegate::delegate! {
-        to self.free {
-            #[call(pop)]
-            pub(super) fn try_get(&self) -> Option<B>;
-            pub(super) fn len(&self) -> usize;
+    pub(super) fn drain(&self, mut release: impl FnMut(B)) {
+        while let Some(value) = self.free.pop() {
+            release(value);
         }
     }
 
@@ -59,9 +57,11 @@ where
         self.free.push(value).map(|()| kept)
     }
 
-    pub(super) fn drain(&self, mut release: impl FnMut(B)) {
-        while let Some(value) = self.free.pop() {
-            release(value);
+    delegate::delegate! {
+        to self.free {
+            #[call(pop)]
+            pub(super) fn try_get(&self) -> Option<B>;
+            pub(super) fn len(&self) -> usize;
         }
     }
 }

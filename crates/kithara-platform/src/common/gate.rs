@@ -7,7 +7,7 @@ use crate::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
-    thread::{self, Thread},
+    thread::{self, GateBackend, Thread},
     time::{Duration, Instant},
 };
 
@@ -111,14 +111,14 @@ pub struct ThreadGate {
     waiter: ArcSwapOption<Thread>,
     state: AtomicU64,
     waiter_id: AtomicU64,
-    backend: thread::GateBackend,
+    backend: GateBackend,
     retired_waiters: Mutex<Vec<Arc<Thread>>>,
 }
 
 impl Default for ThreadGate {
     fn default() -> Self {
         Self {
-            backend: thread::GateBackend::default(),
+            backend: GateBackend::default(),
             state: AtomicU64::new(0),
             waiter: ArcSwapOption::empty(),
             retired_waiters: Mutex::new(Vec::new()),

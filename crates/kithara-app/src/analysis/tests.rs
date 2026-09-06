@@ -80,9 +80,9 @@ fn take_over_run(
     owner.runner.clear();
     let (tx, rx) = watch::channel(value);
     owner.active = Some(Activity::Running(Run {
+        rx,
         entry: index,
         axis: axis(),
-        rx,
         requeue: false,
     }));
     tx
@@ -378,13 +378,13 @@ async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
 }
 
 struct HeldRun {
+    target: AnalysisTarget,
     _host: AppHost,
     queue: AppQueueControl,
-    owner: Owner,
-    track_id: TrackId,
     source: AppTrackSource,
-    target: AnalysisTarget,
+    owner: Owner,
     rx: watch::Receiver<Option<AnalysisProgress>>,
+    track_id: TrackId,
 }
 
 async fn close_run(cancel: &CancelToken, url: &str, value: Option<AnalysisProgress>) -> HeldRun {
@@ -398,13 +398,13 @@ async fn close_run(cancel: &CancelToken, url: &str, value: Option<AnalysisProgre
     drop(tx);
     owner.drive().await;
     HeldRun {
-        _host: host,
         queue,
         owner,
         track_id,
         source,
         target,
         rx,
+        _host: host,
     }
 }
 

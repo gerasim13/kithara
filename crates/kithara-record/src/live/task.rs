@@ -17,20 +17,20 @@ pub(super) struct RecordingTask<F>
 where
     F: PartSinkFactory,
 {
-    buffer_frames: usize,
-    config: RecordingConfig,
     control: Arc<Control>,
-    core: Option<RecordingCore<F::Sink>>,
     factory: F,
     formats: HeapCons<FormatChange>,
-    frames: u64,
-    generation_capacity: usize,
-    next_format: Option<FormatChange>,
-    part_frames: u64,
-    parts: u64,
     pcm: HeapCons<f32>,
+    core: Option<RecordingCore<F::Sink>>,
+    next_format: Option<FormatChange>,
     rotation_frames: Option<NonZeroU64>,
     scratch: Option<SampleBuffer>,
+    config: RecordingConfig,
+    frames: u64,
+    part_frames: u64,
+    parts: u64,
+    buffer_frames: usize,
+    generation_capacity: usize,
 }
 
 impl<F> RecordingTask<F>
@@ -51,20 +51,71 @@ where
         let factory = config.factory;
         Self {
             buffer_frames,
-            config: recording,
             control,
-            core: None,
             factory,
             formats,
-            frames: 0,
             generation_capacity,
+            pcm,
+            rotation_frames,
+            config: recording,
+            core: None,
+            frames: 0,
             next_format: None,
             part_frames: 0,
             parts: 0,
-            pcm,
-            rotation_frames,
             scratch: Some(scratch),
         }
+    }
+
+    fn apply_format(&mut self, change: FormatChange) -> Result<(), LiveRecordingError> {
+        if change.spec.channels != Consts::CHANNELS {
+            return Err(LiveRecordingError::ChannelCount(change.spec.channels));
+        }
+        self.finish_part()?;
+        self.config.set_sample_rate(change.spec.sample_rate.get());
+        self.next_format = None;
+        Ok(())
+    }
+
+    fn clear_cut(&self, at: u64) {
+        self.control
+            .cut_at
+            .compare_exchange(at, Consts::NO_CUT, Ordering::AcqRel, Ordering::Relaxed)
+            .ok();
+    }
+
+    fn fail(&mut self, error: LiveRecordingError) -> TickResult {
+        self.control.accepting.store(false, Ordering::Release);
+        self.core.take();
+        self.publish(Err(error));
+        TickResult::Done
+    }
+
+    fn finish_part(&mut self) -> Result<(), LiveRecordingError> {
+        if self.part_frames == 0 {
+            return Ok(());
+        }
+        let part = self
+            .parts
+            .checked_add(1)
+            .ok_or(LiveRecordingError::FrameCountOverflow)?;
+        let Some(core) = self.core.take() else {
+            return Err(LiveRecordingError::FrameCountOverflow);
+        };
+        core.finish().map_err(|source| LiveRecordingError::Part {
+            part,
+            source: Box::new(source),
+        })?;
+        self.parts = part;
+        self.part_frames = 0;
+        Ok(())
+    }
+
+    fn next_format(&mut self) -> Option<FormatChange> {
+        if self.next_format.is_none() {
+            self.next_format = self.formats.try_pop();
+        }
+        self.next_format
     }
 
     fn open_part(&mut self) -> Result<(), LiveRecordingError> {
@@ -89,77 +140,6 @@ where
             }
         })?;
         self.core = Some(core);
-        Ok(())
-    }
-
-    fn finish_part(&mut self) -> Result<(), LiveRecordingError> {
-        if self.part_frames == 0 {
-            return Ok(());
-        }
-        let part = self
-            .parts
-            .checked_add(1)
-            .ok_or(LiveRecordingError::FrameCountOverflow)?;
-        let Some(core) = self.core.take() else {
-            return Err(LiveRecordingError::FrameCountOverflow);
-        };
-        core.finish().map_err(|source| LiveRecordingError::Part {
-            part,
-            source: Box::new(source),
-        })?;
-        self.parts = part;
-        self.part_frames = 0;
-        Ok(())
-    }
-
-    fn push(&mut self, samples: &[f32]) -> Result<(), LiveRecordingError> {
-        let frames = u64::try_from(samples.len() / Consts::STEREO)
-            .map_err(|_| LiveRecordingError::FrameCountOverflow)?;
-        self.open_part()?;
-        let part = self
-            .parts
-            .checked_add(1)
-            .ok_or(LiveRecordingError::FrameCountOverflow)?;
-        self.core
-            .as_mut()
-            .ok_or(LiveRecordingError::FrameCountOverflow)?
-            .push(samples)
-            .map_err(|source| LiveRecordingError::Part {
-                part,
-                source: Box::new(source),
-            })?;
-        self.frames = self
-            .frames
-            .checked_add(frames)
-            .ok_or(LiveRecordingError::FrameCountOverflow)?;
-        self.part_frames = self
-            .part_frames
-            .checked_add(frames)
-            .ok_or(LiveRecordingError::FrameCountOverflow)?;
-        Ok(())
-    }
-
-    fn clear_cut(&self, at: u64) {
-        self.control
-            .cut_at
-            .compare_exchange(at, Consts::NO_CUT, Ordering::AcqRel, Ordering::Relaxed)
-            .ok();
-    }
-
-    fn next_format(&mut self) -> Option<FormatChange> {
-        if self.next_format.is_none() {
-            self.next_format = self.formats.try_pop();
-        }
-        self.next_format
-    }
-
-    fn apply_format(&mut self, change: FormatChange) -> Result<(), LiveRecordingError> {
-        if change.spec.channels != Consts::CHANNELS {
-            return Err(LiveRecordingError::ChannelCount(change.spec.channels));
-        }
-        self.finish_part()?;
-        self.config.set_sample_rate(change.spec.sample_rate.get());
-        self.next_format = None;
         Ok(())
     }
 
@@ -224,11 +204,31 @@ where
         }
     }
 
-    fn fail(&mut self, error: LiveRecordingError) -> TickResult {
-        self.control.accepting.store(false, Ordering::Release);
-        self.core.take();
-        self.publish(Err(error));
-        TickResult::Done
+    fn push(&mut self, samples: &[f32]) -> Result<(), LiveRecordingError> {
+        let frames = u64::try_from(samples.len() / Consts::STEREO)
+            .map_err(|_| LiveRecordingError::FrameCountOverflow)?;
+        self.open_part()?;
+        let part = self
+            .parts
+            .checked_add(1)
+            .ok_or(LiveRecordingError::FrameCountOverflow)?;
+        self.core
+            .as_mut()
+            .ok_or(LiveRecordingError::FrameCountOverflow)?
+            .push(samples)
+            .map_err(|source| LiveRecordingError::Part {
+                part,
+                source: Box::new(source),
+            })?;
+        self.frames = self
+            .frames
+            .checked_add(frames)
+            .ok_or(LiveRecordingError::FrameCountOverflow)?;
+        self.part_frames = self
+            .part_frames
+            .checked_add(frames)
+            .ok_or(LiveRecordingError::FrameCountOverflow)?;
+        Ok(())
     }
 }
 

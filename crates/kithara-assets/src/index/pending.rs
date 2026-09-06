@@ -224,8 +224,8 @@ where
         let writer = epoch.map(|claim| lease.writer(claim));
         Ok(AcquisitionResult::Pending(ResourceAttachment {
             reader,
-            lease,
             writer,
+            lease,
         }))
     }
 

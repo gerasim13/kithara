@@ -28,12 +28,12 @@ pub(crate) struct FileLocalConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    reader: AssetReader<S>,
     coord: Arc<FileCoord>,
-    bus: EventBus,
+    reader: AssetReader<S>,
     cancel: CancelToken,
-    reader_event_capacity: usize,
+    bus: EventBus,
     cached_codec: Option<AudioCodec>,
+    reader_event_capacity: usize,
 }
 
 /// Sync `Source` impl over a shared [`FileInner`].
@@ -73,16 +73,6 @@ where
         Ok(())
     }
 
-    fn ensure_storage_not_terminal(&self) -> StreamResult<()> {
-        match self.inner.asset.reader.status() {
-            ResourceStatus::Failed(reason) => Err(StreamError::Source(
-                FileSourceError::Storage(StorageError::Failed(reason)).into(),
-            )),
-            ResourceStatus::Cancelled => Err(Self::cancelled_error()),
-            ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
-        }
-    }
-
     fn ensure_realtime_not_terminal(&self) -> StreamResult<()> {
         self.inner.refresh_unmanaged_terminal();
         match self.inner.terminal_state() {
@@ -91,6 +81,16 @@ where
             }
             FileTerminalState::Cancelled => Err(Self::cancelled_error()),
             FileTerminalState::Active | FileTerminalState::Committed => Ok(()),
+        }
+    }
+
+    fn ensure_storage_not_terminal(&self) -> StreamResult<()> {
+        match self.inner.asset.reader.status() {
+            ResourceStatus::Failed(reason) => Err(StreamError::Source(
+                FileSourceError::Storage(StorageError::Failed(reason)).into(),
+            )),
+            ResourceStatus::Cancelled => Err(Self::cancelled_error()),
+            ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
         }
     }
 
@@ -110,10 +110,10 @@ where
         } = config;
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
                 bus,
                 reader_event_capacity,
+                coord: Arc::clone(&coord),
             },
             FileAssetCtx {
                 reader,
@@ -202,6 +202,13 @@ impl<S> FileInner<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    pub(crate) fn known_len(&self) -> Option<u64> {
+        self.source
+            .coord
+            .total_bytes()
+            .or_else(|| self.asset.reader.len())
+    }
+
     pub(crate) fn phase(&self) -> SourcePhase {
         let pos = self.source.coord.position();
         self.phase_at(pos..pos.saturating_add(1))
@@ -231,13 +238,6 @@ where
             return SourcePhase::Seeking;
         }
         SourcePhase::Waiting
-    }
-
-    pub(crate) fn known_len(&self) -> Option<u64> {
-        self.source
-            .coord
-            .total_bytes()
-            .or_else(|| self.asset.reader.len())
     }
 
     fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
@@ -278,6 +278,10 @@ impl<S> SourceProbe for FileProbe<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
+    }
+
     delegate::delegate! {
         to self.inner {
             fn phase(&self) -> SourcePhase;
@@ -289,10 +293,6 @@ where
             fn position(&self) -> u64;
             fn set_position(&self, pos: u64);
         }
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        file_byte_map(&self.inner)
     }
 }
 
@@ -428,17 +428,6 @@ impl<S> ByteMap for FileByteMap<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    delegate::delegate! {
-        to self {
-            #[expr($.map_or(0..0, FileSegmentIndex::init_range))]
-            #[call(segment_index)]
-            fn init_segment_range(&self) -> Range<u64>;
-            #[expr(Some($?.segment_count()))]
-            #[call(segment_index)]
-            fn segment_count(&self) -> Option<u32>;
-        }
-    }
-
     fn len(&self) -> Option<u64> {
         self.inner.asset.reader.len()
     }
@@ -449,5 +438,16 @@ where
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.segment_index()?.segment_at_time(t)
+    }
+
+    delegate::delegate! {
+        to self {
+            #[expr($.map_or(0..0, FileSegmentIndex::init_range))]
+            #[call(segment_index)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr(Some($?.segment_count()))]
+            #[call(segment_index)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 }

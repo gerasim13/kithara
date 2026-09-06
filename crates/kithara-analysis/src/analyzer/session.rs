@@ -30,15 +30,15 @@ pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
 {
+    pub(super) fingerprint: AnalysisFingerprint,
+    pub(super) token: AnalysisToken,
+    pub(super) coverage: Coverage,
+    pub(super) source_sample_rate: NonZeroU32,
+    pub(super) pools: PoolRegion<S>,
     pub(super) beat: Slot<B>,
     pub(super) waveform: waveform::Slot,
-    pub(super) coverage: Coverage,
-    pub(super) fingerprint: AnalysisFingerprint,
-    pub(super) revision: u64,
     pub(super) settled: bool,
-    pub(super) source_sample_rate: NonZeroU32,
-    pub(super) token: AnalysisToken,
-    pub(super) pools: PoolRegion<S>,
+    pub(super) revision: u64,
 }
 
 impl<B, S> TrackAnalyzers<B, S>
@@ -46,35 +46,91 @@ where
     B: ResamplerBackend,
     S: HasPool<f32>,
 {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn coverage(&self) -> &Coverage {
-        &self.coverage
-    }
-
     pub(crate) fn analysed(&self) -> &Coverage {
         self.beat.coverage(&self.coverage)
     }
 
+    fn beat_state(&self) -> BeatState {
+        let analysed = self.analysed();
+        let taken = self
+            .coverage
+            .runs()
+            .iter()
+            .all(|run| analysed.contains(*run));
+        if self.settled && taken {
+            BeatState::Final
+        } else {
+            BeatState::Provisional
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn settle(&mut self) {
-        self.settled = true;
+    pub(crate) const fn coverage(&self) -> &Coverage {
+        &self.coverage
     }
 
     pub(crate) fn covered_frames(&self) -> u64 {
         self.coverage.frames()
     }
 
+    fn ingest(
+        &mut self,
+        pcm: &[f32],
+        channels: usize,
+        range: FrameRange,
+        opens: Opens,
+        extent: &mut Extent,
+        detector: Option<&mut beat::Detector>,
+    ) -> Ingest {
+        extent.deliver(range);
+        let seen = self.coverage.contains(range);
+        if !seen {
+            self.coverage.insert(range);
+            waveform::push(
+                &mut self.waveform,
+                &self.pools,
+                pcm,
+                channels,
+                range.start(),
+            );
+        }
+        let analysed = self.beat.coverage(&self.coverage).contains(range);
+        let took = self
+            .beat
+            .push(&self.pools, pcm, channels, range.start(), opens, detector);
+        if took || !seen {
+            return Ingest::Accepted;
+        }
+        if analysed {
+            return Ingest::Covered;
+        }
+        Ingest::Deferred
+    }
+
     pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectRequest> {
         self.beat.prepare_detection(&self.pools, trailing)
     }
 
-    delegate::delegate! {
-        to self.beat {
-            pub(crate) fn apply_detection(&mut self, output: beat::DetectOutput);
-            #[cfg(not(target_arch = "wasm32"))]
-            #[call(intake)]
-            pub(crate) fn beat_intake(&self) -> Intake;
-        }
+    pub(crate) fn progress(
+        &mut self,
+        detector: Option<&mut beat::Detector>,
+        ending: bool,
+        chunk_frames: NonZeroU64,
+        extent: Option<u64>,
+    ) -> AnalysisProgress {
+        let analysis = self.snapshot(detector, ending, extent);
+        let resume = if analysis.is_settled() {
+            None
+        } else {
+            let waveform = waveform::write_resume(&self.waveform);
+            let beat = self.beat.write_resume();
+            Some(AnalysisResume::capture(
+                chunk_frames,
+                waveform.as_deref(),
+                beat.as_deref(),
+            ))
+        };
+        AnalysisProgress::new(analysis, resume)
     }
 
     pub(crate) fn push(
@@ -123,38 +179,30 @@ where
         )
     }
 
-    fn ingest(
+    pub(crate) fn restore(
         &mut self,
-        pcm: &[f32],
-        channels: usize,
-        range: FrameRange,
-        opens: Opens,
-        extent: &mut Extent,
-        detector: Option<&mut beat::Detector>,
-    ) -> Ingest {
-        extent.deliver(range);
-        let seen = self.coverage.contains(range);
-        if !seen {
-            self.coverage.insert(range);
-            waveform::push(
-                &mut self.waveform,
-                &self.pools,
-                pcm,
-                channels,
-                range.start(),
-            );
+        analysis: &TrackAnalysis,
+        resume: ResumeState,
+        chunk_frames: NonZeroU64,
+    ) -> Result<(), BlobError> {
+        if analysis.is_settled()
+            || analysis.source_sample_rate() != self.source_sample_rate
+            || analysis.token() != &self.token
+            || analysis.fingerprint() != &self.fingerprint
+            || resume.chunk_frames != chunk_frames
+        {
+            return Err(BlobError::Corrupt);
         }
-        let analysed = self.beat.coverage(&self.coverage).contains(range);
-        let took = self
-            .beat
-            .push(&self.pools, pcm, channels, range.start(), opens, detector);
-        if took || !seen {
-            return Ingest::Accepted;
-        }
-        if analysed {
-            return Ingest::Covered;
-        }
-        Ingest::Deferred
+        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
+        self.beat.restore(&self.pools, resume.beat)?;
+        self.coverage = analysis.coverage().clone();
+        self.settled = false;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const fn settle(&mut self) {
+        self.settled = true;
     }
 
     pub(crate) fn snapshot(
@@ -185,60 +233,12 @@ where
             .build()
     }
 
-    pub(crate) fn progress(
-        &mut self,
-        detector: Option<&mut beat::Detector>,
-        ending: bool,
-        chunk_frames: NonZeroU64,
-        extent: Option<u64>,
-    ) -> AnalysisProgress {
-        let analysis = self.snapshot(detector, ending, extent);
-        let resume = if analysis.is_settled() {
-            None
-        } else {
-            let waveform = waveform::write_resume(&self.waveform);
-            let beat = self.beat.write_resume();
-            Some(AnalysisResume::capture(
-                chunk_frames,
-                waveform.as_deref(),
-                beat.as_deref(),
-            ))
-        };
-        AnalysisProgress::new(analysis, resume)
-    }
-
-    pub(crate) fn restore(
-        &mut self,
-        analysis: &TrackAnalysis,
-        resume: ResumeState,
-        chunk_frames: NonZeroU64,
-    ) -> Result<(), BlobError> {
-        if analysis.is_settled()
-            || analysis.source_sample_rate() != self.source_sample_rate
-            || analysis.token() != &self.token
-            || analysis.fingerprint() != &self.fingerprint
-            || resume.chunk_frames != chunk_frames
-        {
-            return Err(BlobError::Corrupt);
-        }
-        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
-        self.beat.restore(&self.pools, resume.beat)?;
-        self.coverage = analysis.coverage().clone();
-        self.settled = false;
-        Ok(())
-    }
-
-    fn beat_state(&self) -> BeatState {
-        let analysed = self.analysed();
-        let taken = self
-            .coverage
-            .runs()
-            .iter()
-            .all(|run| analysed.contains(*run));
-        if self.settled && taken {
-            BeatState::Final
-        } else {
-            BeatState::Provisional
+    delegate::delegate! {
+        to self.beat {
+            pub(crate) fn apply_detection(&mut self, output: beat::DetectOutput);
+            #[cfg(not(target_arch = "wasm32"))]
+            #[call(intake)]
+            pub(crate) fn beat_intake(&self) -> Intake;
         }
     }
 }

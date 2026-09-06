@@ -25,13 +25,14 @@ _shared:
     just lint ast-grep
     just lint typos
     just lint arch
+    just lint style
 
-# Fast local chain: formatting, Clippy, ast-grep, typos, and arch ratchet.
+# Fast local chain: formatting, Clippy, ast-grep, typos, and both ratchets.
 fast:
     just lint _shared
     just lint idioms --check derivable_getter --check derivable_delegation
 
-# Full CI chain: fast checks, xtask tests, quality scans, style, and idioms.
+# Full CI chain: fast checks, xtask tests, quality scans, and idioms.
 # It runs every idiom check below, so it takes the shared part directly rather
 # than through `fast`, whose two-check pass it would then repeat.
 full:
@@ -41,7 +42,6 @@ full:
     just quality rstest-audit
     just quality trait-mock-audit
     just quality trait-mock-exceptions
-    just lint style
     just lint idioms
 
 [positional-arguments]

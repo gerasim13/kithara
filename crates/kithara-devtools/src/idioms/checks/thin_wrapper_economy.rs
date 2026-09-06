@@ -10,8 +10,9 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use proc_macro2::{TokenStream, TokenTree};
 use syn::{
-    Block, Expr, ExprPath, FieldValue, FnArg, ImplItemFn, Item, ItemFn, ItemUse, Macro, Member,
-    Pat, PathArguments, Safety, Stmt, TraitItemFn, UseTree, Visibility,
+    Block, Expr, ExprPath, FieldValue, FnArg, ImplItemFn, Item, ItemFn, ItemUse, Lit, Macro,
+    Member, Meta, Pat, PathArguments, Safety, Stmt, TraitItemFn, UseTree, Visibility,
+    punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -598,11 +599,7 @@ impl<'a> References<'a> {
             .insert(reason);
     }
 
-    fn visit_function(
-        &mut self,
-        inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
-        block: &Block,
-    ) {
+    fn visit_function(&mut self, inputs: &Punctuated<FnArg, syn::Token![,]>, block: &Block) {
         let previous = std::mem::take(&mut self.bindings);
         let mut bindings = Bindings::default();
         for input in inputs {
@@ -826,9 +823,9 @@ fn collect_imports(tree: &UseTree, out: &mut Vec<String>, glob: &mut bool) {
 
 fn attribute_contains_reference(attribute: &syn::Attribute, name: &str) -> bool {
     match &attribute.meta {
-        syn::Meta::Path(path) => path.segments.iter().any(|segment| segment.ident == name),
-        syn::Meta::List(list) => tokens_contain_reference(list.tokens.clone(), name),
-        syn::Meta::NameValue(name_value) if !name_value.path.is_ident("doc") => {
+        Meta::Path(path) => path.segments.iter().any(|segment| segment.ident == name),
+        Meta::List(list) => tokens_contain_reference(list.tokens.clone(), name),
+        Meta::NameValue(name_value) if !name_value.path.is_ident("doc") => {
             match &name_value.value {
                 Expr::Path(path) => path
                     .path
@@ -839,7 +836,7 @@ fn attribute_contains_reference(attribute: &syn::Attribute, name: &str) -> bool 
                 _ => false,
             }
         }
-        syn::Meta::NameValue(_) => false,
+        Meta::NameValue(_) => false,
     }
 }
 
@@ -860,9 +857,9 @@ fn macro_tokens_contain_reference(tokens: TokenStream, name: &str) -> bool {
     })
 }
 
-fn literal_contains_reference(literal: &syn::Lit, name: &str) -> bool {
+fn literal_contains_reference(literal: &Lit, name: &str) -> bool {
     match literal {
-        syn::Lit::Str(value) => text_contains_identifier(&value.value(), name),
+        Lit::Str(value) => text_contains_identifier(&value.value(), name),
         _ => false,
     }
 }

@@ -12,6 +12,12 @@ impl<T> Storage for Vec<T> {
         capacity.checked_mul(size_of::<T>())
     }
 
+    fn try_with_capacity(capacity: usize) -> Result<Self, ()> {
+        let mut value = Self::new();
+        value.try_reserve_exact(capacity).map_err(|_| ())?;
+        Ok(value)
+    }
+
     delegate::delegate! {
         to self {
             fn capacity(&self) -> usize;
@@ -21,25 +27,11 @@ impl<T> Storage for Vec<T> {
             fn shrink_to(&mut self, min_capacity: usize);
         }
     }
-
-    fn try_with_capacity(capacity: usize) -> Result<Self, ()> {
-        let mut value = Self::new();
-        value.try_reserve_exact(capacity).map_err(|_| ())?;
-        Ok(value)
-    }
 }
 
 impl Storage for String {
     fn bytes_for_capacity(capacity: usize) -> Option<usize> {
         Some(capacity)
-    }
-
-    delegate::delegate! {
-        to self {
-            fn capacity(&self) -> usize;
-            fn clear(&mut self);
-            fn shrink_to(&mut self, min_capacity: usize);
-        }
     }
 
     fn move_from(&mut self, other: &mut Self) {
@@ -51,5 +43,13 @@ impl Storage for String {
         let mut value = Self::new();
         value.try_reserve_exact(capacity).map_err(|_| ())?;
         Ok(value)
+    }
+
+    delegate::delegate! {
+        to self {
+            fn capacity(&self) -> usize;
+            fn clear(&mut self);
+            fn shrink_to(&mut self, min_capacity: usize);
+        }
     }
 }

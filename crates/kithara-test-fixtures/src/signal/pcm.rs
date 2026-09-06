@@ -17,6 +17,12 @@ impl Pcm {
         })
     }
 
+    /// Number of interleaved channels.
+    #[must_use]
+    pub const fn channels(&self) -> u16 {
+        self.channels
+    }
+
     /// Render `total_frames` of a per-frame sample function, for a body no
     /// single [`Wave`] describes.
     #[must_use]
@@ -39,12 +45,6 @@ impl Pcm {
             channels,
             sample_rate,
         }
-    }
-
-    /// Number of interleaved channels.
-    #[must_use]
-    pub const fn channels(&self) -> u16 {
-        self.channels
     }
 
     /// Sample rate in Hz.

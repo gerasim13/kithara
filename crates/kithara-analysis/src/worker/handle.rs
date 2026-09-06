@@ -24,11 +24,11 @@ use crate::{
 pub struct AnalysisWorker {
     resume_shape: (bool, bool),
     fingerprint: AnalysisFingerprint,
-    dispatcher: Dispatcher,
-    chunk_seconds: NonZeroU32,
     scope: CancelScope,
-    start_job: StartJob,
+    dispatcher: Dispatcher,
     tasks: Mutex<Vec<ActiveTask>>,
+    chunk_seconds: NonZeroU32,
+    start_job: StartJob,
     _base: Worker,
     active: bool,
 }
@@ -48,12 +48,12 @@ struct ActiveTask {
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
     token: AnalysisToken,
-    revision: u64,
     cancel: CancelToken,
     rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
     ingest: ring::Reader,
     tx: watch::Sender<Option<AnalysisProgress>>,
+    revision: u64,
 }
 
 /// Output of opening an analysis pass before its fallback reader starts.
@@ -209,12 +209,12 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
             revision,
             tx,
+            cancel: self.scope.token().child(),
             resume: None,
         };
         (rx, producer, pass)
@@ -259,12 +259,12 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
             revision,
             tx,
+            cancel: self.scope.token().child(),
             resume: Some(progress),
         };
         Ok((rx, producer, pass))
@@ -284,14 +284,14 @@ impl AnalysisWorker {
             resume,
         } = pass;
         self.submit(Job {
+            token,
             reader,
             cancel,
-            ingest,
             rate,
-            token,
-            revision,
-            tx,
             resume,
+            ingest,
+            tx,
+            revision,
         });
     }
 

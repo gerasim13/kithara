@@ -1,3 +1,4 @@
+use lucide_icons::Icon;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -30,8 +31,8 @@ impl Crossfader {
         Self {
             arrow_color: skin.rgba(metrics.arrow_color),
             arrows: (
-                char::from(lucide_icons::Icon::ChevronsLeft),
-                char::from(lucide_icons::Icon::ChevronsRight),
+                char::from(Icon::ChevronsLeft),
+                char::from(Icon::ChevronsRight),
             ),
             captions: skin.crossfader_labels.clone(),
             label_color: skin.rgba(metrics.label_text.color),

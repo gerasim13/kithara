@@ -1,8 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use iced::{
-    Element, Length, Rectangle, wgpu,
-    widget::{Space, shader},
+    Element, Length, Rectangle,
+    mouse::Cursor,
+    wgpu,
+    wgpu::{
+        BindingType, BufferBindingType, BufferUsages, ColorWrites, MultisampleState,
+        PipelineCompilationOptions, PrimitiveState, PrimitiveTopology, ShaderSource, ShaderStages,
+    },
+    widget::{Space, shader, shader::Shader},
 };
 use kithara_test_macros as kithara;
 
@@ -13,7 +19,7 @@ pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Elem
     let Some(frame) = VisFrame::read(preset.copied(), &ctx) else {
         return Space::new().into();
     };
-    shader::Shader::new(Program(frame))
+    Shader::new(Program(frame))
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -26,12 +32,7 @@ impl shader::Program<UiEvent> for Program {
     type Primitive = Primitive;
     type State = ();
 
-    fn draw(
-        &self,
-        _state: &Self::State,
-        _cursor: iced::mouse::Cursor,
-        _bounds: Rectangle,
-    ) -> Self::Primitive {
+    fn draw(&self, _state: &Self::State, _cursor: Cursor, _bounds: Rectangle) -> Self::Primitive {
         Primitive::new(self.0)
     }
 }
@@ -108,9 +109,9 @@ impl shader::Pipeline for Pipeline {
             label: Some("kithara_ui.vis.bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -124,7 +125,7 @@ impl shader::Pipeline for Pipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kithara_ui.vis.shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: ShaderSource::Wgsl(SHADER.into()),
         });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("kithara_ui.vis.pipeline"),
@@ -132,23 +133,23 @@ impl shader::Pipeline for Pipeline {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..wgpu::PrimitiveState::default()
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..PrimitiveState::default()
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: ColorWrites::ALL,
                 })],
             }),
             multiview: None,
@@ -177,7 +178,7 @@ impl UniformSlot {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.uniforms"),
             size: Uniforms::BUFFER_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -219,7 +220,7 @@ mod tests {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("kithara_ui.vis.test.uniforms"),
             contents: &uniforms.bytes(),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: BufferUsages::UNIFORM,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("kithara_ui.vis.test.bind_group"),
@@ -248,7 +249,7 @@ mod tests {
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.test.readback"),
             size: u64::from(ROW_BYTES * SIDE),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 

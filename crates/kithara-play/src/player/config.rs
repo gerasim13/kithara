@@ -41,29 +41,28 @@ const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayerConfig<S> {
-    /// Stable synchronization-group identity owned by this player.
-    #[builder(default = allocate_grid_id())]
-    #[patch(skip)]
-    pub(crate) grid_id: BeatGridId,
-    /// Per-deck Warp resources and live temporal controls. A document reaches
-    /// them under `player.warp:`; the live [`StretchControls`] handle inside
-    /// is shared with the deck and the UI and is not a document key.
-    ///
-    /// [`StretchControls`]: kithara_warp::StretchControls
-    #[builder(default = WarpConfig::builder().build())]
-    #[patch(nested)]
-    pub(crate) warp: WarpConfig,
-    /// Maximum accepted control-to-presented-audio response in output frames.
-    #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
-    #[field(get, copy)]
-    pub(crate) response_budget_frames: NonZeroUsize,
-    /// Explicit shared playback worker. Its pools and cancellation lifetime
-    /// are configured once in [`crate::PlayWorkerConfig`].
-    #[patch(skip)]
-    pub(crate) worker: PlayWorker<S>,
     /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
     pub gapless_mode: GaplessMode,
+    /// Initial output sample rate supplied by the owning session, handed on
+    /// to the engine this player builds and to the player's own sync
+    /// identity. Not a document key: `HostConfig` owns the rate, a Host
+    /// rejects a player whose rate disagrees with its own, and the document
+    /// names it once under `host`.
+    #[patch(skip)]
+    pub sample_rate: NonZeroU32,
+    /// EQ band layout handed to the engine this player builds. Not a document
+    /// key: every construction site derives it from a generator, and a custom
+    /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
+    #[builder(default = generate_log_spaced_bands(10))]
+    #[patch(skip)]
+    pub eq_layout: Vec<EqBandConfig>,
+    /// Built-in auto-advance handler. The queue overwrites this for every
+    /// queue-driven player at construction, so it is not a document key.
+    /// See `crates/kithara-play/CONTEXT.md` for the owning contract.
+    #[builder(default = true)]
+    #[patch(skip)]
+    pub auto_advance_enabled: bool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
     /// in so rendered output never stretches with inserted silence while the
@@ -74,12 +73,6 @@ pub struct PlayerConfig<S> {
     #[builder(default)]
     #[patch(skip)]
     pub block_on_underrun: bool,
-    /// Built-in auto-advance handler. The queue overwrites this for every
-    /// queue-driven player at construction, so it is not a document key.
-    /// See `crates/kithara-play/CONTEXT.md` for the owning contract.
-    #[builder(default = true)]
-    #[patch(skip)]
-    pub auto_advance_enabled: bool,
     /// Crossfade duration in seconds. Default: 1.0.
     #[builder(default = 1.0)]
     pub crossfade_duration: f32,
@@ -93,23 +86,18 @@ pub struct PlayerConfig<S> {
     #[builder(default = 3.5)]
     #[patch(skip)]
     pub prefetch_duration: f32,
-    /// Initial output sample rate supplied by the owning session, handed on
-    /// to the engine this player builds and to the player's own sync
-    /// identity. Not a document key: `HostConfig` owns the rate, a Host
-    /// rejects a player whose rate disagrees with its own, and the document
-    /// names it once under `host`.
-    #[patch(skip)]
-    pub sample_rate: NonZeroU32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
-    /// EQ band layout handed to the engine this player builds. Not a document
-    /// key: every construction site derives it from a generator, and a custom
-    /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
-    #[builder(default = generate_log_spaced_bands(10))]
+    /// Stable synchronization-group identity owned by this player.
+    #[builder(default = allocate_grid_id())]
     #[patch(skip)]
-    pub eq_layout: Vec<EqBandConfig>,
+    pub(crate) grid_id: BeatGridId,
+    /// Maximum accepted control-to-presented-audio response in output frames.
+    #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    #[field(get, copy)]
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Shared ABR controller. When `None`, a default one is created.
     #[patch(skip)]
     pub(crate) abr: Option<Arc<AbrController>>,
@@ -123,6 +111,18 @@ pub struct PlayerConfig<S> {
     /// are constructed unbound and attached exactly once by their Host.
     #[patch(skip)]
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    /// Explicit shared playback worker. Its pools and cancellation lifetime
+    /// are configured once in [`crate::PlayWorkerConfig`].
+    #[patch(skip)]
+    pub(crate) worker: PlayWorker<S>,
+    /// Per-deck Warp resources and live temporal controls. A document reaches
+    /// them under `player.warp:`; the live [`StretchControls`] handle inside
+    /// is shared with the deck and the UI and is not a document key.
+    ///
+    /// [`StretchControls`]: kithara_warp::StretchControls
+    #[builder(default = WarpConfig::builder().build())]
+    #[patch(nested)]
+    pub(crate) warp: WarpConfig,
 }
 
 impl<S> Clone for PlayerConfig<S> {

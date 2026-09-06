@@ -1,15 +1,15 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Error, Expr, Ident, ItemFn, Pat, PatIdent};
+use syn::{Error, Expr, FnArg, Ident, ItemFn, Pat, PatIdent};
 
 use super::parse::{ProbeEvent, ProbeFilter};
 
 struct WireFields {
-    arg_bindings: Vec<TokenStream2>,
-    computed_bindings: Vec<TokenStream2>,
-    arg_consumes: Vec<TokenStream2>,
-    computed_consumes: Vec<TokenStream2>,
     fire_fn: Ident,
+    arg_bindings: Vec<TokenStream2>,
+    arg_consumes: Vec<TokenStream2>,
+    computed_bindings: Vec<TokenStream2>,
+    computed_consumes: Vec<TokenStream2>,
     slots: Vec<Ident>,
     tracing_fields: Vec<TokenStream2>,
 }
@@ -22,8 +22,8 @@ fn collect_fn_param_idents(input: &ItemFn) -> syn::Result<Vec<Ident>> {
     let mut idents = Vec::new();
     for arg in &input.sig.inputs {
         match arg {
-            syn::FnArg::Receiver(_) => {}
-            syn::FnArg::Typed(typed) => match typed.pat.as_ref() {
+            FnArg::Receiver(_) => {}
+            FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(PatIdent { ident, .. }) => idents.push(ident.clone()),
                 other => {
                     return Err(Error::new_spanned(
@@ -139,9 +139,9 @@ fn wire_fields(
         computed_bindings,
         arg_consumes,
         computed_consumes,
-        fire_fn: format_ident!("fire_{total}"),
         slots,
         tracing_fields,
+        fire_fn: format_ident!("fire_{total}"),
     })
 }
 

@@ -129,9 +129,9 @@ A change is done only when all of these hold:
 
 - A test that failed before the change now passes, and it pins the contract
   rather than an incidental detail.
-- `just fmt check`, `just lint fast`, and `just lint style` are clean, with no
-  new baseline entries and no lint suppressions. No gate runs `style`; the
-  commit hook stops at `lint fast`.
+- `just fmt check` and `just lint fast` are clean, with no new baseline
+  entries and no lint suppressions. `lint fast` runs the `style` ratchet the
+  lint lane denies on, so the commit hook refuses what CI would.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.
 - Documents describing the changed contract are updated in the same change.

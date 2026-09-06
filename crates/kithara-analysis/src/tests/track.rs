@@ -12,17 +12,20 @@ use num_traits::cast::ToPrimitive;
 
 use crate::test_pools::{Pools, sample_buffer};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct Track {
-    pools: Pools,
     spec: AudioSpec,
-    chunk_frames: u64,
+    bus: EventBus,
+    pools: Pools,
+    metadata: TrackMetadata,
     pcm: Vec<f32>,
-    frames: u64,
+    at: u64,
+    chunk_frames: u64,
     claimed: u64,
     first: u64,
-    at: u64,
-    bus: EventBus,
-    metadata: TrackMetadata,
+    #[field(get, vis = "pub(super)")]
+    frames: u64,
 }
 
 impl Track {
@@ -44,13 +47,6 @@ impl Track {
         }
     }
 
-    pub(super) fn silence(pools: Pools, spec: AudioSpec, chunk_frames: u64, seconds: f64) -> Self {
-        let rate = f64::from(spec.sample_rate.get());
-        let frames = (seconds * rate).round().to_usize().unwrap_or(0);
-        let pcm = vec![0.0; frames * usize::from(spec.channels)];
-        Self::new(pools, spec, chunk_frames, pcm)
-    }
-
     pub(super) fn claiming(
         pools: Pools,
         spec: AudioSpec,
@@ -62,6 +58,10 @@ impl Track {
         let mut track = Self::silence(pools, spec, chunk_frames, seconds);
         track.claimed = (claimed * rate).round().to_u64().unwrap_or(0);
         track
+    }
+
+    fn duration_for(&self, frames: u64) -> Duration {
+        self.spec.duration_for(frames).expect("representable")
     }
 
     pub(super) fn priming(
@@ -77,12 +77,11 @@ impl Track {
         track
     }
 
-    pub(super) fn frames(&self) -> u64 {
-        self.frames
-    }
-
-    fn duration_for(&self, frames: u64) -> Duration {
-        self.spec.duration_for(frames).expect("representable")
+    pub(super) fn silence(pools: Pools, spec: AudioSpec, chunk_frames: u64, seconds: f64) -> Self {
+        let rate = f64::from(spec.sample_rate.get());
+        let frames = (seconds * rate).round().to_usize().unwrap_or(0);
+        let pcm = vec![0.0; frames * usize::from(spec.channels)];
+        Self::new(pools, spec, chunk_frames, pcm)
     }
 }
 

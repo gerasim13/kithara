@@ -7,6 +7,7 @@ use kithara_platform::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+use rayon::ThreadPoolBuilder;
 
 use super::{ComputeContext, ComputeRejected, ComputeSubmitError};
 use crate::{RayonConfig, Wake, config::PoolConfig};
@@ -134,7 +135,7 @@ impl ComputePool {
 
 fn build_pool(config: &RayonConfig) -> Result<Arc<rayon::ThreadPool>, String> {
     let prefix = config.name.clone();
-    rayon::ThreadPoolBuilder::new()
+    ThreadPoolBuilder::new()
         .num_threads(config.threads.get())
         .thread_name(move |index| format!("{prefix}-{index}"))
         .build()
@@ -156,15 +157,23 @@ impl Budget {
     }
 
     fn try_acquire(budget: &Arc<Self>) -> Option<BudgetPermit> {
-        budget
-            .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < budget.limit.get()).then_some(active + 1)
-            })
-            .ok()
-            .map(|_| BudgetPermit {
-                budget: Arc::clone(budget),
-            })
+        let mut active = budget.active.load(Ordering::Acquire);
+        while active < budget.limit.get() {
+            match budget.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(BudgetPermit {
+                        budget: Arc::clone(budget),
+                    });
+                }
+                Err(current) => active = current,
+            }
+        }
+        None
     }
 }
 

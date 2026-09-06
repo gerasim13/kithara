@@ -18,16 +18,18 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
-    /// Player-owned response contract used to validate session geometry.
-    pub(crate) response_budget_frames: NonZeroUsize,
-    /// Optional resident Warp render quantum supplied by the owning player.
-    pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
+    /// Initial output sample rate supplied by the owning player session.
+    pub(crate) sample_rate: NonZeroU32,
+    /// Player-owned response contract used to validate session geometry.
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
     pub(crate) cancel: Option<CancelToken>,
+    /// Optional resident Warp render quantum supplied by the owning player.
+    pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Optional pre-bound dispatcher for isolated harnesses. Production
     /// engines receive their session when the owning Player enters a Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
@@ -45,8 +47,6 @@ pub struct EngineConfig<S> {
     /// change nothing the engine actually does.
     #[builder(default = 2)]
     pub(crate) channels: u16,
-    /// Initial output sample rate supplied by the owning player session.
-    pub(crate) sample_rate: NonZeroU32,
     /// Maximum number of concurrent player slots. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,

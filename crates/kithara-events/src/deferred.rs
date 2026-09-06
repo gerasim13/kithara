@@ -1,4 +1,5 @@
 use crossbeam_queue::ArrayQueue;
+use kithara_platform::sync::Arc;
 use portable_atomic::{AtomicU64, Ordering};
 
 use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
@@ -19,7 +20,7 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeferredBus<E> {
-    next_seq: kithara_platform::sync::Arc<AtomicU64>,
+    next_seq: Arc<AtomicU64>,
     pending: ArrayQueue<DeferredEvent<E>>,
     dropped: AtomicU64,
     #[field(get)]

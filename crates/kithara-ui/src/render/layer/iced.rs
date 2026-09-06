@@ -5,10 +5,16 @@ use iced::{
     advanced::{
         Clipboard, Renderer as _, Shell, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
-        layout::{self, Layout},
-        mouse, overlay, renderer,
-        widget::{self, Operation, Tree},
+        layout::{self, Layout, Node},
+        mouse, overlay,
+        overlay::Nested,
+        renderer,
+        widget::{
+            Operation, Tree,
+            tree::{State, Tag},
+        },
     },
+    event::Status,
     widget::canvas::Frame,
 };
 
@@ -74,7 +80,7 @@ struct WindowOverlay<'a> {
     skin: &'a Skin,
     ghost: Option<&'a DragGhost>,
     bounds: Rectangle,
-    child: RefCell<Option<overlay::Nested<'a, UiEvent, Theme, Renderer>>>,
+    child: RefCell<Option<Nested<'a, UiEvent, Theme, Renderer>>>,
     resize_edges: bool,
 }
 
@@ -140,7 +146,7 @@ impl WindowOverlay<'_> {
                 if let Some(message) = message {
                     shell.publish(message);
                 }
-                if status == iced::event::Status::Captured {
+                if status == Status::Captured {
                     shell.capture_event();
                 }
             }
@@ -166,7 +172,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
         self.draw_layers(renderer, pointer);
     }
 
-    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
+    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> Node {
         let children = self
             .child
             .get_mut()
@@ -174,7 +180,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
             .map(|child| child.layout(renderer, bounds))
             .into_iter()
             .collect();
-        layout::Node::with_children(bounds, children)
+        Node::with_children(bounds, children)
     }
 
     fn mouse_interaction(
@@ -262,19 +268,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> Node {
         let limits = limits.width(Length::Fill).height(Length::Fill);
         let child = self
             .child
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, &limits);
         let size = limits.resolve(Length::Fill, Length::Fill, child.size());
-        layout::Node::with_children(size, vec![child])
+        Node::with_children(size, vec![child])
     }
 
     fn mouse_interaction(
@@ -337,7 +338,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         let state = tree.state.downcast_ref::<LayerState>();
         Some(overlay::Element::new(Box::new(WindowOverlay {
             bounds: layout.bounds(),
-            child: RefCell::new(child.map(overlay::Nested::new)),
+            child: RefCell::new(child.map(Nested::new)),
             ghost: self.ghost.as_ref(),
             resize_edges: self.resize_edges,
             skin: self.skin,
@@ -353,14 +354,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         self.size()
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(LayerState {
+    fn state(&self) -> State {
+        State::new(LayerState {
             text: RefCell::new(None),
         })
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<LayerState>()
+    fn tag(&self) -> Tag {
+        Tag::of::<LayerState>()
     }
 
     fn update(
@@ -481,13 +482,8 @@ mod tests {
         ) {
         }
 
-        fn layout(
-            &mut self,
-            _tree: &mut Tree,
-            _renderer: &Renderer,
-            limits: &Limits,
-        ) -> layout::Node {
-            layout::Node::new(limits.max())
+        fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &Limits) -> Node {
+            Node::new(limits.max())
         }
 
         fn overlay<'a>(
@@ -519,8 +515,8 @@ mod tests {
         ) {
         }
 
-        fn layout(&mut self, _renderer: &Renderer, bounds: Size) -> layout::Node {
-            layout::Node::new(bounds)
+        fn layout(&mut self, _renderer: &Renderer, bounds: Size) -> Node {
+            Node::new(bounds)
         }
 
         fn mouse_interaction(

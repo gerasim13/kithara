@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use kithara_platform::time::Instant;
-use tracing::{Subscriber, field::Visit};
+use tracing::{
+    Subscriber,
+    field::{Field, Visit},
+};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
 use super::{
@@ -62,10 +65,10 @@ struct ProbeVisitor {
 }
 
 impl Visit for ProbeVisitor {
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+    fn record_bool(&mut self, field: &Field, value: bool) {
         self.numeric.insert(field.name(), u64::from(value));
     }
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         let formatted = format!("{value:?}");
         if let Ok(parsed) = formatted.parse::<u64>() {
             self.numeric.insert(field.name(), parsed);
@@ -80,16 +83,16 @@ impl Visit for ProbeVisitor {
             self.strings.insert(field.name(), formatted);
         }
     }
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+    fn record_i64(&mut self, field: &Field, value: i64) {
         if value >= 0 {
             self.numeric
                 .insert(field.name(), u64::try_from(value).unwrap_or(0));
         }
     }
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+    fn record_str(&mut self, field: &Field, value: &str) {
         self.strings.insert(field.name(), value.to_string());
     }
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+    fn record_u64(&mut self, field: &Field, value: u64) {
         self.numeric.insert(field.name(), value);
     }
 }

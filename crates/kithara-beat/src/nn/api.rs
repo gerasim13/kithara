@@ -48,10 +48,10 @@ where
         #[builder(default)] config: BeatConfig,
     ) -> Result<Self, BeatError> {
         Ok(Self {
+            pools,
             mel: MelExtractor::try_from(mel_model)?,
             predictor: BeatPredictor::try_from(beat_model)?,
             picker: PeakPicker::new(config),
-            pools,
         })
     }
 

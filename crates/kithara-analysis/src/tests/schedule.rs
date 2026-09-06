@@ -38,8 +38,8 @@ struct Consts;
 impl Consts {
     const CHUNK: u64 = 8820;
     const EXTENT: u64 = 4 * 44_100;
-    const TOKEN: &'static str = "scheduled-track";
     const TICKS: usize = 8192;
+    const TOKEN: &'static str = "scheduled-track";
     const WINDOW_SECONDS: u32 = 1;
 }
 
@@ -61,20 +61,20 @@ type Log = Arc<Mutex<Vec<Call>>>;
 
 struct Source {
     bus: EventBus,
-    metadata: TrackMetadata,
-    frames: u64,
+    log: Log,
+    fails_after: Option<u64>,
+    pools: Option<kithara_bufpool::PoolRegion<TestPools>>,
     reports: Option<u64>,
-    chunk: u64,
-    snap: u64,
-    floor: u64,
+    metadata: TrackMetadata,
+    echoes: bool,
     refines: bool,
     stalls: bool,
-    echoes: bool,
-    fails_after: Option<u64>,
     at: u64,
+    chunk: u64,
     chunks: u64,
-    log: Log,
-    pools: Option<kithara_bufpool::PoolRegion<TestPools>>,
+    floor: u64,
+    frames: u64,
+    snap: u64,
 }
 
 impl Source {
@@ -98,35 +98,6 @@ impl Source {
         }
     }
 
-    fn snapping(self, snap: u64) -> Self {
-        Self { snap, ..self }
-    }
-
-    fn flooring(self, floor: u64) -> Self {
-        Self { floor, ..self }
-    }
-
-    fn reporting(self, frames: Option<u64>) -> Self {
-        Self {
-            reports: frames,
-            ..self
-        }
-    }
-
-    fn refining(self) -> Self {
-        Self {
-            refines: true,
-            ..self
-        }
-    }
-
-    fn stalling(self) -> Self {
-        Self {
-            stalls: true,
-            ..self
-        }
-    }
-
     fn echoing(self) -> Self {
         Self {
             echoes: true,
@@ -141,12 +112,41 @@ impl Source {
         }
     }
 
+    fn flooring(self, floor: u64) -> Self {
+        Self { floor, ..self }
+    }
+
     fn log(&self) -> Log {
         Arc::clone(&self.log)
     }
 
     fn push(&self, call: Call) {
         self.log.lock().push(call);
+    }
+
+    fn refining(self) -> Self {
+        Self {
+            refines: true,
+            ..self
+        }
+    }
+
+    fn reporting(self, frames: Option<u64>) -> Self {
+        Self {
+            reports: frames,
+            ..self
+        }
+    }
+
+    fn snapping(self, snap: u64) -> Self {
+        Self { snap, ..self }
+    }
+
+    fn stalling(self) -> Self {
+        Self {
+            stalls: true,
+            ..self
+        }
     }
 }
 
@@ -235,7 +235,7 @@ impl AudioControl for Source {
             .saturating_mul(self.snap)
             .max(self.floor);
         self.at = landed;
-        self.push(Call::Seek { to: target, landed });
+        self.push(Call::Seek { landed, to: target });
         let reported = if self.echoes { target } else { landed };
         Ok(SeekOutcome::Landed {
             target: position,
@@ -262,10 +262,10 @@ struct Pass<B, S>
 where
     B: ResamplerBackend,
 {
-    node: NodeHarness<B, S>,
     producer: AnalysisProducer,
-    results: watch::Receiver<Option<AnalysisProgress>>,
     log: Log,
+    node: NodeHarness<B, S>,
+    results: watch::Receiver<Option<AnalysisProgress>>,
     _jobs: mpsc::Sender<Job>,
 }
 
@@ -273,6 +273,44 @@ impl<B> Pass<B, TestPools>
 where
     B: ResamplerBackend,
 {
+    fn analysis(&self) -> TrackAnalysis {
+        self.results
+            .borrow()
+            .as_ref()
+            .map(|progress| progress.analysis().clone())
+            .expect("the pass publishes what it covered")
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        self.log.lock().clone()
+    }
+
+    fn drive(&mut self, ticks: usize) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut remaining = ticks;
+        while remaining > 0 && !self.has_ended() {
+            match self.node.tick() {
+                TickResult::Backpressured if Instant::now() < deadline => thread::yield_now(),
+                TickResult::Backpressured => return false,
+                _ => remaining -= 1,
+            }
+        }
+        self.has_ended()
+    }
+
+    fn has_ended(&self) -> bool {
+        self.results.has_changed().is_err()
+    }
+
+    fn offer(&mut self, at: u64, frames: u64) {
+        let frames = frames.to_usize().unwrap_or(0);
+        assert_eq!(
+            self.producer.offer(&sine_from(at, frames), spec(), at),
+            Ok(()),
+            "the transport takes a range on its own axis"
+        );
+    }
+
     fn open(mut source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
         let rate = spec().sample_rate;
         source.pools = Some(builder.pools().clone());
@@ -281,12 +319,12 @@ where
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
-            token: Consts::TOKEN.into(),
-            revision: 0,
-            reader: Box::new(source),
             tx,
             rate,
             ingest,
+            token: Consts::TOKEN.into(),
+            revision: 0,
+            reader: Box::new(source),
             cancel: CancelToken::root(),
             resume: None,
         })
@@ -307,46 +345,8 @@ where
         }
     }
 
-    fn offer(&mut self, at: u64, frames: u64) {
-        let frames = frames.to_usize().unwrap_or(0);
-        assert_eq!(
-            self.producer.offer(&sine_from(at, frames), spec(), at),
-            Ok(()),
-            "the transport takes a range on its own axis"
-        );
-    }
-
     fn tick(&mut self) {
         let _ = self.node.tick();
-    }
-
-    fn drive(&mut self, ticks: usize) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut remaining = ticks;
-        while remaining > 0 && !self.has_ended() {
-            match self.node.tick() {
-                TickResult::Backpressured if Instant::now() < deadline => thread::yield_now(),
-                TickResult::Backpressured => return false,
-                _ => remaining -= 1,
-            }
-        }
-        self.has_ended()
-    }
-
-    fn has_ended(&self) -> bool {
-        self.results.has_changed().is_err()
-    }
-
-    fn analysis(&self) -> TrackAnalysis {
-        self.results
-            .borrow()
-            .as_ref()
-            .map(|progress| progress.analysis().clone())
-            .expect("the pass publishes what it covered")
-    }
-
-    fn calls(&self) -> Vec<Call> {
-        self.log.lock().clone()
     }
 }
 
@@ -880,8 +880,8 @@ mod artifacts {
 
     struct Route {
         artifacts: Artifacts,
-        seeks: usize,
         lost: u64,
+        seeks: usize,
     }
 
     fn least_runs() -> usize {

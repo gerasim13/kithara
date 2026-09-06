@@ -1,12 +1,3 @@
-//! The embeddable layer: a UI that owns no window and no GPU device.
-//!
-//! A host that already has both — bevy, a plug-in shell, someone else's winit
-//! loop - drives this directly: hand it a size, hand it input, take the complete
-//! frame, prepare its shader images, draw its Vello scene and then its native
-//! effects. [`super::run`] is a
-//! thin window of its own built on top of this, for an application that has no
-//! host to live in.
-
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
@@ -61,22 +52,22 @@ pub struct Ui<'config, Application> {
     /// bound to it animates without the application having to keep a timer.
     #[field(get(copy), vis = "pub")]
     clock: Clock,
-    commands: Vec<WindowCommand>,
     config: Config<'config>,
+    root: MasonryRoot<UiEvent>,
+    state: MasonryState,
+    pointer: PhysicalPosition<f64>,
+    size: PhysicalSize<u32>,
+    screens: Screens,
     /// What every document of this host is compiled against, built once so
     /// that the draw pools inside it outlive a redress. Compiling one per
     /// rebuild would hand each new document an empty pool family and throw the
     /// filled one away with the document it came from.
     doc: UiConfig,
-    pointer: PhysicalPosition<f64>,
-    root: MasonryRoot<UiEvent>,
-    scale: f64,
-    size: PhysicalSize<u32>,
-    screens: Screens,
-    state: MasonryState,
+    commands: Vec<WindowCommand>,
     /// The state the shown screen keeps for itself. It is this host's, not the
     /// application's: nothing is asked for it and nothing declares it.
     view: ViewState,
+    scale: f64,
 }
 
 impl<'config, Application> Ui<'config, Application>
@@ -114,16 +105,16 @@ where
         Ok(Self {
             app,
             clock,
-            commands: Vec::new(),
             config,
             doc,
-            pointer: PhysicalPosition::new(0.0, 0.0),
             root,
             scale,
             screens,
             size,
             state,
             view,
+            commands: Vec::new(),
+            pointer: PhysicalPosition::new(0.0, 0.0),
         })
     }
 
@@ -138,207 +129,10 @@ where
         skin.rgba(skin.layout.page_background)
     }
 
-    /// The state the shown screen keeps for itself.
-    ///
-    /// An application may read what a document turned for itself without
-    /// having declared, answered, or been asked for any of it.
-    #[must_use]
-    pub const fn view(&self) -> &ViewState {
-        &self.view
-    }
-
-    /// Stands the screen's own state at one page, and shows that page.
-    ///
-    /// A page named here comes from the application rather than from a
-    /// document, so it is checked against what the shown screen offers before
-    /// anything moves: a name no screen offers leaves the screen where it is.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError::UnknownPage`] when the shown screen turns no such
-    /// state, or turns it between pages that do not include `page`, and
-    /// whatever compiling the page it does offer fails with.
-    pub fn stand(&mut self, state: &str, page: &str) -> Result<(), RunError> {
-        let views = self.screens.shown().views();
-        if !views
-            .pages()
-            .get(state)
-            .is_some_and(|at| at.offered.contains(page))
-        {
-            return Err(UiDocError::UnknownPage {
-                origin: SourceUri(self.app.document().to_owned()),
-                id: state.to_owned(),
-                page: page.to_owned(),
-                path: String::new(),
-            }
-            .into());
-        }
-        self.view.stand(state, page);
-        self.turn().map(|_| ())
-    }
-
-    /// Turns one flag the screen keeps for itself, and shows what that changed.
-    ///
-    /// A flag turned here comes from the application rather than from a press,
-    /// which is how a harness opens the surface a page is about before
-    /// photographing it. The name is checked against what the shown screen
-    /// names, so a state no document wrote leaves the screen where it is.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError::UnknownState`] when the shown screen names no such
-    /// state, and whatever compiling the screen it does show fails with.
-    pub fn set(&mut self, state: &str, set: ViewSet) -> Result<(), RunError> {
-        if !self.screens.shown().views().named().contains(state) {
-            return Err(UiDocError::UnknownState {
-                origin: SourceUri(self.app.document().to_owned()),
-                id: state.to_owned(),
-            }
-            .into());
-        }
-        if !self.view.set(state, set) {
-            return Ok(());
-        }
-        if self.turn()? {
-            return Ok(());
-        }
-        // The flag turned no page, so the screen standing is the one already
-        // compiled. It is mounted again all the same, because what a flag
-        // lights - a group's background, a glyph's colour - is settled where
-        // the tree is built, which is the same reason standing at a page
-        // mounts one.
-        self.mount_shown()
-    }
-
     /// Current allocation-reuse counters for this mounted document.
     #[must_use]
     pub fn draw_pool_stats(&self) -> PoolStats {
         self.screens.shown().draw_pool_stats()
-    }
-
-    /// Resolves one control's document path to the rect its layout gave it, in
-    /// the same logical units [`Self::input`] takes a point in.
-    ///
-    /// A harness names a control by its path and acts at the rect this
-    /// returns instead of computing a pixel by hand: a scenario clicks it,
-    /// and a capture photographs it.
-    #[cfg(any(test, feature = "capture"))]
-    pub fn rect_of(&self, path: &str) -> Option<Rect> {
-        let id = self.state.widget_id(path)?;
-        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
-        Some(Rect {
-            x: bounds.x0.as_(),
-            y: bounds.y0.as_(),
-            w: (bounds.x1 - bounds.x0).as_(),
-            h: (bounds.y1 - bounds.y0).as_(),
-        })
-    }
-
-    /// The colour the control at `path` writes its text in right now.
-    ///
-    /// What a flag lights is a value the document reads rather than a shape it
-    /// stands in, so a harness reads it back the same way it reads a rect: by
-    /// the path the document gave the control.
-    #[cfg(any(test, feature = "capture"))]
-    pub fn ink_of(&self, path: &str) -> Option<Rgba> {
-        self.root.ink_of(self.state.widget_id(path)?)
-    }
-
-    /// Takes what the document asked its window to do since the last call. A
-    /// document that draws its own title bar asks to be dragged, minimised,
-    /// maximised or closed this way; a host with no window can ignore it.
-    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
-        std::mem::take(&mut self.commands)
-    }
-
-    delegate::delegate! {
-        to self.root {
-            /// Satisfies the redraw signals covered by a frame the host completed.
-            ///
-            /// Returns whether another frame should follow. Every unrelated
-            /// platform signal remains queued on the retained root.
-            pub fn complete_frame(&mut self) -> bool;
-            /// Reports whether the next retained frame would change the picture.
-            pub fn needs_frame(&self) -> bool;
-            /// Takes the cursor the document last asked its window to show.
-            ///
-            /// A host that owns a window applies it; a host without one can
-            /// drop it, but takes it either way so the queue stays bounded.
-            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
-        }
-    }
-
-    /// Tells the UI how big its rectangle is now, in physical pixels.
-    pub fn resize(&mut self, size: (u32, u32), scale: f64) {
-        let scale_changed = self.scale != scale;
-        self.size = PhysicalSize::new(size.0, size.1);
-        self.scale = scale;
-        if scale_changed
-            && let Err(error) = self
-                .root
-                .handle_window_event(WindowEvent::Rescale(self.scale))
-        {
-            tracing::error!(%error, "masonry rescale");
-        }
-        if let Err(error) = self
-            .root
-            .handle_window_event(WindowEvent::Resize(self.size))
-        {
-            tracing::error!(%error, "masonry resize");
-        }
-    }
-
-    /// Feeds one neutral input event in. Whatever the document publishes in
-    /// response is applied to the application before this returns.
-    pub fn input(&mut self, input: Input<'_>) {
-        match input {
-            Input::Pointer(pointer) => {
-                if let Some(at) = pointer.at {
-                    self.pointer = PhysicalPosition::new(
-                        f64::from(at.x) * self.scale,
-                        f64::from(at.y) * self.scale,
-                    );
-                }
-                if let Some(event) = self.pointer_event(pointer.phase, pointer.clicks) {
-                    self.pointer_input(event);
-                }
-            }
-            Input::Wheel(scroll) => {
-                let (x, y) = (
-                    scroll.delta(ScrollAxis::Horizontal),
-                    scroll.delta(ScrollAxis::Vertical),
-                );
-                let delta = if scroll.is_pixels() {
-                    ScrollDelta::PixelDelta(PhysicalPosition::new(x.into(), y.into()))
-                } else {
-                    ScrollDelta::LineDelta(x, y)
-                };
-                self.pointer_input(PointerEvent::Scroll(PointerScrollEvent {
-                    pointer: pointer_info(),
-                    delta,
-                    state: pointer_state(self.pointer, false, self.scale, 1),
-                }));
-            }
-            Input::KeyPressed { .. }
-            | Input::KeyReleased { .. }
-            | Input::InputMethod(_)
-            | Input::ModifiersChanged(_) => {
-                if let Some(event) = masonry_text_event(input) {
-                    self.text(event);
-                }
-            }
-        }
-        self.settle();
-    }
-
-    fn text(&mut self, event: TextEvent) {
-        if let Err(error) = self.root.handle_text_event(event) {
-            tracing::error!(%error, "masonry text");
-        }
-    }
-
-    fn pointer_input(&mut self, event: PointerEvent) {
-        if let Err(error) = self.root.handle_pointer_event(event) {
-            tracing::error!(%error, "masonry pointer");
-        }
     }
 
     /// Advances one frame's worth of animation.
@@ -376,41 +170,57 @@ where
         self.settle();
     }
 
-    /// Draws the current document, in the physical pixels the caller sized it
-    /// with. The caller prepares [`crate::render::shader::ShaderPass`],
-    /// rasterises the Vello scene, then sends native declarations through
-    /// [`crate::render::vis::VisPass`] on the same target.
+    /// The colour the control at `path` writes its text in right now.
     ///
-    /// The document is laid out and painted in logical units. This method scales
-    /// the Vello scene; the host gives that same scale and its physical target
-    /// size to the native pass.
-    ///
-    /// # Errors
-    /// Returns [`RunError`] when the paint pass fails.
-    pub fn render(&mut self) -> Result<Frame, RunError> {
-        let (scene, _) = self
-            .root
-            .redraw()
-            .map_err(|error| RunError::Host(error.to_string()))?;
-        let shaders = self.root.shader_declarations();
-        let vis = self.root.vis_declarations();
-        let scene = if (self.scale - 1.0).abs() < f64::EPSILON {
-            scene
-        } else {
-            let mut scaled = Scene::new();
-            scaled.append(&scene, Some(Affine::scale(self.scale)));
-            scaled
-        };
-        Ok(Frame::new(scene, shaders, vis))
+    /// What a flag lights is a value the document reads rather than a shape it
+    /// stands in, so a harness reads it back the same way it reads a rect: by
+    /// the path the document gave the control.
+    #[cfg(any(test, feature = "capture"))]
+    pub fn ink_of(&self, path: &str) -> Option<Rgba> {
+        self.root.ink_of(self.state.widget_id(path)?)
     }
 
-    /// Draws the current document through the same single paint path as
-    /// [`Self::render`] and returns only its Vello scene.
-    ///
-    /// # Errors
-    /// Returns [`RunError`] when the paint pass fails.
-    pub fn scene(&mut self) -> Result<Scene, RunError> {
-        self.render().map(Into::into)
+    /// Feeds one neutral input event in. Whatever the document publishes in
+    /// response is applied to the application before this returns.
+    pub fn input(&mut self, input: Input<'_>) {
+        match input {
+            Input::Pointer(pointer) => {
+                if let Some(at) = pointer.at {
+                    self.pointer = PhysicalPosition::new(
+                        f64::from(at.x) * self.scale,
+                        f64::from(at.y) * self.scale,
+                    );
+                }
+                if let Some(event) = self.pointer_event(pointer.phase, pointer.clicks) {
+                    self.pointer_input(event);
+                }
+            }
+            Input::Wheel(scroll) => {
+                let (x, y) = (
+                    scroll.delta(ScrollAxis::Horizontal),
+                    scroll.delta(ScrollAxis::Vertical),
+                );
+                let delta = if scroll.is_pixels() {
+                    ScrollDelta::PixelDelta(PhysicalPosition::new(x.into(), y.into()))
+                } else {
+                    ScrollDelta::LineDelta(x, y)
+                };
+                self.pointer_input(PointerEvent::Scroll(PointerScrollEvent {
+                    delta,
+                    pointer: pointer_info(),
+                    state: pointer_state(self.pointer, false, self.scale, 1),
+                }));
+            }
+            Input::KeyPressed { .. }
+            | Input::KeyReleased { .. }
+            | Input::InputMethod(_)
+            | Input::ModifiersChanged(_) => {
+                if let Some(event) = masonry_text_event(input) {
+                    self.text(event);
+                }
+            }
+        }
+        self.settle();
     }
 
     fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
@@ -442,6 +252,187 @@ where
             | PointerPhase::MoveLongPress => None,
         }
     }
+
+    fn pointer_input(&mut self, event: PointerEvent) {
+        if let Err(error) = self.root.handle_pointer_event(event) {
+            tracing::error!(%error, "masonry pointer");
+        }
+    }
+
+    /// Resolves one control's document path to the rect its layout gave it, in
+    /// the same logical units [`Self::input`] takes a point in.
+    ///
+    /// A harness names a control by its path and acts at the rect this
+    /// returns instead of computing a pixel by hand: a scenario clicks it,
+    /// and a capture photographs it.
+    #[cfg(any(test, feature = "capture"))]
+    pub fn rect_of(&self, path: &str) -> Option<Rect> {
+        let id = self.state.widget_id(path)?;
+        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
+        Some(Rect {
+            x: bounds.x0.as_(),
+            y: bounds.y0.as_(),
+            w: (bounds.x1 - bounds.x0).as_(),
+            h: (bounds.y1 - bounds.y0).as_(),
+        })
+    }
+
+    /// Draws the current document, in the physical pixels the caller sized it
+    /// with. The caller prepares [`crate::render::shader::ShaderPass`],
+    /// rasterises the Vello scene, then sends native declarations through
+    /// [`crate::render::vis::VisPass`] on the same target.
+    ///
+    /// The document is laid out and painted in logical units. This method scales
+    /// the Vello scene; the host gives that same scale and its physical target
+    /// size to the native pass.
+    ///
+    /// # Errors
+    /// Returns [`RunError`] when the paint pass fails.
+    pub fn render(&mut self) -> Result<Frame, RunError> {
+        let (scene, _) = self
+            .root
+            .redraw()
+            .map_err(|error| RunError::Host(error.to_string()))?;
+        let shaders = self.root.shader_declarations();
+        let vis = self.root.vis_declarations();
+        let scene = if (self.scale - 1.0).abs() < f64::EPSILON {
+            scene
+        } else {
+            let mut scaled = Scene::new();
+            scaled.append(&scene, Some(Affine::scale(self.scale)));
+            scaled
+        };
+        Ok(Frame::new(scene, shaders, vis))
+    }
+
+    /// Tells the UI how big its rectangle is now, in physical pixels.
+    pub fn resize(&mut self, size: (u32, u32), scale: f64) {
+        let scale_changed = self.scale != scale;
+        self.size = PhysicalSize::new(size.0, size.1);
+        self.scale = scale;
+        if scale_changed
+            && let Err(error) = self
+                .root
+                .handle_window_event(WindowEvent::Rescale(self.scale))
+        {
+            tracing::error!(%error, "masonry rescale");
+        }
+        if let Err(error) = self
+            .root
+            .handle_window_event(WindowEvent::Resize(self.size))
+        {
+            tracing::error!(%error, "masonry resize");
+        }
+    }
+
+    /// Draws the current document through the same single paint path as
+    /// [`Self::render`] and returns only its Vello scene.
+    ///
+    /// # Errors
+    /// Returns [`RunError`] when the paint pass fails.
+    pub fn scene(&mut self) -> Result<Scene, RunError> {
+        self.render().map(Into::into)
+    }
+
+    /// Turns one flag the screen keeps for itself, and shows what that changed.
+    ///
+    /// A flag turned here comes from the application rather than from a press,
+    /// which is how a harness opens the surface a page is about before
+    /// photographing it. The name is checked against what the shown screen
+    /// names, so a state no document wrote leaves the screen where it is.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::UnknownState`] when the shown screen names no such
+    /// state, and whatever compiling the screen it does show fails with.
+    pub fn set(&mut self, state: &str, set: ViewSet) -> Result<(), RunError> {
+        if !self.screens.shown().views().named().contains(state) {
+            return Err(UiDocError::UnknownState {
+                origin: SourceUri(self.app.document().to_owned()),
+                id: state.to_owned(),
+            }
+            .into());
+        }
+        if !self.view.set(state, set) {
+            return Ok(());
+        }
+        if self.turn()? {
+            return Ok(());
+        }
+        // The flag turned no page, so the screen standing is the one already
+        // compiled. It is mounted again all the same, because what a flag
+        // lights - a group's background, a glyph's colour - is settled where
+        // the tree is built, which is the same reason standing at a page
+        // mounts one.
+        self.mount_shown()
+    }
+
+    /// Stands the screen's own state at one page, and shows that page.
+    ///
+    /// A page named here comes from the application rather than from a
+    /// document, so it is checked against what the shown screen offers before
+    /// anything moves: a name no screen offers leaves the screen where it is.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::UnknownPage`] when the shown screen turns no such
+    /// state, or turns it between pages that do not include `page`, and
+    /// whatever compiling the page it does offer fails with.
+    pub fn stand(&mut self, state: &str, page: &str) -> Result<(), RunError> {
+        let views = self.screens.shown().views();
+        if !views
+            .pages()
+            .get(state)
+            .is_some_and(|at| at.offered.contains(page))
+        {
+            return Err(UiDocError::UnknownPage {
+                origin: SourceUri(self.app.document().to_owned()),
+                id: state.to_owned(),
+                page: page.to_owned(),
+                path: String::new(),
+            }
+            .into());
+        }
+        self.view.stand(state, page);
+        self.turn().map(|_| ())
+    }
+
+    /// Takes what the document asked its window to do since the last call. A
+    /// document that draws its own title bar asks to be dragged, minimised,
+    /// maximised or closed this way; a host with no window can ignore it.
+    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    fn text(&mut self, event: TextEvent) {
+        if let Err(error) = self.root.handle_text_event(event) {
+            tracing::error!(%error, "masonry text");
+        }
+    }
+
+    /// The state the shown screen keeps for itself.
+    ///
+    /// An application may read what a document turned for itself without
+    /// having declared, answered, or been asked for any of it.
+    #[must_use]
+    pub const fn view(&self) -> &ViewState {
+        &self.view
+    }
+
+    delegate::delegate! {
+        to self.root {
+            /// Satisfies the redraw signals covered by a frame the host completed.
+            ///
+            /// Returns whether another frame should follow. Every unrelated
+            /// platform signal remains queued on the retained root.
+            pub fn complete_frame(&mut self) -> bool;
+            /// Reports whether the next retained frame would change the picture.
+            pub fn needs_frame(&self) -> bool;
+            /// Takes the cursor the document last asked its window to show.
+            ///
+            /// A host that owns a window applies it; a host without one can
+            /// drop it, but takes it either way so the queue stays bounded.
+            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
+        }
+    }
 }
 
 /// How the screen this host shows follows the application and the state the
@@ -450,6 +441,41 @@ impl<Application> Ui<'_, Application>
 where
     Application: App,
 {
+    /// Mounts the screen the cache is showing, in place of the tree standing.
+    fn mount_shown(&mut self) -> Result<(), RunError> {
+        // A state belongs to the document that named it. What the screen now
+        // shown does not name is gone rather than kept to answer for a state
+        // this document does not have.
+        self.view.retain(self.screens.shown().views().named());
+        self.app.turned(&self.view);
+        self.root = mount(
+            &self.app,
+            &self.config,
+            &self.state,
+            self.screens.shown(),
+            root_options(self.size, self.scale),
+            self.clock,
+            &self.view,
+        )?;
+        self.root
+            .handle_window_event(WindowEvent::Resize(self.size))
+            .map(|_| ())
+            .map_err(|error| RunError::Host(error.to_string()))
+    }
+
+    /// Compiles the application's document again and mounts what it produced,
+    /// in place of what this host is showing.
+    ///
+    /// The tree a host mounts is retained: its shape is settled where it is
+    /// built, so a document that now compiles to another shape - because the
+    /// application moved on, or because another skin measures it differently -
+    /// reaches the screen only by being built again.
+    fn remount(&mut self) -> Result<(), RunError> {
+        let ui = compile_document(&self.app, &self.config, &self.doc, &self.view)?;
+        self.screens.reset(ui);
+        self.mount_shown()
+    }
+
     /// Hands the application what the document published, then shows the new
     /// state.
     ///
@@ -541,41 +567,6 @@ where
         }
         self.mount_shown().map(|()| true)
     }
-
-    /// Compiles the application's document again and mounts what it produced,
-    /// in place of what this host is showing.
-    ///
-    /// The tree a host mounts is retained: its shape is settled where it is
-    /// built, so a document that now compiles to another shape - because the
-    /// application moved on, or because another skin measures it differently -
-    /// reaches the screen only by being built again.
-    fn remount(&mut self) -> Result<(), RunError> {
-        let ui = compile_document(&self.app, &self.config, &self.doc, &self.view)?;
-        self.screens.reset(ui);
-        self.mount_shown()
-    }
-
-    /// Mounts the screen the cache is showing, in place of the tree standing.
-    fn mount_shown(&mut self) -> Result<(), RunError> {
-        // A state belongs to the document that named it. What the screen now
-        // shown does not name is gone rather than kept to answer for a state
-        // this document does not have.
-        self.view.retain(self.screens.shown().views().named());
-        self.app.turned(&self.view);
-        self.root = mount(
-            &self.app,
-            &self.config,
-            &self.state,
-            self.screens.shown(),
-            root_options(self.size, self.scale),
-            self.clock,
-            &self.view,
-        )?;
-        self.root
-            .handle_window_event(WindowEvent::Resize(self.size))
-            .map(|_| ())
-            .map_err(|error| RunError::Host(error.to_string()))
-    }
 }
 
 fn compile_document<Application>(
@@ -639,11 +630,11 @@ where
 
 fn root_options(size: PhysicalSize<u32>, scale_factor: f64) -> RenderRootOptions {
     RenderRootOptions {
+        size,
+        scale_factor,
         default_properties: Arc::new(default_property_set()),
         use_system_fonts: false,
         size_policy: WindowSizePolicy::User,
-        size,
-        scale_factor,
         test_font: None,
     }
 }

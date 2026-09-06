@@ -39,48 +39,48 @@ impl fmt::Debug for PlayerMember {
 pub trait Player:
     BeatGrid + SyncGroup<NestedGroup = PlayerMember> + MaybeSend + MaybeSync + 'static
 {
-    /// Start or resume playback.
-    fn play(&self);
-
-    /// Pause playback.
-    fn pause(&self);
-
-    /// Seek within the current item.
-    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
-
-    /// Advance control-plane and audio-backend work.
-    fn tick(&self) -> Result<(), PlayError>;
-
-    /// Read one coherent playback view.
-    fn playback_view(&self) -> PlaybackView;
-
-    /// Commit the host-applied deck level after a validated graph batch.
-    fn set_host_level(&self, level: f32);
+    /// Stop owned work and detach the player from its playback session.
+    fn close(&mut self) -> Result<(), PlayError>;
 
     /// Read the desired host-applied deck level.
     fn host_level(&self) -> f32;
 
-    /// Stop owned work and detach the player from its playback session.
-    fn close(&mut self) -> Result<(), PlayError>;
+    /// Pause playback.
+    fn pause(&self);
+
+    /// Start or resume playback.
+    fn play(&self);
+
+    /// Read one coherent playback view.
+    fn playback_view(&self) -> PlaybackView;
+
+    /// Seek within the current item.
+    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
+
+    /// Commit the host-applied deck level after a validated graph batch.
+    fn set_host_level(&self, level: f32);
+
+    /// Advance control-plane and audio-backend work.
+    fn tick(&self) -> Result<(), PlayError>;
 }
 
 /// Produces a cloneable command capability without sharing player identity or
 /// synchronization topology.
 pub trait PlayerControlSource: Player {
-    /// Typed pool schema shared with the canonical playback session.
-    type Schema;
-
     /// Concrete command capability retained by typed host-owned handles.
     type Control: Clone + MaybeSend + MaybeSync + 'static;
 
-    /// Creates a command capability for this player.
-    fn control(&self) -> Self::Control;
+    /// Typed pool schema shared with the canonical playback session.
+    type Schema;
 
     /// Attaches the resident Player to its canonical session exactly once.
     fn attach_session(&mut self, binding: SessionBinding<Self::Schema>) -> Result<(), PlayError>;
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
+
+    /// Creates a command capability for this player.
+    fn control(&self) -> Self::Control;
 
     /// Transfers only the sendable Host-owned part of a wasm player.
     #[cfg(target_arch = "wasm32")]
@@ -106,6 +106,10 @@ where
 {
     type NestedGroup = PlayerMember;
 
+    fn status(&self) -> SyncStatusSnapshot {
+        SyncGroup::status(&self.sync)
+    }
+
     delegate::delegate! {
         to self.sync {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
@@ -116,31 +120,26 @@ where
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(&self.sync)
-    }
 }
 
 impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn play(&self) {
-        let _ = self.runtime.with_open(PlayerRuntime::play);
+    fn close(&mut self) -> Result<(), PlayError> {
+        self.make_control().close()
+    }
+
+    fn host_level(&self) -> f32 {
+        self.runtime.core.engine.master_volume()
     }
 
     fn pause(&self) {
         let _ = self.runtime.with_open(PlayerRuntime::pause);
     }
 
-    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.seek_seconds(seconds))
-    }
-
-    fn tick(&self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(PlayerRuntime::tick)
+    fn play(&self) {
+        let _ = self.runtime.with_open(PlayerRuntime::play);
     }
 
     fn playback_view(&self) -> PlaybackView {
@@ -153,18 +152,19 @@ where
             .unwrap_or_default()
     }
 
+    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.seek_seconds(seconds))
+    }
+
     fn set_host_level(&self, level: f32) {
         if !self.runtime.is_closed() {
             self.runtime.core.engine.commit_desired_master_volume(level);
         }
     }
 
-    fn host_level(&self) -> f32 {
-        self.runtime.core.engine.master_volume()
-    }
-
-    fn close(&mut self) -> Result<(), PlayError> {
-        self.make_control().close()
+    fn tick(&self) -> Result<(), PlayError> {
+        self.runtime.with_open_result(PlayerRuntime::tick)
     }
 }
 
@@ -172,12 +172,8 @@ impl<S> PlayerControlSource for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    type Schema = S;
     type Control = crate::player::PlayerControl<S>;
-
-    fn control(&self) -> Self::Control {
-        self.make_control()
-    }
+    type Schema = S;
 
     fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.runtime.attach_session(binding)
@@ -185,6 +181,10 @@ where
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
+    }
+
+    fn control(&self) -> Self::Control {
+        self.make_control()
     }
 
     #[cfg(target_arch = "wasm32")]

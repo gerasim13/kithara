@@ -1,6 +1,7 @@
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
     border::Radius,
+    mouse::Cursor,
     widget::{
         Canvas, Row, Space, Stack,
         canvas::{self, Fill, Frame, Geometry, Style, fill::Rule},
@@ -386,7 +387,7 @@ impl<Message> canvas::Program<Message> for FrameChrome {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
+        _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         if self.round.any() && self.radius > 0.0 {

@@ -100,9 +100,9 @@ impl ChunkCursor {
         }
         Ok(CopyOutcome {
             finished,
-            output_frames: take_frames,
             samples,
             source_span,
+            output_frames: take_frames,
         })
     }
 
@@ -284,10 +284,10 @@ impl ChunkCursor {
 }
 
 struct CopyOutcome {
+    source_span: Option<SourceSpan>,
     finished: bool,
     output_frames: u64,
     samples: usize,
-    source_span: Option<SourceSpan>,
 }
 
 fn source_spans_coalesce(

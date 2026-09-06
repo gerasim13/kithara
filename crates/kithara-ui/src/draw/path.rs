@@ -45,8 +45,8 @@ pub enum FillRule {
 /// leave the draw list and reach a toolkit directly.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PoolPath {
-    rule: FillRule,
     verbs: Buffer<Verb>,
+    rule: FillRule,
 }
 
 impl PoolPath {
@@ -55,13 +55,6 @@ impl PoolPath {
         Self {
             rule,
             verbs: Buffer::owned(verbs),
-        }
-    }
-
-    pub(super) fn pooled(rule: FillRule, guard: VecGuard<Verb>) -> Self {
-        Self {
-            rule,
-            verbs: Buffer::pooled(guard),
         }
     }
 
@@ -74,6 +67,13 @@ impl PoolPath {
     pub(super) fn into_pooled(mut self, acquire: impl FnOnce() -> VecGuard<Verb>) -> Self {
         self.verbs = self.verbs.into_pooled(acquire);
         self
+    }
+
+    pub(super) fn pooled(rule: FillRule, guard: VecGuard<Verb>) -> Self {
+        Self {
+            rule,
+            verbs: Buffer::pooled(guard),
+        }
     }
 
     #[must_use]

@@ -1,5 +1,12 @@
-use kithara::bufpool::{
-    OverallBudget, Percent, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema,
+use kithara::{
+    assets::AssetStore,
+    bufpool::{
+        OverallBudget, Percent, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema,
+    },
+    host::Host,
+    play::{PlayWorker, ResourceConfig},
+    prelude::PlaybackResamplerBackend,
+    queue::{Queue, QueueControl, TrackSource},
 };
 use serde::Deserialize;
 
@@ -27,26 +34,25 @@ pool_schema! {
 pub type Pools = PoolRegion<AppPools>;
 
 /// App-owned asset-store shape.
-pub type AppStore = kithara::assets::AssetStore<AppPools>;
+pub type AppStore = AssetStore<AppPools>;
 
 /// App-owned audio host shape.
-pub type AppHost = kithara::host::Host<AppPools>;
+pub type AppHost = Host<AppPools>;
 
 /// App-owned playback worker shape.
-pub type AppWorker = kithara::play::PlayWorker<AppPools>;
+pub type AppWorker = PlayWorker<AppPools>;
 
 /// App-owned resource configuration shape.
-pub type AppResourceConfig<B = kithara::prelude::PlaybackResamplerBackend> =
-    kithara::play::ResourceConfig<AppPools, B>;
+pub type AppResourceConfig<B = PlaybackResamplerBackend> = ResourceConfig<AppPools, B>;
 
 /// App-owned queue shape.
-pub type AppQueue = kithara::queue::Queue<AppPools>;
+pub type AppQueue = Queue<AppPools>;
 
 /// App-owned queue control shape.
-pub type AppQueueControl = kithara::queue::QueueControl<AppPools>;
+pub type AppQueueControl = QueueControl<AppPools>;
 
 /// App-owned track-source shape.
-pub type AppTrackSource = kithara::queue::TrackSource<AppPools>;
+pub type AppTrackSource = TrackSource<AppPools>;
 
 /// What a document can say about this application's buffer pools: the region's
 /// own byte budget, then one field per pool the `pool_schema!` invocation above

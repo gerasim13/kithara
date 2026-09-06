@@ -1,6 +1,9 @@
 use js_sys::Uint8Array;
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::sync::{OnceLock, mpsc};
+use kithara_platform::{
+    sync::{OnceLock, mpsc},
+    tokio::task,
+};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -36,6 +39,7 @@ impl Support {
         AudioCodec::Flac,
     ];
 
+    const FLAC_DESCRIPTION_LEN: usize = 42;
     /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
     const FLAC_PROBE_STREAMINFO: [u8; 34] = [
         0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -43,7 +47,6 @@ impl Support {
         0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
-    const FLAC_DESCRIPTION_LEN: usize = 42;
 
     fn set(&mut self, codec: AudioCodec, supported: bool) {
         match codec {
@@ -79,7 +82,7 @@ where
         return;
     }
     let _ = host_cmd().set(spawn_host(pools));
-    drop(kithara_platform::tokio::task::spawn(async {
+    drop(task::spawn(async {
         let mut snapshot = Support::default();
         for codec in Support::CODECS {
             snapshot.set(codec, probe(codec).await);

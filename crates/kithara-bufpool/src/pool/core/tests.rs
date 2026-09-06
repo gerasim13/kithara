@@ -42,9 +42,9 @@ impl Storage for OverallocStorage {
 }
 
 struct RefillStorage {
-    capacity: usize,
-    core: Weak<RefillCore>,
     remaining: Arc<AtomicUsize>,
+    core: Weak<RefillCore>,
+    capacity: usize,
 }
 
 impl Default for RefillStorage {
@@ -93,7 +93,7 @@ impl Drop for RefillStorage {
         };
         if self
             .remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                 left.checked_sub(1)
             })
             .is_err()

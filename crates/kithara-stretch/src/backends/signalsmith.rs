@@ -52,33 +52,34 @@ enum TerminalState {
 /// Exact-span Signalsmith engine, prepared for fixed maximum source and output
 /// blocks.
 pub(crate) struct SignalsmithElastic {
-    inner: Stretch,
     capabilities: ElasticCapabilities,
     prime_input: SampleBuffer,
+    inner: Stretch,
     terminal: TerminalState,
 }
 
 impl SignalsmithElastic {
-    fn terminal_output_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
-        self.capabilities
-            .latency()
-            .source_frames()
-            .checked_mul(request.output_frames())
-            .map(|frames| frames.div_ceil(request.source_frames()))
-            .ok_or(ElasticError::SampleCountOverflow)
-    }
-
-    fn terminal_source_boundary(
-        &self,
-        request: ElasticRequest,
-        output_cursor: usize,
-    ) -> Result<usize, ElasticError> {
-        output_cursor
-            .checked_mul(request.source_frames())
-            .and_then(|frames| frames.checked_add(request.output_frames() / 2))
-            .map(|frames| frames / request.output_frames())
-            .map(|frames| frames.min(self.capabilities.latency().source_frames()))
-            .ok_or(ElasticError::SampleCountOverflow)
+    fn flush_native(
+        &mut self,
+        output: &mut [f32],
+        capacity: usize,
+        cursor: usize,
+    ) -> Result<ElasticDrain, ElasticError> {
+        let total = self.capabilities.latency().output_frames();
+        let frames = total.saturating_sub(cursor).min(capacity);
+        let next = cursor
+            .checked_add(frames)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let start = self.capabilities.samples(cursor)?;
+        let end = self.capabilities.samples(next)?;
+        output[..end - start].copy_from_slice(&self.prime_input[start..end]);
+        let complete = next == total;
+        self.terminal = if complete {
+            TerminalState::Idle
+        } else {
+            TerminalState::Native { cursor: next }
+        };
+        Ok(ElasticDrain::new(frames, complete))
     }
 
     fn flush_padding(
@@ -125,35 +126,34 @@ impl SignalsmithElastic {
         } else {
             self.terminal = TerminalState::Padding {
                 request,
+                output_frames,
                 source_cursor: next_source,
                 output_cursor: next_output,
-                output_frames,
             };
         }
         Ok(ElasticDrain::new(rendered_frames, false))
     }
 
-    fn flush_native(
-        &mut self,
-        output: &mut [f32],
-        capacity: usize,
-        cursor: usize,
-    ) -> Result<ElasticDrain, ElasticError> {
-        let total = self.capabilities.latency().output_frames();
-        let frames = total.saturating_sub(cursor).min(capacity);
-        let next = cursor
-            .checked_add(frames)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let start = self.capabilities.samples(cursor)?;
-        let end = self.capabilities.samples(next)?;
-        output[..end - start].copy_from_slice(&self.prime_input[start..end]);
-        let complete = next == total;
-        self.terminal = if complete {
-            TerminalState::Idle
-        } else {
-            TerminalState::Native { cursor: next }
-        };
-        Ok(ElasticDrain::new(frames, complete))
+    fn terminal_output_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
+        self.capabilities
+            .latency()
+            .source_frames()
+            .checked_mul(request.output_frames())
+            .map(|frames| frames.div_ceil(request.source_frames()))
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    fn terminal_source_boundary(
+        &self,
+        request: ElasticRequest,
+        output_cursor: usize,
+    ) -> Result<usize, ElasticError> {
+        output_cursor
+            .checked_mul(request.source_frames())
+            .and_then(|frames| frames.checked_add(request.output_frames() / 2))
+            .map(|frames| frames / request.output_frames())
+            .map(|frames| frames.min(self.capabilities.latency().source_frames()))
+            .ok_or(ElasticError::SampleCountOverflow)
     }
 }
 
@@ -167,6 +167,42 @@ impl fmt::Debug for SignalsmithElastic {
 }
 
 impl ElasticEngine for SignalsmithElastic {
+    fn capabilities(&self) -> ElasticCapabilities {
+        self.capabilities
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
+        if matches!(self.terminal, TerminalState::Idle) {
+            return Ok(ElasticDrain::new(0, true));
+        }
+        let capacity = self.capabilities.output_capacity(output.len())?;
+        match self.terminal {
+            TerminalState::Armed { request } => self.flush_padding(
+                output,
+                capacity,
+                request,
+                0,
+                0,
+                self.terminal_output_frames(request)?,
+            ),
+            TerminalState::Padding {
+                request,
+                source_cursor,
+                output_cursor,
+                output_frames,
+            } => self.flush_padding(
+                output,
+                capacity,
+                request,
+                source_cursor,
+                output_cursor,
+                output_frames,
+            ),
+            TerminalState::Native { cursor } => self.flush_native(output, capacity, cursor),
+            TerminalState::Idle => Ok(ElasticDrain::new(0, true)),
+        }
+    }
+
     fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
     where
         S: HasPool<f32>,
@@ -196,10 +232,6 @@ impl ElasticEngine for SignalsmithElastic {
             prime_input,
             terminal: TerminalState::Idle,
         })
-    }
-
-    fn capabilities(&self) -> ElasticCapabilities {
-        self.capabilities
     }
 
     fn prime(
@@ -247,6 +279,12 @@ impl ElasticEngine for SignalsmithElastic {
         Ok(())
     }
 
+    fn reset(&mut self) -> Result<(), ElasticError> {
+        self.inner.reset();
+        self.terminal = TerminalState::Idle;
+        Ok(())
+    }
+
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
         let factor = PitchScale::checked(scale)
             .map(f64::from)
@@ -254,44 +292,6 @@ impl ElasticEngine for SignalsmithElastic {
             .to_f32()
             .ok_or(ElasticError::InvalidPitch(scale))?;
         self.inner.set_transpose_factor(factor, None);
-        Ok(())
-    }
-
-    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
-        if matches!(self.terminal, TerminalState::Idle) {
-            return Ok(ElasticDrain::new(0, true));
-        }
-        let capacity = self.capabilities.output_capacity(output.len())?;
-        match self.terminal {
-            TerminalState::Armed { request } => self.flush_padding(
-                output,
-                capacity,
-                request,
-                0,
-                0,
-                self.terminal_output_frames(request)?,
-            ),
-            TerminalState::Padding {
-                request,
-                source_cursor,
-                output_cursor,
-                output_frames,
-            } => self.flush_padding(
-                output,
-                capacity,
-                request,
-                source_cursor,
-                output_cursor,
-                output_frames,
-            ),
-            TerminalState::Native { cursor } => self.flush_native(output, capacity, cursor),
-            TerminalState::Idle => Ok(ElasticDrain::new(0, true)),
-        }
-    }
-
-    fn reset(&mut self) -> Result<(), ElasticError> {
-        self.inner.reset();
-        self.terminal = TerminalState::Idle;
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ use std::{
 };
 
 use num_traits::cast::AsPrimitive;
+use png::Decoder;
 
 use super::geometry::{read_geometry, write_png};
 
@@ -264,7 +265,7 @@ pub(super) struct Image {
 
 pub(super) fn read_png(path: &Path) -> Result<Image, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
-    let decoder = png::Decoder::new(file);
+    let decoder = Decoder::new(file);
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("decode {}: {error}", path.display()))?;

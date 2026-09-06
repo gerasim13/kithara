@@ -27,12 +27,16 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
+use kithara_test_fixtures::assets;
 use num_traits::cast::AsPrimitive;
 
 use super::{Entry, Request};
 use crate::{
     config::{AppConfig, AppDrm},
-    pools::{self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools},
+    pools::{
+        self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools,
+        PoolsSection,
+    },
     sources::build_resource_config,
     state::UiState,
     wave_cache::{AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig},
@@ -44,7 +48,7 @@ pub(crate) fn chunk_seconds() -> NonZeroU32 {
 }
 
 pub(crate) fn test_pools() -> Pools {
-    pools::build(&pools::PoolsSection::default()).expect("valid app pool policy")
+    pools::build(&PoolsSection::default()).expect("valid app pool policy")
 }
 
 pub(crate) fn axis() -> NonZeroU32 {
@@ -185,21 +189,14 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
 
 pub(crate) fn mp3_track(directory: &Path) -> String {
     let path = directory.join("track.mp3");
-    std::fs::write(
-        &path,
-        kithara_test_fixtures::assets::sine_mp3_a440_2s().bytes(),
-    )
-    .expect("fixture track is written");
+    std::fs::write(&path, assets::sine_mp3_a440_2s().bytes()).expect("fixture track is written");
     format!("file://{}", path.display())
 }
 
 pub(crate) fn mp3_track_48k(directory: &Path) -> String {
     let path = directory.join("track-48k.mp3");
-    std::fs::write(
-        &path,
-        kithara_test_fixtures::assets::rhythm_mp3_deck_a_120bpm_48k().bytes(),
-    )
-    .expect("fixture track is written");
+    std::fs::write(&path, assets::rhythm_mp3_deck_a_120bpm_48k().bytes())
+        .expect("fixture track is written");
     format!("file://{}", path.display())
 }
 

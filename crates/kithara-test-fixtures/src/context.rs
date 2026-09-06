@@ -3,15 +3,15 @@ use std::{io, path::Path};
 use crate::store;
 
 pub(crate) struct BuildContext<'a> {
-    asset_id: &'a str,
     namespace: &'a Path,
+    asset_id: &'a str,
 }
 
 impl<'a> BuildContext<'a> {
     pub(crate) const fn new(namespace: &'a Path, asset_id: &'a str) -> Self {
         Self {
-            asset_id,
             namespace,
+            asset_id,
         }
     }
 

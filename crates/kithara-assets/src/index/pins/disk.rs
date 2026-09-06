@@ -17,6 +17,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_storage::{Atomic, MmapDriver, StorageError};
+use rkyv::rancor::Error;
 
 use super::core::{PinCounts, PinsIndex, PinsInner};
 use crate::{
@@ -140,9 +141,7 @@ fn read_pins(
     }
 
     let archived =
-        match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(
-            &buf[..n],
-        ) {
+        match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, Error>(&buf[..n]) {
             Ok(a) => a,
             Err(e) => {
                 tracing::debug!("Failed to validate pins index: {}", e);
@@ -169,7 +168,7 @@ fn write_pins(res: &Atomic<MmapDriver>, pins: &[String], durable: bool) -> Asset
         pinned: map,
     };
 
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+    let bytes = rkyv::to_bytes::<Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {
         res.write_all_durable(&bytes)?;

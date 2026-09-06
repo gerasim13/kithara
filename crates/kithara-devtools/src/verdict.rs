@@ -1,5 +1,7 @@
 use std::fmt;
 
+use anyhow::Error;
+
 /// A child-command failure that should be reported without a wrapper backtrace.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -28,9 +30,9 @@ impl std::error::Error for ChildFailure {}
 impl ChildFailure {
     /// Report a child whose standard error was captured by the current process.
     #[must_use]
-    pub fn captured(label: String, exit_code: Option<i32>, stderr: String) -> anyhow::Error {
+    pub fn captured(label: String, exit_code: Option<i32>, stderr: String) -> Error {
         let stderr = (!stderr.is_empty()).then_some(stderr);
-        anyhow::Error::new(Self {
+        Error::new(Self {
             exit_code,
             stderr,
             label,
@@ -45,8 +47,8 @@ impl ChildFailure {
 
     /// Report a child whose output was inherited by the current process.
     #[must_use]
-    pub fn inherited(label: String, exit_code: Option<i32>) -> anyhow::Error {
-        anyhow::Error::new(Self {
+    pub fn inherited(label: String, exit_code: Option<i32>) -> Error {
+        Error::new(Self {
             label,
             exit_code,
             stderr: None,
@@ -97,14 +99,14 @@ impl NotClean {
     /// Not `new`: this hands back the `anyhow::Error` a check returns, not the
     /// verdict itself, and a `new` that does not return `Self` reads wrong.
     #[must_use]
-    pub fn raised(check: &'static str, findings: usize) -> anyhow::Error {
-        anyhow::Error::new(Self {
+    pub fn raised(check: &'static str, findings: usize) -> Error {
+        Error::new(Self {
             check,
             findings: Some(findings),
         })
     }
 
-    fn render(error: &anyhow::Error) -> (String, i32) {
+    fn render(error: &Error) -> (String, i32) {
         if let Some(verdict) = error.downcast_ref::<Self>() {
             return (verdict.to_string(), 1);
         }
@@ -121,7 +123,7 @@ impl NotClean {
     /// Verdicts and reported child failures print their sentence. Anything
     /// else is a genuine tool failure and keeps its chain and backtrace.
     #[must_use]
-    pub fn report(error: &anyhow::Error) -> i32 {
+    pub fn report(error: &Error) -> i32 {
         let (message, code) = Self::render(error);
         eprintln!("{message}");
         code
@@ -130,8 +132,8 @@ impl NotClean {
     /// The same verdict from a check that prints its findings but does not
     /// hand back a count.
     #[must_use]
-    pub fn reported(check: &'static str) -> anyhow::Error {
-        anyhow::Error::new(Self {
+    pub fn reported(check: &'static str) -> Error {
+        Error::new(Self {
             check,
             findings: None,
         })

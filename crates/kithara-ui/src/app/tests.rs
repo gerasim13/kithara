@@ -53,10 +53,6 @@ impl Reads for Swapper {
 }
 
 impl App for Swapper {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         if self.lit {
             "lit.klayout.ron"
@@ -67,6 +63,10 @@ impl App for Swapper {
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -83,17 +83,17 @@ impl App for Swapper {
 /// wears is the player's to decide, so switching one at runtime is this and
 /// nothing more.
 struct Dresser<'a> {
-    lit: bool,
     off: &'a Skin,
     on: &'a Skin,
+    lit: bool,
 }
 
 impl<'a> Dresser<'a> {
     const fn wearing(off: &'a Skin, on: &'a Skin) -> Self {
         Self {
-            lit: false,
             off,
             on,
+            lit: false,
         }
     }
 }
@@ -111,12 +111,12 @@ impl App for Dresser<'_> {
         "dim.klayout.ron"
     }
 
-    fn skin(&self) -> &Skin {
-        if self.lit { self.on } else { self.off }
-    }
-
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        if self.lit { self.on } else { self.off }
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -160,16 +160,16 @@ impl Reads for Dial {
 }
 
 impl App for Dial {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -193,16 +193,16 @@ impl Reads for TickingDial {
 }
 
 impl App for TickingDial {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn tick(&mut self) {
@@ -225,16 +225,16 @@ impl Reads for Typed {
 }
 
 impl App for Typed {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -254,16 +254,16 @@ impl Reads for Board {
 }
 
 impl App for Board {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "board.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}
@@ -313,16 +313,16 @@ impl Reads for InteractionBoard {
 }
 
 impl App for InteractionBoard {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "interactions.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -488,14 +488,14 @@ struct Counted<'a> {
 }
 
 impl SourceResolver for Counted<'_> {
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
-        self.loads.set(self.loads.get() + 1);
-        self.inner.load(base, rel)
-    }
-
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.bytes(base, rel)
+    }
+
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.load(base, rel)
     }
 }
 
@@ -906,7 +906,7 @@ fn moving_a_control_does_not_compile_the_document_again() {
     let mounted = resolver.loads.get();
     assert!(mounted > 0, "mounting must have compiled the document once");
 
-    let at = |y: f32| Pt { x: 19.0, y };
+    let at = |y: f32| Pt { y, x: 19.0 };
     ui.input(press(at(60.0), PointerPhase::Move));
     ui.input(press(at(60.0), PointerPhase::Down));
     for step in 1_u8..=8 {
@@ -1086,9 +1086,9 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
 /// reached the control the menu keeps inside itself.
 #[derive(Default)]
 struct Menu {
+    group: bool,
     open: bool,
     picked: bool,
-    group: bool,
 }
 
 impl Reads for Menu {
@@ -1103,16 +1103,16 @@ impl Reads for Menu {
 }
 
 impl App for Menu {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -1601,16 +1601,16 @@ impl Reads for Bare {
 }
 
 impl App for Bare {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}
@@ -1678,16 +1678,16 @@ impl Reads for Stepped {
 }
 
 impl App for Stepped {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -1756,16 +1756,16 @@ impl Reads for Carry {
 }
 
 impl App for Carry {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "carry.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -2495,16 +2495,16 @@ impl Reads for Pages {
 }
 
 impl App for Pages {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "pages.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -2589,8 +2589,8 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
 /// An application showing one reading, which either keeps moving - the way a
 /// meter fed from somewhere else does - or settles and stays put.
 struct Reading {
-    moves: bool,
     shown: String,
+    moves: bool,
 }
 
 impl Reading {
@@ -2610,16 +2610,16 @@ impl Reads for Reading {
 }
 
 impl App for Reading {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn tick(&mut self) {
@@ -2705,10 +2705,6 @@ impl Reads for Pager {
 }
 
 impl App for Pager {
-    fn skin(&self) -> &Skin {
-        skin()
-    }
-
     fn document(&self) -> &str {
         if self.second {
             "second.klayout.ron"
@@ -2719,6 +2715,10 @@ impl App for Pager {
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -3018,13 +3018,13 @@ impl<'a> Counting<'a> {
 }
 
 impl SourceResolver for Counting<'_> {
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
+        self.inner.bytes(base, rel)
+    }
+
     fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.load(base, rel)
-    }
-
-    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
-        self.inner.bytes(base, rel)
     }
 }
 

@@ -91,17 +91,17 @@ where
     /// election if the original writer drops. `None` for local /
     /// already-cached sources that never download.
     pub(crate) resource_lease: Option<ResourceLease<S>>,
-    completion_started: AtomicBool,
     complete: AtomicBool,
+    completion_started: AtomicBool,
     terminal_state: AtomicU8,
 
     opened_emitted: OnceLock<()>,
 
+    reader_waker: OnceLock<Waker>,
     /// Late-bound audio-worker wake. Remote file sources can underrun while
     /// HTTP bytes are still arriving, so each write wakes the worker that
     /// previously parked on a non-blocking readiness probe.
     worker_wake: OnceLock<Arc<dyn WorkerWake>>,
-    reader_waker: OnceLock<Waker>,
 }
 
 impl<S> FileInner<S>
@@ -135,6 +135,18 @@ where
         inner
     }
 
+    pub(crate) fn arm_reader_waker(self: &Arc<Self>) {
+        let Some(lease) = self.resource_lease.as_ref() else {
+            return;
+        };
+        let waker = self.reader_waker.get_or_init(|| {
+            Waker::from(Arc::new(FileReaderWake {
+                inner: Arc::downgrade(self),
+            }))
+        });
+        lease.register_reader_waker(waker);
+    }
+
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,
     /// or `None` when the file is not yet complete or not fragmented mp4.
     fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
@@ -146,6 +158,75 @@ where
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.asset.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
+    }
+
+    /// Commit the epoch once every byte up to `final_len` has landed.
+    /// Returns whether the resource committed through this epoch.
+    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch<S>, final_len: u64) -> bool {
+        if self.asset.reader.next_gap(0, final_len).is_some() {
+            return false;
+        }
+        match epoch.commit(Some(final_len)).current() {
+            Some(Ok(())) => {
+                self.observe_committed();
+                true
+            }
+            Some(Err(error)) => {
+                self.source.bus.publish(FileEvent::Error {
+                    error: FileError::Io(error.to_string()),
+                });
+                false
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+    }
+
+    /// Mark the file complete once. The one-shot fragmented-mp4 parse runs
+    /// on this edge so the hot-path `byte_map` audit
+    /// can short-circuit on `segment_index.get()` without re-reading the
+    /// file each tick.
+    pub(crate) fn mark_complete(&self) {
+        if self.completion_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(total_bytes) = self.source.coord.total_bytes() {
+            self.source
+                .bus
+                .publish(FileEvent::CacheComplete { total_bytes });
+        }
+        self.try_build_segment_index();
+        self.set_terminal_state(FileTerminalState::Committed);
+        self.complete.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn observe_committed(&self) -> bool {
+        if self.resource_lease.is_none() {
+            return self.complete.load(Ordering::Acquire);
+        }
+        let ResourceStatus::Committed { final_len } = self.asset.reader.status() else {
+            return false;
+        };
+        let total_bytes = final_len.map_or_else(|| self.asset.reader.len(), Some);
+        self.source.coord.set_total_bytes(total_bytes);
+        if let Some(total_bytes) = total_bytes {
+            self.source.coord.set_download_pos(total_bytes);
+        }
+        if self.content_type_info.get().is_none()
+            && let Some(codec) = sniff_codec(&self.asset.reader)
+        {
+            let _ = self.content_type_info.set(MediaInfo::from(codec));
+        }
+        self.publish_opened(
+            total_bytes,
+            false,
+            total_bytes.map(|_| TotalBytesSource::CommittedLen),
+        );
+        self.mark_complete();
+        true
     }
 
     pub(crate) fn publish_opened(
@@ -182,37 +263,6 @@ where
         });
     }
 
-    /// Mark the file complete once. The one-shot fragmented-mp4 parse runs
-    /// on this edge so the hot-path `byte_map` audit
-    /// can short-circuit on `segment_index.get()` without re-reading the
-    /// file each tick.
-    pub(crate) fn mark_complete(&self) {
-        if self.completion_started.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if let Some(total_bytes) = self.source.coord.total_bytes() {
-            self.source
-                .bus
-                .publish(FileEvent::CacheComplete { total_bytes });
-        }
-        self.try_build_segment_index();
-        self.set_terminal_state(FileTerminalState::Committed);
-        self.complete.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        self.complete.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn terminal_state(&self) -> FileTerminalState {
-        match self.terminal_state.load(Ordering::Acquire) {
-            code if code == FileTerminalState::Committed as u8 => FileTerminalState::Committed,
-            code if code == FileTerminalState::Failed as u8 => FileTerminalState::Failed,
-            code if code == FileTerminalState::Cancelled as u8 => FileTerminalState::Cancelled,
-            _ => FileTerminalState::Active,
-        }
-    }
-
     pub(crate) fn refresh_unmanaged_terminal(&self) {
         if self.resource_lease.is_some() || self.is_complete() {
             return;
@@ -228,62 +278,12 @@ where
         let _ = self.worker_wake.set(wake);
     }
 
-    pub(crate) fn arm_reader_waker(self: &Arc<Self>) {
-        let Some(lease) = self.resource_lease.as_ref() else {
-            return;
-        };
-        let waker = self.reader_waker.get_or_init(|| {
-            Waker::from(Arc::new(FileReaderWake {
-                inner: Arc::downgrade(self),
-            }))
-        });
-        lease.register_reader_waker(waker);
-    }
-
-    pub(crate) fn observe_committed(&self) -> bool {
-        if self.resource_lease.is_none() {
-            return self.complete.load(Ordering::Acquire);
-        }
-        let ResourceStatus::Committed { final_len } = self.asset.reader.status() else {
-            return false;
-        };
-        let total_bytes = final_len.map_or_else(|| self.asset.reader.len(), Some);
-        self.source.coord.set_total_bytes(total_bytes);
-        if let Some(total_bytes) = total_bytes {
-            self.source.coord.set_download_pos(total_bytes);
-        }
-        if self.content_type_info.get().is_none()
-            && let Some(codec) = sniff_codec(&self.asset.reader)
-        {
-            let _ = self.content_type_info.set(MediaInfo::from(codec));
-        }
-        self.publish_opened(
-            total_bytes,
-            false,
-            total_bytes.map(|_| TotalBytesSource::CommittedLen),
-        );
-        self.mark_complete();
-        true
-    }
-
-    /// Commit the epoch once every byte up to `final_len` has landed.
-    /// Returns whether the resource committed through this epoch.
-    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch<S>, final_len: u64) -> bool {
-        if self.asset.reader.next_gap(0, final_len).is_some() {
-            return false;
-        }
-        match epoch.commit(Some(final_len)).current() {
-            Some(Ok(())) => {
-                self.observe_committed();
-                true
-            }
-            Some(Err(error)) => {
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(error.to_string()),
-                });
-                false
-            }
-            None => false,
+    pub(crate) fn terminal_state(&self) -> FileTerminalState {
+        match self.terminal_state.load(Ordering::Acquire) {
+            code if code == FileTerminalState::Committed as u8 => FileTerminalState::Committed,
+            code if code == FileTerminalState::Failed as u8 => FileTerminalState::Failed,
+            code if code == FileTerminalState::Cancelled as u8 => FileTerminalState::Cancelled,
+            _ => FileTerminalState::Active,
         }
     }
 

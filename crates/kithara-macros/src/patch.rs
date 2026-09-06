@@ -39,14 +39,14 @@ enum Merge {
 /// One source field as it reaches the generated patch.
 struct DocumentField<'a> {
     ident: &'a Ident,
-    /// `doc` and `cfg` attributes the source field already carries.
-    forwarded: Vec<&'a Attribute>,
-    /// Attributes `#[patch(attribute(...))]` adds to the patch field alone.
-    added: Vec<TokenStream2>,
     merge: Merge,
     /// The field's own type, before the patch wraps or renames it.
     source: Type,
     ty: Type,
+    /// Attributes `#[patch(attribute(...))]` adds to the patch field alone.
+    added: Vec<TokenStream2>,
+    /// `doc` and `cfg` attributes the source field already carries.
+    forwarded: Vec<&'a Attribute>,
 }
 
 /// What the struct as a whole said about refusing a merged configuration.
@@ -95,10 +95,6 @@ fn variant_ident(ident: &Ident) -> Ident {
 }
 
 impl DocumentField<'_> {
-    fn is_fallible(&self) -> bool {
-        matches!(self.merge, Merge::Nested { fallible: true })
-    }
-
     fn cfgs(&self) -> Vec<TokenStream2> {
         cfgs(&self.forwarded)
     }
@@ -119,6 +115,10 @@ impl DocumentField<'_> {
             #( #[#added] )*
             #visibility #ident: #ty,
         }
+    }
+
+    fn is_fallible(&self) -> bool {
+        matches!(self.merge, Merge::Nested { fallible: true })
     }
 
     /// This key's merge, written onto `target` -- the caller's own value when
@@ -541,15 +541,15 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
 
     Ok(Classified::Key(Box::new(DocumentField {
         ident,
+        added,
+        merge,
+        source,
+        ty,
         forwarded: field
             .attrs
             .iter()
             .filter(|a| a.path().is_ident("doc") || a.path().is_ident("cfg"))
             .collect(),
-        added,
-        merge,
-        source,
-        ty,
     })))
 }
 

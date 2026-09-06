@@ -150,12 +150,43 @@ impl Leaf {
         }
     }
 
+    /// The colour this leaf writes its text in right now, where it writes any.
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) const fn ink(&self) -> Option<Rgba> {
+        match self {
+            Self::Text { color, .. } => Some(*color),
+            Self::Control(_)
+            | Self::Custom { .. }
+            | Self::Empty
+            | Self::Shader(_)
+            | Self::Vis(_) => None,
+        }
+    }
+
     pub(crate) fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<HostAction> {
         match self {
             Self::Control(control) => control.input(input, &hit),
             Self::Custom { widget, .. } => widget.input(input, hit),
             Self::Empty | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => Outcome::IGNORED,
         }
+    }
+
+    /// Shows the face the flag now reads for, answering whether the picture
+    /// changed.
+    pub(crate) fn light(&mut self, on: bool) -> bool {
+        let Self::Text {
+            role, color, lit, ..
+        } = self
+        else {
+            return false;
+        };
+        lit.is_some_and(|faces| {
+            let face = if on { faces.lit } else { faces.idle };
+            let moved = face.color != *color;
+            *role = face.role;
+            *color = face.color;
+            moved
+        })
     }
 
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> Size {
@@ -258,37 +289,6 @@ impl Leaf {
         widget.repaint()
     }
 
-    /// The colour this leaf writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) const fn ink(&self) -> Option<Rgba> {
-        match self {
-            Self::Text { color, .. } => Some(*color),
-            Self::Control(_)
-            | Self::Custom { .. }
-            | Self::Empty
-            | Self::Shader(_)
-            | Self::Vis(_) => None,
-        }
-    }
-
-    /// Shows the face the flag now reads for, answering whether the picture
-    /// changed.
-    pub(crate) fn light(&mut self, on: bool) -> bool {
-        let Self::Text {
-            role, color, lit, ..
-        } = self
-        else {
-            return false;
-        };
-        lit.is_some_and(|faces| {
-            let face = if on { faces.lit } else { faces.idle };
-            let moved = face.color != *color;
-            *role = face.role;
-            *color = face.color;
-            moved
-        })
-    }
-
     /// Takes what this leaf's endpoint now ctx. This is the one way a mounted
     /// leaf learns a new value without the tree being rebuilt around it.
     pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
@@ -319,8 +319,8 @@ impl Leaf {
 /// role resolves to.
 #[derive(Clone, Copy)]
 pub(super) struct TextFace {
-    pub(super) role: TextRoleSkin,
     pub(super) color: Rgba,
+    pub(super) role: TextRoleSkin,
 }
 
 /// The two faces a run of text shows, where the document named a flag to choose
