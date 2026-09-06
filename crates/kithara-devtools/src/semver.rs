@@ -67,6 +67,14 @@ fn packages_to_compare<'a>(
         .partition(|name| baseline_members.contains(*name))
 }
 
+/// The comparison, pinned to the default feature set.
+///
+/// Left alone, cargo-semver-checks turns on every feature whose name does not
+/// look experimental. The facade does not survive that: its beat backend names
+/// three models, the crate embeds one and refuses the rest with
+/// `compile_error!`, and one of the three needs bytes that are quantized on a
+/// developer machine. The surface this stage is about is the one a consumer
+/// gets from a plain dependency, and that is the default set.
 fn semver_args<'a>(baseline: &'a str, packages: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec!["semver-checks", "check-release", "--default-features"];
     for package in packages {
@@ -191,5 +199,15 @@ source = "git+https://github.com/example/firewheel#0000000"
         );
         assert!(args.contains(&"--default-features"));
         assert!(!args.contains(&"--workspace"));
+    }
+
+    /// The heuristic feature set enables everything that does not look
+    /// experimental, which for this facade means three mutually exclusive beat
+    /// models at once and a build that cannot resolve its own model bytes.
+    #[test]
+    fn semver_command_pins_the_default_feature_set() {
+        let args = semver_args("origin/main", &["kithara"]);
+
+        assert!(args.contains(&"--default-features"), "{args:?}");
     }
 }
