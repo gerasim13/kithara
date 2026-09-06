@@ -9,25 +9,25 @@ the change that lands the work, and keep it short.
 ## In Flight
 
 - Build and test warnings, cleared. `Atomic*::fetch_update` is deprecated as of
-  1.95 and its replacement cannot be spoken here: `loom` 0.7.2 carries only the
+  1.95 and its replacement cannot be named here: `loom` 0.7.2 carries only the
   old name, so routing through `kithara_platform::sync::atomic` would break the
-  loom lane. The four sites moved to the `compare_exchange_weak` loop
-  `fetch_update` compiles into, which keeps every ordering. MSRV is 1.95,
-  `rkyv` 0.8.18 and `bytecheck` 0.8.3 retire their own deprecations, and
-  `kithara-app`'s GUI-only modules are gated on `gui` so a `lib-only` build
-  stops warning about 57 unused items.
+  loom lane. The four sites moved to the `compare_exchange_weak` loop it
+  compiles into, keeping every ordering. MSRV is 1.95; `rkyv` 0.8.18 and
+  `bytecheck` 0.8.3 retire theirs, and `kithara-app`'s GUI-only modules are
+  gated on `gui` so a `lib-only` build no longer warns on 57 items.
 
 - The `sccache` trap in the Clippy path, closed. A workstation Clippy run set
   `CARGO_INCREMENTAL=1` to cancel the blanket `0` the `justfile` exports, but
   `sccache` reads that variable too and aborts rather than fall back, for any
   language: `btls-sys` reached its C compiler through a CMake launcher that
-  refused to run, and printed no compiler error because no compiler ran. No
-  site in the repository sets a non-zero `CARGO_INCREMENTAL` now.
+  refused to run, so no compiler error was printed. No site sets a non-zero
+  `CARGO_INCREMENTAL` now.
 
-- Where the machine keeps its tools is asked, not written down.
-  `CiHost::brew_root` owns the answer the Windows guest's `qemu` pair spelled
-  out as absolute paths into one Homebrew prefix, and a guard now keeps the
-  executor's sources from writing one down again.
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
 
 - Mac CI host cleanup. The hourly pass hung inside `opendir` on a volume that
   had stopped answering and launchd starts no second instance, so the host
@@ -61,8 +61,8 @@ the change that lands the work, and keep it short.
 - `block` 0.1.6 is a future-incompat report no change here can answer: it
   reaches the tree through `cpal` and has no published successor.
 - `kithara-ui` still warns under `--no-default-features --features render` and
-  `--features vello`, where the widget layer compiles without a host. That is
-  627 items and its own change.
+  `--features vello`, where the widget layer compiles without a host: 627
+  items, its own change.
 - Work the comment queue down by hand: `--fix` is exhausted, so all 668
   findings are decisions.
 - 439 ordering findings are mechanical; one `just lint style --fix` clears
