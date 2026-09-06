@@ -4,9 +4,16 @@ use syn::{DeriveInput, Error, ItemFn, parse_macro_input};
 
 use super::{
     derive::{expand_derive, expand_derive_into_probe_arg},
-    expand::expand,
-    parse::parse_filter,
+    expand::{expand, expand_event},
+    parse::{ProbeEvent, parse_filter},
 };
+
+pub(crate) fn expand_event_entry(input: TokenStream) -> TokenStream {
+    let event = parse_macro_input!(input as ProbeEvent);
+    expand_event(event)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
 
 /// Entry-point for `#[kithara::probe]` — forwarded from `lib.rs`.
 pub(crate) fn expand_attr(attr: TokenStream, item: TokenStream) -> TokenStream {

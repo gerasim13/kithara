@@ -52,3 +52,31 @@ must not submit blocking work there. A domain `Task::tick` may delegate to an
 inherent method carrying that domain's real-time sanitizer annotation; the base
 dispatcher adds no hidden work around the call. Heavy work crosses only the
 bounded compute seam.
+
+## Configuration document entry point
+
+`WorkerConfigPatch` is the second way in: a configuration document types into it
+and `apply` writes `max_compute_tasks` and `pool`, leaving whatever `cancel`
+and `runtime` the builder already assembled standing. Those two fields are
+wiring, not settings, and carry `#[patch(skip)]` for it.
+
+`pool` is a document key of a different shape, because `PoolConfig` holds a
+variant a document cannot spell: `Shared` carries a live `rayon::ThreadPool`
+only code can hand over. `ComputePool` is that same choice minus the variant,
+and the field declares it as the type that travels:
+
+```rust
+#[patch(wire = ComputePool, from = PoolConfig::from)]
+pub(crate) pool: PoolConfig,
+```
+
+The key parses as `ComputePool` and the merge converts before it writes, so a
+document naming `mode: shared` is refused by name rather than dropped in
+silence. The conversion lives here, not at the construction site, because
+`ComputePool` is `#[non_exhaustive]`: only this crate can match it
+exhaustively, so only this crate may write it — anywhere else, the match would
+need a wildcard arm that silently swallows a variant added later.
+
+`DispatcherConfigPatch` names thread budgets only. `name` is skipped: a
+dispatcher is named where it is built, and one document key would hand every
+dispatcher an embedder builds the same thread name.

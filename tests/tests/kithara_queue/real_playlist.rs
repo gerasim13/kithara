@@ -8,7 +8,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::OnceCell,
@@ -18,9 +17,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
-    pools::{AppPools, build as app_pools},
+    config::{AppConfig, AppDrm},
+    document::Config,
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
@@ -71,7 +70,7 @@ mod test_statics {
 async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
-            let pools = app_pools().expect("build app pool region");
+            let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
@@ -83,11 +82,12 @@ async fn shared_test_ctx() -> &'static TestCtx {
             );
             let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
             let shutdown = CancelToken::never();
+            let document = Config::load(None, None).expect("the shipped configuration loads");
             let store = AssetStore::builder(pools.clone())
                 .cancel(shutdown.child())
                 .backend(StorageBackend::default())
                 .flush_hub(flush_hub)
-                .layouts(baked::build_baked_asset_layouts())
+                .layouts(document.asset_layouts())
                 .build();
             let worker = PlayWorker::new(
                 PlayWorkerConfig::builder(pools)
@@ -96,6 +96,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
             );
             let session_pools = worker.pools().clone();
             let config = AppConfig::builder()
+                .drm(AppDrm::new(
+                    document
+                        .drm_policy()
+                        .expect("the shipped providers are valid"),
+                ))
                 .downloader(downloader)
                 .shutdown(shutdown)
                 .worker(worker.clone())
@@ -497,7 +502,7 @@ where
     res.unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
-/// Drive `AppConfig::DEFAULT_TRACKS` (all 10 URLs including DRM) end-
+/// Drive the shipped playlist (all its URLs, including DRM) end-
 /// to-end: play first, pause/resume, seek, manual crossfade, auto-
 /// advance through the rest, `QueueEnded` on the last. Per-track
 /// failures are collected and reported in a structured final panic
@@ -516,7 +521,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let ctx = shared_test_ctx().await;
-    let urls: Vec<&'static str> = baked::BAKED_TRACKS.to_vec();
+    let urls = Config::load(None, None)
+        .expect("the shipped configuration loads")
+        .tracks()
+        .to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     ctx.queue.set_crossfade_duration(2.0);
@@ -615,7 +623,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
-        let url = urls[i];
+        let url = &urls[i];
         let result: Result<(), String> =
             async {
                 wait_for_status(
@@ -833,4 +841,168 @@ async fn prod_tracks_sequential_startup_latency() {
         report.len(),
         violations.join("\n")
     );
+}
+
+/// The outgoing track's own timeline, seen at the seam.
+struct Seam {
+    left_at: f64,
+    reason: Option<AdvanceReason>,
+}
+
+/// Follow `outgoing` until the queue leaves it, and report where its
+/// clock stood at that moment. The seam is taken at the earliest signal
+/// the queue gives - the crossfade starting, or the advance itself -
+/// because that is when a listener first hears the outgoing track go.
+async fn seam_out_of(
+    queue: &QueueControl<AppPools>,
+    rx: &mut EventReceiver,
+    outgoing: TrackId,
+    deadline: Duration,
+) -> Seam {
+    use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
+
+    let started = kithara::platform::time::Instant::now();
+    let mut left_at = queue.position_seconds().unwrap_or(0.0);
+    while started.elapsed() < deadline {
+        let mut reason = None;
+        let mut left = false;
+        loop {
+            match rx.try_recv() {
+                Ok(envelope) => match envelope.event {
+                    Event::Queue(QueueEvent::CurrentTrackAdvance { id, reason: why })
+                        if id != Some(outgoing) =>
+                    {
+                        reason = Some(why);
+                        left = true;
+                    }
+                    Event::Queue(QueueEvent::CrossfadeStarted { .. }) => left = true,
+                    _ => {}
+                },
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
+        }
+        if left || queue.current().is_none_or(|entry| entry.id != outgoing) {
+            return Seam { left_at, reason };
+        }
+        left_at = queue.position_seconds().unwrap_or(left_at);
+        sleep(Duration::from_millis(50)).await;
+    }
+    panic!("queue never left the outgoing track; its clock stood at {left_at:.2}s");
+}
+
+/// The seam the reported premature switch was seen on: an HLS stream
+/// handing over to a whole MPEG body over HTTP. Nothing else crosses it -
+/// every other case in this file loads one real source as a queue of one,
+/// and the offline census alternates HLS with FLAC.
+///
+/// The measurement is where the outgoing track's clock stood when the
+/// queue left it. A handover belongs inside the crossfade the queue
+/// announced, so that reading must be within one crossfade of the
+/// track's own length. A switch a listener hears as a fade in the middle
+/// of a track lands far short of it, and the failure names the second it
+/// happened on.
+// flash(false): real-CDN e2e; the outgoing track is played through in wall clock.
+#[kithara::test(tokio)]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
+async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) {
+    /// Sixty seconds of tones in ten segments, the shortest real HLS
+    /// stream this playlist has.
+    const HLS_URL: &str = "https://stream.silvercomet.top/tones/master.m3u8";
+    /// A whole MPEG body on the same host, range-capable.
+    const MPEG_URL: &str = "https://stream.silvercomet.top/track.mp3";
+    const CROSSFADE_SECS: f32 = 2.0;
+    /// Covers the 50 ms sampling grid and the per-segment gapless trim
+    /// that shortens decoded audio below the `#EXTINF` sum.
+    const SEAM_SLACK_SECS: f64 = 2.0;
+    /// The stream's own media playlist: ten segments of six seconds. The
+    /// seam reading is meaningless against a length the queue got wrong, so
+    /// the length is a separate assertion - `PlayheadState::set_duration` is
+    /// an unconditional store, and a decoder that speaks for one segment
+    /// rather than the whole stream would lower it here.
+    const HLS_LENGTH_SECS: f64 = 60.0;
+    const LENGTH_SLACK_SECS: f64 = 1.0;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let ctx = shared_test_ctx().await;
+    ctx.queue.set_crossfade_duration(CROSSFADE_SECS);
+
+    let mut rx = ctx.queue.subscribe();
+    let hls = ctx
+        .queue
+        .append(build_track_source(
+            HLS_URL,
+            ctx,
+            backend,
+            AbrMode::Auto(None),
+        ))
+        .expect("append the HLS leg");
+    let mpeg = ctx
+        .queue
+        .append(build_track_source(
+            MPEG_URL,
+            ctx,
+            backend,
+            AbrMode::Auto(None),
+        ))
+        .expect("append the MPEG leg");
+
+    wait_for_status(
+        &mut rx,
+        &ctx.queue,
+        hls,
+        TrackStatus::Loaded,
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("HLS leg load [{HLS_URL}]: {e}"));
+    ctx.queue
+        .select(hls, Transition::None)
+        .expect("select the HLS leg");
+    wait_for_position_at_least(&ctx.queue, 0.5, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|e| panic!("HLS leg never started [{HLS_URL}]: {e}"));
+
+    let hls_duration = ctx
+        .queue
+        .duration_seconds()
+        .expect("duration known after Loaded");
+    assert!(
+        (hls_duration - HLS_LENGTH_SECS).abs() <= LENGTH_SLACK_SECS,
+        "the queue must report the length the stream's own playlist sums to: \
+         reported={hls_duration:.2}s, playlist={HLS_LENGTH_SECS:.2}s"
+    );
+    let seam = seam_out_of(
+        &ctx.queue,
+        &mut rx,
+        hls,
+        Duration::from_secs_f64(hls_duration) + Duration::from_secs(30),
+    )
+    .await;
+
+    assert_ne!(
+        seam.reason,
+        Some(AdvanceReason::TrackFailed),
+        "the HLS leg was left because it failed, at {:.2}s of {hls_duration:.2}s",
+        seam.left_at
+    );
+    let earliest = hls_duration - f64::from(CROSSFADE_SECS) - SEAM_SLACK_SECS;
+    assert!(
+        seam.left_at >= earliest,
+        "the queue left the HLS leg at {:.2}s of {hls_duration:.2}s, {:.2}s before \
+         the crossfade it announced could start (reason={:?})",
+        seam.left_at,
+        earliest - seam.left_at,
+        seam.reason
+    );
+
+    let _ = ctx.queue.remove(hls);
+    let _ = ctx.queue.remove(mpeg);
 }

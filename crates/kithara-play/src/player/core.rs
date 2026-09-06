@@ -1,6 +1,8 @@
 mod lifecycle;
 mod player;
 
+use std::num::NonZeroUsize;
+
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
@@ -33,6 +35,7 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) warp: WarpConfig,
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
@@ -156,8 +159,17 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
+    /// Terminal teardown: close the player and cancel its subtree.
+    ///
+    /// Deliberately skips the admission gate. This runs from `Drop`, and a
+    /// player is dropped by whoever last owns it — including a session
+    /// dispatcher unwinding its own state. An admitted operation can be parked
+    /// on a reply from that same dispatcher, so waiting for the gate here
+    /// closes the cycle. Neither step needs it: closing is a store on an
+    /// atomic and cancelling fires a token, and a cancel exists to interrupt
+    /// an admitted operation rather than to queue behind one. `close` still
+    /// takes the gate, so the orderly path keeps its ordering.
     fn invalidate(&self) {
-        let _admission = self.operations.lock();
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -229,6 +241,7 @@ impl<S> PlayerRuntime<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     #[cfg(not(target_arch = "wasm32"))]
     use std::sync::mpsc::{RecvTimeoutError, channel};
 
@@ -245,7 +258,7 @@ mod tests {
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerControlSource},
+        player::{PlayerConfig, PlayerConfigPatch, PlayerControlSource},
         resource::{ResourceConfig, ResourceSrc},
         session::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, testing},
         test_pools::{TestPools, pools},
@@ -353,6 +366,51 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
+    fn drop_does_not_wait_for_an_admitted_operation() {
+        let player = player();
+        let runtime = Arc::clone(&player.runtime);
+        let observer = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("test session answers stream-shape queries")
+            .cancel
+            .expect("prepare_config must populate cancel")
+            .child();
+        let (entered_tx, entered_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let operation = std::thread::spawn(move || {
+            runtime
+                .with_open(|_| {
+                    entered_tx.send(()).expect("report admitted operation");
+                    release_rx.recv().expect("release admitted operation");
+                })
+                .expect("operation remains admitted");
+        });
+        entered_rx
+            .recv()
+            .expect("operation entered the admission gate");
+
+        let closed = Arc::clone(&player.runtime);
+        let (dropped_tx, dropped_rx) = channel();
+        let dropper = std::thread::spawn(move || {
+            drop(player);
+            dropped_tx.send(()).expect("report completed drop");
+        });
+        dropped_rx
+            .recv_timeout(Duration::from_millis(50))
+            .expect("drop must not queue behind an admitted operation");
+        assert!(closed.is_closed(), "drop must close the player at once");
+        assert!(
+            observer.is_cancelled(),
+            "drop must cancel the subtree while the operation is still admitted"
+        );
+
+        release_tx.send(()).expect("release admitted operation");
+        operation.join().expect("operation thread completed");
+        dropper.join().expect("drop thread completed");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
     fn player_lifecycle_admits_only_one_concurrent_close() {
         let lifecycle = Arc::new(PlayerLifecycle::open());
         assert!(
@@ -396,6 +454,32 @@ mod tests {
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"
         );
+    }
+
+    /// A document naming `player.gapless_mode` must reach the same prepared
+    /// decoder config as the Rust-level builder above -- riding the full
+    /// chain (`PlayerConfig` -> `PlayerCore` -> `AudioDecoderConfig`) rather
+    /// than stopping at the configuration the patch writes into.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn a_document_named_gapless_mode_reaches_the_prepared_decoder() {
+        let patch: PlayerConfigPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+            .expect("the document types");
+        let mut config = PlayerConfig::builder()
+            .worker(worker())
+            .session(testing::test_session())
+            .sample_rate(NonZeroU32::new(44_100).expect("44100 is not zero"))
+            .build();
+        config.apply(patch);
+
+        let player = PlayerImpl::new(config);
+        let mut config = resource_config("https://example.com/song.mp3");
+
+        config = player
+            .prepare_config(config)
+            .expect("test session answers stream-shape queries");
+
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
     }
 
     #[kithara::test]
@@ -531,8 +615,8 @@ mod tests {
             .crossfade_duration(2.0)
             .prefetch_duration(5.0)
             .default_rate(0.5)
-            .eq_layout(generate_log_spaced_bands(5))
             .gapless_mode(GaplessMode::MediaOnly)
+            .eq_layout(generate_log_spaced_bands(5))
             .max_slots(2)
             .warp(
                 WarpConfig::builder()
@@ -542,6 +626,25 @@ mod tests {
             .build();
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    /// `PlayerConfig::sample_rate` is the single place the value lives before
+    /// the `EngineConfig` it configures exists. This pins that the value the
+    /// player reports back out is the exact one the engine runs with, so the
+    /// rate the owning Host hands down cannot land somewhere the engine never
+    /// reads.
+    #[kithara::test]
+    fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
+        let sample_rate = NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero");
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .sample_rate(sample_rate)
+                .build(),
+        );
+
+        assert_eq!(player.sample_rate(), sample_rate.get());
     }
 
     #[kithara::test]
@@ -566,10 +669,10 @@ mod tests {
             .sample_rate(testing::TEST_SAMPLE_RATE)
             .worker(worker())
             .session(testing::test_session())
-            .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)
             .prefetch_duration(7.0)
+            .max_slots(8)
             .eq_layout(generate_log_spaced_bands(5))
             .build();
         assert_eq!(config.max_slots, 8);
