@@ -9,86 +9,36 @@ the change that lands the work, and keep it short.
 ## In Flight
 
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
-  extent per pass in `kithara-analysis`. The grid is published at the tempo
-  level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the
-  reported deck scenario on a release build with the full model, and the size
-  of the resume blob.
-
-- `SpectralBeats`, a beat detector needing no model, beside the neural one. It
-  searches the `Tempo` its caller hands it, and a build picks the model it
-  embeds; the cache tag names both. Left: nothing.
-
-- Harness and document revision. `AGENTS.md` routes instead of restating; the
-  `style` namespace budgets documents with `doc_size`, blocks drift with
-  `doc_staleness`, and holds every crate README to one shape with
-  `readme_shape`. All three queues are at zero.
-
-- Release optimization for every third-party package. `[profile.release]` sets
-  `opt-level = "z"` workspace-wide, and the `[profile.dev.package.*]` block right
-  above it is the repository's own list of what is too slow unoptimised - release
-  threw that list away, so both time-stretch backends, the AAC decoder and the
-  pure-Rust DSP all shipped compiled for size. `[profile.release.package."*"]`
-  now raises every non-workspace package to 3 (329 on wasm, 339 Apple, 405
-  Android, 708 workspace-wide); the workspace's own crates keep `"z"`. The
-  override moves each build script's `OPT_LEVEL`, which is what reaches native C
-  and C++. Captured A/B for `fdk-aac-sys`: 171 files, `-Oz` -> `-O3`, zero
-  crossover, `aacdecoder.cpp` among them. `bungee-sys` is partial by construction
-  - its `build.rs` reads `PROFILE`, not `OPT_LEVEL`, so CMake was already
-  building the vendored core `Release`.
-
-  Measured cost: `test-release` and `bench` inherit the overrides, so the
-  seventeen lanes on that profile pay ~+82% compile CPU (319 of 676 units move
-  from opt-level 0 to 3); the Apple release graph goes 476 -> 1105 CPU-seconds
-  (2.32x); `web-size` +42% CPU and dist 3137 -> 3565 KiB. `build-override` does
-  not beat the glob - verified in the unit graph - so build scripts cannot be
-  held back while the natives move.
-
-  Two side effects the glob cannot express. The `-Z build-std` sysroot is
-  non-workspace, so its codegen moves to 3 while `optimize_for_size` still
-  applies. And the TLS natives grow for nothing on symmetric crypto: their AES,
-  ChaCha20-Poly1305 and SHA kernels are assembly (123 assembled `.S` objects in
-  `btls-sys`, 98 in `aws-lc-sys`) that is byte-identical at `-Os` and `-O3`, so
-  BoringSSL `libcrypto` `__TEXT` +55% buys throughput nowhere. Named
-  `[profile.release.package.<name>]` entries beat the glob if they are pinned
-  back.
+  extent per pass in `kithara-analysis`. Left: the reported deck scenario on a
+  release build with the full model, and the size of the resume blob.
 
 - Tooling parameter ownership. Every policy number and list `xtask` and
-  `kithara-devtools` used to carry as a `const` now has a config owner: eight
-  keys of the CI host profile, the architecture thresholds, the style checks,
-  and the stress, quality and architecture render budgets. Programs the tools
-  spawn are resolved through the profile rather than spelled into the call, and
-  the shell strings the two crates embedded are gone - one Rust binary per crate
-  stands in for what a script did. Moving a `const` into a container that
-  derives `Default` would have handed the reader zeroes: eleven structs got a
-  written `Default` instead, each listing every field. The stand-in binary took
-  `xtask` past what the `cargo xtask` alias can resolve on its own, so the
-  manifest now names `default-run`.
+  `kithara-devtools` carried as a `const` now has a config owner: eight
+  `CiHost` keys, the architecture thresholds, the style checks, and the stress,
+  quality and architecture render budgets. Spawned programs resolve through
+  `ToolsConfig`, one Rust binary per crate replaces the shell each embedded,
+  and `xtask/Cargo.toml` names `default-run`. Writing the host's live cache
+  namespaces down surfaced one the list never held: `target-slots`, every Linux
+  job's `CARGO_TARGET_DIR`, was pruned as retired. Left: nothing.
 
 ## Next
 
-- The workspace's own crates are still at `"z"` - `kithara-audio`, `-decode`,
-  `-resampler` and the rest carry the size setting a per-package glob cannot
-  reach. Raising them is a measured change of its own.
-- `crates/kithara-ffi/.wasm-slim.toml` budgets the wasm bundle at
-  29000/31000/33000 KiB against a May baseline of ~28.2 MiB, while a local
-  `dist` weighs 3565 KiB. Either the gate is an order of magnitude stale or the
-  two numbers weigh different things; the `web-size` lane on GitLab is the only
-  place that settles it, and nothing here has run it.
-- No runtime number backs the optimization yet. Decode throughput, stretch cost
-  and render-budget headroom were never measured before or after, so the case
-  rests on codegen rather than on a benchmark.
-- `xtask/tests/` still writes ten `#!/bin/sh` fixtures - eight in
-  `self_cache_runner.rs`, two in `agent_hook_runner.rs`. They stand in for the
-  hook and the cache runner's own callers, which are shell by contract, so they
-  are the one place a script is the subject rather than the implementation.
+- Raise the workspace's own crates off `opt-level = "z"` - `kithara-audio`,
+  `-decode`, `-resampler` and the rest, which the per-package glob cannot
+  reach. A measured change of its own.
+- No runtime number backs the release optimization. Decode throughput, stretch
+  cost and render-budget headroom were never measured before or after, so the
+  case rests on codegen.
+- `crates/kithara-ffi/.wasm-slim.toml` budgets 29000/31000/33000 KiB against a
+  ~28.2 MiB baseline while a local `dist` weighs 3565 KiB. Either the gate is
+  an order of magnitude stale or the two weigh different things; only the
+  GitLab `web-size` lane settles it.
 - Work the comment queue down by hand: `--fix` is exhausted for comments, so
-  all 668 are decisions (497 body comments, 105 long doc blocks, 50 oversized
-  inline comments, 16 dense functions).
-- 439 ordering findings are mechanical; one `just lint style --fix` clears
+  all 665 `comment_hygiene` warns are decisions.
+- 593 ordering findings (`struct_field_order` 229, `struct_init_order` 115,
+  `trait_item_order` 249) are mechanical; one `just lint style --fix` clears
   them but rewrites declarations across every crate, so it wants its own
   change.
-- Wire `just lint style` to a gate: nothing runs it today. A warm run is 58 s,
-  too much for every commit, nothing for a lane. The lane catalog owns that.
 
 ## Blocked
 
