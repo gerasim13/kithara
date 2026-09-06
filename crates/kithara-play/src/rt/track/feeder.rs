@@ -128,10 +128,6 @@ impl PlayerResource {
         })
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
     /// Cached span in seconds: how much of the source is on disk and needs no
     /// further network.
     #[must_use]

@@ -5,7 +5,6 @@ use kithara_warp::{RenderSnapshot, StretchControls};
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
-    bridge::PlayerCmd,
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -24,7 +23,7 @@ impl<S> PlayerRuntime<S> {
         )
     )]
     fn rate_requested(&self, target: f32, request_revision: u64, snapshot: &RenderSnapshot) {
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+        self.core.worker.wake();
     }
 
     /// Ensure we have an active slot, allocating one if needed.
@@ -139,7 +138,7 @@ impl<S> PlayerRuntime<S> {
         if let Some(snapshot) = snapshot {
             self.rate_requested(target, revision, &snapshot);
         } else {
-            let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
+            self.core.worker.wake();
         }
     }
 

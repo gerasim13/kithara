@@ -94,7 +94,6 @@ where
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.enter_playing();
