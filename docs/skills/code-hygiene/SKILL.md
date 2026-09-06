@@ -210,8 +210,7 @@ just lint ast-grep <path>
 
 ```
 cargo build --workspace
-just lint fast          # commit gate; it does not run the style ratchets
-just lint style         # the comment, ordering, and document ratchets
+just lint fast          # commit gate; includes the style ratchets
 just test all           # nextest + doctests
 ```
 

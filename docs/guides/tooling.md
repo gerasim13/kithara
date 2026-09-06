@@ -6,10 +6,10 @@ policy. Keep `AGENTS.md` short; put command details here.
 ## Fast Gate
 
 `.config/just/lint.just` owns what each chain runs. The fact the recipe cannot
-tell you: `just lint fast` is the commit gate and it does not run `style` - and
-neither does any CI lane, so comment, document, and ordering debt accumulates
-silently until someone runs `just lint style` by hand. A warm workspace run of it
-costs under a minute.
+tell you: `style` carries no baseline, so one deny is a new violation and
+the lint lane goes red. `just lint fast` runs it, so the commit gate refuses
+what CI would; a warm run costs under a minute. A merge takes no hook, so a
+document near its budget still crosses it when two branches each add a line.
 
 ## Autofix
 
