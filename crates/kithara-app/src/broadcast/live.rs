@@ -14,14 +14,15 @@ pub(crate) struct Stream {
 }
 
 trait BroadcastHost {
-    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
-    fn enable_outputs(&self, outputs: OutputGroup) -> BroadcastResult<()>;
     fn disable_outputs(&self) -> BroadcastResult<()>;
+    fn enable_outputs(&self, outputs: OutputGroup) -> BroadcastResult<()>;
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
 }
 
 impl BroadcastHost for AppHost {
-    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-        Ok(self.sample_rate()?.measured)
+    fn disable_outputs(&self) -> BroadcastResult<()> {
+        AppHost::disable_outputs(self)?;
+        Ok(())
     }
 
     fn enable_outputs(&self, outputs: OutputGroup) -> BroadcastResult<()> {
@@ -29,9 +30,8 @@ impl BroadcastHost for AppHost {
         Ok(())
     }
 
-    fn disable_outputs(&self) -> BroadcastResult<()> {
-        AppHost::disable_outputs(self)?;
-        Ok(())
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+        Ok(self.sample_rate()?.measured)
     }
 }
 
@@ -45,15 +45,15 @@ impl Packager for Backend {
         live.handle.status().is_live
     }
 
+    fn release(host: &AppHost) -> BroadcastResult<()> {
+        release(host)
+    }
+
     fn start(host: &AppHost, config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
         let Some(config) = measured_config(host, config)? else {
             return Ok(None);
         };
         start(host, config).map(Some)
-    }
-
-    fn release(host: &AppHost) -> BroadcastResult<()> {
-        release(host)
     }
 
     fn stop(live: Stream) {
@@ -105,8 +105,8 @@ mod tests {
     use crate::pools;
 
     struct SampleRateSession {
-        outputs: Mutex<Option<OutputGroup>>,
         sample_rate: AtomicU32,
+        outputs: Mutex<Option<OutputGroup>>,
     }
 
     impl SampleRateSession {
@@ -119,9 +119,9 @@ mod tests {
     }
 
     impl BroadcastHost for SampleRateSession {
-        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-            let sample_rate = self.sample_rate.load(Ordering::Relaxed);
-            Ok((sample_rate != 0).then_some(sample_rate))
+        fn disable_outputs(&self) -> BroadcastResult<()> {
+            self.outputs.lock().take();
+            Ok(())
         }
 
         fn enable_outputs(&self, outputs: OutputGroup) -> BroadcastResult<()> {
@@ -129,9 +129,9 @@ mod tests {
             Ok(())
         }
 
-        fn disable_outputs(&self) -> BroadcastResult<()> {
-            self.outputs.lock().take();
-            Ok(())
+        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+            let sample_rate = self.sample_rate.load(Ordering::Relaxed);
+            Ok((sample_rate != 0).then_some(sample_rate))
         }
     }
 

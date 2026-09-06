@@ -12,17 +12,6 @@ pub(crate) struct Lockfile {
 }
 
 impl Lockfile {
-    pub(crate) fn parse(text: &str) -> Result<Self, String> {
-        let mut lock: Table = text
-            .parse()
-            .map_err(|_| "lockfile must be TOML".to_owned())?;
-        let Some(Value::Array(packages)) = lock.remove("package") else {
-            return Err("lockfile must list packages".to_owned());
-        };
-
-        Ok(Self { packages })
-    }
-
     /// Return what the fingerprint hashes for [`ENCODERS`], rather than the
     /// lockfile.
     ///
@@ -56,6 +45,36 @@ impl Lockfile {
         }
 
         Ok(resolved)
+    }
+
+    fn package_for_dependency(&self, dependency: &str) -> Option<&Value> {
+        let mut fields = dependency.split_whitespace();
+        let name = fields.next()?;
+        let version = fields.next();
+        let source = fields
+            .next()
+            .map(|source| source.trim_matches(&['(', ')'][..]));
+
+        self.packages.iter().find(|package| {
+            package.get("name").and_then(Value::as_str) == Some(name)
+                && version.is_none_or(|version| {
+                    package.get("version").and_then(Value::as_str) == Some(version)
+                })
+                && source.is_none_or(|source| {
+                    package.get("source").and_then(Value::as_str) == Some(source)
+                })
+        })
+    }
+
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        let mut lock: Table = text
+            .parse()
+            .map_err(|_| "lockfile must be TOML".to_owned())?;
+        let Some(Value::Array(packages)) = lock.remove("package") else {
+            return Err("lockfile must list packages".to_owned());
+        };
+
+        Ok(Self { packages })
     }
 
     pub(crate) fn unclassified_encode_dependencies(&self) -> Result<BTreeSet<String>, String> {
@@ -104,25 +123,6 @@ impl Lockfile {
                 Ok(unclassified)
             })
     }
-
-    fn package_for_dependency(&self, dependency: &str) -> Option<&Value> {
-        let mut fields = dependency.split_whitespace();
-        let name = fields.next()?;
-        let version = fields.next();
-        let source = fields
-            .next()
-            .map(|source| source.trim_matches(&['(', ')'][..]));
-
-        self.packages.iter().find(|package| {
-            package.get("name").and_then(Value::as_str) == Some(name)
-                && version.is_none_or(|version| {
-                    package.get("version").and_then(Value::as_str) == Some(version)
-                })
-                && source.is_none_or(|source| {
-                    package.get("source").and_then(Value::as_str) == Some(source)
-                })
-        })
-    }
 }
 
 #[cfg(test)]
@@ -135,19 +135,6 @@ mod tests {
     struct Consts;
 
     impl Consts {
-        const UNCLASSIFIED_DIRECT_DEPENDENCY: &str = r#"
-version = 4
-
-[[package]]
-name = "kithara-encode"
-version = "0.0.1"
-dependencies = ["mp3lame-sys 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)"]
-
-[[package]]
-name = "mp3lame-sys"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-"#;
         const CLASSIFIED_ENCODER_DEPENDENCY: &str = r#"
 version = 4
 
@@ -159,24 +146,6 @@ dependencies = ["fdk-aac 0.7.0"]
 [[package]]
 name = "fdk-aac"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-"#;
-        const TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE: &str = r#"
-version = 4
-
-[[package]]
-name = "kithara-encode"
-version = "0.0.1"
-dependencies = ["kithara-workspace-hack"]
-
-[[package]]
-name = "kithara-workspace-hack"
-version = "0.0.0"
-dependencies = ["mp3lame-sys"]
-
-[[package]]
-name = "mp3lame-sys"
-version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
         const MISSING_ENCODER: &str = r#"
@@ -196,6 +165,37 @@ checksum = "fdk-aac-sys-checksum"
 name = "ffmpeg-next"
 version = "8.1.0"
 checksum = "ffmpeg-next-checksum"
+"#;
+        const TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE: &str = r#"
+version = 4
+
+[[package]]
+name = "kithara-encode"
+version = "0.0.1"
+dependencies = ["kithara-workspace-hack"]
+
+[[package]]
+name = "kithara-workspace-hack"
+version = "0.0.0"
+dependencies = ["mp3lame-sys"]
+
+[[package]]
+name = "mp3lame-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#;
+        const UNCLASSIFIED_DIRECT_DEPENDENCY: &str = r#"
+version = 4
+
+[[package]]
+name = "kithara-encode"
+version = "0.0.1"
+dependencies = ["mp3lame-sys 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)"]
+
+[[package]]
+name = "mp3lame-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
     }
 

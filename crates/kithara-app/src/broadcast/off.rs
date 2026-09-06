@@ -17,12 +17,12 @@ impl Packager for Backend {
         match *live {}
     }
 
-    fn start(_host: &AppHost, _config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
-        Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
-    }
-
     fn release(_host: &AppHost) -> BroadcastResult<()> {
         Ok(())
+    }
+
+    fn start(_host: &AppHost, _config: &AppBroadcastConfig) -> BroadcastResult<Option<Stream>> {
+        Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
     }
 
     fn stop(live: Stream) {

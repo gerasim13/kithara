@@ -141,8 +141,8 @@ pub struct Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) control: QueueControl<S>,
     pub(super) player: PlayerImpl<S>,
+    pub(super) control: QueueControl<S>,
 }
 
 impl<S> Deref for QueueControl<S>
@@ -210,12 +210,12 @@ where
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
-            admission: Mutex::new(()),
             loader,
             tracks,
             bus,
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
+            admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
@@ -229,11 +229,11 @@ where
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {
-            control: QueueControl {
-                player: player_control,
-                runtime,
-            },
             player,
+            control: QueueControl {
+                runtime,
+                player: player_control,
+            },
         }
     }
 }
@@ -242,10 +242,6 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) fn invalidate(&self) {
-        self.shutdown.cancel();
-    }
-
     /// Close the resident player, then irreversibly cancel queue-owned work.
     ///
     /// # Errors
@@ -259,6 +255,10 @@ where
         Ok(())
     }
 
+    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
+        let _ = self.with_open(operation);
+    }
+
     fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
@@ -267,29 +267,8 @@ where
         }
     }
 
-    pub(in crate::queue) fn with_open<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> T,
-    ) -> Result<T, PlayError> {
-        let _admission = self.lock_admission();
-        self.ensure_open()?;
-        Ok(operation(self))
-    }
-
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        let _admission = self.lock_admission();
-        self.ensure_open().map_err(E::from)?;
-        operation(self)
-    }
-
-    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
-        let _ = self.with_open(operation);
+    pub(crate) fn invalidate(&self) {
+        self.shutdown.cancel();
     }
 
     #[must_use]
@@ -331,6 +310,27 @@ where
         self.select_apply
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(in crate::queue) fn with_open<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> T,
+    ) -> Result<T, PlayError> {
+        let _admission = self.lock_admission();
+        self.ensure_open()?;
+        Ok(operation(self))
+    }
+
+    pub(in crate::queue) fn with_open_result<T, E>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<PlayError>,
+    {
+        let _admission = self.lock_admission();
+        self.ensure_open().map_err(E::from)?;
+        operation(self)
     }
 
     delegate::delegate! {
@@ -417,6 +417,10 @@ pub(crate) mod tests {
     }
 
     impl SessionDispatcher<TestPools> for TestSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
                 Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
@@ -432,10 +436,6 @@ pub(crate) mod tests {
                 _ => Reply::Ok,
             };
             Ok(reply)
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

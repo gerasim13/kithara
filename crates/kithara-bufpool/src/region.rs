@@ -32,6 +32,31 @@ struct RegionInner<S> {
 }
 
 impl<S> PoolRegion<S> {
+    /// Build one region after a generated schema builder has collected every slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a slot configuration is invalid or its eager
+    /// payload cannot be admitted and allocated.
+    #[doc(hidden)]
+    pub fn __build<F>(overall_budget: OverallBudget, build_schema: F) -> Result<Self, PoolError>
+    where
+        F: FnOnce(&BuildContext) -> Result<S, PoolError>,
+    {
+        let context = BuildContext {
+            budget: RegionBudget::new(overall_budget.0),
+            reclaimers: RefCell::new(Vec::new()),
+        };
+        let schema = build_schema(&context)?;
+        context.install_reclaimers()?;
+        Ok(Self {
+            inner: Arc::new(RegionInner {
+                schema,
+                budget: context.budget,
+            }),
+        })
+    }
+
     /// Acquire an empty buffer from the pool registered for `K`.
     #[must_use]
     pub fn get<K>(&self) -> K::Buffer
@@ -70,41 +95,6 @@ impl<S> PoolRegion<S> {
         K::__stats(&slot.core, PoolAccess::new())
     }
 
-    /// Snapshot the shared region budget.
-    #[must_use]
-    pub fn stats(&self) -> RegionStats {
-        RegionStats {
-            allocated_bytes: self.inner.budget.current(),
-            max_bytes: self.inner.budget.limit(),
-            peak_allocated_bytes: self.inner.budget.peak(),
-        }
-    }
-
-    /// Build one region after a generated schema builder has collected every slot.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a slot configuration is invalid or its eager
-    /// payload cannot be admitted and allocated.
-    #[doc(hidden)]
-    pub fn __build<F>(overall_budget: OverallBudget, build_schema: F) -> Result<Self, PoolError>
-    where
-        F: FnOnce(&BuildContext) -> Result<S, PoolError>,
-    {
-        let context = BuildContext {
-            budget: RegionBudget::new(overall_budget.0),
-            reclaimers: RefCell::new(Vec::new()),
-        };
-        let schema = build_schema(&context)?;
-        context.install_reclaimers()?;
-        Ok(Self {
-            inner: Arc::new(RegionInner {
-                budget: context.budget,
-                schema,
-            }),
-        })
-    }
-
     fn slot<K>(&self) -> &PoolSlot<K>
     where
         K: PoolKey,
@@ -116,6 +106,16 @@ impl<S> PoolRegion<S> {
             "pool slot belongs to a different region"
         );
         slot
+    }
+
+    /// Snapshot the shared region budget.
+    #[must_use]
+    pub fn stats(&self) -> RegionStats {
+        RegionStats {
+            allocated_bytes: self.inner.budget.current(),
+            max_bytes: self.inner.budget.limit(),
+            peak_allocated_bytes: self.inner.budget.peak(),
+        }
     }
 }
 
@@ -138,46 +138,11 @@ impl<S> fmt::Debug for PoolRegion<S> {
 /// Safe construction context used by `pool_schema!` expansions.
 #[doc(hidden)]
 pub struct BuildContext {
-    budget: RegionBudget,
     reclaimers: RefCell<Vec<Weak<dyn IdleReclaimer>>>,
+    budget: RegionBudget,
 }
 
 impl BuildContext {
-    /// Build one opaque physical slot under this context's shared budget.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `config` is invalid or its eager payload cannot
-    /// be admitted and allocated.
-    #[doc(hidden)]
-    pub fn slot<K>(&self, config: PoolConfig) -> Result<PoolSlot<K>, PoolError>
-    where
-        K: PoolKey,
-    {
-        Ok(PoolSlot {
-            core: K::__build(self, config, PoolAccess::new())?,
-            budget: self.budget.clone(),
-            key: PhantomData,
-        })
-    }
-
-    pub(crate) fn pool_limit(&self, share: Percent) -> Result<usize, PoolError> {
-        if !share.is_valid() {
-            return Err(PoolError::InvalidConfig {
-                field: "max_share",
-                reason: "must be between 0 and 100 percent",
-            });
-        }
-        let percent = usize::from(share.0);
-        let quotient = self.budget.limit() / 100;
-        let remainder = self.budget.limit() % 100;
-        Ok(quotient * percent + remainder * percent / 100)
-    }
-
-    pub(crate) fn region_budget(&self) -> RegionBudget {
-        self.budget.clone()
-    }
-
     pub(crate) fn core<const SHARDS: usize, B, const OBSERVE: bool>(
         &self,
         config: PoolConfig,
@@ -202,6 +167,41 @@ impl BuildContext {
                 reason: "idle reclaimer inventory was already installed",
             })
     }
+
+    pub(crate) fn pool_limit(&self, share: Percent) -> Result<usize, PoolError> {
+        if !share.is_valid() {
+            return Err(PoolError::InvalidConfig {
+                field: "max_share",
+                reason: "must be between 0 and 100 percent",
+            });
+        }
+        let percent = usize::from(share.0);
+        let quotient = self.budget.limit() / 100;
+        let remainder = self.budget.limit() % 100;
+        Ok(quotient * percent + remainder * percent / 100)
+    }
+
+    pub(crate) fn region_budget(&self) -> RegionBudget {
+        self.budget.clone()
+    }
+
+    /// Build one opaque physical slot under this context's shared budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `config` is invalid or its eager payload cannot
+    /// be admitted and allocated.
+    #[doc(hidden)]
+    pub fn slot<K>(&self, config: PoolConfig) -> Result<PoolSlot<K>, PoolError>
+    where
+        K: PoolKey,
+    {
+        Ok(PoolSlot {
+            core: K::__build(self, config, PoolAccess::new())?,
+            budget: self.budget.clone(),
+            key: PhantomData,
+        })
+    }
 }
 
 /// Opaque typed slot stored inside a generated schema.
@@ -211,8 +211,8 @@ where
     K: PoolKey,
 {
     core: K::Core,
-    budget: RegionBudget,
     key: PhantomData<fn() -> K>,
+    budget: RegionBudget,
 }
 
 #[cfg(test)]

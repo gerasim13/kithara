@@ -56,6 +56,10 @@ where
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     pub(crate) cancel: Option<CancelToken>,
+    /// Session-owned audio-consumer wake capability. Player preparation fills
+    /// this field; `None` identifies a direct resource consumed off RT.
+    #[builder(skip)]
+    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
     /// Optional cache discriminator mixed into the asset root.
     pub(crate) discriminator: Option<String>,
     /// Shared downloader instance.
@@ -72,28 +76,24 @@ where
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Resident Warp resources and live temporal controls.
-    #[builder(default = WarpConfig::builder().build())]
-    pub(crate) warp: WarpConfig,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
-    /// Session-owned audio-consumer wake capability. Player preparation fills
-    /// this field; `None` identifies a direct resource consumed off RT.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
-    /// here; a direct reader off the real-time thread may opt in itself.
-    /// Never set on a resource consumed by a real-time callback.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
     /// `HEAD` (zvuk stage `/drm/`).
     #[builder(default)]
     pub(crate) size_probe_method: SizeProbeMethod,
+    /// Resident Warp resources and live temporal controls.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself.
+    /// Never set on a resource consumed by a real-time callback.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Maximum peak bitrate in bits per second for ABR variant selection.
     #[builder(default = 0.0)]
     pub(crate) preferred_peak_bitrate: f64,

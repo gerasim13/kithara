@@ -29,20 +29,20 @@ use crate::Host;
 /// Probe-only access to session-output policy.
 pub trait HostProbe {
     /// # Errors
-    /// Returns an error when the Host cannot read the canonical transport revision.
-    fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
-
-    /// # Errors
     /// Returns an error when the Host cannot read the output policy.
     fn ducking(&self) -> Result<SessionDuckingMode, PlayError>;
+
+    /// # Errors
+    /// Returns an error when the deterministic Host route cannot restart.
+    fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
 
     /// # Errors
     /// Returns an error when the Host rejects the output-policy update.
     fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
 
     /// # Errors
-    /// Returns an error when the deterministic Host route cannot restart.
-    fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError>;
+    /// Returns an error when the Host cannot read the canonical transport revision.
+    fn transport_revision(&self) -> Result<TransportRevision, PlayError>;
 }
 
 impl<S> HostProbe for Host<S> {
@@ -85,26 +85,6 @@ where
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
     }
 
-    #[must_use]
-    pub fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
-    where
-        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
-    {
-        Self {
-            state: state_for(sample_rate, start_stream_fn),
-        }
-    }
-
-    #[must_use]
-    pub fn exec(&mut self, cmd: Cmd<S>) -> Reply {
-        if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
-            && self.state.root.with_group(*grid_id, |_| ()).is_none()
-        {
-            attach_player_with_id(&mut self.state, *grid_id, pools.clone());
-        }
-        run_cmd(&mut self.state, cmd)
-    }
-
     pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.state.ctx.as_mut()
     }
@@ -117,6 +97,16 @@ where
         tap::enable(&mut self.state, outputs).map_err(Into::into)
     }
 
+    #[must_use]
+    pub fn exec(&mut self, cmd: Cmd<S>) -> Reply {
+        if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
+            && self.state.root.with_group(*grid_id, |_| ()).is_none()
+        {
+            attach_player_with_id(&mut self.state, *grid_id, pools.clone());
+        }
+        run_cmd(&mut self.state, cmd)
+    }
+
     /// Restart the deterministic graph at a different output rate.
     ///
     /// # Errors
@@ -124,17 +114,27 @@ where
     pub fn restart_stream(&mut self, sample_rate: u32) -> Result<(), PlayError> {
         restart_stream(&mut self.state, sample_rate).map_err(Into::into)
     }
+
+    #[must_use]
+    pub fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
+        Self {
+            state: state_for(sample_rate, start_stream_fn),
+        }
+    }
 }
 
 pub(crate) struct FixtureSession;
 
 impl<S> SessionDispatcher<S> for FixtureSession {
-    fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        Ok(Reply::Ok)
-    }
-
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        Ok(Reply::Ok)
     }
 }
 

@@ -25,6 +25,10 @@ struct TestSession {
 }
 
 impl<S> SessionDispatcher<S> for TestSession {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
@@ -43,10 +47,6 @@ impl<S> SessionDispatcher<S> for TestSession {
         };
         Ok(reply)
     }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
 }
 
 pub(crate) fn test_session<S>() -> Arc<dyn SessionDispatcher<S>> {
@@ -57,9 +57,9 @@ pub(crate) fn test_session_with_shape<S>(
     shape: Option<StreamShape>,
 ) -> Arc<dyn SessionDispatcher<S>> {
     Arc::new(TestSession {
+        shape,
         next_player: AtomicU64::new(1),
         next_slot: AtomicU64::new(0),
         nodes: Mutex::default(),
-        shape,
     })
 }

@@ -377,8 +377,8 @@ mod tests {
         let handle = controller.register(&peer);
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
-                scope: ctx.scope.clone(),
                 cancel,
+                scope: ctx.scope.clone(),
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal,

@@ -29,13 +29,13 @@ impl PoolAccess {
 
 /// A compile-time key for one physical pool in a closed schema.
 pub trait PoolKey: sealed::Sealed {
-    /// Element stored in this pool's buffers.
-    type Item;
     /// Nominal checked guard returned by the facade.
     type Buffer;
     /// Opaque core used by schema-generated plumbing.
     #[doc(hidden)]
     type Core;
+    /// Element stored in this pool's buffers.
+    type Item;
 
     /// Build one physical slot.
     #[doc(hidden)]

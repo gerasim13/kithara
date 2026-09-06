@@ -4,7 +4,7 @@ use num_traits::Float;
 
 use super::{ElasticError, ElasticRequest};
 
-// i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
+/// i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
 const RATE_FRACTION_DEPTH: u8 = 64;
 
 /// Supported source-frame advance per output frame.

@@ -557,7 +557,7 @@ mod tests {
     fn open_host() -> (mpsc::Sender<HostCmd>, mpsc::Receiver<HostOut>) {
         let cmd = spawn_host(pools());
         let (reply_tx, out) = mpsc::channel();
-        cmd.send(HostCmd::Open { id: 1, reply_tx })
+        cmd.send(HostCmd::Open { reply_tx, id: 1 })
             .expect("BUG: host cmd channel closed at spawn");
         (cmd, out)
     }

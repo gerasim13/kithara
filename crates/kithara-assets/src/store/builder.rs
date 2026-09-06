@@ -137,14 +137,14 @@ where
                     pools,
                     event_bus,
                     cache_capacity,
+                    processing_chunk_size,
+                    processing_gate_poll_interval,
+                    segment_reservation,
                     availability: availability.clone(),
                     evict_cfg: EvictConfig {
                         max_assets,
                         max_bytes,
                     },
-                    processing_chunk_size,
-                    processing_gate_poll_interval,
-                    segment_reservation,
                 }),
                 availability,
             });
@@ -171,8 +171,8 @@ where
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
                 active_resources,
-                cancel: cancel.clone(),
                 mem_resource_capacity,
+                cancel: cancel.clone(),
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
                 pools: pools.clone(),
@@ -234,17 +234,17 @@ where
 /// branch is a function instead of another sixty lines in the builder.
 #[cfg(not(target_arch = "wasm32"))]
 struct DiskStoreSetup<S> {
-    root_dir: PathBuf,
-    cancel: Option<CancelToken>,
-    flush_hub: Option<Arc<FlushHub>>,
-    pools: PoolRegion<S>,
-    event_bus: Option<EventBus>,
-    cache_capacity: Option<NonZeroUsize>,
     availability: AvailabilityIndex,
     evict_cfg: EvictConfig,
+    cache_capacity: Option<NonZeroUsize>,
+    cancel: Option<CancelToken>,
+    event_bus: Option<EventBus>,
+    flush_hub: Option<Arc<FlushHub>>,
     processing_chunk_size: Option<usize>,
     processing_gate_poll_interval: Option<Duration>,
     segment_reservation: Option<u64>,
+    root_dir: PathBuf,
+    pools: PoolRegion<S>,
 }
 
 /// Assemble the disk decorator chain: evict over the disk store, processing

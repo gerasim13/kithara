@@ -187,9 +187,9 @@ impl Task for PanicTask {
 }
 
 struct LocalTask {
-    constructed_on: u64,
-    events: mpsc::Sender<(u64, u64)>,
     _thread_bound: Rc<()>,
+    events: mpsc::Sender<(u64, u64)>,
+    constructed_on: u64,
 }
 
 impl Task for LocalTask {
@@ -249,8 +249,8 @@ fn local_task_is_constructed_and_run_on_the_dispatcher_thread() {
         .reserve(TaskConfig::new())
         .expect("local task reservation")
         .start_local(move |_| LocalTask {
-            constructed_on: thread::current_thread_id(),
             events,
+            constructed_on: thread::current_thread_id(),
             _thread_bound: Rc::new(()),
         })
         .expect("local task submission");
@@ -408,8 +408,8 @@ fn backpressure_poll_observes_a_deferred_edge_without_restarting_the_task() {
         .register(TaskConfig::new(), {
             let ticks = Arc::clone(&ticks);
             move |_| BackpressureCountingTask {
-                first_tick: Some(first_tick),
                 ticks,
+                first_tick: Some(first_tick),
             }
         })
         .expect("backpressured task submission");

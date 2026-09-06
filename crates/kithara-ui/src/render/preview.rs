@@ -199,16 +199,6 @@ mod tests {
     }
 
     impl Registry {
-        fn preset_surface() -> Self {
-            let mut registry = Self::default();
-            registry.deck();
-            registry.player();
-            registry.bar();
-            registry.menu();
-            registry.clock();
-            registry
-        }
-
         fn add(
             &mut self,
             category: EndpointCategory,
@@ -223,6 +213,103 @@ mod tests {
                 self.endpoints
                     .insert((category, (*id).to_owned()), desc.clone());
             }
+        }
+
+        fn bar(&mut self) {
+            use EndpointCategory::{Command, Model, Telemetry};
+            self.add(Telemetry, &["engine.load"], ValueKind::Scalar, &[]);
+            self.add(Telemetry, &["engine.latency"], ValueKind::Text, &[]);
+            self.add(Model, &["ui.set.recording"], ValueKind::Bool, &[]);
+            self.add(
+                Model,
+                &["ui.set.record_hint", "ui.set.record_time"],
+                ValueKind::Text,
+                &[],
+            );
+            self.add(Command, &["ui.set.toggle_record"], ValueKind::Trigger, &[]);
+        }
+
+        fn clock(&mut self) {
+            use EndpointCategory::{Command, Model, Parameter};
+            self.add(
+                Model,
+                &[
+                    "clock.family.step",
+                    "clock.family.leap",
+                    "clock.grid.quantize",
+                    "clock.grid.snap",
+                    "clock.grid.click",
+                    "clock.link.enabled",
+                    "clock.midi.send",
+                ],
+                ValueKind::Bool,
+                &[],
+            );
+            self.add(
+                Model,
+                &[
+                    "clock.bpm",
+                    "clock.source",
+                    "clock.warning",
+                    "clock.grid.division",
+                    "clock.link.peers",
+                    "clock.midi.input",
+                    "clock.midi.output",
+                ],
+                ValueKind::Text,
+                &[],
+            );
+            self.add(
+                Model,
+                &["clock.limit", "clock.tolerance"],
+                ValueKind::Scalar,
+                &[],
+            );
+            self.add(Parameter, &["clock.tempo"], ValueKind::Scalar, &[]);
+            self.add(
+                Model,
+                &["clock.source.active", "clock.source.synced"],
+                ValueKind::Bool,
+                &["source"],
+            );
+            self.add(
+                Model,
+                &[
+                    "clock.source.name",
+                    "clock.source.tempo",
+                    "clock.source.mode",
+                    "clock.source.pulse",
+                    "clock.source.stretch",
+                ],
+                ValueKind::Text,
+                &["source"],
+            );
+            self.add(
+                Command,
+                &[
+                    "clock.nudge_up",
+                    "clock.nudge_down",
+                    "clock.family.step",
+                    "clock.family.leap",
+                    "clock.grid.toggle_quantize",
+                    "clock.grid.toggle_snap",
+                    "clock.grid.toggle_click",
+                    "clock.link.toggle",
+                    "clock.midi.toggle_send",
+                    "clock.tap",
+                    "clock.half",
+                    "clock.double",
+                    "clock.reset",
+                ],
+                ValueKind::Trigger,
+                &[],
+            );
+            self.add(
+                Command,
+                &["clock.source.select"],
+                ValueKind::Trigger,
+                &["source"],
+            );
         }
 
         fn deck(&mut self) {
@@ -315,27 +402,6 @@ mod tests {
                 ValueKind::Trigger,
                 &["deck", "variant"],
             );
-        }
-
-        fn player(&mut self) {
-            use EndpointCategory::{Model, Parameter, Telemetry};
-            self.add(Telemetry, &["player.output.levels"], ValueKind::Stereo, &[]);
-            self.add(Parameter, &["player.output.volume"], ValueKind::Scalar, &[]);
-            self.add(Model, &["library.visible_tracks"], ValueKind::Table, &[]);
-        }
-
-        fn bar(&mut self) {
-            use EndpointCategory::{Command, Model, Telemetry};
-            self.add(Telemetry, &["engine.load"], ValueKind::Scalar, &[]);
-            self.add(Telemetry, &["engine.latency"], ValueKind::Text, &[]);
-            self.add(Model, &["ui.set.recording"], ValueKind::Bool, &[]);
-            self.add(
-                Model,
-                &["ui.set.record_hint", "ui.set.record_time"],
-                ValueKind::Text,
-                &[],
-            );
-            self.add(Command, &["ui.set.toggle_record"], ValueKind::Trigger, &[]);
         }
 
         fn menu(&mut self) {
@@ -433,87 +499,21 @@ mod tests {
             );
         }
 
-        fn clock(&mut self) {
-            use EndpointCategory::{Command, Model, Parameter};
-            self.add(
-                Model,
-                &[
-                    "clock.family.step",
-                    "clock.family.leap",
-                    "clock.grid.quantize",
-                    "clock.grid.snap",
-                    "clock.grid.click",
-                    "clock.link.enabled",
-                    "clock.midi.send",
-                ],
-                ValueKind::Bool,
-                &[],
-            );
-            self.add(
-                Model,
-                &[
-                    "clock.bpm",
-                    "clock.source",
-                    "clock.warning",
-                    "clock.grid.division",
-                    "clock.link.peers",
-                    "clock.midi.input",
-                    "clock.midi.output",
-                ],
-                ValueKind::Text,
-                &[],
-            );
-            self.add(
-                Model,
-                &["clock.limit", "clock.tolerance"],
-                ValueKind::Scalar,
-                &[],
-            );
-            self.add(Parameter, &["clock.tempo"], ValueKind::Scalar, &[]);
-            self.add(
-                Model,
-                &["clock.source.active", "clock.source.synced"],
-                ValueKind::Bool,
-                &["source"],
-            );
-            self.add(
-                Model,
-                &[
-                    "clock.source.name",
-                    "clock.source.tempo",
-                    "clock.source.mode",
-                    "clock.source.pulse",
-                    "clock.source.stretch",
-                ],
-                ValueKind::Text,
-                &["source"],
-            );
-            self.add(
-                Command,
-                &[
-                    "clock.nudge_up",
-                    "clock.nudge_down",
-                    "clock.family.step",
-                    "clock.family.leap",
-                    "clock.grid.toggle_quantize",
-                    "clock.grid.toggle_snap",
-                    "clock.grid.toggle_click",
-                    "clock.link.toggle",
-                    "clock.midi.toggle_send",
-                    "clock.tap",
-                    "clock.half",
-                    "clock.double",
-                    "clock.reset",
-                ],
-                ValueKind::Trigger,
-                &[],
-            );
-            self.add(
-                Command,
-                &["clock.source.select"],
-                ValueKind::Trigger,
-                &["source"],
-            );
+        fn player(&mut self) {
+            use EndpointCategory::{Model, Parameter, Telemetry};
+            self.add(Telemetry, &["player.output.levels"], ValueKind::Stereo, &[]);
+            self.add(Parameter, &["player.output.volume"], ValueKind::Scalar, &[]);
+            self.add(Model, &["library.visible_tracks"], ValueKind::Table, &[]);
+        }
+
+        fn preset_surface() -> Self {
+            let mut registry = Self::default();
+            registry.deck();
+            registry.player();
+            registry.bar();
+            registry.menu();
+            registry.clock();
+            registry
         }
     }
 

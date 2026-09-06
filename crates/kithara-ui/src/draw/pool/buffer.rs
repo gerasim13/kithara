@@ -12,25 +12,6 @@ pub(in crate::draw) enum Buffer<T> {
 }
 
 impl<T> Buffer<T> {
-    pub(in crate::draw) const fn owned(values: Vec<T>) -> Self {
-        Self::Owned(values)
-    }
-
-    pub(in crate::draw) const fn pooled(guard: VecGuard<T>) -> Self {
-        Self::Pooled(guard)
-    }
-
-    pub(in crate::draw) fn push(&mut self, value: T) {
-        match self {
-            Self::Owned(values) => values.push(value),
-            Self::Pooled(guard) => {
-                if let Err(error) = guard.try_push(value) {
-                    panic!("draw buffer growth failed: {error}");
-                }
-            }
-        }
-    }
-
     pub(in crate::draw) fn as_slice(&self) -> &[T] {
         match self {
             Self::Owned(values) => values,
@@ -49,6 +30,25 @@ impl<T> Buffer<T> {
                     panic!("draw buffer growth failed: {error}");
                 }
                 pooled
+            }
+        }
+    }
+
+    pub(in crate::draw) const fn owned(values: Vec<T>) -> Self {
+        Self::Owned(values)
+    }
+
+    pub(in crate::draw) const fn pooled(guard: VecGuard<T>) -> Self {
+        Self::Pooled(guard)
+    }
+
+    pub(in crate::draw) fn push(&mut self, value: T) {
+        match self {
+            Self::Owned(values) => values.push(value),
+            Self::Pooled(guard) => {
+                if let Err(error) = guard.try_push(value) {
+                    panic!("draw buffer growth failed: {error}");
+                }
             }
         }
     }

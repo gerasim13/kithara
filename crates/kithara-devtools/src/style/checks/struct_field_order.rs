@@ -344,9 +344,9 @@ fn check_field_block(
 
 #[derive(Debug, Clone)]
 struct FieldKey {
+    builder_bucket: BuilderRole,
     name: String,
     type_key: String,
-    builder_bucket: BuilderRole,
     idx: usize,
     vis_bucket: usize,
 }

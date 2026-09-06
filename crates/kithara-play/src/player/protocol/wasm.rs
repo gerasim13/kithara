@@ -9,13 +9,20 @@ use portable_atomic::{AtomicF32, Ordering};
 use crate::sync::GroupState;
 
 pub(crate) struct PlayerSync {
-    owned: Option<GroupState<PlayerMember>>,
     grid: BeatGridSnapshot,
+    owned: Option<GroupState<PlayerMember>>,
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
 }
 
 impl PlayerSync {
+    pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
+        let owned = self.owned.take()?;
+        self.grid = owned.snapshot();
+        self.topology = owned.topology();
+        self.status = owned.status();
+        Some(owned)
+    }
     pub(crate) fn unavailable(
         id: BeatGridId,
         sample_rate: NonZeroU32,
@@ -29,13 +36,6 @@ impl PlayerSync {
             status: owned.status(),
             owned: Some(owned),
         }
-    }
-    pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
-        let owned = self.owned.take()?;
-        self.grid = owned.snapshot();
-        self.topology = owned.topology();
-        self.status = owned.status();
-        Some(owned)
     }
 }
 
@@ -54,6 +54,18 @@ impl BeatGrid for PlayerSync {
 impl SyncGroup for PlayerSync {
     type NestedGroup = PlayerMember;
 
+    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+        self.owned
+            .as_mut()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.acknowledge(applied)
+            })
+    }
+
+    fn status(&self) -> SyncStatusSnapshot {
+        self.owned.as_ref().map_or(self.status, SyncGroup::status)
+    }
+
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
         self.owned
             .as_ref()
@@ -69,24 +81,12 @@ impl SyncGroup for PlayerSync {
             None => Err(SyncRejected::new(SyncError::OwnerUnavailable, operation)),
         }
     }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        self.owned.as_ref().map_or(self.status, SyncGroup::status)
-    }
-
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        self.owned
-            .as_mut()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.acknowledge(applied)
-            })
-    }
 }
 
 /// Host-owned sendable synchronization state and desired level for a wasm player.
 pub struct PlayerMember {
-    sync: GroupState<PlayerMember>,
     level: AtomicF32,
+    sync: GroupState<PlayerMember>,
 }
 
 impl PlayerMember {

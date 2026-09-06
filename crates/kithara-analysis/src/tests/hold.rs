@@ -31,13 +31,13 @@ use crate::{
 struct Consts;
 
 impl Consts {
-    const RATE: u32 = 1000;
+    const BUCKETS: usize = 64;
     const CHUNK_FRAMES: u64 = 200;
     const CHUNK_SECONDS: u32 = 16;
-    const TICK_LIMIT: u64 = 1 << 20;
-    const PATIENCE: u32 = 16;
-    const BUCKETS: usize = 64;
     const HOG_FRAMES: usize = 8192;
+    const PATIENCE: u32 = 16;
+    const RATE: u32 = 1000;
+    const TICK_LIMIT: u64 = 1 << 20;
 }
 
 fn rate() -> NonZeroU32 {
@@ -91,13 +91,13 @@ fn run(
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let (_writer, ingest) = ring::open_for(rate());
     let job = Job {
+        ingest,
+        tx,
         reader: Box::new(track),
         cancel: CancelToken::root(),
-        ingest,
         rate: rate(),
         token: "hold".into(),
         revision: 0,
-        tx,
         resume: None,
     };
     let mut task = AnalysisTask::new(

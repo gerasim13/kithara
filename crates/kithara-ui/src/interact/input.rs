@@ -124,7 +124,7 @@ impl Scroll {
 
     #[cfg(test)]
     pub(crate) const fn pixels(y: f32) -> Self {
-        Self::Pixels { x: 0.0, y }
+        Self::Pixels { y, x: 0.0 }
     }
 
     #[cfg(test)]

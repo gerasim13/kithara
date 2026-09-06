@@ -12,19 +12,15 @@ use crate::{
 /// Exact-span Bungee engine.
 pub(crate) struct BungeeElastic {
     capabilities: ElasticCapabilities,
-    core: StreamCore,
     last_request: Option<ElasticRequest>,
+    tail_remaining: Option<usize>,
+    core: StreamCore,
+    tail_armed: bool,
     pitch: f64,
     rate_age_frames: usize,
-    tail_armed: bool,
-    tail_remaining: Option<usize>,
 }
 
 impl BungeeElastic {
-    fn frame_count(frames: usize) -> Result<u128, ElasticError> {
-        frames.to_u128().ok_or(ElasticError::SampleCountOverflow)
-    }
-
     fn exact_tail_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
         let latency = self.capabilities.latency();
         let source = Self::frame_count(request.source_frames())?;
@@ -39,45 +35,8 @@ impl BungeeElastic {
         usize::try_from(total).map_err(|_| ElasticError::SampleCountOverflow)
     }
 
-    fn record_request(&mut self, request: ElasticRequest) -> Result<(), ElasticError> {
-        let latency_frames = self.capabilities.latency().output_frames();
-        let same_rate = self.last_request.map(|previous| {
-            Ok::<_, ElasticError>(
-                Self::frame_count(previous.source_frames())?
-                    * Self::frame_count(request.output_frames())?
-                    == Self::frame_count(request.source_frames())?
-                        * Self::frame_count(previous.output_frames())?,
-            )
-        });
-        self.rate_age_frames = if same_rate.transpose()?.unwrap_or(false) {
-            self.rate_age_frames
-                .saturating_add(request.output_frames())
-                .min(latency_frames)
-        } else {
-            request.output_frames().min(latency_frames)
-        };
-        self.last_request = Some(request);
-        self.tail_remaining = None;
-        Ok(())
-    }
-
-    fn prepare_exact_tail(&mut self) -> Result<(), ElasticError> {
-        if self.tail_remaining.is_some()
-            || self.rate_age_frames != self.capabilities.latency().output_frames()
-        {
-            return Ok(());
-        }
-        let request = self.last_request.ok_or(ElasticError::EnginePreparation(
-            "Bungee exact tail has no source request",
-        ))?;
-        self.tail_remaining = Some(self.exact_tail_frames(request)?);
-        Ok(())
-    }
-
-    fn reset_rate(&mut self) {
-        self.last_request = None;
-        self.rate_age_frames = 0;
-        self.tail_remaining = None;
+    fn frame_count(frames: usize) -> Result<u128, ElasticError> {
+        frames.to_u128().ok_or(ElasticError::SampleCountOverflow)
     }
 
     fn latency<S>(
@@ -113,6 +72,47 @@ impl BungeeElastic {
         core.discard()?;
         Ok(ElasticLatency::new(source_frames, output_frames))
     }
+
+    fn prepare_exact_tail(&mut self) -> Result<(), ElasticError> {
+        if self.tail_remaining.is_some()
+            || self.rate_age_frames != self.capabilities.latency().output_frames()
+        {
+            return Ok(());
+        }
+        let request = self.last_request.ok_or(ElasticError::EnginePreparation(
+            "Bungee exact tail has no source request",
+        ))?;
+        self.tail_remaining = Some(self.exact_tail_frames(request)?);
+        Ok(())
+    }
+
+    fn record_request(&mut self, request: ElasticRequest) -> Result<(), ElasticError> {
+        let latency_frames = self.capabilities.latency().output_frames();
+        let same_rate = self.last_request.map(|previous| {
+            Ok::<_, ElasticError>(
+                Self::frame_count(previous.source_frames())?
+                    * Self::frame_count(request.output_frames())?
+                    == Self::frame_count(request.source_frames())?
+                        * Self::frame_count(previous.output_frames())?,
+            )
+        });
+        self.rate_age_frames = if same_rate.transpose()?.unwrap_or(false) {
+            self.rate_age_frames
+                .saturating_add(request.output_frames())
+                .min(latency_frames)
+        } else {
+            request.output_frames().min(latency_frames)
+        };
+        self.last_request = Some(request);
+        self.tail_remaining = None;
+        Ok(())
+    }
+
+    fn reset_rate(&mut self) {
+        self.last_request = None;
+        self.rate_age_frames = 0;
+        self.tail_remaining = None;
+    }
 }
 
 impl fmt::Debug for BungeeElastic {
@@ -125,6 +125,50 @@ impl fmt::Debug for BungeeElastic {
 }
 
 impl ElasticEngine for BungeeElastic {
+    fn capabilities(&self) -> ElasticCapabilities {
+        self.capabilities
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
+        if !self.tail_armed {
+            return Ok(ElasticDrain::new(0, true));
+        }
+        self.prepare_exact_tail()?;
+        let capacity = self.capabilities.output_capacity(output.len())?;
+        let capacity = self
+            .tail_remaining
+            .map_or(capacity, |remaining| capacity.min(remaining));
+        let mut chunk = self.core.terminal_tail(output, capacity)?;
+        if let Some(remaining) = self.tail_remaining {
+            let remaining =
+                remaining
+                    .checked_sub(chunk.frames())
+                    .ok_or(ElasticError::EnginePreparation(
+                        "Bungee terminal output exceeded its exact span",
+                    ))?;
+            if chunk.complete() && remaining > 0 {
+                self.tail_armed = false;
+                self.reset_rate();
+                return Err(ElasticError::EnginePreparation(
+                    "Bungee terminal output ended before its exact span",
+                ));
+            }
+            if remaining == 0 {
+                if !chunk.complete() {
+                    self.core.discard()?;
+                }
+                chunk = ElasticDrain::new(chunk.frames(), true);
+            } else {
+                self.tail_remaining = Some(remaining);
+            }
+        }
+        self.tail_armed = !chunk.complete();
+        if chunk.complete() {
+            self.reset_rate();
+        }
+        Ok(chunk)
+    }
+
     fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
     where
         S: HasPool<f32>,
@@ -161,10 +205,6 @@ impl ElasticEngine for BungeeElastic {
             tail_armed: false,
             tail_remaining: None,
         })
-    }
-
-    fn capabilities(&self) -> ElasticCapabilities {
-        self.capabilities
     }
 
     fn prime(
@@ -212,56 +252,16 @@ impl ElasticEngine for BungeeElastic {
         Ok(())
     }
 
-    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
-        self.pitch =
-            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
-        Ok(())
-    }
-
-    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
-        if !self.tail_armed {
-            return Ok(ElasticDrain::new(0, true));
-        }
-        self.prepare_exact_tail()?;
-        let capacity = self.capabilities.output_capacity(output.len())?;
-        let capacity = self
-            .tail_remaining
-            .map_or(capacity, |remaining| capacity.min(remaining));
-        let mut chunk = self.core.terminal_tail(output, capacity)?;
-        if let Some(remaining) = self.tail_remaining {
-            let remaining =
-                remaining
-                    .checked_sub(chunk.frames())
-                    .ok_or(ElasticError::EnginePreparation(
-                        "Bungee terminal output exceeded its exact span",
-                    ))?;
-            if chunk.complete() && remaining > 0 {
-                self.tail_armed = false;
-                self.reset_rate();
-                return Err(ElasticError::EnginePreparation(
-                    "Bungee terminal output ended before its exact span",
-                ));
-            }
-            if remaining == 0 {
-                if !chunk.complete() {
-                    self.core.discard()?;
-                }
-                chunk = ElasticDrain::new(chunk.frames(), true);
-            } else {
-                self.tail_remaining = Some(remaining);
-            }
-        }
-        self.tail_armed = !chunk.complete();
-        if chunk.complete() {
-            self.reset_rate();
-        }
-        Ok(chunk)
-    }
-
     fn reset(&mut self) -> Result<(), ElasticError> {
         self.core.discard()?;
         self.tail_armed = false;
         self.reset_rate();
+        Ok(())
+    }
+
+    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
+        self.pitch =
+            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
         Ok(())
     }
 }

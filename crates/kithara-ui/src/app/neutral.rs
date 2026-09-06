@@ -36,9 +36,6 @@ pub trait App {
     /// Advances anything that moves on its own. Called once per frame.
     fn tick(&mut self) {}
 
-    /// Applies one event the document published.
-    fn update(&mut self, event: UiEvent);
-
     /// Told what the document turned for itself, after every turn.
     ///
     /// The host owns the screen's own state, so an application that feeds the
@@ -47,6 +44,9 @@ pub trait App {
     fn turned(&mut self, view: &ViewState) {
         let _ = view;
     }
+
+    /// Applies one event the document published.
+    fn update(&mut self, event: UiEvent);
 }
 
 /// Everything a host needs besides the application itself.

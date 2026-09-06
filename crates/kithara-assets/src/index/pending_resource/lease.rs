@@ -49,10 +49,6 @@ where
         }
     }
 
-    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle<S> {
-        WriterHandle::new(claim, &self.session)
-    }
-
     /// Extend this consumer's immediate byte demand and wake the writer.
     #[doc(hidden)]
     pub fn request_until(&self, end: u64) {
@@ -96,6 +92,10 @@ where
         if let Some(waker) = self.entry.take_peer_waker() {
             waker.wake();
         }
+    }
+
+    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle<S> {
+        WriterHandle::new(claim, &self.session)
     }
 
     delegate::delegate! {
@@ -214,8 +214,8 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(in crate::index) reader: AssetReader<S>,
-    pub(in crate::index) lease: ResourceLease<S>,
     pub(in crate::index) writer: Option<WriterHandle<S>>,
+    pub(in crate::index) lease: ResourceLease<S>,
 }
 
 impl<S> From<ResourceAttachment<S>> for (AssetReader<S>, ResourceLease<S>, Option<WriterHandle<S>>)

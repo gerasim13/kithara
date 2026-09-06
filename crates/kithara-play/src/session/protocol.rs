@@ -223,18 +223,25 @@ mod handle {
     /// worker, so the bound is [`MaybeSend`], which is `Send` on every
     /// threaded target and nothing on wasm.
     pub trait SessionDispatcher<S>: MaybeSend + MaybeSync {
-        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
-
         /// Describe how audio consumers hosted by this session may wake workers.
         /// Every one of them reads from the render callback, offline backends
         /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
+
+        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
 
         fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(PlayError::Session(err)),
                 reply => Ok(reply),
             }
+        }
+
+        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            let requested = self.sample_rate()?.requested;
+            NonZeroU32::new(requested).ok_or(PlayError::Session(SessionError::InvalidSampleRate(
+                requested,
+            )))
         }
 
         fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
@@ -253,13 +260,6 @@ mod handle {
                     "unexpected reply for session stream-shape query".into(),
                 )),
             }
-        }
-
-        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
-            let requested = self.sample_rate()?.requested;
-            NonZeroU32::new(requested).ok_or(PlayError::Session(SessionError::InvalidSampleRate(
-                requested,
-            )))
         }
     }
 
@@ -304,11 +304,13 @@ mod handle {
             }))
         }
 
-        #[must_use]
-        pub(crate) fn pending() -> Self {
-            Self(Arc::new(SessionSlot {
-                binding: Mutex::default(),
-            }))
+        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+                Reply::SlotAllocated(allocated) => Ok(allocated),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session allocate slot".into(),
+                )),
+            }
         }
 
         pub(crate) fn bind(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
@@ -321,41 +323,6 @@ mod handle {
             Ok(())
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session allocate slot".into(),
-                )),
-            }
-        }
-
-        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher<S>>, PlayError> {
-            self.0
-                .binding
-                .lock()
-                .as_ref()
-                .map(|binding| Arc::clone(&binding.dispatcher))
-                .ok_or(PlayError::SessionUnbound)
-        }
-
-        delegate::delegate! {
-            to self.dispatcher()? {
-                pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
-                pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            }
-        }
-
-        pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
-            let dispatcher = self
-                .0
-                .binding
-                .lock()
-                .as_ref()
-                .map(|binding| Arc::clone(&binding.dispatcher));
-            dispatcher.map_or(Ok(None), |dispatcher| dispatcher.stream_shape())
-        }
-
         #[must_use]
         pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             // An instance may prepare resources before Host insertion. The
@@ -365,6 +332,15 @@ mod handle {
                 .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
                     dispatcher.consumer_wake_mode()
                 })
+        }
+
+        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher<S>>, PlayError> {
+            self.0
+                .binding
+                .lock()
+                .as_ref()
+                .map(|binding| Arc::clone(&binding.dispatcher))
+                .ok_or(PlayError::SessionUnbound)
         }
 
         pub fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
@@ -383,6 +359,13 @@ mod handle {
                 reason: reason.to_owned(),
             })
             .map(|_| ())
+        }
+
+        #[must_use]
+        pub(crate) fn pending() -> Self {
+            Self(Arc::new(SessionSlot {
+                binding: Mutex::default(),
+            }))
         }
 
         pub fn register_player(
@@ -426,15 +409,6 @@ mod handle {
             .map(|_| ())
         }
 
-        #[cfg(any(test, feature = "probe"))]
-        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
-            if levels.is_empty() {
-                return Ok(());
-            }
-            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
-                .map(|_| ())
-        }
-
         pub fn set_player_eq_layout(
             &self,
             player_id: PlayerId,
@@ -445,6 +419,15 @@ mod handle {
                 player_id,
             })
             .map(|_| ())
+        }
+
+        #[cfg(any(test, feature = "probe"))]
+        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
+            if levels.is_empty() {
+                return Ok(());
+            }
+            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
+                .map(|_| ())
         }
 
         pub fn set_player_slot_volume(
@@ -479,6 +462,16 @@ mod handle {
             self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
         }
 
+        pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+            let dispatcher = self
+                .0
+                .binding
+                .lock()
+                .as_ref()
+                .map(|binding| Arc::clone(&binding.dispatcher));
+            dispatcher.map_or(Ok(None), |dispatcher| dispatcher.stream_shape())
+        }
+
         pub fn tick(&self) -> Result<(), PlayError> {
             self.exec_ok(Cmd::Tick).map(|_| ())
         }
@@ -486,6 +479,13 @@ mod handle {
         pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
             self.exec_ok(Cmd::UnregisterPlayer { player_id })
                 .map(|_| ())
+        }
+
+        delegate::delegate! {
+            to self.dispatcher()? {
+                pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
+                pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            }
         }
     }
 }
@@ -522,16 +522,20 @@ mod tests {
     }
 
     impl SessionDispatcher<TestPools> for DefaultSession {
-        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            Ok(Reply::Ok)
         }
     }
 
     impl SessionDispatcher<TestPools> for RateCapture {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
@@ -548,10 +552,6 @@ mod tests {
                 }
                 _ => Ok(Reply::Ok),
             }
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

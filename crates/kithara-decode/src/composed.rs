@@ -54,6 +54,7 @@ const ZERO_FRAME_BUDGET: u32 = 32;
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
 pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
+    spec: AudioSpec,
     codec: C,
     demuxer: D,
     head_strip: HeadStrip,
@@ -71,7 +72,6 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
     pools: PoolRegion<S>,
-    spec: AudioSpec,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
@@ -695,9 +695,9 @@ mod test_stub_codec {
     }
 
     pub(super) struct LaggedQueueCodec {
+        spec: AudioSpec,
         decoded_pts: Duration,
         pending_pts: Option<Duration>,
-        spec: AudioSpec,
         frames_per_call: u32,
     }
 

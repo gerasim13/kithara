@@ -12,16 +12,16 @@ pub(super) struct BudgetCounter {
 #[derive(Debug)]
 struct BudgetCounterInner {
     current: AtomicUsize,
-    limit: usize,
     peak: AtomicUsize,
+    limit: usize,
 }
 
 impl BudgetCounter {
     pub(super) fn new(limit: usize) -> Self {
         Self {
             inner: Arc::new(BudgetCounterInner {
-                current: AtomicUsize::new(0),
                 limit,
+                current: AtomicUsize::new(0),
                 peak: AtomicUsize::new(0),
             }),
         }
@@ -37,6 +37,25 @@ impl BudgetCounter {
 
     pub(super) fn peak(&self) -> usize {
         self.inner.peak.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn release(&self, amount: usize, owner: &'static str) -> bool {
+        let mut current = self.current();
+        loop {
+            let Some(next) = current.checked_sub(amount) else {
+                tracing::error!(current, amount, owner, "buffer-pool accounting underflow");
+                return false;
+            };
+            match self.inner.current.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     pub(super) fn same_counter(&self, other: &Self) -> bool {
@@ -68,25 +87,6 @@ impl BudgetCounter {
                     self.inner.peak.fetch_max(next, Ordering::Relaxed);
                     return Ok(());
                 }
-                Err(actual) => current = actual,
-            }
-        }
-    }
-
-    pub(super) fn release(&self, amount: usize, owner: &'static str) -> bool {
-        let mut current = self.current();
-        loop {
-            let Some(next) = current.checked_sub(amount) else {
-                tracing::error!(current, amount, owner, "buffer-pool accounting underflow");
-                return false;
-            };
-            match self.inner.current.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
                 Err(actual) => current = actual,
             }
         }

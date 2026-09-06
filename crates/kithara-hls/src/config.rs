@@ -74,8 +74,6 @@ where
     pub initial_abr_mode: AbrMode,
     /// Shared asset store.
     pub store: AssetStore<S>,
-    /// Buffer-pool facade shared across all components.
-    pub pools: PoolRegion<S>,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
@@ -112,14 +110,13 @@ where
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
+    /// Buffer-pool facade shared across all components.
+    pub pools: PoolRegion<S>,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
-    /// Max segments to download per step.
-    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
-    pub download_batch_size: usize,
     /// Acquire attempts a planned segment slot gets before the dispatch
     /// settles it terminally. A requeue is re-dispatched on the peer's next
     /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
@@ -127,6 +124,9 @@ where
     /// releases, so its retry resolves on its own.
     #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub acquire_attempt_budget: u8,
+    /// Max segments to download per step.
+    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    pub download_batch_size: usize,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
     /// [`Self::ephemeral_cache_min_media_window`].
@@ -220,6 +220,10 @@ where
     /// obstruction another task is already clearing to disappear, few enough
     /// that a standing one reaches the reader instead of parking it.
     pub const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
+    /// Default [`Self::download_batch_size`]. Three segments keep the fetcher
+    /// busy across one round-trip without planning further ahead than a
+    /// look-ahead cap would allow anyway.
+    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = DEFAULT_DOWNLOAD_BATCH_SIZE;
     /// Per-stream media window for a shared 128-entry cache. Two concurrent
     /// streams each retain 60 media and four non-media entries.
     pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize =
@@ -228,10 +232,6 @@ where
         DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW;
     pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize =
         DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE;
-    /// Default [`Self::download_batch_size`]. Three segments keep the fetcher
-    /// busy across one round-trip without planning further ahead than a
-    /// look-ahead cap would allow anyway.
-    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = DEFAULT_DOWNLOAD_BATCH_SIZE;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.

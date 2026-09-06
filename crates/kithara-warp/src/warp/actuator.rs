@@ -38,11 +38,21 @@ impl<S> Warp<S> {
         let reader = publisher.reader();
         Self {
             source,
-            config: config.clone(),
-            publisher: Some(publisher),
             #[cfg(feature = "render")]
             reader,
+            config: config.clone(),
+            publisher: Some(publisher),
         }
+    }
+
+    /// Creates the worker-side renderer paired with this Warp facade.
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub fn renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
+    where
+        P: HasPool<f32>,
+    {
+        WarpRenderer::new(&self.config, self.reader.clone(), spec, pools)
     }
 
     /// Live temporal controls shared with the resident Warp lane.
@@ -55,16 +65,6 @@ impl<S> Warp<S> {
     #[must_use]
     pub fn take_publisher(&mut self) -> Option<RenderPublisher> {
         self.publisher.take()
-    }
-
-    /// Creates the worker-side renderer paired with this Warp facade.
-    #[cfg(feature = "render")]
-    #[must_use]
-    pub fn renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
-    where
-        P: HasPool<f32>,
-    {
-        WarpRenderer::new(&self.config, self.reader.clone(), spec, pools)
     }
 }
 

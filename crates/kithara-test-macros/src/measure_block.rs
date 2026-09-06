@@ -4,9 +4,9 @@ use quote::quote;
 use syn::{Expr, Token, parse::Parse};
 
 struct Input {
+    expression: Expr,
     label: Expr,
     _comma: Token![,],
-    expression: Expr,
 }
 
 impl Parse for Input {

@@ -37,8 +37,8 @@ pub(crate) struct DemandState<S> {
     pub(crate) reader: Option<AssetReader<S>>,
     pub(crate) phase: SessionPhase,
     pub(crate) entries: Vec<Arc<DemandEntry>>,
-    pub(super) writer_claim: Option<Arc<WriterClaim>>,
     pub(super) writer: Option<AssetWriter<S>>,
+    pub(super) writer_claim: Option<Arc<WriterClaim>>,
 }
 
 impl<S> DemandState<S> {

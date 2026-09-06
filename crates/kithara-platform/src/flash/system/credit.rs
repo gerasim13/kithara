@@ -445,8 +445,8 @@ impl FlashInner {
         self.core.lock().registry.active_sync_holders.insert(
             key,
             SyncHolder {
-                name,
                 resumed_from,
+                name,
                 resumed_at_ns,
             },
         );

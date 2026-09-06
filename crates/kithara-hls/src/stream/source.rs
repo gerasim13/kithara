@@ -133,6 +133,10 @@ where
         self.peer_wake.clone()
     }
 
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
+    }
+
     fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
         Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
     }
@@ -144,10 +148,6 @@ where
             self.coord.seek_epoch_handle(),
         );
         Some(Box::new(sink))
-    }
-
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
     fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {

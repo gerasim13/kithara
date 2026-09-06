@@ -17,13 +17,13 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    pools: PoolRegion<S>,
     /// `AssetStore::builder(pools).processing_chunk_size(..)`, unset when the
     /// caller left the processing layer's own default in place.
     chunk_size: Option<usize>,
     /// `AssetStore::builder(pools).processing_gate_poll_interval(..)`, unset when
     /// the caller left the processing layer's own default in place.
     gate_poll_interval: Option<Duration>,
+    pools: PoolRegion<S>,
 }
 
 impl<A, S> Clone for ProcessingAssets<A, S>
@@ -53,9 +53,9 @@ where
     ) -> Self {
         Self {
             inner,
-            pools,
             chunk_size,
             gate_poll_interval,
+            pools,
         }
     }
 

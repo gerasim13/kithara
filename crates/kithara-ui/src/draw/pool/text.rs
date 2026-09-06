@@ -17,21 +17,21 @@ enum TextStorage {
 }
 
 impl PoolText {
-    pub(in crate::draw) fn pooled(content: &str, mut guard: TextGuard) -> Self {
-        if let Err(error) = guard.try_push_str(content) {
-            panic!("draw text growth failed: {error}");
-        }
-        Self {
-            storage: TextStorage::Pooled(guard),
-        }
-    }
-
     /// Returns the retained UTF-8 text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         match &self.storage {
             TextStorage::Owned(content) => content,
             TextStorage::Pooled(guard) => guard,
+        }
+    }
+
+    pub(in crate::draw) fn pooled(content: &str, mut guard: TextGuard) -> Self {
+        if let Err(error) = guard.try_push_str(content) {
+            panic!("draw text growth failed: {error}");
+        }
+        Self {
+            storage: TextStorage::Pooled(guard),
         }
     }
 }

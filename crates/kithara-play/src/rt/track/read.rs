@@ -50,37 +50,6 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    pub(crate) fn render(
-        &mut self,
-        context: Option<&RenderContext>,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        sink: &mut RtSink<'_>,
-    ) -> TrackReadOutcome {
-        let Some(context) = context else {
-            self.resource.clear_render();
-            return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
-        };
-        if context.sample_rate().get() != self.sample_rate {
-            self.resource.clear_render();
-            self.handle_failed_end(sink.notifications);
-            return TrackReadOutcome::Failed;
-        }
-        let Some(context) = context.for_output_range(range.clone()) else {
-            self.resource.clear_render();
-            self.handle_failed_end(sink.notifications);
-            return TrackReadOutcome::Failed;
-        };
-        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
-            self.resource
-                .publish_render(&context, presentation_frontier(&context, source.frame()));
-        } else {
-            self.resource.clear_render();
-        }
-        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
-    }
-
     /// Advance the media clock by `frames` of mixed output.
     ///
     /// The mix output runs on the output clock; one output frame carries the
@@ -282,6 +251,36 @@ impl PlayerTrack {
         self.read_with_context(None, scratch_bufs, mix_bufs, range, sink)
     }
 
+    fn read_resource(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        metrics: &RtMetrics,
+    ) -> TrackReadOutcome {
+        let resource = &mut self.resource;
+        let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
+        let mut scratch_window = [
+            &mut scratch_left[0][range.clone()],
+            &mut scratch_right[0][range.clone()],
+        ];
+
+        match resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics) {
+            ReadOutcome::Full { frames } => TrackReadOutcome::Full {
+                frames,
+                duration: resource.duration(),
+                frames_until_eof: resource.frames_until_eof(),
+                position: 0.0,
+            },
+            ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
+                frames,
+                duration: resource.duration(),
+            },
+            ReadOutcome::Eof => TrackReadOutcome::Eof,
+            ReadOutcome::Failed => TrackReadOutcome::Failed,
+        }
+    }
+
     fn read_with_context(
         &mut self,
         context: Option<&RenderContext>,
@@ -325,34 +324,35 @@ impl PlayerTrack {
         }
     }
 
-    fn read_resource(
+    pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        metrics: &RtMetrics,
+        sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
-        let resource = &mut self.resource;
-        let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
-        let mut scratch_window = [
-            &mut scratch_left[0][range.clone()],
-            &mut scratch_right[0][range.clone()],
-        ];
-
-        match resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics) {
-            ReadOutcome::Full { frames } => TrackReadOutcome::Full {
-                frames,
-                duration: resource.duration(),
-                frames_until_eof: resource.frames_until_eof(),
-                position: 0.0,
-            },
-            ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
-                frames,
-                duration: resource.duration(),
-            },
-            ReadOutcome::Eof => TrackReadOutcome::Eof,
-            ReadOutcome::Failed => TrackReadOutcome::Failed,
+        let Some(context) = context else {
+            self.resource.clear_render();
+            return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
+        };
+        if context.sample_rate().get() != self.sample_rate {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
         }
+        let Some(context) = context.for_output_range(range.clone()) else {
+            self.resource.clear_render();
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        };
+        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
+            self.resource
+                .publish_render(&context, presentation_frontier(&context, source.frame()));
+        } else {
+            self.resource.clear_render();
+        }
+        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {

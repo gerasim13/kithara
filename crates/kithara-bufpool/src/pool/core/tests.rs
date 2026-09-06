@@ -42,9 +42,9 @@ impl Storage for OverallocStorage {
 }
 
 struct RefillStorage {
-    capacity: usize,
-    core: Weak<RefillCore>,
     remaining: Arc<AtomicUsize>,
+    core: Weak<RefillCore>,
+    capacity: usize,
 }
 
 impl Default for RefillStorage {

@@ -81,10 +81,10 @@ fn toolkit(host: Host) -> &'static str {
 
 /// What one page did when it was left alone.
 struct Walked {
-    /// Whether the window would still be drawing this page unprompted.
-    asking: bool,
     /// Whether the page's document says it draws a different picture later.
     animates: bool,
+    /// Whether the window would still be drawing this page unprompted.
+    asking: bool,
 }
 
 /// Steps one page on the named host with nothing touching it.
@@ -156,7 +156,7 @@ mod immediate {
             }
         }
 
-        Walked { asking, animates }
+        Walked { animates, asking }
     }
 
     /// A renderer with the gallery's own faces registered, drawing into memory.
@@ -206,15 +206,6 @@ mod retained {
     }
 
     impl App for Still {
-        delegate::delegate! {
-            to self.gallery {
-                fn document(&self) -> &str;
-                fn skin(&self) -> &Skin;
-                fn turned(&mut self, view: &ViewState);
-                fn update(&mut self, event: UiEvent);
-            }
-        }
-
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
             self.gallery.reads(with)
         }
@@ -222,6 +213,15 @@ mod retained {
         fn tick(&mut self) {
             if self.ticks {
                 self.gallery.tick();
+            }
+        }
+
+        delegate::delegate! {
+            to self.gallery {
+                fn document(&self) -> &str;
+                fn skin(&self) -> &Skin;
+                fn turned(&mut self, view: &ViewState);
+                fn update(&mut self, event: UiEvent);
             }
         }
     }
@@ -299,7 +299,7 @@ mod retained {
             }
         }
 
-        Walked { asking, animates }
+        Walked { animates, asking }
     }
 }
 

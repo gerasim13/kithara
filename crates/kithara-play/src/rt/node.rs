@@ -26,12 +26,12 @@ pub struct PlayerNode<S> {
     #[diff(skip)]
     inputs: Arc<Mutex<Option<NodeInputs>>>,
 
+    #[diff(skip)]
+    context_requirement: ContextRequirement,
+
     /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
     pools: PoolRegion<S>,
-
-    #[diff(skip)]
-    context_requirement: ContextRequirement,
 }
 
 /// A runtime parameter patch for [`PlayerNode`].
@@ -44,16 +44,16 @@ pub enum PlayerNodePatch {
 impl<S> Patch for PlayerNode<S> {
     type Patch = PlayerNodePatch;
 
+    fn apply(&mut self, patch: Self::Patch) {
+        match patch {
+            PlayerNodePatch::Active(patch) => self.active.apply(patch),
+        }
+    }
+
     fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
         match path {
             [0, tail @ ..] => Ok(PlayerNodePatch::Active(bool::patch(data, tail)?)),
             _ => Err(PatchError::InvalidPath),
-        }
-    }
-
-    fn apply(&mut self, patch: Self::Patch) {
-        match patch {
-            PlayerNodePatch::Active(patch) => self.active.apply(patch),
         }
     }
 }

@@ -1985,7 +1985,7 @@ mod tests {
     }
 
     fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
-        (name.to_owned(), LaneRate { failed, attempts })
+        (name.to_owned(), LaneRate { attempts, failed })
     }
 
     /// A lane whose verdict is one exit code per attempt has no per-test rate to

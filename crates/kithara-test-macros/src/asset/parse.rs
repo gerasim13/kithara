@@ -44,15 +44,15 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
 /// Parsed `#[kithara::asset(ext = "…", content_type = "…")]`.
 pub(crate) struct AssetArgs {
     pub(crate) content_type: LitStr,
-    /// Pass the build context to a required producer.
-    pub(crate) context: bool,
+    pub(crate) ext: LitStr,
     /// Cached assets that must be materialized before this producer runs.
     pub(crate) depends_on: Vec<LitStr>,
-    /// Bake the asset into the binary instead of reading it from the store.
-    pub(crate) embed: bool,
     /// Environment variables that invalidate this producer.
     pub(crate) env: Vec<LitStr>,
-    pub(crate) ext: LitStr,
+    /// Pass the build context to a required producer.
+    pub(crate) context: bool,
+    /// Bake the asset into the binary instead of reading it from the store.
+    pub(crate) embed: bool,
     /// Keep the build green when this producer reports an unavailable asset.
     pub(crate) optional: bool,
 }
@@ -160,11 +160,11 @@ impl Parse for AssetArgs {
         Ok(Self {
             content_type,
             context,
-            depends_on: depends_on.unwrap_or_default(),
             embed,
-            env: env.unwrap_or_default(),
             ext,
             optional,
+            depends_on: depends_on.unwrap_or_default(),
+            env: env.unwrap_or_default(),
         })
     }
 }

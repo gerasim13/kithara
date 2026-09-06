@@ -270,6 +270,17 @@ where
         )
     }
 
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx<S>, prefetch_base: u64) -> Option<u32> {
+        let window = look_ahead_segments(ctx)?;
+        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        Some(base.saturating_add(window.saturating_sub(1)))
+    }
+
+    fn segment_window_entry_byte(&self, ctx: &PlanCtx<S>, seg_idx: u32) -> Option<u64> {
+        let window = look_ahead_segments(ctx)?;
+        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
+    }
+
     /// Settle a claim whose resource could not be acquired, per
     /// [`settle_for`].
     fn settle_unacquirable(
@@ -303,17 +314,6 @@ where
                 let _ = handle.into_failed();
             }
         }
-    }
-
-    fn prefetch_segment_cap(&self, ctx: &PlanCtx<S>, prefetch_base: u64) -> Option<u32> {
-        let window = look_ahead_segments(ctx)?;
-        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
-        Some(base.saturating_add(window.saturating_sub(1)))
-    }
-
-    fn segment_window_entry_byte(&self, ctx: &PlanCtx<S>, seg_idx: u32) -> Option<u64> {
-        let window = look_ahead_segments(ctx)?;
-        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
     }
 }
 

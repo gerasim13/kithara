@@ -152,8 +152,6 @@ pub(crate) struct NativeInner {
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
-    queue_owner: kithara::host::HostOwned<FfiQueue>,
-    queue: FfiQueueControl,
     /// Rust-owned asset store shared by the queue and every item resource.
     store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
@@ -168,6 +166,8 @@ pub(crate) struct NativeInner {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    queue: FfiQueueControl,
+    queue_owner: kithara::host::HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
@@ -222,12 +222,12 @@ impl NativeInner {
         Self {
             downloader,
             store,
+            queue_owner,
+            queue,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
-            queue_owner,
-            queue,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),

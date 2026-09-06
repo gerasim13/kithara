@@ -75,9 +75,9 @@ fn bad_name(name: &str) -> Option<&'static str> {
 fn refuse(id: &str, origin: &SourceUri, reason: Option<String>) -> Result<(), UiDocError> {
     reason.map_or(Ok(()), |reason| {
         Err(UiDocError::InvalidId {
+            reason,
             origin: origin.clone(),
             id: id.to_owned(),
-            reason,
         })
     })
 }

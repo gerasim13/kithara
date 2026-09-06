@@ -61,26 +61,15 @@ pub enum TempoError {
 /// with how tightly it holds a tempo once found.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tempo {
-    low: f32,
+    drift: f32,
     high: f32,
+    low: f32,
     prior: f32,
     tolerance: f32,
-    drift: f32,
 }
 
 #[bon]
 impl Tempo {
-    /// The band, in BPM.
-    #[must_use]
-    pub fn band(&self) -> RangeInclusive<f32> {
-        self.low..=self.high
-    }
-
-    /// The hypotheses the band covers.
-    pub(super) fn lags(&self) -> RangeInclusive<usize> {
-        hypothesis(self.high)..=hypothesis(self.low)
-    }
-
     /// A policy over the defaults: band and prior in BPM, tolerance in
     /// seconds, drift in BPM per second measured at the prior, so one rate
     /// reaches further in period the slower that prior is.
@@ -114,11 +103,11 @@ impl Tempo {
             return Err(TempoError::Drift { drift });
         }
         let tempo = Self {
-            low,
+            drift,
             high,
+            low,
             prior,
             tolerance,
-            drift,
         };
         let lags = tempo.lags();
         let scored = PeriodConsts::PERIOD_INDEX;
@@ -133,10 +122,34 @@ impl Tempo {
         Ok(tempo)
     }
 
+    /// The band, in BPM.
+    #[must_use]
+    pub fn band(&self) -> RangeInclusive<f32> {
+        self.low..=self.high
+    }
+
+    /// The hypotheses the band covers.
+    pub(super) fn lags(&self) -> RangeInclusive<usize> {
+        hypothesis(self.high)..=hypothesis(self.low)
+    }
+
     /// The preferred tempo, in BPM.
     #[must_use]
     pub const fn prior(&self) -> f32 {
         self.prior
+    }
+
+    /// The Rayleigh mode, in whole lags.
+    pub(super) fn prior_lag(&self) -> f32 {
+        lag(self.prior).round()
+    }
+
+    /// Where the salience the tracker reads begins: the band's shortest lag,
+    /// less the comb's widest reach below a harmonic.
+    pub(super) fn search_floor(&self) -> usize {
+        self.lags()
+            .start()
+            .saturating_sub(PeriodConsts::COMB_HARMONICS - 1)
     }
 
     /// How far consecutive beats may fall from the period, in seconds.
@@ -153,19 +166,6 @@ impl Tempo {
     /// The drift, as the between-estimate spread of the period, in lags.
     pub(super) fn transition_sigma(&self) -> f32 {
         self.drift * lags_per_drift(self.prior)
-    }
-
-    /// The Rayleigh mode, in whole lags.
-    pub(super) fn prior_lag(&self) -> f32 {
-        lag(self.prior).round()
-    }
-
-    /// Where the salience the tracker reads begins: the band's shortest lag,
-    /// less the comb's widest reach below a harmonic.
-    pub(super) fn search_floor(&self) -> usize {
-        self.lags()
-            .start()
-            .saturating_sub(PeriodConsts::COMB_HARMONICS - 1)
     }
 }
 

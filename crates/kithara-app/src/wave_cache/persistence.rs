@@ -32,12 +32,12 @@ use crate::pools::{AppPools, AppStore, Pools};
 
 /// Complete configuration for the app-owned analysis persistence actor.
 pub(crate) struct AnalysisPersistenceConfig {
-    worker: Worker,
-    pools: Pools,
-    queue_capacity: NonZeroUsize,
-    chunk_duration: Duration,
     dispatcher: DispatcherConfig,
+    chunk_duration: Duration,
+    queue_capacity: NonZeroUsize,
+    pools: Pools,
     task: TaskConfig,
+    worker: Worker,
 }
 
 impl AnalysisPersistenceConfig {
@@ -50,12 +50,12 @@ impl AnalysisPersistenceConfig {
         task: TaskConfig,
     ) -> Self {
         Self {
-            worker,
-            pools,
-            queue_capacity,
-            chunk_duration,
             dispatcher,
+            chunk_duration,
+            queue_capacity,
+            pools,
             task,
+            worker,
         }
     }
 }
@@ -111,8 +111,8 @@ impl AnalysisPersistence {
         self.inner
             .tx
             .send(StoreRequest {
-                target,
                 progress,
+                target,
                 ack,
             })
             .await
@@ -129,8 +129,8 @@ impl AnalysisPersistence {
         self.inner
             .tx
             .try_send(StoreRequest {
-                target,
                 progress,
+                target,
                 ack,
             })
             .is_ok()
@@ -138,13 +138,13 @@ impl AnalysisPersistence {
 }
 
 struct AnalysisPersistenceInner {
-    tx: mpsc::Sender<StoreRequest>,
     _owner: PersistenceOwner,
+    tx: mpsc::Sender<StoreRequest>,
 }
 
 struct PersistenceOwner {
-    task: TaskHandle,
     dispatcher: Dispatcher,
+    task: TaskHandle,
     _worker: Worker,
 }
 
@@ -156,8 +156,8 @@ impl Drop for PersistenceOwner {
 }
 
 struct StoreRequest {
-    target: AnalysisTarget,
     progress: AnalysisProgress,
+    target: AnalysisTarget,
     ack: oneshot::Sender<Result<(), AnalysisPersistenceError>>,
 }
 
@@ -190,12 +190,12 @@ impl PersistenceTask {
 }
 
 impl Task for PersistenceTask {
-    fn tick(&mut self) -> TickResult {
-        TickResult::Waiting
-    }
-
     fn on_cancel(&mut self) {
         self.abort();
+    }
+
+    fn tick(&mut self) -> TickResult {
+        TickResult::Waiting
     }
 }
 

@@ -13,11 +13,11 @@ const SOURCES: [Source; 8] = [
 
 struct Source {
     id: &'static str,
-    name: &'static str,
-    tempo: &'static str,
     mode: &'static str,
+    name: &'static str,
     pulse: &'static str,
     stretch: &'static str,
+    tempo: &'static str,
 }
 
 impl Source {
@@ -31,26 +31,26 @@ impl Source {
     ) -> Self {
         Self {
             id,
-            name,
-            tempo,
             mode,
+            name,
             pulse,
             stretch,
+            tempo,
         }
     }
 }
 
 pub(crate) struct ClockState {
     bpm_label: String,
-    source: usize,
-    family_step: bool,
-    quantize: bool,
-    snap: bool,
     click: bool,
+    family_step: bool,
     key_locked: bool,
     link: bool,
     midi_send: bool,
+    quantize: bool,
+    snap: bool,
     bpm: f64,
+    source: usize,
 }
 
 impl Default for ClockState {
@@ -145,8 +145,8 @@ impl ClockState {
         Some(value)
     }
 
-    pub(crate) fn step(&mut self, steps: f64) {
-        self.set_bpm(self.bpm + steps);
+    fn rebuild(&mut self) {
+        self.bpm_label = format!("{:.2}", self.bpm);
     }
 
     fn set_bpm(&mut self, bpm: f64) {
@@ -154,8 +154,8 @@ impl ClockState {
         self.rebuild();
     }
 
-    fn rebuild(&mut self) {
-        self.bpm_label = format!("{:.2}", self.bpm);
+    pub(crate) fn step(&mut self, steps: f64) {
+        self.set_bpm(self.bpm + steps);
     }
 }
 

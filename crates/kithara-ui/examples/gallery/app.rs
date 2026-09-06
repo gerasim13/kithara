@@ -31,29 +31,64 @@ pub(crate) enum Message {
 }
 
 pub(crate) struct Gallery {
-    pub(crate) window_id: window::Id,
     /// This host's own reading of time, advanced by the same step the tick
     /// subscription fires at, so a document bound to it moves with the page.
     pub(crate) clock: Clock,
-    /// How far that clock moves in one frame.
-    pub(crate) step: Duration,
-    pub(crate) reads: DemoReads,
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
     pub(crate) kinds: CustomKinds,
+    pub(crate) reads: DemoReads,
+    /// How far that clock moves in one frame.
+    pub(crate) step: Duration,
+    pub(crate) window_id: window::Id,
+    pub(crate) capture: Option<Capture>,
     /// The screen the gallery shows, and the pages of it compiled before.
     pub(crate) screens: Screens,
-    pub(crate) capture: Option<Capture>,
     /// State the documents keep for themselves, which no endpoint of this
     /// application answers.
     pub(crate) view: ViewState,
 }
 
 impl Gallery {
-    /// The skin the gallery is dressed in, read off the same state every page
-    /// is read from, so turning a page cannot undress it.
-    pub(crate) fn skin(&self) -> &'static Skin {
-        self.reads.skin()
+    /// Selects the next page and lets one frame render before the shot.
+    fn capture_next(&mut self) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        let Some(shot) = capture.next() else {
+            capture.report();
+            return iced::exit();
+        };
+        self.select(shot);
+        Task::done(Message::CaptureShoot(shot))
+    }
+
+    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        match capture.save(shot, image) {
+            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
+            Err(error) => eprintln!("capture failed: {error}"),
+        }
+        Task::done(Message::CaptureNext)
+    }
+
+    pub(crate) const fn compiled(&self) -> &CompiledUi {
+        self.screens.shown()
+    }
+
+    /// Compiles every page again against the skin the gallery has turned to.
+    ///
+    /// A document is compiled against a skin and not merely painted with one:
+    /// what a page measures comes from the skin's own numbers, so a skin
+    /// changed at runtime is a set of pages built again.
+    pub(crate) fn dress(&mut self) {
+        let resolver = resolver();
+        let endpoints = crate::demo::registry();
+        let skin = self.skin().document();
+        let ui = compiled(&resolver, &endpoints, skin, &self.view);
+        self.screens.reset(ui);
     }
 
     /// The gallery with no window of iced's: the offscreen capture rasterises
@@ -91,11 +126,14 @@ impl Gallery {
         self.compiled().animates || self.reads.feeds()
     }
 
-    /// One frame of the gallery's own time: the clock a document binds to,
-    /// and the application's own reading of how far along it is.
-    pub(crate) fn tick(&mut self) {
-        self.clock = self.clock.advance(self.step);
-        self.reads.tick();
+    /// Applies whatever the press at `path` writes to the screen's own state,
+    /// then shows the page that state now stands at.
+    pub(crate) fn press(&mut self, path: &str) {
+        let Self { screens, view, .. } = self;
+        if let Some((state, write)) = screens.shown().views().at(path) {
+            view.apply(state, write);
+        }
+        self.turn();
     }
 
     /// Turns to the page a shot names, as freshly as the retained host mounts
@@ -110,18 +148,17 @@ impl Gallery {
         self.turn();
     }
 
-    pub(crate) const fn compiled(&self) -> &CompiledUi {
-        self.screens.shown()
+    /// The skin the gallery is dressed in, read off the same state every page
+    /// is read from, so turning a page cannot undress it.
+    pub(crate) fn skin(&self) -> &'static Skin {
+        self.reads.skin()
     }
 
-    /// Applies whatever the press at `path` writes to the screen's own state,
-    /// then shows the page that state now stands at.
-    pub(crate) fn press(&mut self, path: &str) {
-        let Self { screens, view, .. } = self;
-        if let Some((state, write)) = screens.shown().views().at(path) {
-            view.apply(state, write);
-        }
-        self.turn();
+    /// One frame of the gallery's own time: the clock a document binds to,
+    /// and the application's own reading of how far along it is.
+    pub(crate) fn tick(&mut self) {
+        self.clock = self.clock.advance(self.step);
+        self.reads.tick();
     }
 
     /// Shows the page the screen's state stands at, and tells the demo model
@@ -146,43 +183,6 @@ impl Gallery {
         if let Some(page) = page.and_then(sections::named) {
             reads.show(page);
         }
-    }
-
-    /// Compiles every page again against the skin the gallery has turned to.
-    ///
-    /// A document is compiled against a skin and not merely painted with one:
-    /// what a page measures comes from the skin's own numbers, so a skin
-    /// changed at runtime is a set of pages built again.
-    pub(crate) fn dress(&mut self) {
-        let resolver = resolver();
-        let endpoints = crate::demo::registry();
-        let skin = self.skin().document();
-        let ui = compiled(&resolver, &endpoints, skin, &self.view);
-        self.screens.reset(ui);
-    }
-
-    /// Selects the next page and lets one frame render before the shot.
-    fn capture_next(&mut self) -> Task<Message> {
-        let Some(capture) = self.capture.as_mut() else {
-            return Task::none();
-        };
-        let Some(shot) = capture.next() else {
-            capture.report();
-            return iced::exit();
-        };
-        self.select(shot);
-        Task::done(Message::CaptureShoot(shot))
-    }
-
-    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
-        let Some(capture) = self.capture.as_mut() else {
-            return Task::none();
-        };
-        match capture.save(shot, image) {
-            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
-            Err(error) => eprintln!("capture failed: {error}"),
-        }
-        Task::done(Message::CaptureNext)
     }
 }
 

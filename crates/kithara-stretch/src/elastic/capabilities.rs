@@ -20,13 +20,6 @@ impl ElasticCapabilities {
         Self { latency, shape }
     }
 
-    /// Interleaved sample count of a frame span at the prepared channel count.
-    pub(crate) fn samples(self, frames: usize) -> Result<usize, ElasticError> {
-        frames
-            .checked_mul(self.channels())
-            .ok_or(ElasticError::SampleCountOverflow)
-    }
-
     /// Validate caller-owned interleaved storage and return its frame capacity.
     pub(crate) fn output_capacity(self, output_samples: usize) -> Result<usize, ElasticError> {
         if output_samples == 0 {
@@ -36,11 +29,18 @@ impl ElasticCapabilities {
         if !output_samples.is_multiple_of(channels) {
             let expected = self.samples(output_samples.div_ceil(channels))?;
             return Err(ElasticError::OutputSampleCount {
-                actual: output_samples,
                 expected,
+                actual: output_samples,
             });
         }
         Ok(output_samples / channels)
+    }
+
+    /// Interleaved sample count of a frame span at the prepared channel count.
+    pub(crate) fn samples(self, frames: usize) -> Result<usize, ElasticError> {
+        frames
+            .checked_mul(self.channels())
+            .ok_or(ElasticError::SampleCountOverflow)
     }
 
     /// Every engine accepts the same requests: inside the prepared block

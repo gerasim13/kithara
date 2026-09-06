@@ -1,12 +1,12 @@
 pub(super) struct FramesConsts;
 
 impl FramesConsts {
-    /// The rate the crate contract fixes.
-    pub(super) const RATE: f32 = 22_050.0;
     /// Analysis window, 46.4 ms.
     pub(super) const FRAME: usize = 1024;
     /// Hop, 11.61 ms: the detection-function resolution the papers fix.
     pub(super) const HOP: usize = 256;
+    /// The rate the crate contract fixes.
+    pub(super) const RATE: f32 = 22_050.0;
 }
 
 pub(super) struct NoveltyConsts;

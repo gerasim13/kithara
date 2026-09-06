@@ -18,12 +18,12 @@ use crate::session::{
 struct Defaults;
 
 impl Defaults {
-    const CHANNELS: u16 = 2;
-    const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    const BLOCK_FRAMES: NonZeroU32 = match NonZeroU32::new(512) {
         Some(value) => value,
         None => unreachable!(),
     };
-    const BLOCK_FRAMES: NonZeroU32 = match NonZeroU32::new(512) {
+    const CHANNELS: u16 = 2;
+    const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(value) => value,
         None => unreachable!(),
     };
@@ -38,6 +38,17 @@ fn default_dispatcher_config() -> DispatcherConfig {
 
 #[bon::bon]
 impl<S> HostConfig<S> {
+    /// Maximum frames processed by one backend/task quantum.
+    #[must_use]
+    pub const fn max_block_frames(&self) -> Option<NonZeroU32> {
+        match self {
+            Self::Offline {
+                max_block_frames, ..
+            } => Some(*max_block_frames),
+            Self::Realtime { .. } => None,
+        }
+    }
+
     /// Configure a device-free offline session.
     #[builder(finish_fn = build)]
     pub fn offline(
@@ -58,21 +69,10 @@ impl<S> HostConfig<S> {
             declick_frames,
             declared_latency,
             worker,
-            dispatcher: Box::new(dispatcher),
             task,
             #[cfg(any(test, feature = "probe"))]
             pacing,
-        }
-    }
-
-    /// Maximum frames processed by one backend/task quantum.
-    #[must_use]
-    pub const fn max_block_frames(&self) -> Option<NonZeroU32> {
-        match self {
-            Self::Offline {
-                max_block_frames, ..
-            } => Some(*max_block_frames),
-            Self::Realtime { .. } => None,
+            dispatcher: Box::new(dispatcher),
         }
     }
 
@@ -89,11 +89,11 @@ impl<S> HostConfig<S> {
 
 pub(super) struct OfflineRuntime<S> {
     client: Arc<OfflineSessionClient<S>>,
-    max_block_frames: NonZeroU32,
     spec: AudioSpec,
-    _worker: Worker,
     _dispatcher: kithara_worker::Dispatcher,
+    max_block_frames: NonZeroU32,
     _task: kithara_worker::TaskHandle,
+    _worker: Worker,
 }
 
 type StartedOfflineRuntime<S> = (Arc<dyn HostDispatcher<S>>, OfflineRuntime<S>);
@@ -158,24 +158,6 @@ where
         self.client.position().map_err(OfflineRenderError::backend)
     }
 
-    fn render_at(
-        &self,
-        position: u64,
-        frames: u32,
-    ) -> Result<kithara_bufpool::SampleBuffer, OfflineRenderError> {
-        self.client
-            .render(position, frames)
-            .map_err(|error| match error {
-                crate::session::offline::OfflineSessionError::CursorChanged { actual, .. } => {
-                    OfflineRenderError::RangeUnavailable {
-                        requested: position,
-                        current: actual,
-                    }
-                }
-                error => OfflineRenderError::backend(error),
-            })
-    }
-
     fn render(
         &mut self,
         request: &OfflineRenderRequest,
@@ -236,6 +218,24 @@ where
         }
         debug_assert_eq!(rendered_frames, requested_frames);
         Ok(OfflineRenderReport::new(rendered_frames))
+    }
+
+    fn render_at(
+        &self,
+        position: u64,
+        frames: u32,
+    ) -> Result<kithara_bufpool::SampleBuffer, OfflineRenderError> {
+        self.client
+            .render(position, frames)
+            .map_err(|error| match error {
+                crate::session::offline::OfflineSessionError::CursorChanged { actual, .. } => {
+                    OfflineRenderError::RangeUnavailable {
+                        requested: position,
+                        current: actual,
+                    }
+                }
+                error => OfflineRenderError::backend(error),
+            })
     }
 }
 

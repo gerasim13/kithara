@@ -24,9 +24,9 @@ const BUDGET_RUNS: usize = 4;
 #[derive(Clone, Copy)]
 struct WindowMeta {
     full: bool,
-    index: usize,
     keep_seconds: f32,
     offset_seconds: f32,
+    index: usize,
 }
 
 pub(crate) struct DetectRequest {
@@ -66,19 +66,19 @@ pub(crate) struct BeatAnalyzer<B>
 where
     B: ResamplerBackend,
 {
-    params: GridParams,
-    failure: Option<BeatDetectError>,
-    downmix: SampleBuffer,
-    grid: GridBuffers,
-    runs: Runs<B>,
     windows: BTreeMap<usize, RawBeats>,
     short: BTreeSet<usize>,
+    grid: GridBuffers,
+    params: GridParams,
+    failure: Option<BeatDetectError>,
+    runs: Runs<B>,
+    downmix: SampleBuffer,
+    #[field(get, copy, vis = "pub(crate)")]
+    source_rate: u32,
     hop_frames: usize,
     min_frames: usize,
     ready_frames: usize,
     window_frames: usize,
-    #[field(get, copy, vis = "pub(crate)")]
-    source_rate: u32,
 }
 
 impl<B> BeatAnalyzer<B>
@@ -128,46 +128,27 @@ where
         }
     }
 
-    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
-        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
-    }
-
-    delegate::delegate! {
-        to self.runs {
-            pub(crate) fn intake(&self) -> Intake;
-            #[call(taken)]
-            pub(crate) fn coverage(&self) -> &Coverage;
-            #[cfg(test)]
-            #[call(held)]
-            pub(crate) fn held_frames(&self) -> usize;
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        match output.result {
+            Ok(raw) => self.apply_raw(output.window, raw),
+            Err(error) => self.failure = Some(error),
         }
     }
 
-    pub(crate) fn snapshot<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        detector: &dyn BeatDetector,
-        ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError>
-    where
-        S: HasPool<f32>,
-    {
-        if ending {
-            self.runs.flush()?;
+    fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
+        self.windows.insert(
+            window.index,
+            RawBeats {
+                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
+                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
+            },
+        );
+        if window.full {
+            self.short.remove(&window.index);
+        } else {
+            self.short.insert(window.index);
         }
-        self.detect(pools, detector, ending)?;
-
-        self.build_artifact()
-    }
-
-    pub(crate) fn snapshot_deferred(
-        &mut self,
-        ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError> {
-        if ending {
-            self.runs.flush()?;
-        }
-        self.build_artifact()
+        self.release_detected();
     }
 
     fn build_artifact(&mut self) -> Result<BeatArtifact, BeatDetectError> {
@@ -189,58 +170,25 @@ where
         build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid).map_err(Into::into)
     }
 
-    pub(crate) fn push_interleaved<S>(
+    fn detect<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        pcm: &[f32],
-        channels: usize,
-        at: u64,
-        opens: Opens,
         detector: &dyn BeatDetector,
-    ) -> bool
+        trailing: bool,
+    ) -> Result<(), BeatDetectError>
     where
         S: HasPool<f32>,
     {
-        let took = self.push_interleaved_deferred(pools, pcm, channels, at, opens);
-        self.failure = self.detect(pools, detector, false).err();
-        took
+        while let Some(request) = self.prepare_detection(pools, trailing) {
+            let DetectOutput { result, window } = request.detect(detector);
+            let raw = result?;
+            self.apply_raw(window, raw);
+        }
+        Ok(())
     }
 
-    pub(crate) fn push_interleaved_deferred<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        pcm: &[f32],
-        channels: usize,
-        at: u64,
-        opens: Opens,
-    ) -> bool
-    where
-        S: HasPool<f32>,
-    {
-        if channels == 0 || self.failure.is_some() {
-            return false;
-        }
-        let frames = pcm.len() / channels;
-        if frames == 0 {
-            return false;
-        }
-
-        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
-        if let Err(error) = self.downmix.ensure_len(frames) {
-            self.failure = Some(error.into());
-            return false;
-        }
-        self.downmix.truncate(frames);
-        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
-            *dst = frame.iter().sum::<f32>() * inv;
-        }
-        match self.runs.push(pools, &self.downmix, at, opens) {
-            Ok(took) => took,
-            Err(error) => {
-                self.failure = Some(error);
-                false
-            }
-        }
+    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
+        self.failure.as_ref()
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -313,30 +261,74 @@ where
         None
     }
 
-    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
-        match output.result {
-            Ok(raw) => self.apply_raw(output.window, raw),
-            Err(error) => self.failure = Some(error),
+    pub(crate) fn push_interleaved<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        opens: Opens,
+        detector: &dyn BeatDetector,
+    ) -> bool
+    where
+        S: HasPool<f32>,
+    {
+        let took = self.push_interleaved_deferred(pools, pcm, channels, at, opens);
+        self.failure = self.detect(pools, detector, false).err();
+        took
+    }
+
+    pub(crate) fn push_interleaved_deferred<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        opens: Opens,
+    ) -> bool
+    where
+        S: HasPool<f32>,
+    {
+        if channels == 0 || self.failure.is_some() {
+            return false;
+        }
+        let frames = pcm.len() / channels;
+        if frames == 0 {
+            return false;
+        }
+
+        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
+        if let Err(error) = self.downmix.ensure_len(frames) {
+            self.failure = Some(error.into());
+            return false;
+        }
+        self.downmix.truncate(frames);
+        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
+            *dst = frame.iter().sum::<f32>() * inv;
+        }
+        match self.runs.push(pools, &self.downmix, at, opens) {
+            Ok(took) => took,
+            Err(error) => {
+                self.failure = Some(error);
+                false
+            }
         }
     }
 
-    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
-        self.failure.as_ref()
-    }
-
-    pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
-        let mut writer = Writer::new(out);
-        self.runs.write_resume(&mut writer);
-        writer.write_len(self.windows.len());
-        for (index, raw) in &self.windows {
-            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
-            write_marks(&mut writer, &raw.beats);
-            write_marks(&mut writer, &raw.downbeats);
-        }
-        writer.write_len(self.short.len());
-        for index in &self.short {
-            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
-        }
+    fn release_detected(&mut self) {
+        let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
+        self.runs.release(|base| {
+            let first = base.div_ceil(hop);
+            let mut index = first;
+            while windows.contains_key(&index) && !short.contains(&index) {
+                index = index.saturating_add(1);
+            }
+            if index == first {
+                base
+            } else {
+                index.saturating_mul(hop)
+            }
+        });
     }
 
     pub(crate) fn restore<S>(
@@ -370,53 +362,61 @@ where
         Ok(())
     }
 
-    fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
-        self.windows.insert(
-            window.index,
-            RawBeats {
-                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
-                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
-            },
-        );
-        if window.full {
-            self.short.remove(&window.index);
-        } else {
-            self.short.insert(window.index);
-        }
-        self.release_detected();
-    }
-
-    fn release_detected(&mut self) {
-        let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
-        self.runs.release(|base| {
-            let first = base.div_ceil(hop);
-            let mut index = first;
-            while windows.contains_key(&index) && !short.contains(&index) {
-                index = index.saturating_add(1);
-            }
-            if index == first {
-                base
-            } else {
-                index.saturating_mul(hop)
-            }
-        });
-    }
-
-    fn detect<S>(
+    pub(crate) fn snapshot<S>(
         &mut self,
         pools: &PoolRegion<S>,
         detector: &dyn BeatDetector,
-        trailing: bool,
-    ) -> Result<(), BeatDetectError>
+        ending: bool,
+    ) -> Result<BeatArtifact, BeatDetectError>
     where
         S: HasPool<f32>,
     {
-        while let Some(request) = self.prepare_detection(pools, trailing) {
-            let DetectOutput { result, window } = request.detect(detector);
-            let raw = result?;
-            self.apply_raw(window, raw);
+        if ending {
+            self.runs.flush()?;
         }
-        Ok(())
+        self.detect(pools, detector, ending)?;
+
+        self.build_artifact()
+    }
+
+    pub(crate) fn snapshot_deferred(
+        &mut self,
+        ending: bool,
+    ) -> Result<BeatArtifact, BeatDetectError> {
+        if ending {
+            self.runs.flush()?;
+        }
+        self.build_artifact()
+    }
+
+    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
+        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
+    }
+
+    pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
+        let mut writer = Writer::new(out);
+        self.runs.write_resume(&mut writer);
+        writer.write_len(self.windows.len());
+        for (index, raw) in &self.windows {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+            write_marks(&mut writer, &raw.beats);
+            write_marks(&mut writer, &raw.downbeats);
+        }
+        writer.write_len(self.short.len());
+        for index in &self.short {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+        }
+    }
+
+    delegate::delegate! {
+        to self.runs {
+            pub(crate) fn intake(&self) -> Intake;
+            #[call(taken)]
+            pub(crate) fn coverage(&self) -> &Coverage;
+            #[cfg(test)]
+            #[call(held)]
+            pub(crate) fn held_frames(&self) -> usize;
+        }
     }
 }
 
@@ -558,6 +558,18 @@ mod tests {
     }
 
     impl Pass {
+        fn apply_detection(&mut self, output: super::DetectOutput) {
+            self.analyzer.apply_detection(output);
+        }
+
+        fn held_frames(&self) -> usize {
+            self.analyzer.held_frames()
+        }
+
+        fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
+            self.analyzer.prepare_detection(&self.pools, trailing)
+        }
+
         fn push_interleaved(
             &mut self,
             pcm: &[f32],
@@ -568,18 +580,6 @@ mod tests {
         ) -> bool {
             self.analyzer
                 .push_interleaved(&self.pools, pcm, channels, at, opens, detector)
-        }
-
-        fn snapshot(
-            &mut self,
-            detector: &dyn BeatDetector,
-            ending: bool,
-        ) -> Result<crate::BeatArtifact, BeatDetectError> {
-            self.analyzer.snapshot(&self.pools, detector, ending)
-        }
-
-        fn write_resume(&mut self, out: &mut Vec<u8>) {
-            self.analyzer.write_resume(out);
         }
 
         fn push_interleaved_deferred(
@@ -593,20 +593,20 @@ mod tests {
                 .push_interleaved_deferred(&self.pools, pcm, channels, at, opens)
         }
 
-        fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
-            self.analyzer.prepare_detection(&self.pools, trailing)
-        }
-
-        fn apply_detection(&mut self, output: super::DetectOutput) {
-            self.analyzer.apply_detection(output);
-        }
-
-        fn held_frames(&self) -> usize {
-            self.analyzer.held_frames()
+        fn snapshot(
+            &mut self,
+            detector: &dyn BeatDetector,
+            ending: bool,
+        ) -> Result<crate::BeatArtifact, BeatDetectError> {
+            self.analyzer.snapshot(&self.pools, detector, ending)
         }
 
         fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange> {
             self.analyzer.unanalysed(extent)
+        }
+
+        fn write_resume(&mut self, out: &mut Vec<u8>) {
+            self.analyzer.write_resume(out);
         }
     }
 

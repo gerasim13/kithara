@@ -61,10 +61,10 @@ pub(super) struct OpenPicker {
 /// What routing one event through the engine produced.
 pub(super) struct Routed {
     pub(super) outcome: Outcome<HostAction>,
-    pub(super) focused: bool,
     /// The widgets whose face the event changed, which are the widgets that
     /// have to be painted again for it to be seen.
     pub(super) repaint: Vec<WidgetId>,
+    pub(super) focused: bool,
 }
 
 /// The face one control an engine drives shows right now.
@@ -181,6 +181,25 @@ impl HostedEngine {
         engine.cursor(&targets)
     }
 
+    /// The face every control this engine drives shows, in target order.
+    fn faces(&self, engine: &Engine, point: Option<Pt>) -> Vec<Face> {
+        self.targets
+            .iter()
+            .map(|target| match &target.plan {
+                HostedControlPlan::Table(plan) => {
+                    Face::Table(plan.view(engine, point, target_bounds(target)))
+                }
+                HostedControlPlan::Tree(plan) => {
+                    Face::Tree(plan.view(engine, point, target_bounds(target)))
+                }
+                HostedControlPlan::Picker { path, .. } => {
+                    Face::Picker(engine.picker_snapshot(path))
+                }
+                _ => Face::Unread,
+            })
+            .collect()
+    }
+
     pub(super) fn has_open_picker(&self) -> bool {
         self.open_picker().is_some()
     }
@@ -270,32 +289,13 @@ impl HostedEngine {
             .map(|event| (self.map_event)(engine_value(&path, child, event)));
         Routed {
             outcome,
-            focused,
             repaint,
+            focused,
         }
     }
 
     pub(super) fn set_menu_layer(&self, layer: WidgetId) {
         self.menu.set(Some(layer));
-    }
-
-    /// The face every control this engine drives shows, in target order.
-    fn faces(&self, engine: &Engine, point: Option<Pt>) -> Vec<Face> {
-        self.targets
-            .iter()
-            .map(|target| match &target.plan {
-                HostedControlPlan::Table(plan) => {
-                    Face::Table(plan.view(engine, point, target_bounds(target)))
-                }
-                HostedControlPlan::Tree(plan) => {
-                    Face::Tree(plan.view(engine, point, target_bounds(target)))
-                }
-                HostedControlPlan::Picker { path, .. } => {
-                    Face::Picker(engine.picker_snapshot(path))
-                }
-                _ => Face::Unread,
-            })
-            .collect()
     }
 
     /// The layer to repaint, once, because the menu it draws has changed.

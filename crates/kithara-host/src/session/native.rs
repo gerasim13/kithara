@@ -48,6 +48,10 @@ impl<S> SessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -56,10 +60,6 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
                 "unexpected host reply for player session command".into(),
             )),
         }
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

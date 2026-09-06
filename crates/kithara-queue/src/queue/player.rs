@@ -26,6 +26,10 @@ where
 {
     type NestedGroup = PlayerMember;
 
+    fn status(&self) -> SyncStatusSnapshot {
+        SyncGroup::status(&self.player)
+    }
+
     delegate::delegate! {
         to self.player {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
@@ -40,10 +44,6 @@ where
                 applied: SyncApplied,
             ) -> Result<SyncStatusSnapshot, SyncError>;
         }
-    }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(&self.player)
     }
 }
 
@@ -75,15 +75,15 @@ impl<S> PlayerControlSource for Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Schema = S;
     type Control = super::QueueControl<S>;
-
-    fn control(&self) -> Self::Control {
-        self.control.clone()
-    }
+    type Schema = S;
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
+    }
+
+    fn control(&self) -> Self::Control {
+        self.control.clone()
     }
 
     delegate::delegate! {

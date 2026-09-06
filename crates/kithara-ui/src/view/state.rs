@@ -35,6 +35,15 @@ impl ViewState {
         }
     }
 
+    /// Applies whatever one press writes, and answers whether it moved the
+    /// state.
+    pub fn apply(&mut self, state: &str, write: ViewWrite<'_>) -> bool {
+        match write {
+            ViewWrite::Flag(set) => self.set(state, set),
+            ViewWrite::Page(page) => self.stand(state, page),
+        }
+    }
+
     #[must_use]
     pub fn flag(&self, state: &str) -> bool {
         matches!(self.stands.get(state), Some(Stands::Flag(true)))
@@ -50,13 +59,13 @@ impl ViewState {
         }
     }
 
-    /// Applies whatever one press writes, and answers whether it moved the
-    /// state.
-    pub fn apply(&mut self, state: &str, write: ViewWrite<'_>) -> bool {
-        match write {
-            ViewWrite::Flag(set) => self.set(state, set),
-            ViewWrite::Page(page) => self.stand(state, page),
-        }
+    /// Drops every state the screen now being shown does not name.
+    ///
+    /// A state belongs to the document that declared it. Another document is
+    /// another declaration, so what it does not name is gone rather than
+    /// carried over to answer for a state that no longer exists.
+    pub fn retain(&mut self, named: &BTreeSet<String>) {
+        self.stands.retain(|state, _| named.contains(state));
     }
 
     /// Applies one write and answers whether it moved the flag.
@@ -95,14 +104,5 @@ impl ViewState {
                 Stands::Flag(_) => None,
             })
             .collect()
-    }
-
-    /// Drops every state the screen now being shown does not name.
-    ///
-    /// A state belongs to the document that declared it. Another document is
-    /// another declaration, so what it does not name is gone rather than
-    /// carried over to answer for a state that no longer exists.
-    pub fn retain(&mut self, named: &BTreeSet<String>) {
-        self.stands.retain(|state, _| named.contains(state));
     }
 }

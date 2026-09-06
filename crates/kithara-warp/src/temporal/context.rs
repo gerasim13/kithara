@@ -9,19 +9,19 @@ use crate::{SessionBeat, SessionEpoch, SessionFrame, TransportRevision};
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderContext {
-    /// The exact half-open session-output frame range.
-    output_frames: Range<SessionFrame>,
     /// The sample rate defining [`Self::output_frames`].
     #[field(get, copy)]
     sample_rate: NonZeroU32,
     /// The corresponding half-open musical range when transport is playing.
     session_beats: Option<Range<SessionBeat>>,
-    /// The generation of the session frame axis.
-    #[field(get, copy)]
-    session_epoch: SessionEpoch,
     /// The committed transport revision, including paused transport.
     #[field(get, copy)]
     transport_revision: Option<TransportRevision>,
+    /// The exact half-open session-output frame range.
+    output_frames: Range<SessionFrame>,
+    /// The generation of the session frame axis.
+    #[field(get, copy)]
+    session_epoch: SessionEpoch,
 }
 
 impl RenderContext {
@@ -40,11 +40,11 @@ impl RenderContext {
             .is_none_or(|beats| beats.start <= beats.end);
         let transport_matches_beats = session_beats.is_none() || transport_revision.is_some();
         (output_is_ordered && beats_are_ordered && transport_matches_beats).then_some(Self {
-            output_frames,
             sample_rate,
             session_beats,
-            session_epoch,
             transport_revision,
+            output_frames,
+            session_epoch,
         })
     }
 

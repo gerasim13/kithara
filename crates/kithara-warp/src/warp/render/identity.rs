@@ -10,34 +10,17 @@ use crate::{RenderReader, RenderSnapshot, WarpConfig};
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    context: RenderReader,
     committed: Option<RenderSnapshot>,
     prepared: Option<usize>,
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
+    context: RenderReader,
 }
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    #[kithara::probe(
-        session_epoch = u64::from(committed.context().session_epoch()),
-        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
-        output_start,
-        output_end = i64::from(committed.frontier().output()),
-        source_start,
-        source_end = committed.frontier().source()
-    )]
-    fn render_committed(
-        &mut self,
-        committed: RenderSnapshot,
-        source_start: u64,
-        output_start: i64,
-    ) {
-        self.committed = Some(committed);
-    }
-
     pub(crate) fn new(
         _config: &WarpConfig,
         context: RenderReader,
@@ -58,6 +41,14 @@ where
     pub const fn accepts_input(&self) -> bool {
         true
     }
+
+    /// Drain one buffered output chunk after source EOF or a transition.
+    pub const fn flush(&mut self) -> Option<AudioChunk> {
+        None
+    }
+
+    /// Prepare deferred renderer state for the current source format.
+    pub const fn prepare(&mut self, _spec: AudioSpec) {}
 
     /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(
@@ -83,30 +74,27 @@ where
         Some(FrameCount::new(frames))
     }
 
-    /// Whether rendering needs worker-owned staging buffers.
-    #[must_use]
-    pub const fn requires_staging(&self) -> bool {
-        false
-    }
-
-    /// Drain one buffered output chunk after source EOF or a transition.
-    pub const fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-
-    /// Prepare deferred renderer state for the current source format.
-    pub const fn prepare(&mut self, _spec: AudioSpec) {}
-
     /// Render one complete decoded source chunk.
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.prepared = None;
         self.render_prepared(chunk)
     }
 
-    /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        let frames = self.prepared.take()?;
-        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
+    #[kithara::probe(
+        session_epoch = u64::from(committed.context().session_epoch()),
+        transport_revision = committed.context().transport_revision().map_or(0, u64::from),
+        output_start,
+        output_end = i64::from(committed.frontier().output()),
+        source_start,
+        source_end = committed.frontier().source()
+    )]
+    fn render_committed(
+        &mut self,
+        committed: RenderSnapshot,
+        source_start: u64,
+        output_start: i64,
+    ) {
+        self.committed = Some(committed);
     }
 
     fn render_prepared(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
@@ -133,10 +121,22 @@ where
         Some(chunk)
     }
 
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let frames = self.prepared.take()?;
+        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
+    }
+
     /// Exact decoded-source boundary represented by the latest emitted samples.
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
+    }
+
+    /// Whether rendering needs worker-owned staging buffers.
+    #[must_use]
+    pub const fn requires_staging(&self) -> bool {
+        false
     }
 
     /// Discard renderer state after a source discontinuity.

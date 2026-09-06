@@ -17,9 +17,9 @@ use crate::{
 
 struct HostChannel {
     _host: FfiHost,
-    pools: Pools,
     receiver: wasm::HostReceiver<FfiPools>,
     sender: wasm::HostSender<FfiPools>,
+    pools: Pools,
 }
 
 fn current_track_id_cell() -> &'static AtomicI64 {
@@ -48,9 +48,9 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
     wasm::warm_up_audio(&host)
         .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
     *guard = Some(HostChannel {
+        receiver,
         _host: host,
         pools: pools.clone(),
-        receiver,
         sender: sender.clone(),
     });
     Ok((sender, pools))

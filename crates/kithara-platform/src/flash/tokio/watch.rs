@@ -112,6 +112,21 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Sender<T> {
+    /// Borrow the latest value.
+    #[must_use]
+    pub fn borrow(&self) -> Ref<'_, T> {
+        Ref {
+            guard: self.shared.state.lock(),
+        }
+    }
+
+    /// Live receivers: every handle on the shared state that is not a sender.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        let senders = *self.shared.senders.lock();
+        Arc::strong_count(&self.shared).saturating_sub(senders)
+    }
+
     /// Replace the watched value and wake every receiver.
     ///
     /// # Errors
@@ -138,21 +153,6 @@ impl<T> Sender<T> {
         drop(state);
         self.shared.signal(drained);
         old
-    }
-
-    /// Borrow the latest value.
-    #[must_use]
-    pub fn borrow(&self) -> Ref<'_, T> {
-        Ref {
-            guard: self.shared.state.lock(),
-        }
-    }
-
-    /// Live receivers: every handle on the shared state that is not a sender.
-    #[must_use]
-    pub fn receiver_count(&self) -> usize {
-        let senders = *self.shared.senders.lock();
-        Arc::strong_count(&self.shared).saturating_sub(senders)
     }
 
     /// Create a new receiver that starts from the sender's current value.

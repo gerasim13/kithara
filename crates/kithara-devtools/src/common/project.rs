@@ -323,11 +323,11 @@ pub struct FeatureInvariant {
     pub always: Vec<String>,
     /// Groups the powerset must pick from rather than leave empty.
     pub at_least_one_of: Vec<Vec<String>>,
+    /// Groups the powerset must pick at most one member of.
+    pub mutually_exclusive: Vec<Vec<String>>,
     /// Features no combination carries: a shared name that selects nothing,
     /// or one whose input no runner can produce.
     pub never: Vec<String>,
-    /// Groups the powerset must pick at most one member of.
-    pub mutually_exclusive: Vec<Vec<String>>,
 }
 
 impl FeatureInvariant {

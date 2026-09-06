@@ -26,8 +26,8 @@ impl Consts {
     const IV: [u8; 16] = [0; 16];
     const KEY: [u8; 16] = *b"0123456789abcdef";
     const SAMPLE_RATE: u32 = 44_100;
-    const SEGMENT_MILLIS: u64 = 6_000;
     const SEGMENTS: usize = 37;
+    const SEGMENT_MILLIS: u64 = 6_000;
     const TARGET_DURATION: u8 = 6;
     const TOTAL_MILLIS: u64 = 220_200;
     const VARIANTS: [VariantSpec; 4] = [
@@ -75,18 +75,18 @@ impl GaplessConsts {
 struct RssConsts;
 
 impl RssConsts {
-    const SEGMENT_MILLIS: u64 = 4_000;
     const SEGMENTS: usize = 25;
+    const SEGMENT_MILLIS: u64 = 4_000;
     const TARGET_DURATION: u8 = 4;
 }
 
 #[derive(Clone, Copy)]
 struct VariantSpec {
-    bandwidth: u64,
-    bit_rate: u64,
-    codec: AudioCodec,
     codecs: &'static str,
     label: &'static str,
+    codec: AudioCodec,
+    bandwidth: u64,
+    bit_rate: u64,
 }
 
 struct Variant {
@@ -95,8 +95,8 @@ struct Variant {
 }
 
 struct EncodedVariant {
-    spec: VariantSpec,
     track: EncodedTrack,
+    spec: VariantSpec,
 }
 
 fn encode_track(
@@ -164,7 +164,7 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
         encoded_frames
     };
     let track = encode_track(spec, total_frames, packets_per_segment);
-    EncodedVariant { spec, track }
+    EncodedVariant { track, spec }
 }
 
 fn encoded_variants() -> &'static [EncodedVariant] {
@@ -431,8 +431,8 @@ fn bundle(
     )?;
     resources.sort_by(|left, right| left.route.cmp(&right.route));
     toml::to_string(&Manifest {
-        master: "/hls/master.m3u8".to_owned(),
         resources,
+        master: "/hls/master.m3u8".to_owned(),
     })
     .map(String::into_bytes)
     .map_err(io::Error::other)

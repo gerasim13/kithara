@@ -34,14 +34,15 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self.analyzer {
-            pub(crate) fn coverage(&self) -> &Coverage;
-            pub(crate) fn intake(&self) -> Intake;
-            pub(crate) fn failure(&self) -> Option<&BeatDetectError>;
-            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
-            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
-        }
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        trailing: bool,
+    ) -> Option<DetectRequest>
+    where
+        S: HasPool<f32>,
+    {
+        self.analyzer.prepare_detection(pools, trailing)
     }
 
     pub(crate) fn push<S>(
@@ -73,17 +74,6 @@ where
     {
         self.analyzer
             .push_interleaved_deferred(pools, pcm, channels, at, opens)
-    }
-
-    pub(crate) fn prepare_detection<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        trailing: bool,
-    ) -> Option<DetectRequest>
-    where
-        S: HasPool<f32>,
-    {
-        self.analyzer.prepare_detection(pools, trailing)
     }
 
     pub(crate) fn restore<S>(
@@ -141,6 +131,16 @@ where
                 warn!(?error, "beat analysis failed; leaving the beat slot empty");
                 None
             }
+        }
+    }
+
+    delegate::delegate! {
+        to self.analyzer {
+            pub(crate) fn coverage(&self) -> &Coverage;
+            pub(crate) fn intake(&self) -> Intake;
+            pub(crate) fn failure(&self) -> Option<&BeatDetectError>;
+            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
+            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
         }
     }
 }

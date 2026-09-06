@@ -117,12 +117,12 @@ mod tests {
     struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
 
     impl SessionDispatcher<TestPools> for ImmediateSession {
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::ImmediateOffRt
+        }
+
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+            self.0.exec(cmd)
         }
     }
 

@@ -14,9 +14,9 @@ use super::{CHANNELS, OfflineSessionError};
 #[derive(Builder, Clone, Copy)]
 #[builder(state_mod(vis = "pub(crate)"))]
 pub(super) struct BackendConfig {
+    pub(super) declared_latency: Duration,
     pub(super) block_frames: NonZeroU32,
     pub(super) declick_frames: NonZeroU32,
-    pub(super) declared_latency: Duration,
     pub(super) sample_rate: NonZeroU32,
 }
 
@@ -32,8 +32,8 @@ impl Default for BackendConfig {
 }
 
 pub(super) struct OfflineBackend {
-    processor: Option<FirewheelProcessor<Self>>,
     sample_rate: NonZeroU32,
+    processor: Option<FirewheelProcessor<Self>>,
 }
 
 impl OfflineBackend {

@@ -24,9 +24,9 @@ fn empty_chunk(pools: &Pools) -> AudioChunk {
 }
 
 struct MockSource {
-    pools: Pools,
     seek: Arc<dyn SeekControl>,
     seek_obs: Arc<dyn SeekObserve>,
+    pools: Pools,
     ready: bool,
     should_panic: bool,
     chunks_to_produce: usize,

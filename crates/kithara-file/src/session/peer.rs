@@ -27,15 +27,15 @@ pub(crate) struct FilePeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    _session_cancel_wake: CancelWakerGuard,
-    _source_cancel_wake: CancelWakerGuard,
     /// The fetch this peer has in flight, if any.
     inflight: Arc<Mutex<Option<Inflight>>>,
-    inner: Weak<FileInner<S>>,
-    /// Current single-writer election handle, if this consumer owns it.
-    writer: Mutex<Option<WriterHandle<S>>>,
     session_cancel: CancelToken,
     source_cancel: CancelToken,
+    _session_cancel_wake: CancelWakerGuard,
+    _source_cancel_wake: CancelWakerGuard,
+    /// Current single-writer election handle, if this consumer owns it.
+    writer: Mutex<Option<WriterHandle<S>>>,
+    inner: Weak<FileInner<S>>,
 }
 
 /// The fetch a peer is currently streaming.
@@ -95,13 +95,13 @@ where
         let source_cancel_wake = wake_peer_on_cancel(&inner.source.cancel, inner);
         let session_cancel_wake = wake_peer_on_cancel(&session_cancel, inner);
         Self {
+            session_cancel,
+            source_cancel,
             _session_cancel_wake: session_cancel_wake,
             _source_cancel_wake: source_cancel_wake,
             inflight: Arc::new(Mutex::new(None)),
             inner: Arc::downgrade(inner),
             writer: Mutex::new(writer),
-            session_cancel,
-            source_cancel,
         }
     }
 
@@ -144,9 +144,9 @@ where
         });
 
         *self.inflight.lock() = Some(Inflight {
-            cancel: fetch_cancel.clone(),
             end_exclusive,
             start,
+            cancel: fetch_cancel.clone(),
         });
 
         let weak_for_complete = Arc::downgrade(inner);
@@ -162,8 +162,8 @@ where
                     inner.complete_fetch(
                         &epoch,
                         FetchCompletion {
-                            bytes_written: written,
                             end_exclusive,
+                            bytes_written: written,
                             error: err,
                             invalid_response: invalid_for_complete.load(Ordering::Acquire),
                             resume_from: start,
@@ -193,6 +193,69 @@ where
             .maybe_headers(headers)
             .on_complete(on_complete)
             .build()
+    }
+
+    fn drop_writer(&self) {
+        let writer = self.writer.lock().take();
+        drop(writer);
+    }
+
+    fn next_action(&self, inner: &Arc<FileInner<S>>, lease: &ResourceLease<S>) -> PeerAction<S> {
+        if inner.source.cancel.is_cancelled() || self.session_cancel.is_cancelled() {
+            self.drop_writer();
+            return PeerAction::Done;
+        }
+        if inner.observe_committed() {
+            return PeerAction::Done;
+        }
+        if !matches!(inner.asset.reader.status(), ResourceStatus::Active) {
+            return PeerAction::Done;
+        }
+
+        let Some(writer) = self.writer_snapshot(lease) else {
+            return PeerAction::Pending;
+        };
+        let total = inner.source.coord.total_bytes();
+        let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
+        let cursor = steering_cursor(&inner.source.coord);
+        let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
+            // A relinquished fetch may have landed everything; its replacement
+            // has nothing to fetch.
+            if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
+                return PeerAction::Done;
+            }
+            return PeerAction::Pending;
+        };
+        let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
+        PeerAction::Fetch(FetchPlan {
+            end_exclusive,
+            cancel: writer.cancel,
+            epoch: writer.epoch,
+            start: gap.start,
+        })
+    }
+
+    /// Whether the peer has to park on a fetch that is already running, having
+    /// first cancelled that fetch if the reader cursor sits inside its span
+    /// past the bytes it has landed. Stored bytes decide, not a write offset
+    /// the fetch publishes. See CONTEXT.md "Fetch targeting".
+    fn park_on_running_fetch(&self, inner: &Arc<FileInner<S>>) -> bool {
+        let Some((cancel, end_exclusive, start)) = self
+            .inflight
+            .lock()
+            .as_ref()
+            .map(|fetch| (fetch.cancel.clone(), fetch.end_exclusive, fetch.start))
+        else {
+            return false;
+        };
+        let frontier = landed_frontier(&inner.asset.reader, start, end_exclusive);
+        let overtaken = steering_cursor(&inner.source.coord)
+            .filter(|cursor| end_exclusive.is_none_or(|end| *cursor < end))
+            .is_some_and(|cursor| cursor > frontier);
+        if overtaken {
+            cancel.cancel();
+        }
+        true
     }
 
     /// Snapshot the current writer without dropping election state under File's lock.
@@ -243,69 +306,6 @@ where
         };
         drop(stale);
         snapshot
-    }
-
-    /// Whether the peer has to park on a fetch that is already running, having
-    /// first cancelled that fetch if the reader cursor sits inside its span
-    /// past the bytes it has landed. Stored bytes decide, not a write offset
-    /// the fetch publishes. See CONTEXT.md "Fetch targeting".
-    fn park_on_running_fetch(&self, inner: &Arc<FileInner<S>>) -> bool {
-        let Some((cancel, end_exclusive, start)) = self
-            .inflight
-            .lock()
-            .as_ref()
-            .map(|fetch| (fetch.cancel.clone(), fetch.end_exclusive, fetch.start))
-        else {
-            return false;
-        };
-        let frontier = landed_frontier(&inner.asset.reader, start, end_exclusive);
-        let overtaken = steering_cursor(&inner.source.coord)
-            .filter(|cursor| end_exclusive.is_none_or(|end| *cursor < end))
-            .is_some_and(|cursor| cursor > frontier);
-        if overtaken {
-            cancel.cancel();
-        }
-        true
-    }
-
-    fn drop_writer(&self) {
-        let writer = self.writer.lock().take();
-        drop(writer);
-    }
-
-    fn next_action(&self, inner: &Arc<FileInner<S>>, lease: &ResourceLease<S>) -> PeerAction<S> {
-        if inner.source.cancel.is_cancelled() || self.session_cancel.is_cancelled() {
-            self.drop_writer();
-            return PeerAction::Done;
-        }
-        if inner.observe_committed() {
-            return PeerAction::Done;
-        }
-        if !matches!(inner.asset.reader.status(), ResourceStatus::Active) {
-            return PeerAction::Done;
-        }
-
-        let Some(writer) = self.writer_snapshot(lease) else {
-            return PeerAction::Pending;
-        };
-        let total = inner.source.coord.total_bytes();
-        let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
-        let cursor = steering_cursor(&inner.source.coord);
-        let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
-            // A relinquished fetch may have landed everything; its replacement
-            // has nothing to fetch.
-            if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
-                return PeerAction::Done;
-            }
-            return PeerAction::Pending;
-        };
-        let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
-        PeerAction::Fetch(FetchPlan {
-            cancel: writer.cancel,
-            end_exclusive,
-            epoch: writer.epoch,
-            start: gap.start,
-        })
     }
 }
 

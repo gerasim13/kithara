@@ -227,17 +227,17 @@ mod tests {
     }
 
     fn hit(y: f32) -> Hit {
-        Hit::new(Some(Pt { x: 17.0, y }), knob())
+        Hit::new(Some(Pt { y, x: 17.0 }), knob())
     }
 
     /// This recognizer normalizes against the area, so it reads the hit and not
     /// the event; the event carries the same point so the fixture reads true.
     fn moved(y: f32) -> Input<'static> {
-        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 17.0, y })))
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { y, x: 17.0 })))
     }
 
     fn moved_on_meter(y: f32) -> Input<'static> {
-        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 6.0, y })))
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { y, x: 6.0 })))
     }
 
     fn pointer(phase: PointerPhase) -> Input<'static> {
@@ -291,7 +291,7 @@ mod tests {
     }
 
     fn on_meter(y: f32) -> Hit {
-        Hit::new(Some(Pt { x: 6.0, y }), meter())
+        Hit::new(Some(Pt { y, x: 6.0 }), meter())
     }
 
     fn seeking() -> Scalar {

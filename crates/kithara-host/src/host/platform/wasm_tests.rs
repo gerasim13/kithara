@@ -57,8 +57,8 @@ fn resident(close: Outcome, drops: Rc<RefCell<usize>>) -> Resident {
 
 struct Dispatcher {
     session: FixtureSession,
-    root: RefCell<GroupState<PlayerMember>>,
     detach: Outcome,
+    root: RefCell<GroupState<PlayerMember>>,
 }
 
 impl SessionDispatcher<TestPools> for Dispatcher {
@@ -125,9 +125,9 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
 
     let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
+        detach,
         session: FixtureSession,
         root: RefCell::new(root),
-        detach,
     });
     let drops = Rc::new(RefCell::new(0));
     let mut platform = Platform::remote();
@@ -136,10 +136,10 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<
         .expect("fixture resident registry");
     assert!(replaced.is_none());
     let host = Host {
-        id: host_id,
-        owns_session: false,
         root_view,
         dispatcher,
+        id: host_id,
+        owns_session: false,
         session: SessionRuntime::realtime(platform),
     };
     (host, resident_id, drops)

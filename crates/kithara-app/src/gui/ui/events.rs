@@ -479,8 +479,8 @@ mod tests {
             translate(
                 state,
                 UiEvent::Control {
-                    path: path.to_string(),
                     action,
+                    path: path.to_string(),
                 },
             )
         }

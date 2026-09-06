@@ -17,8 +17,8 @@ pub(crate) trait IdleReclaimer: Send + Sync {
 type ReclaimerSlots = Box<[Weak<dyn IdleReclaimer>]>;
 
 struct IdleReclaimers {
-    slots: OnceLock<ReclaimerSlots>,
     next: AtomicUsize,
+    slots: OnceLock<ReclaimerSlots>,
 }
 
 /// Hard byte limit shared by every pool in one region.
@@ -40,8 +40,8 @@ impl Percent {
 
 #[derive(Clone)]
 pub(crate) struct RegionBudget {
-    counter: BudgetCounter,
     reclaimers: Arc<IdleReclaimers>,
+    counter: BudgetCounter,
 }
 
 impl RegionBudget {
@@ -53,11 +53,6 @@ impl RegionBudget {
                 next: AtomicUsize::new(0),
             }),
         }
-    }
-
-    pub(crate) fn same_region(&self, other: &Self) -> bool {
-        self.counter.same_counter(&other.counter)
-            && Arc::ptr_eq(&self.reclaimers, &other.reclaimers)
     }
 
     pub(crate) fn install_reclaimers(
@@ -90,6 +85,11 @@ impl RegionBudget {
             }
         }
         released
+    }
+
+    pub(crate) fn same_region(&self, other: &Self) -> bool {
+        self.counter.same_counter(&other.counter)
+            && Arc::ptr_eq(&self.reclaimers, &other.reclaimers)
     }
 
     delegate::delegate! {

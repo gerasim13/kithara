@@ -92,6 +92,10 @@ mod tests {
     struct ForeignSession;
 
     impl SessionDispatcher<TestPools> for ForeignSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
@@ -100,10 +104,6 @@ mod tests {
                 ))),
                 _ => Ok(Reply::Ok),
             }
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

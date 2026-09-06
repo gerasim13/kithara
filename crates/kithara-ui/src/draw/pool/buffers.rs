@@ -43,8 +43,8 @@ pub struct PoolStats {
 /// Shared reusable storage for retained commands, paths, and text.
 #[derive(Clone, Debug)]
 pub struct DrawBuffers {
-    region: PoolRegion<DrawSchema>,
     limits: DrawPoolLimits,
+    region: PoolRegion<DrawSchema>,
 }
 
 impl DrawBuffers {
@@ -71,7 +71,16 @@ impl DrawBuffers {
             Ok(region) => region,
             Err(error) => panic!("valid draw buffer configuration failed: {error}"),
         };
-        Self { region, limits }
+        Self { limits, region }
+    }
+
+    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
+        Buffer::pooled(self.region.get::<CommandKey>())
+    }
+
+    #[must_use]
+    pub const fn limits(&self) -> DrawPoolLimits {
+        self.limits
     }
 
     /// Starts an empty command list backed by this buffer family.
@@ -91,15 +100,8 @@ impl DrawBuffers {
         path
     }
 
-    /// Copies UTF-8 content into a buffer that returns here when unused.
-    #[must_use]
-    pub fn text(&self, content: &str) -> PoolText {
-        PoolText::pooled(content, self.region.get::<TextKey>())
-    }
-
-    #[must_use]
-    pub const fn limits(&self) -> DrawPoolLimits {
-        self.limits
+    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
+        path.into_pooled(|| self.region.get::<PathKey>())
     }
 
     #[must_use]
@@ -117,12 +119,10 @@ impl DrawBuffers {
         }
     }
 
-    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
-        Buffer::pooled(self.region.get::<CommandKey>())
-    }
-
-    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
-        path.into_pooled(|| self.region.get::<PathKey>())
+    /// Copies UTF-8 content into a buffer that returns here when unused.
+    #[must_use]
+    pub fn text(&self, content: &str) -> PoolText {
+        PoolText::pooled(content, self.region.get::<TextKey>())
     }
 }
 

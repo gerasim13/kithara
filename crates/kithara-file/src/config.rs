@@ -33,8 +33,13 @@ where
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
     pub store: AssetStore<S>,
-    /// Buffer-pool facade shared with storage and fallback transport.
-    pub pools: PoolRegion<S>,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -50,6 +55,8 @@ where
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
+    /// Buffer-pool facade shared with storage and fallback transport.
+    pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -59,13 +66,6 @@ where
     /// core.
     #[builder(default = 256)]
     pub reader_event_capacity: usize,
-    /// Poll interval while a sibling `AssetStore` instance holds the
-    /// atomic-chunked tmp for this file's canonical path. The default is short
-    /// enough that the observed ~67 ms race window in
-    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
-    /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    pub tmp_claim_poll_interval: Duration,
 }
 
 impl<S> Clone for FileConfig<S>

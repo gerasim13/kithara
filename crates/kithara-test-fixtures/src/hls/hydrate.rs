@@ -27,10 +27,10 @@ pub(crate) struct KeyPolicy {
 }
 
 pub(crate) struct Options {
-    pub(crate) headers: HeaderMap,
-    pub(crate) key: Option<KeyPolicy>,
     pub(crate) refresh: &'static [&'static str],
     pub(crate) timeout: Duration,
+    pub(crate) headers: HeaderMap,
+    pub(crate) key: Option<KeyPolicy>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,16 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
+    fn content_type(self, url: &Url) -> &'static str {
+        match (self, self.extension(url)) {
+            (Self::Playlist, _) => "application/vnd.apple.mpegurl",
+            (Self::Media, "aac") => "audio/aac",
+            (Self::Media, "m4s" | "mp4" | "m4a") => "audio/mp4",
+            (Self::Media, "ts") => "video/mp2t",
+            (Self::Key | Self::Media, _) => "application/octet-stream",
+        }
+    }
+
     fn extension(self, url: &Url) -> &str {
         match self {
             Self::Key => "key",
@@ -51,16 +61,6 @@ impl Kind {
                 .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext))
                 .filter(|ext| !ext.is_empty())
                 .unwrap_or("bin"),
-        }
-    }
-
-    fn content_type(self, url: &Url) -> &'static str {
-        match (self, self.extension(url)) {
-            (Self::Playlist, _) => "application/vnd.apple.mpegurl",
-            (Self::Media, "aac") => "audio/aac",
-            (Self::Media, "m4s" | "mp4" | "m4a") => "audio/mp4",
-            (Self::Media, "ts") => "video/mp2t",
-            (Self::Key | Self::Media, _) => "application/octet-stream",
         }
     }
 }
@@ -197,14 +197,14 @@ fn fetch(
     if !status.is_success() {
         return if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             Err(HydrateError::AuthStatus {
-                url: RedactedUrl::new(url),
                 status,
+                url: RedactedUrl::new(url),
                 refresh: refresh_names(refresh),
             })
         } else {
             Err(HydrateError::Status {
-                url: RedactedUrl::new(url),
                 status,
+                url: RedactedUrl::new(url),
             })
         };
     }
@@ -220,8 +220,8 @@ fn fetch(
 fn resolve(base: &Url, reference: &str) -> Result<Url, HydrateError> {
     base.join(reference)
         .map_err(|source| HydrateError::Resolve {
-            base: RedactedUrl::new(base),
             source,
+            base: RedactedUrl::new(base),
         })
 }
 
@@ -234,8 +234,8 @@ fn insert_kind(
         && first != kind
     {
         return Err(HydrateError::ConflictingKind {
-            url: RedactedUrl::new(url),
             first,
+            url: RedactedUrl::new(url),
             second: kind,
         });
     }
@@ -357,8 +357,8 @@ fn download_resource(
     };
     let bytes = fetch(client, url, &policy.headers, deadline, options.refresh)?;
     let processed = (policy.processor)(bytes).map_err(|reason| HydrateError::Key {
-        url: RedactedUrl::new(url),
         reason,
+        url: RedactedUrl::new(url),
     })?;
     validate_key(url, processed)
 }
@@ -393,13 +393,13 @@ pub(crate) fn hydrate(
         options.refresh,
     )?;
     let master_text = std::str::from_utf8(&master_bytes).map_err(|source| HydrateError::Utf8 {
-        url: RedactedUrl::new(master_url),
         source,
+        url: RedactedUrl::new(master_url),
     })?;
     let mut master = MasterPlaylist::try_from(master_text)
         .map_err(|source| HydrateError::Master {
-            url: RedactedUrl::new(master_url),
             source,
+            url: RedactedUrl::new(master_url),
         })?
         .into_owned();
     let playlist_urls = playlist_urls(&master, master_url)?;
@@ -419,14 +419,14 @@ pub(crate) fn hydrate(
     let mut resources = BTreeMap::new();
     for (url, bytes) in playlist_bytes {
         let text = std::str::from_utf8(&bytes).map_err(|source| HydrateError::Utf8 {
-            url: RedactedUrl::new(&url),
             source,
+            url: RedactedUrl::new(&url),
         })?;
         let playlist = text
             .parse::<MediaPlaylist>()
             .map_err(|source| HydrateError::MediaPlaylist {
-                url: RedactedUrl::new(&url),
                 source,
+                url: RedactedUrl::new(&url),
             })?
             .into_owned();
         collect_media_resources(&playlist, &url, &mut resources)?;

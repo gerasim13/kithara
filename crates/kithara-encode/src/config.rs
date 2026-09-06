@@ -13,10 +13,10 @@ pub struct EncodeConfig {
     /// Container written by the container session.
     #[builder(default = ContainerFormat::Wav)]
     pub container: ContainerFormat,
-    /// Source sample rate in Hz.
-    pub sample_rate: u32,
     /// Number of interleaved source channels.
     pub channels: u16,
+    /// Source sample rate in Hz.
+    pub sample_rate: u32,
     /// PCM frames carried by each portable access unit.
     #[builder(default = 1_024)]
     pub packet_frames: usize,

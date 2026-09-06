@@ -67,16 +67,6 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self.decoder {
-            fn backend(&self) -> kithara_decode::DecoderBackend;
-        }
-    }
-
-    fn playback_resampler_backend(&self) -> &'static str {
-        self.decoder.resampler_backend_name()
-    }
-
     fn decode_init(
         &self,
         decoder: Box<dyn Decoder>,
@@ -86,10 +76,10 @@ where
         DecodeInit {
             decoder,
             decoder_factory,
+            media_info,
             decoder_backend: self.backend(),
             gapless_mode: self.decoder.gapless_mode(),
             host_sample_rate: Arc::clone(&self.host_sample_rate),
-            media_info,
             pools: self.pools.clone(),
             playback_resampler_backend: self.playback_resampler_backend(),
             // A requested host rate always resolves to a resampler plan, so a
@@ -98,9 +88,8 @@ where
         }
     }
 
-    fn resampler_config(&self) -> Option<DecoderResamplerConfig<B>> {
-        let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
-        self.decoder.build_resampler_config(target_sample_rate)
+    fn playback_resampler_backend(&self) -> &'static str {
+        self.decoder.resampler_backend_name()
     }
 
     /// Publish the initial decoder state before the source becomes registrable.
@@ -114,14 +103,14 @@ where
         duration: Option<kithara_platform::time::Duration>,
     ) {
         bus.publish(decoder_changed_event(DecoderChangedEventData {
-            backend: self.backend(),
             media_info,
             spec,
             track_info,
+            duration,
+            backend: self.backend(),
             epoch: 0,
             cause: DecoderChangeCause::Initial,
             base_offset: 0,
-            duration,
         }));
         if let Some(event) =
             decoder_gapless_event(media_info, spec, track_info, FrameDomain::Output)
@@ -145,6 +134,17 @@ where
             )
         {
             bus.publish(event);
+        }
+    }
+
+    fn resampler_config(&self) -> Option<DecoderResamplerConfig<B>> {
+        let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
+        self.decoder.build_resampler_config(target_sample_rate)
+    }
+
+    delegate::delegate! {
+        to self.decoder {
+            fn backend(&self) -> kithara_decode::DecoderBackend;
         }
     }
 }
@@ -178,20 +178,32 @@ where
 
 struct StreamSourceRegistration<S> {
     preload_gate: Arc<super::PreloadGate>,
-    ring: RingParts,
     lane: PreparedAudioLane<S>,
+    ring: RingParts,
 }
 
 struct PreparedStreamSource<S> {
     preload_gate: Arc<super::PreloadGate>,
-    ring: RingParts,
     lane: PreparedAudioLane<S>,
+    ring: RingParts,
 }
 
 impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
+    #[must_use]
+    /// Returns the unified event bus used by the stream and audio pipeline.
+    pub fn event_bus(&self) -> &EventBus {
+        AudioSession::event_bus(self)
+    }
+
+    #[must_use]
+    /// Subscribes to unified stream and audio events.
+    pub fn events(&self) -> kithara_events::EventReceiver {
+        self.event_bus().subscribe()
+    }
+
     /// Prepare a stream-backed audio reader and its concrete producer lane.
     ///
     /// # Errors
@@ -302,10 +314,10 @@ where
         let prepared = prepare_stream_audio_source(registration, &wake_stream, Arc::clone(&wake));
 
         let audio = Self::from(AudioParts {
+            emit,
             ring: RingConsumer::new(prepared.ring),
             cursor: ChunkCursor::new(&pools, initial_spec).map_err(DecodeError::backend)?,
-            emit,
-            runtime: AudioRuntime { cancel, wake },
+            runtime: AudioRuntime { wake, cancel },
             session: Session {
                 playhead,
                 seek,
@@ -320,18 +332,6 @@ where
             marker: PhantomData,
         });
         Ok(PreparedAudio::new(audio, prepared.lane))
-    }
-
-    #[must_use]
-    /// Returns the unified event bus used by the stream and audio pipeline.
-    pub fn event_bus(&self) -> &EventBus {
-        AudioSession::event_bus(self)
-    }
-
-    #[must_use]
-    /// Subscribes to unified stream and audio events.
-    pub fn events(&self) -> kithara_events::EventReceiver {
-        self.event_bus().subscribe()
     }
 }
 
@@ -356,9 +356,9 @@ fn prepare_pcm_ring(
     let ring = RingParts {
         block_on_underrun,
         consumer_wake_mode,
-        audio_rx: data_rx,
         trash_tx,
         reader_wake,
+        audio_rx: data_rx,
         epoch: Arc::clone(epoch),
     };
     (ProducerPort::new(data_tx, trash_inlet), ring)
@@ -371,8 +371,8 @@ fn prepare_stream_source_registration<S>(
 ) -> StreamSourceRegistration<S> {
     StreamSourceRegistration {
         preload_gate,
-        ring,
         lane,
+        ring,
     }
 }
 
@@ -592,10 +592,10 @@ mod tests {
         let lane = PreparedAudioLane {
             source,
             port,
+            emit,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: 1,
             playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
-            emit,
         };
 
         let registration =

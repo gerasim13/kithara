@@ -77,18 +77,11 @@ pub struct AppConfig {
     pub drm: AppDrm,
     /// App-wide shared asset store.
     pub store: AppStore,
+    /// One playback worker shared by every deck in this app session.
+    pub worker: AppWorker,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
-    /// Fixed source duration covered by one progressive analysis chunk.
-    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
-    pub analysis_chunk_seconds: NonZeroU32,
-    /// One playback worker shared by every deck in this app session.
-    pub worker: AppWorker,
-    /// Optional base runtime shared by playback, analysis, and app-owned
-    /// background dispatchers. Production supplies one; focused consumers may
-    /// let each domain worker own its standalone base.
-    pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
@@ -97,6 +90,21 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
+    /// Fixed source duration covered by one progressive analysis chunk.
+    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    pub analysis_chunk_seconds: NonZeroU32,
+    /// Optional base runtime shared by playback, analysis, and app-owned
+    /// background dispatchers. Production supplies one; focused consumers may
+    /// let each domain worker own its standalone base.
+    pub base_worker: Option<Worker>,
+    /// Complete live-broadcast construction config for this app session.
+    pub broadcast: Option<AppBroadcastConfig>,
+    /// Where this application reads its UI package from. What is found there
+    /// is laid over the documents this build carries, so the interface can be
+    /// changed without a rebuild. A path that does not exist means no package
+    /// was laid out and the build's own documents draw; `None` means this
+    /// configuration names no package at all.
+    pub ui_package: Option<PathBuf>,
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
@@ -116,21 +124,13 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Complete live-broadcast construction config for this app session.
-    pub broadcast: Option<AppBroadcastConfig>,
+    /// Band count of the EQ layout every deck's player graph is built with.
+    #[builder(default = 3)]
+    pub eq_bands: usize,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]
     pub waveform_max_buckets: usize,
-    /// Band count of the EQ layout every deck's player graph is built with.
-    #[builder(default = 3)]
-    pub eq_bands: usize,
-    /// Where this application reads its UI package from. What is found there
-    /// is laid over the documents this build carries, so the interface can be
-    /// changed without a rebuild. A path that does not exist means no package
-    /// was laid out and the build's own documents draw; `None` means this
-    /// configuration names no package at all.
-    pub ui_package: Option<PathBuf>,
 }
 
 fn default_tracks() -> Vec<String> {

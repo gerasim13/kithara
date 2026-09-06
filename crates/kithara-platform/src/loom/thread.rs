@@ -86,7 +86,7 @@ where
         .name(name.into())
         .spawn(tracked)
     {
-        Ok(inner) => JoinHandle { finished, inner },
+        Ok(inner) => JoinHandle { inner, finished },
         Err(error) => panic!("failed to spawn named loom thread: {error}"),
     }
 }

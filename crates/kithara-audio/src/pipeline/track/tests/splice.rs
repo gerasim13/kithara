@@ -520,12 +520,12 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let decode = DecodeInit {
         decoder_factory,
         host_sample_rate,
+        pools,
         decoder: initial_decoder,
         decoder_backend: backend,
         gapless_mode: GaplessMode::Disabled,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",
-        pools,
         recreate_on_host_rate_change: false,
     }
     .into_parts(None, shared_stream.seek_observe().epoch())

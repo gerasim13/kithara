@@ -182,27 +182,6 @@ where
         Some(state)
     }
 
-    /// One flow's children, split into the layout each asks for and the node
-    /// it is, with the state of every block among them collected on the way.
-    fn flow(
-        &self,
-        children: Vec<GroupMount<MasonryNode<Action>>>,
-        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
-    ) -> (Vec<ChildLayout>, Vec<MasonryNode<Action>>) {
-        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
-        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
-        for child in children {
-            let block = self.block(child.block, blocks);
-            layouts.push(
-                ChildLayout::natural(child.output.declared(), child.minimum)
-                    .within(child.band)
-                    .blocked(block),
-            );
-            nodes.push(child.output);
-        }
-        (layouts, nodes)
-    }
-
     /// A leaf drawing content this toolkit does not own.
     ///
     /// The dressing is taken here rather than at paint because the leaf
@@ -228,6 +207,27 @@ where
             None,
             None,
         )
+    }
+
+    /// One flow's children, split into the layout each asks for and the node
+    /// it is, with the state of every block among them collected on the way.
+    fn flow(
+        &self,
+        children: Vec<GroupMount<MasonryNode<Action>>>,
+        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+    ) -> (Vec<ChildLayout>, Vec<MasonryNode<Action>>) {
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
+        for child in children {
+            let block = self.block(child.block, blocks);
+            layouts.push(
+                ChildLayout::natural(child.output.declared(), child.minimum)
+                    .within(child.band)
+                    .blocked(block),
+            );
+            nodes.push(child.output);
+        }
+        (layouts, nodes)
     }
 
     /// One module's chrome around the content the walk already produced.
@@ -404,11 +404,11 @@ where
         let content = style.cased(content);
         let mut output = MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
-                align: spec.align,
                 content,
                 role,
                 padding_x,
                 color,
+                align: spec.align,
                 lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),

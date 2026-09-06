@@ -113,10 +113,10 @@ fn check_view(
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
     let wrong = |detail: String| UiDocError::BindingDirection {
+        detail,
         origin: origin.clone(),
         id: id.0.clone(),
         path: path.to_owned(),
-        detail,
     };
     let wanted = if matches!(side, BindingSide::Read) {
         ValueKind::Bool

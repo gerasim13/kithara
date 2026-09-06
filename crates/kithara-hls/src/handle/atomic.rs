@@ -42,9 +42,9 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     scope: AssetScope<S>,
-    pools: PoolRegion<S>,
     downloader: PeerHandle,
     _marker: PhantomData<R>,
+    pools: PoolRegion<S>,
 }
 
 impl<R, S> Clone for AtomicFetch<R, S>

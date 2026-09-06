@@ -19,11 +19,11 @@ impl Consts {
     const RATE_44K1: u32 = 44_100;
     const RATE_48K: u32 = 48_000;
     const STEREO: u16 = 2;
+    /// The sample count occupies the low 36 bits of that field.
+    const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
     /// Offset of STREAMINFO's packed rate/channels/depth/sample-count field:
     /// `fLaC` and the metablock header, then ten bytes into the body.
     const STREAMINFO_COUNT_OFFSET: usize = 18;
-    /// The sample count occupies the low 36 bits of that field.
-    const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
 }
 
 /// Renders the waveform and hands it to one of the byte encoders.
@@ -37,9 +37,9 @@ fn encode(
 ) -> Vec<u8> {
     let pcm = Pcm::new(sample_rate, channels, total_frames, wave);
     EncoderFactory::encode_bytes(&BytesEncodeRequest {
-        pcm: &pcm,
         target,
         bit_rate,
+        pcm: &pcm,
     })
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: {target:?} encode failed: {error}"))
     .bytes

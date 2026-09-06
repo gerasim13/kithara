@@ -12,6 +12,15 @@ pub struct BufferRing<B> {
 }
 
 impl<B> BufferRing<B> {
+    /// Fixed number of elements in the backing slice.
+    #[must_use]
+    pub fn capacity<T>(&self) -> usize
+    where
+        B: Deref<Target = [T]>,
+    {
+        self.buffer.len()
+    }
+
     /// Wrap a buffer whose readable values occupy its prefix.
     ///
     /// # Errors
@@ -26,30 +35,27 @@ impl<B> BufferRing<B> {
         }
         Ok(Self {
             buffer,
-            head: 0,
             len,
+            head: 0,
         })
     }
 
-    /// Number of readable elements.
+    /// Return the owning pooled buffer.
     #[must_use]
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Fixed number of elements in the backing slice.
-    #[must_use]
-    pub fn capacity<T>(&self) -> usize
-    where
-        B: Deref<Target = [T]>,
-    {
-        self.buffer.len()
+    pub fn into_inner(self) -> B {
+        self.buffer
     }
 
     /// Whether no readable elements remain.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Number of readable elements.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
     }
 
     /// Copy and consume the next elements without shifting the retained tail.
@@ -98,12 +104,6 @@ impl<B> BufferRing<B> {
         self.buffer[..input.len() - first].copy_from_slice(&input[first..]);
         self.len += input.len();
         true
-    }
-
-    /// Return the owning pooled buffer.
-    #[must_use]
-    pub fn into_inner(self) -> B {
-        self.buffer
     }
 }
 

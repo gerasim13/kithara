@@ -18,18 +18,9 @@ pub(crate) struct OfflineSessionClient<S> {
 impl<S> OfflineSessionClient<S> {
     pub(super) fn new(cmd_tx: mpsc::Sender<OfflineMsg<S>>, control: TaskControl) -> Self {
         Self {
-            cmd_tx: Mutex::new(cmd_tx),
             control,
+            cmd_tx: Mutex::new(cmd_tx),
         }
-    }
-
-    fn send(&self, message: OfflineMsg<S>) -> Result<(), Box<OfflineMsg<S>>> {
-        self.cmd_tx
-            .lock()
-            .send(message)
-            .map_err(|error| Box::new(error.0))?;
-        self.control.wake();
-        Ok(())
     }
 
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
@@ -80,9 +71,22 @@ impl<S> OfflineSessionClient<S> {
             .recv()
             .map_err(|_| OfflineSessionError::SessionGone)?
     }
+
+    fn send(&self, message: OfflineMsg<S>) -> Result<(), Box<OfflineMsg<S>>> {
+        self.cmd_tx
+            .lock()
+            .send(message)
+            .map_err(|error| Box::new(error.0))?;
+        self.control.wake();
+        Ok(())
+    }
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -91,10 +95,6 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> 
                 "unexpected offline Host reply for player command".into(),
             )),
         }
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

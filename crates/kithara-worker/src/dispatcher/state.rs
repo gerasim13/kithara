@@ -60,11 +60,11 @@ pub(super) enum Command {
 }
 
 pub(super) struct Registration {
-    pub(super) factory: TaskFactory,
     pub(super) cancel: CancelGroup,
     pub(super) token: CancelToken,
     pub(super) priority: Priority,
     pub(super) control: TaskControl,
+    pub(super) factory: TaskFactory,
     pub(super) id: TaskId,
     pub(super) cancel_guards: Vec<CancelWakerGuard>,
 }

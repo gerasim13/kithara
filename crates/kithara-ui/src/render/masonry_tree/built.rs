@@ -73,10 +73,6 @@ pub(crate) struct PopoverRegistration {
     pub(crate) flag: Binding,
     pub(crate) dismiss: Rc<dyn Fn() -> HostAction>,
     pub(crate) state: Rc<PopoverState>,
-    /// The node the surface opens from.
-    pub(crate) anchor: WidgetId,
-    /// The layer the surface is drawn in.
-    pub(crate) layer: WidgetId,
     /// The engine-driven controls the open surface answers for: the anchor it
     /// opens from, and everything the surface itself holds.
     ///
@@ -86,6 +82,10 @@ pub(crate) struct PopoverRegistration {
     /// The anchor is one of them because a surface is closed by the control
     /// that opened it, and a surface wide enough covers that control too.
     pub(crate) controls: Vec<WidgetId>,
+    /// The node the surface opens from.
+    pub(crate) anchor: WidgetId,
+    /// The layer the surface is drawn in.
+    pub(crate) layer: WidgetId,
 }
 
 /// The window layer one tree mounted, and what a root needs to keep it in step
@@ -363,19 +363,6 @@ impl<Action> MasonryNode<Action> {
         area
     }
 
-    /// Remembers the flag this node is dressed by, and the two faces it chooses
-    /// between where the faces are the node's own rather than its leaf's, so the
-    /// root can read the flag again without building the tree afresh.
-    pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {
-        if let Some(faces) = faces {
-            self.widget.widget.set_faces(faces);
-        }
-        self.watched.push(Watched::Lit {
-            id: self.widget.id(),
-            flag,
-        });
-    }
-
     /// Remembers that this node hides the blocks among its own children, so
     /// the root can read them again and lay this node out when one changes.
     pub(crate) fn hides(&mut self, blocks: Vec<(Binding, Rc<BlockState>)>) {
@@ -408,6 +395,19 @@ impl<Action> MasonryNode<Action> {
         }
         self.engines.push(Rc::clone(&engine));
         self.widget.widget.set_engine(engine);
+    }
+
+    /// Remembers the flag this node is dressed by, and the two faces it chooses
+    /// between where the faces are the node's own rather than its leaf's, so the
+    /// root can read the flag again without building the tree afresh.
+    pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {
+        if let Some(faces) = faces {
+            self.widget.widget.set_faces(faces);
+        }
+        self.watched.push(Watched::Lit {
+            flag,
+            id: self.widget.id(),
+        });
     }
 
     /// Rounds the corners of this node's own box that the layout says are the

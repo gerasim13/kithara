@@ -420,7 +420,7 @@ mod dragged {
     fn mounted(value: f32) -> Painted<Knob> {
         let skin = builtin::skin();
         let control = mount::Knob::builder().build();
-        let data = Captioned { label: None, value };
+        let data = Captioned { value, label: None };
         let grip = control.grip(skin, &data);
         Painted::new(control.painter(skin), data, skin).interactive(
             grip,
@@ -447,19 +447,19 @@ mod dragged {
     }
 
     fn at(y: f32) -> Hit {
-        Hit::new(Some(Pt { x: 20.0, y }), area())
+        Hit::new(Some(Pt { y, x: 20.0 }), area())
     }
 
     fn down(y: f32) -> Input<'static> {
-        Input::Pointer(mouse(PointerPhase::Down, Some(Pt { x: 20.0, y })))
+        Input::Pointer(mouse(PointerPhase::Down, Some(Pt { y, x: 20.0 })))
     }
 
     fn moved(y: f32) -> Input<'static> {
-        Input::Pointer(mouse(PointerPhase::Move, Some(Pt { x: 20.0, y })))
+        Input::Pointer(mouse(PointerPhase::Move, Some(Pt { y, x: 20.0 })))
     }
 
     fn up(y: f32) -> Input<'static> {
-        Input::Pointer(mouse(PointerPhase::Up, Some(Pt { x: 20.0, y })))
+        Input::Pointer(mouse(PointerPhase::Up, Some(Pt { y, x: 20.0 })))
     }
 }
 

@@ -36,19 +36,20 @@ pub(super) struct Gallery {
 }
 
 impl App for Gallery {
-    delegate::delegate! {
-        to self.reads {
-            fn skin(&self) -> &Skin;
-            fn tick(&mut self);
-        }
-    }
-
     fn document(&self) -> &str {
         sections::entry()
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(&self.reads)
+    }
+
+    /// The page on screen is the screen's own to say, so the feed behind a
+    /// page starts and stops with the page rather than with a press.
+    fn turned(&mut self, view: &ViewState) {
+        if let Some(page) = view.page(sections::PAGE).and_then(sections::named) {
+            self.reads.show(page);
+        }
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -62,11 +63,10 @@ impl App for Gallery {
         }
     }
 
-    /// The page on screen is the screen's own to say, so the feed behind a
-    /// page starts and stops with the page rather than with a press.
-    fn turned(&mut self, view: &ViewState) {
-        if let Some(page) = view.page(sections::PAGE).and_then(sections::named) {
-            self.reads.show(page);
+    delegate::delegate! {
+        to self.reads {
+            fn skin(&self) -> &Skin;
+            fn tick(&mut self);
         }
     }
 }

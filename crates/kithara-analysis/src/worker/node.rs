@@ -38,17 +38,17 @@ where
     B: ResamplerBackend,
 {
     builder: AnalyzerBuilder<B, S>,
+    detector_state: DetectorState,
     chunk_seconds: NonZeroU32,
+    publish_seconds: NonZeroU32,
+    producer_drain_limit: NonZeroUsize,
     _completion: Option<Sender<()>>,
-    completed: Receiver<DetectDone>,
-    completion: Sender<DetectDone>,
-    context: TaskContext,
     current: Option<AnalysisTask<B, S>>,
     detector: Option<Detector>,
-    detector_state: DetectorState,
+    completed: Receiver<DetectDone>,
     jobs: Receiver<Job>,
-    producer_drain_limit: NonZeroUsize,
-    publish_seconds: NonZeroU32,
+    completion: Sender<DetectDone>,
+    context: TaskContext,
 }
 
 impl<B, S> AnalysisNode<B, S>
@@ -76,38 +76,6 @@ where
         )
     }
 
-    pub(crate) fn with_completion(
-        mut builder: AnalyzerBuilder<B, S>,
-        jobs: Receiver<Job>,
-        context: TaskContext,
-        chunk_seconds: NonZeroU32,
-        producer_drain_limit: NonZeroUsize,
-        publish_seconds: NonZeroU32,
-        task_completion: Option<Sender<()>>,
-    ) -> Self {
-        let detector = builder.take_detector();
-        let detector_state = if detector.is_some() {
-            DetectorState::Idle
-        } else {
-            DetectorState::Disabled
-        };
-        let (completion, completed) = mpsc::channel();
-        Self {
-            builder,
-            chunk_seconds,
-            _completion: task_completion,
-            completed,
-            completion,
-            context,
-            current: None,
-            detector,
-            detector_state,
-            jobs,
-            producer_drain_limit,
-            publish_seconds,
-        }
-    }
-
     fn accept_completion(&mut self) -> bool {
         let done = match self.completed.try_recv() {
             Ok(done) => done,
@@ -125,44 +93,40 @@ where
         true
     }
 
-    fn submit_detection(&mut self, job: DetectJob) -> TickResult {
-        let completion = self.completion.clone();
-        let Some(detector) = self.detector.clone() else {
-            self.detector_state = DetectorState::Disabled;
-            return TickResult::Progress;
-        };
-        match self.context.submit_compute(job, move |compute, job| {
-            let cancel = compute.cancel_group().clone() | job.pass_cancel.clone();
-            let output = if cancel.is_cancelled() {
-                None
-            } else {
-                let output = detect(job.request, &detector);
-                (!cancel.is_cancelled()).then_some(output)
-            };
-            completion.send(DetectDone { output }).ok();
-        }) {
-            Ok(()) => {
-                self.detector_state = DetectorState::Running;
-                TickResult::Progress
+    fn accept_job(&mut self) -> TickResult {
+        match self.jobs.try_recv() {
+            Ok(job) => {
+                let task = match AnalysisTask::new(
+                    job,
+                    &self.builder,
+                    self.chunk_seconds,
+                    self.producer_drain_limit,
+                    self.publish_seconds,
+                ) {
+                    Ok(task) => task,
+                    Err(error) => {
+                        warn!(?error, "analysis: resume checkpoint rejected");
+                        return TickResult::Progress;
+                    }
+                };
+                self.current = Some(task);
+                self.tick_current()
             }
-            Err(rejected) if rejected.reason() == ComputeSubmitError::Saturated => {
-                self.detector_state = DetectorState::Retry(rejected.recover_payload());
-                TickResult::Backpressured
-            }
-            Err(rejected) => {
-                let reason = rejected.reason();
-                drop(rejected.recover_payload());
-                self.detector_state = DetectorState::Unavailable;
-                if let Some(current) = &mut self.current {
-                    current.fail_compute_unavailable();
-                }
-                debug_assert!(matches!(
-                    reason,
-                    ComputeSubmitError::Cancelled | ComputeSubmitError::Unavailable
-                ));
-                TickResult::Progress
-            }
+            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
+            Err(TryRecvError::Disconnected) => TickResult::Done,
         }
+    }
+
+    fn clear_finished(&mut self) {
+        if !self.current.as_ref().is_some_and(AnalysisTask::is_done) {
+            return;
+        }
+        self.current = None;
+        let state = std::mem::replace(&mut self.detector_state, DetectorState::Disabled);
+        self.detector_state = match state {
+            DetectorState::Retry(_) => DetectorState::Idle,
+            state => state,
+        };
     }
 
     fn drive_detection(&mut self) -> Option<TickResult> {
@@ -220,16 +184,44 @@ where
         }
     }
 
-    fn clear_finished(&mut self) {
-        if !self.current.as_ref().is_some_and(AnalysisTask::is_done) {
-            return;
-        }
-        self.current = None;
-        let state = std::mem::replace(&mut self.detector_state, DetectorState::Disabled);
-        self.detector_state = match state {
-            DetectorState::Retry(_) => DetectorState::Idle,
-            state => state,
+    fn submit_detection(&mut self, job: DetectJob) -> TickResult {
+        let completion = self.completion.clone();
+        let Some(detector) = self.detector.clone() else {
+            self.detector_state = DetectorState::Disabled;
+            return TickResult::Progress;
         };
+        match self.context.submit_compute(job, move |compute, job| {
+            let cancel = compute.cancel_group().clone() | job.pass_cancel.clone();
+            let output = if cancel.is_cancelled() {
+                None
+            } else {
+                let output = detect(job.request, &detector);
+                (!cancel.is_cancelled()).then_some(output)
+            };
+            completion.send(DetectDone { output }).ok();
+        }) {
+            Ok(()) => {
+                self.detector_state = DetectorState::Running;
+                TickResult::Progress
+            }
+            Err(rejected) if rejected.reason() == ComputeSubmitError::Saturated => {
+                self.detector_state = DetectorState::Retry(rejected.recover_payload());
+                TickResult::Backpressured
+            }
+            Err(rejected) => {
+                let reason = rejected.reason();
+                drop(rejected.recover_payload());
+                self.detector_state = DetectorState::Unavailable;
+                if let Some(current) = &mut self.current {
+                    current.fail_compute_unavailable();
+                }
+                debug_assert!(matches!(
+                    reason,
+                    ComputeSubmitError::Cancelled | ComputeSubmitError::Unavailable
+                ));
+                TickResult::Progress
+            }
+        }
     }
 
     fn tick_current(&mut self) -> TickResult {
@@ -260,27 +252,35 @@ where
         }
     }
 
-    fn accept_job(&mut self) -> TickResult {
-        match self.jobs.try_recv() {
-            Ok(job) => {
-                let task = match AnalysisTask::new(
-                    job,
-                    &self.builder,
-                    self.chunk_seconds,
-                    self.producer_drain_limit,
-                    self.publish_seconds,
-                ) {
-                    Ok(task) => task,
-                    Err(error) => {
-                        warn!(?error, "analysis: resume checkpoint rejected");
-                        return TickResult::Progress;
-                    }
-                };
-                self.current = Some(task);
-                self.tick_current()
-            }
-            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
-            Err(TryRecvError::Disconnected) => TickResult::Done,
+    pub(crate) fn with_completion(
+        mut builder: AnalyzerBuilder<B, S>,
+        jobs: Receiver<Job>,
+        context: TaskContext,
+        chunk_seconds: NonZeroU32,
+        producer_drain_limit: NonZeroUsize,
+        publish_seconds: NonZeroU32,
+        task_completion: Option<Sender<()>>,
+    ) -> Self {
+        let detector = builder.take_detector();
+        let detector_state = if detector.is_some() {
+            DetectorState::Idle
+        } else {
+            DetectorState::Disabled
+        };
+        let (completion, completed) = mpsc::channel();
+        Self {
+            builder,
+            chunk_seconds,
+            completed,
+            completion,
+            context,
+            detector,
+            detector_state,
+            jobs,
+            producer_drain_limit,
+            publish_seconds,
+            _completion: task_completion,
+            current: None,
         }
     }
 }
@@ -290,6 +290,10 @@ where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    fn on_cancel(&mut self) {
+        self.current = None;
+    }
+
     fn tick(&mut self) -> TickResult {
         let completed = self.accept_completion();
         let result = if self.current.is_some() {
@@ -302,9 +306,5 @@ where
         } else {
             result
         }
-    }
-
-    fn on_cancel(&mut self) {
-        self.current = None;
     }
 }

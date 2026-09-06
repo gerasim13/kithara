@@ -68,6 +68,8 @@ impl UiState {
             tracks,
             current_track_index,
             track_name,
+            beat_marks,
+            downbeat_marks,
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
             selected_variant: None,
@@ -78,8 +80,6 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
@@ -92,6 +92,8 @@ impl UiState {
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
         Self {
+            beat_marks,
+            downbeat_marks,
             current_track_index: None,
             selected_variant: None,
             current_variant: None,
@@ -100,8 +102,6 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
@@ -197,13 +197,13 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct StateController {
-    beat_clock: Mutex<BeatClockState>,
     #[field(get, deref = false)]
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
+    beat_clock: Mutex<BeatClockState>,
 }
 
 impl StateController {
@@ -414,8 +414,8 @@ pub(crate) async fn listen(
     analysis: AnalysisHandle,
 ) {
     let mut held = HeldAnalysis {
-        queue: queue.clone(),
         analysis,
+        queue: queue.clone(),
         rx: None,
     };
     held.follow(&state).await;
@@ -455,12 +455,27 @@ pub(crate) async fn listen(
 }
 
 struct HeldAnalysis {
-    queue: AppQueueControl,
     analysis: AnalysisHandle,
+    queue: AppQueueControl,
     rx: Option<watch::Receiver<Option<AnalysisProgress>>>,
 }
 
 impl HeldAnalysis {
+    fn axis(&self) -> Option<NonZeroU32> {
+        let axis = NonZeroU32::new(self.queue.sample_rate());
+        if axis.is_none() {
+            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
+        }
+        axis
+    }
+
+    async fn changed(&mut self) -> bool {
+        match &mut self.rx {
+            Some(rx) => rx.changed().await.is_ok(),
+            None => std::future::pending().await,
+        }
+    }
+
     async fn follow(&mut self, state: &Mutex<UiState>) {
         let held = {
             let st = state.lock();
@@ -480,28 +495,6 @@ impl HeldAnalysis {
         self.mirror(state, true);
     }
 
-    async fn warm(&self, state: &Mutex<UiState>) {
-        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
-        if let Some(axis) = self.axis() {
-            self.analysis.warm(self.queue.clone(), ids, axis).await;
-        }
-    }
-
-    fn axis(&self) -> Option<NonZeroU32> {
-        let axis = NonZeroU32::new(self.queue.sample_rate());
-        if axis.is_none() {
-            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
-        }
-        axis
-    }
-
-    async fn changed(&mut self) -> bool {
-        match &mut self.rx {
-            Some(rx) => rx.changed().await.is_ok(),
-            None => std::future::pending().await,
-        }
-    }
-
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
         let next = self
             .rx
@@ -513,6 +506,13 @@ impl HeldAnalysis {
         let mut st = state.lock();
         if !same_revision(st.analysis.as_ref(), next.as_ref()) {
             st.set_analysis(next);
+        }
+    }
+
+    async fn warm(&self, state: &Mutex<UiState>) {
+        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
+        if let Some(axis) = self.axis() {
+            self.analysis.warm(self.queue.clone(), ids, axis).await;
         }
     }
 }

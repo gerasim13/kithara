@@ -6,9 +6,9 @@ use crate::signal::{Pcm, Wave, header, wav, wav_from_fn};
 struct Consts;
 
 impl Consts {
+    const BEATS_PER_BAR: usize = 4;
     const BEAT_MARKER_PEAK: i16 = 22_000;
     const BEAT_TONE_PEAK: i16 = 10_000;
-    const BEATS_PER_BAR: usize = 4;
     const CHANNELS: u16 = 2;
     const DOWNBEAT_MARKER_PEAK: i16 = 28_000;
     const DOWNBEAT_TONE_PEAK: i16 = 14_000;

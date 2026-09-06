@@ -213,7 +213,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
             let result = replace_track(
                 queue,
                 &build_state.borrow(),
-                ReplaceTrackArgs { index, id, url },
+                ReplaceTrackArgs { url, id, index },
             );
             crate::web::interop::send_reply(request_id, result);
         }
@@ -253,10 +253,10 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
             register_key_rule(
                 &mut build_state.borrow_mut(),
                 SetupHlsAesArgs {
-                    salt,
-                    domains,
                     headers,
                     query_params,
+                    salt,
+                    domains,
                 },
             );
         }
