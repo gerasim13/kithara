@@ -346,20 +346,47 @@ fn check_field_block(
 struct FieldKey {
     name: String,
     type_key: String,
-    builder_bucket: usize,
+    builder_bucket: BuilderRole,
     idx: usize,
     vis_bucket: usize,
 }
 
 fn cmp_field_key(a: &FieldKey, b: &FieldKey) -> Ordering {
-    a.builder_bucket
-        .cmp(&b.builder_bucket)
-        .then_with(|| a.vis_bucket.cmp(&b.vis_bucket))
-        .then_with(|| a.type_key.cmp(&b.type_key))
-        .then_with(|| a.name.cmp(&b.name))
+    a.builder_bucket.cmp(&b.builder_bucket).then_with(|| {
+        if a.builder_bucket.is_positional() {
+            a.idx.cmp(&b.idx)
+        } else {
+            a.vis_bucket
+                .cmp(&b.vis_bucket)
+                .then_with(|| a.type_key.cmp(&b.type_key))
+                .then_with(|| a.name.cmp(&b.name))
+        }
+    })
 }
 
-fn builder_bucket(attrs: &[Attribute]) -> usize {
+/// What a `bon` builder makes of a field, in the order the roles appear in the
+/// generated API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BuilderRole {
+    /// An argument of the builder's starting function.
+    StartFn,
+    /// A builder-private field, set by neither caller nor setter.
+    Field,
+    /// An argument of the builder's finishing function.
+    FinishFn,
+    /// A field the builder gives a setter of its own.
+    Setter,
+}
+
+impl BuilderRole {
+    /// Whether the role puts the field in a function signature, where the
+    /// declaration order is the call order and sorting would change the API.
+    const fn is_positional(self) -> bool {
+        matches!(self, Self::StartFn | Self::FinishFn)
+    }
+}
+
+fn builder_bucket(attrs: &[Attribute]) -> BuilderRole {
     attrs
         .iter()
         .filter(|attr| attr.path().is_ident("builder"))
@@ -369,16 +396,16 @@ fn builder_bucket(attrs: &[Attribute]) -> usize {
                     return None;
                 };
                 match ident.to_string().as_str() {
-                    "start_fn" => Some(0),
-                    "field" => Some(1),
-                    "finish_fn" => Some(2),
+                    "start_fn" => Some(BuilderRole::StartFn),
+                    "field" => Some(BuilderRole::Field),
+                    "finish_fn" => Some(BuilderRole::FinishFn),
                     _ => None,
                 }
             }),
             _ => None,
         })
         .min()
-        .unwrap_or(3)
+        .unwrap_or(BuilderRole::Setter)
 }
 
 /// Map each visibility token in config to its bucket index.
@@ -556,6 +583,27 @@ struct S {
         assert!(start < field && field < finish && finish < other, "{out}");
     }
 
+    /// `#[builder(start_fn)]` fields are the starting function's parameters, so
+    /// their declaration order is the call order every caller already wrote.
+    #[test]
+    fn positional_builder_fields_keep_their_declared_order() {
+        let src = "\
+struct S {
+    #[builder(start_fn)]
+    worker: Worker,
+    #[builder(start_fn)]
+    pools: PoolRegion,
+    #[builder(finish_fn)]
+    zone: Zone,
+    #[builder(finish_fn)]
+    area: Area,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(out, src, "a positional signature must survive the fix");
+    }
+
     #[test]
     fn doc_comments_travel_with_field() {
         let src = "\
@@ -713,6 +761,25 @@ struct S {
             1,
             "uniform `#[cfg(test)]` on every field is safe to reorder — must still flag"
         );
+    }
+
+    /// The starting and finishing functions take their parameters in
+    /// declaration order, so a caller reads that order, not a sorted one.
+    #[test]
+    fn a_positional_builder_signature_is_accepted_in_its_declared_order() {
+        let src = "\
+struct S {
+    #[builder(start_fn)]
+    worker: Worker,
+    #[builder(start_fn)]
+    pools: PoolRegion,
+    #[builder(finish_fn)]
+    zone: Zone,
+    #[builder(finish_fn)]
+    area: Area,
+}
+";
+        assert!(detect(src).is_empty(), "{:?}", detect(src));
     }
 
     #[test]
