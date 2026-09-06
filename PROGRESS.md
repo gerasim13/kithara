@@ -8,13 +8,11 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- The Windows guest asks the machine's profile where `qemu` is. Both binaries
-  it launches were absolute paths into one Homebrew prefix, so a host whose
-  Homebrew answers elsewhere could not start the guest, and the error named
-  neither `qemu` nor the prefix. `CiHost::brew_root` already owns that answer
-  and fifteen other tools already go through it. The guard that kept the build
-  configuration from writing a prefix down now reads the executor's sources as
-  well, so the class cannot come back through Rust.
+- Where the machine keeps its tools is asked, not written down, and asking is
+  cheap. `CiHost::brew_root` answers for the executor, `qemu` included. The
+  root `justfile` ran `brew --prefix`, which `just` evaluates before it knows
+  the recipe, so every nested invocation a test drove waited on it; it reads
+  the prefix off where `brew` sits now. A guard holds each half.
 
 - Mac CI host cleanup. The host spent a day refusing jobs for space while its
   hourly pass was gone: the agent hung inside `opendir` on a volume that had
