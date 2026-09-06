@@ -143,10 +143,13 @@ fn main() -> AppResult {
         net.is_insecure = true;
     }
     let should_accept_invalid_certs = net.is_insecure;
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
-    );
-    let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
+    let mut downloader_config =
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build();
+    downloader_config.apply(document.downloader());
+    let downloader = Downloader::new(downloader_config);
+    let mut flush_policy = FlushPolicy::default();
+    flush_policy.apply(document.flush());
+    let flush_hub = FlushHub::new(shutdown.child(), flush_policy);
     let mut store_config = AppStore::builder(pools)
         .cancel(shutdown.child())
         .flush_hub(flush_hub)
@@ -154,8 +157,10 @@ fn main() -> AppResult {
         .into_config();
     store_config.apply(document.assets_store());
     let store = AppStore::open(store_config);
-    // `eprintln!`, not `tracing::error!`: tracing is up by now, but a startup
-    // refusal must not depend on `RUST_LOG` to be seen.
+    // `eprintln!`, not `tracing::error!`: tracing is up by now, but
+    // `init_tracing` points the subscriber at `KITHARA_LOG_FILE`, so a startup
+    // refusal logged through it lands in `app.log` and the terminal that ran
+    // the binary shows nothing before the exit code.
     let drm_policy = match document.drm_policy() {
         Ok(policy) => policy,
         Err(error) => {

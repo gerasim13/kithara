@@ -14,7 +14,7 @@ use kithara::ui::{
 };
 use kithara::{
     analysis::{BeatAnalysisConfig, BeatAnalysisConfigPatchError},
-    assets::{AssetLayoutRegistry, AssetStoreConfigPatch, StorageBackend},
+    assets::{AssetLayoutRegistry, AssetStoreConfigPatch, FlushPolicyPatch, StorageBackend},
     audio::AudioConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
@@ -23,6 +23,7 @@ use kithara::{
         PlayWorkerConfigPatch, PlaybackResamplerBackend, PlayerConfigPatch, policy::DomainKeyPolicy,
     },
     queue::QueueConfigPatch,
+    stream::dl::DownloaderConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
@@ -312,6 +313,22 @@ impl Config {
         self.document.queue.clone()
     }
 
+    /// Knobs the document sets on the shared downloader, the ABR controller
+    /// it owns among them: `abr_settings` is a nested patch, so
+    /// `downloader.abr_settings` is the document's only spelling for
+    /// `kithara-abr`'s configuration. Applied at the construction site in
+    /// `main`, where the HTTP client the downloader is built around exists.
+    #[must_use]
+    pub fn downloader(&self) -> DownloaderConfigPatch {
+        self.document.downloader.clone()
+    }
+
+    /// Knobs the document sets on the asset store's flush policy.
+    #[must_use]
+    pub fn flush(&self) -> FlushPolicyPatch {
+        self.document.flush.clone()
+    }
+
     /// Knobs the document sets on this session's live broadcast. Applied at
     /// the construction site in `main`, where the worker and pools a
     /// `BroadcastConfig` is built from exist.
@@ -383,9 +400,11 @@ mod tests {
     use std::{fs, num::NonZeroUsize, path::PathBuf};
 
     use kithara::{
+        assets::FlushPolicy,
         hls::SizeProbeMethod,
         host::HostConfig,
         net::{Compression, NetOptions},
+        platform::time::Duration,
         worker::ComputePool,
     };
     use tempfile::TempDir;
@@ -525,6 +544,56 @@ mod tests {
         assert!(
             config.queue().max_history_size.is_none(),
             "a knob the document does not name reaches the app empty"
+        );
+    }
+
+    /// The downloader's own keys and the ABR controller nested under them both
+    /// survive the load pipeline. `DownloaderConfig`'s fields are `pub(crate)`,
+    /// so the application only sees what the accessor hands it — that the patch
+    /// then writes through, nested settings included, is pinned inside
+    /// `kithara-stream` by `a_patch_writes_only_the_concurrency_it_names` and
+    /// `a_nested_abr_patch_reaches_the_downloader`.
+    #[kithara::test(native, flash(false))]
+    fn the_downloader_section_carries_its_nested_abr_settings() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "downloader-and-abr",
+            "downloader:\n  max_concurrent: 8\n  abr_settings:\n    min_switch_interval: 45s\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let downloader = config.downloader();
+
+        assert_eq!(downloader.max_concurrent, Some(8));
+        assert_eq!(
+            downloader.abr_settings.min_switch_interval,
+            Some(Duration::from_secs(45)),
+            "`downloader.abr_settings` is the document's only spelling for the ABR controller"
+        );
+        assert!(
+            downloader.soft_timeout.is_none(),
+            "a knob the document does not name reaches the app empty"
+        );
+    }
+
+    /// A document's `flush` key reaches the policy the asset store's hub is
+    /// built with, and a knob it never names keeps the crate default.
+    #[kithara::test(native, flash(false))]
+    fn the_flush_section_reaches_the_policy_the_app_builds() {
+        let dir = tempdir();
+        let path = write(&dir, "flush", "flush:\n  debounce: 250ms\n");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        let mut policy = FlushPolicy::default();
+        policy.apply(config.flush());
+
+        assert_eq!(policy.debounce, Duration::from_millis(250));
+        assert_eq!(
+            policy.force_every_n_ops,
+            FlushPolicy::default().force_every_n_ops,
+            "a knob the document does not name keeps the crate default"
         );
     }
 

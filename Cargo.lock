@@ -4696,7 +4696,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures",
- "humantime-serde",
  "iced",
  "kithara",
  "kithara-assets",
