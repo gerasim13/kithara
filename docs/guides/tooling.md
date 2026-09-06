@@ -31,12 +31,9 @@ count printed ahead of it.
 | --- | --- | --- |
 | `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes short unmarked prose |
 | `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
+| `style` | `qualified_path_depth` | trades a deep path for the `use` that shortens it |
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
-
-`struct_init_order` reads an all-shorthand literal in the order its type
-declares — what `clippy::inconsistent_struct_constructor` demands — so a
-`struct_field_order` rewrite cannot leave the clippy gate red.
 
 Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds only
 what the tool did; `--allow-dirty` mixes its edits into yours. The three lint
@@ -44,10 +41,12 @@ namespaces scope with `--crate <name>` or `--path <path>`, which takes a directo
 or a single file; `typos`, `ast-grep`, and `similarity` take their paths
 positionally.
 
-A reordering fix can leave the crate not compiling: sorting a struct's fields does
-not follow through to its literals, and `clippy::inconsistent_struct_constructor`
-then rejects what the ratchet calls a fixpoint. Compile after a `--fix` that
-touched declarations; a second lint pass will not tell you.
+A rewrite answers to the clippy gate as well as to its own rule.
+`struct_init_order` reads an all-shorthand literal in the order its type
+declares, which is what `clippy::inconsistent_struct_constructor` demands;
+`qualified_path_depth` shortens every path its import names and drops the `use`
+that import leaves naming nothing. Compile after a `--fix` all the same: a
+second lint pass calls its own output a fixpoint.
 
 `comment_hygiene --fix` makes only the two rewrites that cannot be wrong. A
 standalone `//` block directly above an item becomes that item's `///`: it already
