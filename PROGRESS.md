@@ -13,13 +13,15 @@ the change that lands the work, and keep it short.
   crate's `#[derive(Patch)]` type. Open: assembly sits in `main.rs` where no
   test pins it, and twenty-two files take pools from `PoolsSection::default()`.
 
+- Tooling parameter ownership: every policy number `xtask` and
+  `kithara-devtools` held as a `const` has a config owner, spawned programs
+  resolve through `ToolsConfig`, and Rust binaries replace their embedded
+  shell.
+
 - Lint debt worked down by autofix. `struct_init_order`, `derivable_from` and
   `qualified_path_depth` answer to the clippy gate they used to break, the arch
   baseline drops what nothing violates, and `lint fast` runs `style`, so the
   commit hook refuses what used to reach CI.
-
-- `CiHost::brew_root` asks where the machine keeps its tools instead of writing
-  it down; the root `justfile` no longer pays `brew --prefix` per invocation.
 
 - Mac CI host cleanup: a watchdog ends a hung pass, and cleanup reclaims what
   the volume is short of the soft floor. Open: `deps:deny` gates a quarantine
@@ -34,7 +36,7 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- 668 comment findings are decisions `--fix` cannot make.
+- 678 comment findings are decisions `--fix` cannot make.
 - `kithara-ui` warns under `--features render` and `--features vello`, where
   the widget layer compiles without a host: 627 items.
 - `.wasm-slim.toml` budgets wasm at 29000 KiB against a local `dist` of 3565

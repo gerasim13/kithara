@@ -14,7 +14,7 @@ use clap::Args;
 use serde::Deserialize;
 
 use crate::{
-    common::project::StressEvidenceConfig,
+    common::project::{StressEvidenceConfig, StressRenderBudgets},
     junit::{CaseTiming, parse_junit_report},
     verdict::NotClean,
 };
@@ -22,13 +22,8 @@ use crate::{
 mod evidence;
 mod sanitizer;
 
-use evidence::MAX_SIGNATURE_EXAMPLES;
 pub(crate) use sanitizer::{ATTEMPT_MARKER, Findings, findings as sanitizer_findings};
 
-const MAX_FAILURE_ROWS: usize = 100;
-const MAX_PROBLEM_ROWS: usize = 100;
-const MAX_ITERATIONS_PER_TEST: usize = 20;
-const MAX_CELL_CHARS: usize = 240;
 const PERCENT_SCALE: usize = 100;
 const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
 const MAX_INVENTORY_CASES: usize = 100_000;
@@ -75,6 +70,9 @@ pub(crate) struct StressReportArgs {
     #[arg(skip)]
     #[field(with, vis = "pub(crate)")]
     evidence: StressEvidenceConfig,
+    #[arg(skip)]
+    #[field(with, vis = "pub(crate)")]
+    render: StressRenderBudgets,
     /// Explain an absent `JUnit` as fallout from the primary nextest step.
     #[arg(long)]
     #[field(with, vis = "pub(crate)")]
@@ -102,6 +100,7 @@ impl StressReportArgs {
             pressure_log: None,
             allow_missing: false,
             evidence: StressEvidenceConfig::default(),
+            render: StressRenderBudgets::default(),
         }
     }
 }
@@ -130,11 +129,12 @@ struct RenderedReport {
     markdown: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct EvidenceProblems {
     rows: Vec<String>,
     invalid: bool,
     total: usize,
+    row_budget: usize,
 }
 
 type TestId = (String, String);
@@ -166,10 +166,19 @@ struct InventoryMatch {
 }
 
 impl EvidenceProblems {
+    fn new(row_budget: usize) -> Self {
+        Self {
+            rows: Vec::new(),
+            invalid: false,
+            total: 0,
+            row_budget,
+        }
+    }
+
     fn add(&mut self, problem: String, invalid: bool) {
         self.total = self.total.saturating_add(1);
         self.invalid |= invalid;
-        if self.rows.len() < MAX_PROBLEM_ROWS {
+        if self.rows.len() < self.row_budget {
             self.rows.push(problem);
         }
     }
@@ -268,6 +277,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
                 args.expected_count,
                 &args.inventory,
                 &detail,
+                &args.render,
             ));
         }
     };
@@ -282,6 +292,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
                 args.expected_count,
                 &args.junit,
                 args.allow_missing,
+                &args.render,
             ));
         }
         Err(error) => {
@@ -291,6 +302,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
                 args.expected_count,
                 &args.junit,
                 &detail,
+                &args.render,
             ));
         }
     };
@@ -303,6 +315,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
                 args.expected_count,
                 &args.junit,
                 &detail,
+                &args.render,
             ));
         }
     };
@@ -313,6 +326,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             args.expected_count,
             &args.junit,
             &error,
+            &args.render,
         ));
     }
     let mut report = render(
@@ -321,6 +335,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         args.expected_count,
         junit.run_id.as_deref(),
         junit.timestamp.as_deref(),
+        &args.render,
     );
     retain_census_cases(&mut junit.cases, &report.quarantined);
     let correlated_complete = evidence::append_correlated_evidence(
@@ -329,6 +344,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         junit.run_id.as_deref(),
         args,
     );
+
     let truncated = junit
         .cases
         .iter()
@@ -336,8 +352,8 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         .map(|case| {
             format!(
                 "`{} {}`",
-                markdown_cell(&case.suite),
-                markdown_cell(&case.name)
+                markdown_cell(&case.suite, &args.render),
+                markdown_cell(&case.name, &args.render)
             )
         })
         .collect::<Vec<_>>();
@@ -348,7 +364,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             truncated.len(),
             truncated
                 .iter()
-                .take(MAX_SIGNATURE_EXAMPLES)
+                .take(args.render.signature_examples)
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", "),
@@ -388,6 +404,7 @@ pub(crate) fn validate_primary_evidence(
     inventory_path: &Path,
     junit_path: &Path,
     expected_count: usize,
+    budgets: &StressRenderBudgets,
 ) -> Result<()> {
     validate_expected_count(expected_count)?;
     let inventory = read_inventory(inventory_path).map_err(primary_evidence_finding)?;
@@ -401,6 +418,7 @@ pub(crate) fn validate_primary_evidence(
         expected_count,
         junit.run_id.as_deref(),
         junit.timestamp.as_deref(),
+        budgets,
     );
     let failed = junit.cases.iter().filter(|case| case.failed).count();
     let flaky = junit.cases.iter().filter(|case| case.flaky).count();
@@ -452,7 +470,12 @@ fn validate_correlation_metadata(junit: &crate::junit::JunitReport) -> Result<()
     Ok(())
 }
 
-fn render_missing(expected_count: usize, junit: &Path, allow_missing: bool) -> String {
+fn render_missing(
+    expected_count: usize,
+    junit: &Path,
+    allow_missing: bool,
+    budgets: &StressRenderBudgets,
+) -> String {
     let explanation = if allow_missing {
         "No JUnit was staged for this lane: either nextest died before writing one, or the run looked for it at a path nextest does not write. The primary step log names which."
     } else {
@@ -460,7 +483,7 @@ fn render_missing(expected_count: usize, junit: &Path, allow_missing: bool) -> S
     };
     format!(
         "# Stress evidence\n\n- Result: **NO JUNIT**\n- Requested iterations: `{expected_count}`\n- JUnit path: `{}`\n\n{explanation}\n",
-        markdown_cell(&junit.display().to_string()),
+        markdown_cell(&junit.display().to_string(), budgets),
     )
 }
 
@@ -469,11 +492,12 @@ fn render_invalid_artifact(
     expected_count: usize,
     artifact: &Path,
     detail: &str,
+    budgets: &StressRenderBudgets,
 ) -> String {
     format!(
         "# Stress evidence\n\n- Result: **{result}**\n- Requested iterations: `{expected_count}`\n- Evidence path: `{}`\n\n## Evidence problems\n\n- {}\n",
-        markdown_cell(&artifact.display().to_string()),
-        markdown_cell(detail),
+        markdown_cell(&artifact.display().to_string(), budgets),
+        markdown_cell(detail, budgets),
     )
 }
 
@@ -600,6 +624,7 @@ pub(crate) fn render_lane_comparison(
     commanded: &[(String, LaneRate)],
     excluded: &[(String, String)],
     requested: usize,
+    budgets: &StressRenderBudgets,
 ) -> String {
     let mut out = String::from("# Stress run\n");
     let _ = writeln!(out, "\n- Lanes requested: `{requested}`");
@@ -608,13 +633,17 @@ pub(crate) fn render_lane_comparison(
         "- Lanes with trustworthy evidence: `{}`",
         lanes.len() + commanded.len()
     );
-    render_excluded_lanes(&mut out, excluded);
-    render_per_test_comparison(&mut out, lanes);
-    render_attempt_comparison(&mut out, commanded);
+    render_excluded_lanes(&mut out, excluded, budgets);
+    render_per_test_comparison(&mut out, lanes, budgets);
+    render_attempt_comparison(&mut out, commanded, budgets);
     out
 }
 
-fn render_excluded_lanes(out: &mut String, excluded: &[(String, String)]) {
+fn render_excluded_lanes(
+    out: &mut String,
+    excluded: &[(String, String)],
+    budgets: &StressRenderBudgets,
+) {
     if excluded.is_empty() {
         return;
     }
@@ -628,13 +657,17 @@ fn render_excluded_lanes(out: &mut String, excluded: &[(String, String)]) {
         let _ = writeln!(
             out,
             "| `{}` | {} |",
-            markdown_cell(name),
-            markdown_cell(reason)
+            markdown_cell(name, budgets),
+            markdown_cell(reason, budgets)
         );
     }
 }
 
-fn render_attempt_comparison(out: &mut String, commanded: &[(String, LaneRate)]) {
+fn render_attempt_comparison(
+    out: &mut String,
+    commanded: &[(String, LaneRate)],
+    budgets: &StressRenderBudgets,
+) {
     if commanded.is_empty() {
         return;
     }
@@ -643,7 +676,7 @@ fn render_attempt_comparison(out: &mut String, commanded: &[(String, LaneRate)])
         let _ = writeln!(
             out,
             "| `{}` | {} ({}/{}) |",
-            markdown_cell(name),
+            markdown_cell(name, budgets),
             rate_percent(rate.failed, rate.attempts),
             rate.failed,
             rate.attempts
@@ -651,7 +684,11 @@ fn render_attempt_comparison(out: &mut String, commanded: &[(String, LaneRate)])
     }
 }
 
-fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestId, LaneRate>)]) {
+fn render_per_test_comparison(
+    out: &mut String,
+    lanes: &[(String, BTreeMap<TestId, LaneRate>)],
+    budgets: &StressRenderBudgets,
+) {
     if lanes.len() < 2 {
         out.push_str(
             "\nA comparison needs two verified lanes. The lane sections below stand on their own.\n",
@@ -687,15 +724,19 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
 
     out.push_str("\n## Failure rate by test\n\n| test |");
     for (name, _) in lanes {
-        let _ = write!(out, " {} |", markdown_cell(name));
+        let _ = write!(out, " {} |", markdown_cell(name, budgets));
     }
     out.push_str(" holds in |\n|---|");
     for _ in lanes {
         out.push_str("---:|");
     }
     out.push_str("---|\n");
-    for (_, (suite, name), cells) in ranked.iter().take(MAX_FAILURE_ROWS) {
-        let _ = write!(out, "| `{}` |", markdown_cell(&format!("{suite} {name}")));
+    for (_, (suite, name), cells) in ranked.iter().take(budgets.failure_rows) {
+        let _ = write!(
+            out,
+            "| `{}` |",
+            markdown_cell(&format!("{suite} {name}"), budgets)
+        );
         for cell in cells {
             match cell {
                 Some(rate) => {
@@ -710,12 +751,17 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
                 None => out.push_str(" not selected |"),
             }
         }
-        let _ = writeln!(out, " {} |", markdown_cell(&lane_span(lanes, cells)));
-    }
-    if ranked.len() > MAX_FAILURE_ROWS {
         let _ = writeln!(
             out,
-            "\nShowing the first {MAX_FAILURE_ROWS} of {} tests that failed somewhere.",
+            " {} |",
+            markdown_cell(&lane_span(lanes, cells), budgets)
+        );
+    }
+    if ranked.len() > budgets.failure_rows {
+        let rows = budgets.failure_rows;
+        let _ = writeln!(
+            out,
+            "\nShowing the first {rows} of {} tests that failed somewhere.",
             ranked.len()
         );
     }
@@ -872,7 +918,11 @@ pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords
 ///
 /// Retried passes are named separately. No exit code and no failure row carries
 /// them, so without that line the sentence over the table reads as a clean lane.
-pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords) {
+pub(crate) fn append_attempt_reports(
+    out: &mut String,
+    records: &AttemptRecords,
+    budgets: &StressRenderBudgets,
+) {
     if records.is_empty() {
         return;
     }
@@ -906,8 +956,8 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
         });
         let mut rows = failures;
         rows.sort_by_key(|(id, rate)| (Reverse(rate.failed), (*id).clone()));
-        for (id, rate) in rows.into_iter().take(MAX_FAILURE_ROWS) {
-            let named = markdown_cell(&format!("{} {}", id.0, id.1));
+        for (id, rate) in rows.into_iter().take(budgets.failure_rows) {
+            let named = markdown_cell(&format!("{} {}", id.0, id.1), budgets);
             let measured = format!(
                 "{} ({}/{})",
                 rate_percent(rate.failed, rate.attempts),
@@ -919,7 +969,7 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
                 let _ = writeln!(
                     out,
                     "| `{named}` | {measured} | {} |",
-                    markdown_cell(&join_attempts(&attempts))
+                    markdown_cell(&join_attempts(&attempts, budgets), budgets)
                 );
             } else {
                 let _ = writeln!(out, "| `{named}` | {measured} |");
@@ -933,22 +983,22 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
         let _ = writeln!(
             out,
             "\n- Rejected attempts that wrote no report (died before any verdict): `{}`",
-            markdown_cell(&join_attempts(&records.silent))
+            markdown_cell(&join_attempts(&records.silent, budgets), budgets)
         );
     }
     if !records.unreadable.is_empty() {
         let _ = writeln!(
             out,
             "\n- Attempts whose report could not be read: `{}`",
-            markdown_cell(&join_attempts(&records.unreadable))
+            markdown_cell(&join_attempts(&records.unreadable, budgets), budgets)
         );
     }
 }
 
-fn join_attempts(attempts: &BTreeSet<usize>) -> String {
+fn join_attempts(attempts: &BTreeSet<usize>, budgets: &StressRenderBudgets) -> String {
     attempts
         .iter()
-        .take(MAX_ITERATIONS_PER_TEST)
+        .take(budgets.iterations_per_test)
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join(", ")
@@ -971,6 +1021,7 @@ fn collect_stats(
     inventory: &BTreeSet<TestId>,
     expected_count: usize,
     problems: &mut EvidenceProblems,
+    budgets: &StressRenderBudgets,
 ) -> (BTreeMap<TestId, TestStats>, BTreeSet<usize>) {
     let mut tests = BTreeMap::<TestId, TestStats>::new();
     let mut observed_iterations = BTreeSet::new();
@@ -986,14 +1037,17 @@ fn collect_stats(
         let id = (case.suite.clone(), case.name.clone());
         if !inventory.contains(&id) {
             problems.add(
-                format!("JUnit contains unselected test `{}`", test_id(case)),
+                format!(
+                    "JUnit contains unselected test `{}`",
+                    test_id(case, budgets)
+                ),
                 true,
             );
             continue;
         }
         let Some(iteration) = case.iteration else {
             problems.add(
-                format!("test `{}` has no stress iteration", test_id(case)),
+                format!("test `{}` has no stress iteration", test_id(case, budgets)),
                 true,
             );
             continue;
@@ -1002,7 +1056,7 @@ fn collect_stats(
             problems.add(
                 format!(
                     "test `{}` has out-of-range iteration {iteration}",
-                    test_id(case)
+                    test_id(case, budgets)
                 ),
                 true,
             );
@@ -1012,7 +1066,7 @@ fn collect_stats(
             problems.add(
                 format!(
                     "test `{}` has duplicate iteration {iteration}",
-                    test_id(case)
+                    test_id(case, budgets)
                 ),
                 true,
             );
@@ -1040,10 +1094,11 @@ fn render(
     expected_count: usize,
     run_id: Option<&str>,
     timestamp: Option<&str>,
+    budgets: &StressRenderBudgets,
 ) -> RenderedReport {
-    let mut problems = EvidenceProblems::default();
+    let mut problems = EvidenceProblems::new(budgets.problem_rows);
     let (mut tests, mut observed_iterations) =
-        collect_stats(cases, inventory, expected_count, &mut problems);
+        collect_stats(cases, inventory, expected_count, &mut problems, budgets);
 
     let quarantined = quarantine_poisoned_iterations(&mut tests, &mut observed_iterations);
     for (iteration, (failed, total)) in &quarantined {
@@ -1060,10 +1115,11 @@ fn render(
         "the report",
         &observed_iterations,
         expected_count,
+        budgets,
     );
     for (suite, name) in inventory {
         if !tests.contains_key(&(suite.clone(), name.clone())) {
-            let id = markdown_cell(&format!("{suite} {name}"));
+            let id = markdown_cell(&format!("{suite} {name}"), budgets);
             problems.add(
                 format!("selected test `{id}` is absent from the JUnit report"),
                 false,
@@ -1071,13 +1127,14 @@ fn render(
         }
     }
     for ((suite, name), stats) in &tests {
-        let id = markdown_cell(&format!("{suite} {name}"));
+        let id = markdown_cell(&format!("{suite} {name}"), budgets);
         let subject = format!("test `{id}`");
         add_coverage_problem(
             &mut problems,
             &subject,
             &stats.observed_iterations,
             expected_count,
+            budgets,
         );
     }
 
@@ -1123,10 +1180,18 @@ fn render(
     let mut out = String::from("# Stress evidence\n\n");
     let _ = writeln!(out, "- Result: **{result}**");
     if let Some(run_id) = run_id {
-        let _ = writeln!(out, "- Nextest run ID: `{}`", markdown_cell(run_id));
+        let _ = writeln!(
+            out,
+            "- Nextest run ID: `{}`",
+            markdown_cell(run_id, budgets)
+        );
     }
     if let Some(timestamp) = timestamp {
-        let _ = writeln!(out, "- Run started: `{}`", markdown_cell(timestamp));
+        let _ = writeln!(
+            out,
+            "- Run started: `{}`",
+            markdown_cell(timestamp, budgets)
+        );
     }
     let _ = writeln!(out, "- Requested iterations: `{expected_count}`");
     let _ = writeln!(out, "- Observed iterations: `{observed_count}`");
@@ -1153,8 +1218,8 @@ fn render(
     }
 
     render_quarantine(&mut out, &quarantined);
-    render_flakes(&mut out, &tests);
-    render_failures(&mut out, tests);
+    render_flakes(&mut out, &tests, budgets);
+    render_failures(&mut out, tests, budgets);
     RenderedReport {
         incomplete,
         rates,
@@ -1239,7 +1304,11 @@ fn render_quarantine(out: &mut String, quarantined: &BTreeMap<usize, (usize, usi
     }
 }
 
-fn render_flakes(out: &mut String, tests: &BTreeMap<TestId, TestStats>) {
+fn render_flakes(
+    out: &mut String,
+    tests: &BTreeMap<TestId, TestStats>,
+    budgets: &StressRenderBudgets,
+) {
     let mut flakes = tests
         .iter()
         .filter(|(_, stats)| !stats.flaky_iterations.is_empty())
@@ -1252,27 +1321,32 @@ fn render_flakes(out: &mut String, tests: &BTreeMap<TestId, TestStats>) {
         out,
         "\n## Tests that only passed on a retry\n\nThese attempts failed and were retried into a pass. Nothing in the failure count above can see them, and a run that reproduced a defect this way is not a clean run.\n\n| test | retried / attempts | rate | retried iterations (zero-based) |\n|---|---:|---:|---|"
     );
-    for ((suite, name), stats) in flakes.iter().take(MAX_FAILURE_ROWS) {
+    for ((suite, name), stats) in flakes.iter().take(budgets.failure_rows) {
         let retried = stats.flaky_iterations.len();
         let attempts = stats.observed_iterations.len();
-        let id = markdown_cell(&format!("{suite} {name}"));
+        let id = markdown_cell(&format!("{suite} {name}"), budgets);
         let _ = writeln!(
             out,
             "| `{id}` | {retried} / {attempts} | {} | {} |",
             rate_percent(retried, attempts),
-            render_iterations(&stats.flaky_iterations),
+            render_iterations(&stats.flaky_iterations, budgets),
         );
     }
-    if flakes.len() > MAX_FAILURE_ROWS {
+    if flakes.len() > budgets.failure_rows {
+        let rows = budgets.failure_rows;
         let _ = writeln!(
             out,
-            "\nShowing the first {MAX_FAILURE_ROWS} of {} retried tests. The JUnit artifact is exhaustive.",
+            "\nShowing the first {rows} of {} retried tests. The JUnit artifact is exhaustive.",
             flakes.len()
         );
     }
 }
 
-fn render_failures(out: &mut String, tests: BTreeMap<TestId, TestStats>) {
+fn render_failures(
+    out: &mut String,
+    tests: BTreeMap<TestId, TestStats>,
+    budgets: &StressRenderBudgets,
+) {
     let mut failures = tests
         .into_iter()
         .filter(|(_, stats)| !stats.failed_iterations.is_empty())
@@ -1291,12 +1365,12 @@ fn render_failures(out: &mut String, tests: BTreeMap<TestId, TestStats>) {
         out,
         "\n## Failed tests\n\n| test | failed / attempts | rate | failed iterations (zero-based) | max |\n|---|---:|---:|---|---:|"
     );
-    for ((suite, name), stats) in failures.iter().take(MAX_FAILURE_ROWS) {
+    for ((suite, name), stats) in failures.iter().take(budgets.failure_rows) {
         let failures = stats.failed_iterations.len();
         let attempts = stats.observed_iterations.len();
         let rate = rate_percent(failures, attempts);
-        let iterations = render_iterations(&stats.failed_iterations);
-        let id = markdown_cell(&format!("{suite} {name}"));
+        let iterations = render_iterations(&stats.failed_iterations, budgets);
+        let id = markdown_cell(&format!("{suite} {name}"), budgets);
         let _ = writeln!(
             out,
             "| `{id}` | {} / {} | {rate} | {iterations} | {:.0} ms |",
@@ -1305,10 +1379,11 @@ fn render_failures(out: &mut String, tests: BTreeMap<TestId, TestStats>) {
             stats.max_secs * 1000.0,
         );
     }
-    if failures.len() > MAX_FAILURE_ROWS {
+    if failures.len() > budgets.failure_rows {
+        let rows = budgets.failure_rows;
         let _ = writeln!(
             out,
-            "\nShowing the first {MAX_FAILURE_ROWS} of {} failed tests. The JUnit artifact is exhaustive.",
+            "\nShowing the first {rows} of {} failed tests. The JUnit artifact is exhaustive.",
             failures.len()
         );
     }
@@ -1319,6 +1394,7 @@ fn add_coverage_problem(
     subject: &str,
     observed: &BTreeSet<usize>,
     expected_count: usize,
+    budgets: &StressRenderBudgets,
 ) {
     let in_range = observed.range(..expected_count).count();
     let missing_count = expected_count.saturating_sub(in_range);
@@ -1327,10 +1403,10 @@ fn add_coverage_problem(
     }
     let missing = (0..expected_count)
         .filter(|iteration| !observed.contains(iteration))
-        .take(MAX_ITERATIONS_PER_TEST)
+        .take(budgets.iterations_per_test)
         .collect::<BTreeSet<_>>();
-    let mut detail = render_iterations(&missing);
-    if missing_count > MAX_ITERATIONS_PER_TEST {
+    let mut detail = render_iterations(&missing, budgets);
+    if missing_count > budgets.iterations_per_test {
         detail = format!("{detail}, ... ({missing_count} total)");
     }
     problems.add(
@@ -1339,8 +1415,8 @@ fn add_coverage_problem(
     );
 }
 
-fn test_id(case: &CaseTiming) -> String {
-    markdown_cell(&format!("{} {}", case.suite, case.name))
+fn test_id(case: &CaseTiming, budgets: &StressRenderBudgets) -> String {
+    markdown_cell(&format!("{} {}", case.suite, case.name), budgets)
 }
 
 pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
@@ -1355,17 +1431,17 @@ pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
     )
 }
 
-fn render_iterations(iterations: &BTreeSet<usize>) -> String {
+fn render_iterations(iterations: &BTreeSet<usize>, budgets: &StressRenderBudgets) -> String {
     if iterations.is_empty() {
         return "unknown".to_owned();
     }
     let mut rendered = iterations
         .iter()
-        .take(MAX_ITERATIONS_PER_TEST)
+        .take(budgets.iterations_per_test)
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    if iterations.len() > MAX_ITERATIONS_PER_TEST {
+    if iterations.len() > budgets.iterations_per_test {
         let _ = write!(rendered, ", ... ({} total)", iterations.len());
     }
     rendered
@@ -1378,17 +1454,17 @@ fn render_iterations(iterations: &BTreeSet<usize>) -> String {
 /// readiness line lost `queued=` to a tail cut, the one field separating "a
 /// stall" from "still fetching"), and assertion messages put their values
 /// last.
-fn markdown_cell(text: &str) -> String {
+fn markdown_cell(text: &str, budgets: &StressRenderBudgets) -> String {
     let sanitized = text
         .replace('|', "\\|")
         .replace(['\r', '\n'], " ")
         .replace('`', "'");
     let total = sanitized.chars().count();
-    if total <= MAX_CELL_CHARS {
+    if total <= budgets.cell_chars {
         return sanitized;
     }
-    let head_chars = MAX_CELL_CHARS * 2 / 3;
-    let tail_chars = MAX_CELL_CHARS - head_chars;
+    let head_chars = budgets.cell_chars * 2 / 3;
+    let tail_chars = budgets.cell_chars - head_chars;
     let head = sanitized.chars().take(head_chars).collect::<String>();
     let tail = sanitized
         .chars()
@@ -1433,7 +1509,14 @@ mod tests {
             case("other", 2, false, 0.01),
         ];
 
-        let report = render(&cases, &inventory(&["seek", "other"]), 3, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek", "other"]),
+            3,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
         let markdown = &report.markdown;
 
         assert!(report.incomplete.is_none(), "{markdown}");
@@ -1458,7 +1541,14 @@ mod tests {
             case("seek", 2, false, 0.2),
         ];
 
-        let report = render(&cases, &inventory(&["seek"]), 3, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            3,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
         let markdown = &report.markdown;
 
         assert!(markdown.contains("Result: **FLAKY**"), "{markdown}");
@@ -1477,7 +1567,14 @@ mod tests {
             },
         ];
 
-        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
         let markdown = &report.markdown;
 
         assert!(
@@ -1492,9 +1589,58 @@ mod tests {
     fn a_bounded_cell_keeps_the_line_tail() {
         let line = format!("DEBUG target: {} queued=7", "x".repeat(400));
 
-        let cell = markdown_cell(&line);
+        let cell = markdown_cell(&line, &StressRenderBudgets::default());
 
         assert!(cell.ends_with("queued=7"), "{cell}");
+    }
+
+    /// The cell bound is config, not a constant: a project that narrows it
+    /// gets a narrower cell, still head-and-tail rather than head-only.
+    #[test]
+    fn a_narrowed_cell_budget_bounds_the_cell_at_the_configured_width() {
+        let budgets = StressRenderBudgets {
+            cell_chars: 30,
+            ..StressRenderBudgets::default()
+        };
+        let line = "h".repeat(20) + &"t".repeat(20);
+
+        let cell = markdown_cell(&line, &budgets);
+
+        assert_eq!(cell.chars().count(), 33);
+        assert!(cell.starts_with(&"h".repeat(20)));
+        assert!(cell.ends_with(&"t".repeat(10)));
+    }
+
+    /// The failure table is bounded by config: a project that lowers the
+    /// budget sees fewer rows and an accurate count of what it is not seeing.
+    #[test]
+    fn a_lowered_failure_budget_shortens_the_failure_table() {
+        let cases = vec![
+            case("first", 0, true, 1.0),
+            case("second", 0, true, 1.0),
+            case("third", 0, true, 1.0),
+        ];
+        let budgets = StressRenderBudgets {
+            failure_rows: 1,
+            ..StressRenderBudgets::default()
+        };
+
+        let report = render(
+            &cases,
+            &inventory(&["first", "second", "third"]),
+            1,
+            None,
+            None,
+            &budgets,
+        );
+
+        assert!(
+            report
+                .markdown
+                .contains("Showing the first 1 of 3 failed tests"),
+            "{}",
+            report.markdown
+        );
     }
 
     /// 25 tests, 4 repeats; repeat 0 fails wholesale, the rest are clean.
@@ -1517,7 +1663,14 @@ mod tests {
     fn a_mass_failing_repeat_leaves_the_per_test_rates() {
         let (cases, selected) = mass_failure_run();
 
-        let report = render(&cases, &selected, 4, None, None);
+        let report = render(
+            &cases,
+            &selected,
+            4,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         let rate = report.rates[&("demo::tests".to_owned(), "case_00".to_owned())];
         assert_eq!(
@@ -1536,7 +1689,14 @@ mod tests {
     fn a_quarantined_repeat_is_named_in_the_report() {
         let (cases, selected) = mass_failure_run();
 
-        let report = render(&cases, &selected, 4, None, None);
+        let report = render(
+            &cases,
+            &selected,
+            4,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(
             report.markdown.contains("## Quarantined repeats"),
@@ -1550,7 +1710,14 @@ mod tests {
     #[test]
     fn a_quarantined_repeat_is_kept_out_of_the_census() {
         let (mut cases, selected) = mass_failure_run();
-        let report = render(&cases, &selected, 4, None, None);
+        let report = render(
+            &cases,
+            &selected,
+            4,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         retain_census_cases(&mut cases, &report.quarantined);
 
@@ -1566,7 +1733,14 @@ mod tests {
     #[test]
     fn a_kept_repeat_stays_in_the_census() {
         let (mut cases, selected) = mass_failure_run();
-        let report = render(&cases, &selected, 4, None, None);
+        let report = render(
+            &cases,
+            &selected,
+            4,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         retain_census_cases(&mut cases, &report.quarantined);
 
@@ -1585,7 +1759,14 @@ mod tests {
     fn a_narrow_filter_keeps_its_honest_failures() {
         let cases = vec![case("seek", 0, true, 0.1), case("seek", 1, false, 0.1)];
 
-        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         let rate = report.rates[&("demo::tests".to_owned(), "seek".to_owned())];
         assert_eq!(
@@ -1605,8 +1786,22 @@ mod tests {
         let cases = vec![case("seek", 0, false, 0.1)];
 
         let inventory = inventory(&["seek"]);
-        let partial = render(&cases, &inventory, 2, None, None);
-        let complete = render(&cases, &inventory, 1, None, None);
+        let partial = render(
+            &cases,
+            &inventory,
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
+        let complete = render(
+            &cases,
+            &inventory,
+            1,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(partial.incomplete.is_some(), "{}", partial.markdown);
         assert!(
@@ -1626,7 +1821,14 @@ mod tests {
     fn a_failure_before_all_iterations_is_still_incomplete() {
         let cases = vec![case("seek", 0, true, 0.1)];
 
-        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
@@ -1649,7 +1851,14 @@ mod tests {
             case("seek", 2, false, 0.1),
         ];
 
-        let report = render(&cases, &inventory(&["seek"]), 3, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            3,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
@@ -1671,7 +1880,12 @@ mod tests {
 
     #[test]
     fn missing_junit_is_explicitly_incomplete() {
-        let report = render_missing(50, Path::new("target/nextest/stress/junit.xml"), true);
+        let report = render_missing(
+            50,
+            Path::new("target/nextest/stress/junit.xml"),
+            true,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(report.contains("Result: **NO JUNIT**"), "{report}");
         assert!(report.contains("Requested iterations: `50`"), "{report}");
@@ -1689,7 +1903,14 @@ mod tests {
             unindexed,
         ];
 
-        let report = render(&cases, &inventory(&["seek"]), 1, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            1,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
         let markdown = &report.markdown;
 
         assert!(report.incomplete.is_some(), "{markdown}");
@@ -1708,8 +1929,9 @@ mod tests {
 
     #[test]
     fn invalid_evidence_details_stay_bounded() {
-        let too_wide = "x".repeat(MAX_CELL_CHARS + 1);
-        let cases = (0..MAX_PROBLEM_ROWS + 5)
+        let budgets = StressRenderBudgets::default();
+        let too_wide = "x".repeat(budgets.cell_chars + 1);
+        let cases = (0..budgets.problem_rows + 5)
             .map(|index| {
                 let mut timing = case(&format!("case-{index}"), 0, false, 0.1);
                 timing.suite.clone_from(&too_wide);
@@ -1718,19 +1940,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let names = (0..MAX_PROBLEM_ROWS + 5)
+        let names = (0..budgets.problem_rows + 5)
             .map(|index| format!("case-{index}"))
             .collect::<Vec<_>>();
         let selected = names
             .iter()
             .map(|name| (too_wide.clone(), name.clone()))
             .collect();
-        let report = render(&cases, &selected, 1, None, None);
+        let report = render(&cases, &selected, 1, None, None, &budgets);
         let markdown = &report.markdown;
 
         assert_eq!(
             markdown.matches("has no stress iteration").count(),
-            MAX_PROBLEM_ROWS,
+            budgets.problem_rows,
             "{markdown}"
         );
         assert!(markdown.contains("more problems"), "{markdown}");
@@ -1921,6 +2143,7 @@ seek landed short of the requested frame
                 expected_count: 2,
                 allow_missing: true,
                 evidence: StressEvidenceConfig::default(),
+                render: StressRenderBudgets::default(),
             };
 
             let error = run(&args).expect_err("incomplete evidence must fail closed");
@@ -1973,6 +2196,7 @@ seek landed short of the requested frame
             expected_count: 2,
             allow_missing: false,
             evidence: StressEvidenceConfig::default(),
+            render: StressRenderBudgets::default(),
         };
 
         let error = run(&args).expect_err("failed attempt must fail closed");
@@ -2027,6 +2251,7 @@ seek landed short of the requested frame
             expected_count: 1,
             allow_missing: false,
             evidence: StressEvidenceConfig::default(),
+            render: StressRenderBudgets::default(),
         };
 
         let lane = lane_report(&args).expect("lane report");
@@ -2054,7 +2279,14 @@ seek landed short of the requested frame
     fn selected_test_missing_from_junit_fails_closed() {
         let cases = vec![case("seek", 0, false, 0.1)];
 
-        let report = render(&cases, &inventory(&["seek", "missing"]), 1, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek", "missing"]),
+            1,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(report.incomplete.is_some(), "{}", report.markdown);
         assert!(
@@ -2186,6 +2418,7 @@ seek landed short of the requested frame
             &[],
             &[],
             2,
+            &StressRenderBudgets::default(),
         );
 
         let disputed = table.find("disputed").expect("disputed row");
@@ -2203,6 +2436,7 @@ seek landed short of the requested frame
             &[],
             &[],
             2,
+            &StressRenderBudgets::default(),
         );
 
         assert!(table.contains("not selected"), "{table}");
@@ -2210,7 +2444,13 @@ seek landed short of the requested frame
 
     #[test]
     fn a_run_with_one_trustworthy_lane_refuses_to_compare() {
-        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], &[], 2);
+        let table = render_lane_comparison(
+            &[lane("on", &[("solo", 1, 10)])],
+            &[],
+            &[],
+            2,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(table.contains("needs two verified lanes"), "{table}");
     }
@@ -2227,6 +2467,7 @@ seek landed short of the requested frame
             &[],
             &[],
             2,
+            &StressRenderBudgets::default(),
         );
 
         assert!(table.contains("only flash-on"), "{table}");
@@ -2244,6 +2485,7 @@ seek landed short of the requested frame
             &[],
             &[],
             2,
+            &StressRenderBudgets::default(),
         );
 
         assert!(table.contains("every lane"), "{table}");
@@ -2273,6 +2515,7 @@ seek landed short of the requested frame
             &[attempted("rtsan", 1, 4)],
             &[],
             3,
+            &StressRenderBudgets::default(),
         );
 
         assert!(table.contains("rtsan"), "{table}");
@@ -2281,7 +2524,13 @@ seek landed short of the requested frame
 
     #[test]
     fn a_lane_measured_by_attempts_counts_as_trustworthy_evidence() {
-        let table = render_lane_comparison(&[], &[attempted("rtsan", 0, 2)], &[], 1);
+        let table = render_lane_comparison(
+            &[],
+            &[attempted("rtsan", 0, 2)],
+            &[],
+            1,
+            &StressRenderBudgets::default(),
+        );
 
         assert!(
             table.contains("Lanes with trustworthy evidence: `1`"),
@@ -2305,6 +2554,7 @@ seek landed short of the requested frame
                 "incomplete evidence: fewer iterations than requested".to_owned(),
             )],
             3,
+            &StressRenderBudgets::default(),
         );
 
         assert!(
@@ -2326,6 +2576,7 @@ seek landed short of the requested frame
                 "incomplete evidence: fewer iterations than requested".to_owned(),
             )],
             3,
+            &StressRenderBudgets::default(),
         );
 
         assert!(table.contains("flash-off"), "{table}");
@@ -2354,7 +2605,11 @@ seek landed short of the requested frame
 
     fn rendered(temp: &tempfile::TempDir, codes: &[i32]) -> String {
         let mut out = String::new();
-        append_attempt_reports(&mut out, &attempt_records(temp.path(), codes));
+        append_attempt_reports(
+            &mut out,
+            &attempt_records(temp.path(), codes),
+            &StressRenderBudgets::default(),
+        );
         out
     }
 
@@ -2563,7 +2818,14 @@ seek landed short of the requested frame
     fn a_shortfall_names_the_problem_it_was_measured_from() {
         let cases = vec![case("seek", 0, false, 0.1)];
 
-        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek"]),
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         let reason = report
             .incomplete
@@ -2575,7 +2837,14 @@ seek landed short of the requested frame
     fn a_shortfall_counts_the_problems_it_could_not_fit() {
         let cases = vec![case("seek", 0, false, 0.1)];
 
-        let report = render(&cases, &inventory(&["seek", "read"]), 2, None, None);
+        let report = render(
+            &cases,
+            &inventory(&["seek", "read"]),
+            2,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
 
         let reason = report
             .incomplete

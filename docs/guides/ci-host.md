@@ -144,11 +144,12 @@ free space to keep. On an APFS container shared with other volumes those differ:
 read used-against-quota as free space and a volume reports `Normal` while jobs
 are already refused.
 
-Workspaces, VM overlays, logs and whole inactive cache namespaces are pruned;
-individual Cargo, Gradle and sccache files are never deleted in place: jobs hold
-a cache lease, sccache its own LRU limit. No `diskutil apfs` verb accepts
-`-quota` after creation, so the quota cannot be raised and cleanup is the whole
-answer.
+The profile owns this policy: `removable_roots` names the trees cleanup takes
+whole, `active_lease_hours` how long a cache lease keeps one alive,
+`log_limit_bytes` when a log rotates. Individual Cargo, Gradle and sccache files
+are never deleted in place; sccache keeps its own LRU limit. No `diskutil apfs`
+verb accepts `-quota` after creation, so the quota cannot be raised and cleanup
+is the whole answer.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
@@ -158,29 +159,34 @@ evicting past the cap. What its sweeps cannot show:
 
 - The Linux guest's `/var/lib/docker` data disk is not mounted `discard` as its
   root is, so deleted layers stay allocated in a sparse file this volume pays
-  for; every cleanup trims it whatever the pressure.
+  for; every cleanup trims the `colima_profile` instance, whatever the pressure.
 - A cache namespace that stops being written to goes invisible rather than
-  stale, leaving a retired tool's store behind.
+  stale, leaving a retired tool's store behind; `cache_namespaces` lists the
+  live ones and cleanup takes the rest whole. A namespace with an owner belongs
+  there even when it is quiet: `target-slots` holds every Linux job's
+  `CARGO_TARGET_DIR` and the build-cache budget evicts it one slot at a time.
+  An installed profile carries the list verbatim, so adding a name reaches a
+  running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
 - Build-cache bytes for a lane's claimed checkout still count against the
   ceiling.
-- A macOS job VM clone outlives the runner that cloned it; its bundle directory
-  cannot be age-pruned without taking the base bundle, which only
-  `tart create --from-ipsw` and a person can rebuild. It is deleted once tart
-  reports it stopped *and* untouched for a day: a boot outlasts the cleanup
-  interval and an idle booted guest writes nothing for hours, so neither alone
-  separates idle from dead. `tart clone` copies on write, so a directory walk
-  overstates what deleting one returns.
+- A macOS job VM clone outlives the runner that cloned it, and age alone cannot
+  prune its bundle without taking the base bundle, which only
+  `tart create --from-ipsw` and a person can rebuild. It goes once tart reports
+  it stopped *and* untouched for a day: a boot outlasts the cleanup interval and
+  an idle booted guest writes nothing for hours, so neither alone separates idle
+  from dead. `tart clone` copies on write, so a walk overstates what deleting one
+  returns.
 - `CiEnvironment` points every lane's `TMPDIR` under `/tmp/kithara-ci`: outside
   the checkout and both CI roots, short enough for the Unix sockets the suite
-  binds, on storage the macOS guest can bind. Killed jobs leak there steadily;
-  entries are pruned on age alone, an `lsof` walk per candidate costing hours
-  over that backlog.
+  binds, on storage the macOS guest can bind. Killed jobs leak there steadily
+  and are pruned on age alone, an `lsof` walk per candidate costing hours over
+  that backlog.
 
 Health and cleanup run through launchd, and directly as `ci host health` /
 `ci host cleanup`. A `KeepAlive` agent that dies on startup stays loaded and is
-restarted forever, so health checks the process, not the loaded service: a
-missing `colima` or `gitlab-runner` looks like nothing from outside, its jobs
-sitting `pending` while the pipeline reads as hung.
+restarted forever, so health checks each `always_on_agents` process, not the
+loaded service: a missing one looks like nothing from outside, its jobs sitting
+`pending` while the pipeline reads as hung.
 
 launchd starts no second instance while the first is alive, so a wedged pass
 silences `StartInterval` outright: one hung for over a day inside `opendir` on a
