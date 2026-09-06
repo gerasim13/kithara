@@ -98,13 +98,6 @@ impl PlaybackRate {
             Self::Fixed
         }
     }
-
-    fn apply(&self, requested: f32) -> f32 {
-        if let Self::Warp(controls) = self {
-            controls.set_speed(requested);
-        }
-        self.into()
-    }
 }
 
 impl From<&PlaybackRate> for f32 {
@@ -284,10 +277,6 @@ impl Resource {
 
     pub(crate) fn render_reader(&self) -> Option<RenderReader> {
         self.render_publisher.as_ref().map(RenderPublisher::reader)
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.playback_rate.apply(rate)
     }
 
     pub(crate) fn playback_rate(&self) -> f32 {
@@ -633,18 +622,17 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn playback_rate_reports_only_a_real_warp_control() {
         let fixed = Resource::from_reader(EofReader::default(), None);
-        assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
+        assert_eq!(fixed.playback_rate(), 1.0);
 
         let controls = StretchControls::new(1.0);
         let warped = Resource::from_reader(EofReader::default(), None)
             .with_playback_rate(PlaybackRate::for_warp(Arc::clone(&controls)));
         if supports_playback_rate() {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.5);
+            controls.set_speed(1.5);
             assert!((controls.speed() - 1.5).abs() < f32::EPSILON);
             controls.set_speed(1.25);
             assert_eq!(warped.playback_rate(), 1.25);
         } else {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.0);
             assert!((controls.speed() - 1.0).abs() < f32::EPSILON);
             controls.set_speed(1.25);
             assert_eq!(warped.playback_rate(), 1.0);
