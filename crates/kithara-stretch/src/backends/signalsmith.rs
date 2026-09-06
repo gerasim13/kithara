@@ -225,6 +225,7 @@ impl ElasticEngine for SignalsmithElastic {
         prime_input
             .ensure_len(prime_samples.max(native_tail_samples))
             .map_err(|_| ElasticError::PoolCapacity)?;
+        prime_input.shrink_to_fit();
         Ok(Self {
             inner,
             capabilities,

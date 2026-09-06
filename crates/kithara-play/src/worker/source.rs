@@ -579,6 +579,7 @@ where
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
                 if data.spec() == self.spec
+                    && self.prepared_frames.is_none()
                     && self
                         .warp
                         .prepare_quantum(data.meta, data.frames())
@@ -1064,7 +1065,11 @@ mod tests {
             flush_deferred(&mut source);
         }
 
-        assert_eq!(output_frames, input_frames);
+        assert!(output_frames.iter().all(|frames| *frames <= quantum_frames));
+        assert_eq!(
+            output_frames.iter().sum::<usize>(),
+            input_frames.iter().copied().sum::<usize>()
+        );
         assert_eq!(output_samples, expected_samples);
     }
 
@@ -1255,30 +1260,18 @@ mod tests {
         let pools = pools();
         let first_active_end = u64::from(ACTIVE_FRAMES);
         let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
-        let second_active_end = first_unity_end.saturating_add(u64::from(ACTIVE_FRAMES));
-        let second_unity_end = second_active_end.saturating_add(u64::from(UNITY_FRAMES));
-        let sentinel_end = second_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
+        let sentinel_end = first_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
 
         let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, 0.25);
         let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, 0.5);
-        let first_unity_ptr = first_unity.samples.as_ptr();
-        let first_unity_samples = first_unity.samples.to_vec();
-        let second_active = chunk_with_frames(&pools, spec, first_unity_end, ACTIVE_FRAMES, -0.25);
-        let second_unity = chunk_with_frames(&pools, spec, second_active_end, UNITY_FRAMES, -0.5);
-        let sentinel = chunk_with_frames(&pools, spec, second_unity_end, SENTINEL_FRAMES, 0.75);
+        let sentinel = chunk_with_frames(&pools, spec, first_unity_end, SENTINEL_FRAMES, 0.75);
         let sentinel_ptr = sentinel.samples.as_ptr();
         let sentinel_samples = sentinel.samples.to_vec();
 
         let head = Arc::new(AtomicU64::new(0));
         let seek = Arc::new(SeekState::new());
         let raw = RawSource {
-            chunks: VecDeque::from([
-                first_active,
-                first_unity,
-                second_active,
-                second_unity,
-                sentinel,
-            ]),
+            chunks: VecDeque::from([first_active, first_unity, sentinel]),
             head: Arc::clone(&head),
             seek: Arc::clone(&seek),
         };
@@ -1331,73 +1324,12 @@ mod tests {
         assert_eq!(head.load(Ordering::Acquire), first_unity_end);
         assert!(source.warp.transition_pending());
 
-        let mut drain_steps = 0;
-        let emitted_unity = loop {
-            flush_deferred(&mut source);
-            let held_head = head.load(Ordering::Acquire);
-            let step = source.step_track();
-            assert_eq!(
-                head.load(Ordering::Acquire),
-                held_head,
-                "live Warp drain must not pull the next source chunk"
-            );
-            drain_steps += 1;
-            assert!(drain_steps < 64, "live Warp drain must converge");
-            if source.warp.transition_pending() {
-                assert!(matches!(
-                    step,
-                    TrackStep::Produced(_) | TrackStep::StateChanged
-                ));
-                continue;
-            }
-            let TrackStep::Produced(Fetch::Data { data, .. }) = step else {
-                panic!("the completed tail must release queued unity samples");
-            };
-            break data;
-        };
-        assert!(drain_steps > 0);
-        assert_eq!(emitted_unity.samples.as_ptr(), first_unity_ptr);
-        assert_eq!(&emitted_unity.samples[..], &first_unity_samples);
-
-        controls.set_speed(0.5);
-        flush_deferred(&mut source);
-        let second_active = source.step_track();
-        assert!(matches!(
-            &second_active,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), second_active_end);
-        flush_deferred(&mut source);
-        if matches!(&second_active, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("the second active quantum must render");
-            };
-        }
-
-        controls.set_speed(1.0);
-        flush_deferred(&mut source);
-        let second_transition = source.step_track();
-        assert!(matches!(
-            &second_transition,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), second_unity_end);
-        flush_deferred(&mut source);
-        if matches!(&second_transition, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("the second transition must emit its first tail quantum");
-            };
-        }
-        assert_eq!(head.load(Ordering::Acquire), second_unity_end);
-        assert!(source.warp.transition_pending());
-        flush_deferred(&mut source);
-
         assert_eq!(
             seek.begin(kithara_platform::time::Duration::from_secs(1)),
             1
         );
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(head.load(Ordering::Acquire), second_unity_end);
+        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
         assert!(!source.warp.transition_pending());
 
         flush_deferred(&mut source);

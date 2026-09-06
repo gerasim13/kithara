@@ -1,8 +1,18 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Error, FnArg, Ident, ItemFn, Pat, PatIdent};
+use syn::{Error, Expr, Ident, ItemFn, Pat, PatIdent};
 
-use super::parse::ProbeFilter;
+use super::parse::{ProbeEvent, ProbeFilter};
+
+struct WireFields {
+    arg_bindings: Vec<TokenStream2>,
+    computed_bindings: Vec<TokenStream2>,
+    arg_consumes: Vec<TokenStream2>,
+    computed_consumes: Vec<TokenStream2>,
+    fire_fn: Ident,
+    slots: Vec<Ident>,
+    tracing_fields: Vec<TokenStream2>,
+}
 
 /// Collect every named parameter ident from a function signature.
 /// Rejects patterns (`(a, b): _`, ref/mut bindings) — the probe
@@ -12,8 +22,8 @@ fn collect_fn_param_idents(input: &ItemFn) -> syn::Result<Vec<Ident>> {
     let mut idents = Vec::new();
     for arg in &input.sig.inputs {
         match arg {
-            FnArg::Receiver(_) => {}
-            FnArg::Typed(typed) => match typed.pat.as_ref() {
+            syn::FnArg::Receiver(_) => {}
+            syn::FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(PatIdent { ident, .. }) => idents.push(ident.clone()),
                 other => {
                     return Err(Error::new_spanned(
@@ -50,6 +60,91 @@ fn resolve_arg_idents(
     Ok(names)
 }
 
+fn wire_fields(
+    args: &[Ident],
+    computed: &[(Ident, Expr)],
+    owner: &Ident,
+) -> syn::Result<WireFields> {
+    if let Some((name, _)) = computed
+        .iter()
+        .find(|(name, _)| args.iter().any(|arg| arg == name))
+    {
+        return Err(Error::new_spanned(
+            name,
+            format!("probe wire-name `{name}` is specified more than once"),
+        ));
+    }
+    let total = args.len() + computed.len();
+    if total > 6 {
+        return Err(Error::new_spanned(
+            owner,
+            "probe supports at most 6 wire arguments (USDT provider arity ceiling)",
+        ));
+    }
+
+    let arg_slots: Vec<Ident> = (0..args.len())
+        .map(|index| format_ident!("__probe_arg_{index}"))
+        .collect();
+    let computed_slots: Vec<Ident> = (0..computed.len())
+        .map(|index| format_ident!("__probe_computed_{index}"))
+        .collect();
+    let arg_bindings = args
+        .iter()
+        .zip(&arg_slots)
+        .map(|(arg, slot)| {
+            quote! {
+                #[cfg(any(test, feature = "probe"))]
+                let #slot: u64 =
+                    ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
+            }
+        })
+        .collect();
+    let computed_bindings = computed
+        .iter()
+        .zip(&computed_slots)
+        .map(|((_, expression), slot)| {
+            quote! {
+                #[cfg(any(test, feature = "probe"))]
+                let #slot: u64 =
+                    ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expression);
+            }
+        })
+        .collect();
+    let arg_consumes = args.iter().map(|arg| quote! { let _ = &#arg; }).collect();
+    let computed_consumes = computed
+        .iter()
+        .map(|(_, expression)| {
+            quote! {
+                if false {
+                    let _ = #expression;
+                }
+            }
+        })
+        .collect();
+    let slots = arg_slots.iter().chain(&computed_slots).cloned().collect();
+    let tracing_fields = args
+        .iter()
+        .zip(&arg_slots)
+        .map(|(name, slot)| quote! { #name = #slot })
+        .chain(
+            computed
+                .iter()
+                .zip(&computed_slots)
+                .map(|((name, _), slot)| quote! { #name = #slot }),
+        )
+        .collect();
+
+    Ok(WireFields {
+        arg_bindings,
+        computed_bindings,
+        arg_consumes,
+        computed_consumes,
+        fire_fn: format_ident!("fire_{total}"),
+        slots,
+        tracing_fields,
+    })
+}
+
 pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenStream2> {
     let fn_name = input.sig.ident.clone();
     let fn_name_str = fn_name.to_string();
@@ -67,96 +162,8 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let all_args = collect_fn_param_idents(input)?;
     let arg_idents = resolve_arg_idents(filter.args, &all_args)?;
     let computed = filter.computed;
-
-    for (name, _) in &computed {
-        if arg_idents.iter().any(|a| a == name) {
-            return Err(Error::new_spanned(
-                name,
-                format!(
-                    "#[kithara::probe(...)] computed wire-name `{name}` \
-                     collides with a parameter passed in the same probe \
-                     attribute; pick a different name"
-                ),
-            ));
-        }
-    }
-
-    let total_wire = arg_idents.len() + computed.len();
-    if total_wire > 6 {
-        return Err(Error::new_spanned(
-            &input.sig.ident,
-            "#[kithara::probe] supports at most 6 wire arguments \
-             (USDT provider arity ceiling) — counting both plain \
-             parameters and `name = expr` computed values. Pass fewer \
-             fields, fold them into a single struct via \
-             `#[derive(Probe)]`, or split the function so each probe \
-             site stays under the limit.",
-        ));
-    }
     let probe_return = filter.probe_return;
-
-    let arg_slot_idents: Vec<Ident> = (0..arg_idents.len())
-        .map(|i| format_ident!("__probe_arg_{}", i))
-        .collect();
-    let computed_slot_idents: Vec<Ident> = (0..computed.len())
-        .map(|i| format_ident!("__probe_computed_{}", i))
-        .collect();
-
-    let arg_bindings: Vec<TokenStream2> = arg_idents
-        .iter()
-        .zip(arg_slot_idents.iter())
-        .map(|(arg, slot)| {
-            quote! {
-                #[cfg(any(test, feature = "probe"))]
-                let #slot: u64 = ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
-            }
-        })
-        .collect();
-
-    let computed_bindings: Vec<TokenStream2> = computed
-        .iter()
-        .zip(computed_slot_idents.iter())
-        .map(|((_, expr), slot)| {
-            quote! {
-                #[cfg(any(test, feature = "probe"))]
-                let #slot: u64 = ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expr);
-            }
-        })
-        .collect();
-
-    let arg_consume: Vec<TokenStream2> =
-        arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
-
-    let computed_consume: Vec<TokenStream2> = computed
-        .iter()
-        .map(|(_, expr)| {
-            quote! {
-                if false {
-                    let _ = #expr;
-                }
-            }
-        })
-        .collect();
-
-    let fire_fn = format_ident!("fire_{}", total_wire);
-
-    let mut probe_slot_idents: Vec<Ident> = Vec::with_capacity(total_wire);
-    probe_slot_idents.extend(arg_slot_idents.iter().cloned());
-    probe_slot_idents.extend(computed_slot_idents.iter().cloned());
-
-    let mut tracing_fields: Vec<TokenStream2> = Vec::with_capacity(total_wire);
-    tracing_fields.extend(
-        arg_idents
-            .iter()
-            .zip(arg_slot_idents.iter())
-            .map(|(name, slot)| quote! { #name = #slot }),
-    );
-    tracing_fields.extend(
-        computed
-            .iter()
-            .zip(computed_slot_idents.iter())
-            .map(|((name, _), slot)| quote! { #name = #slot }),
-    );
+    let fields = wire_fields(&arg_idents, &computed, &input.sig.ident)?;
 
     let attrs = &input.attrs;
     let vis = &input.vis;
@@ -194,11 +201,18 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         probe_return,
         &fn_name_str,
         &target,
-        &fire_fn,
-        &probe_slot_idents,
-        &tracing_fields,
+        &fields.fire_fn,
+        &fields.slots,
+        &fields.tracing_fields,
         &capture_caller_fn,
     );
+    let WireFields {
+        arg_bindings,
+        computed_bindings,
+        arg_consumes,
+        computed_consumes,
+        ..
+    } = fields;
 
     let track_caller_attr = if probe_return {
         quote! {}
@@ -210,14 +224,51 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         #(#attrs)*
         #track_caller_attr
         #vis #sig {
-            #(#arg_consume)*
-            #(#computed_consume)*
+            #(#arg_consumes)*
+            #(#computed_consumes)*
             #(#arg_bindings)*
             #(#computed_bindings)*
             #emit_entry_event
             #body
         }
     })
+}
+
+pub(crate) fn expand_event(event: ProbeEvent) -> syn::Result<TokenStream2> {
+    let ProbeEvent {
+        name,
+        args,
+        computed,
+    } = event;
+    let crate_name = std::env::var("CARGO_PKG_NAME")
+        .map_err(|_| Error::new_spanned(&name, "probe requires CARGO_PKG_NAME"))?
+        .replace('-', "_");
+    let probe_name = name.to_string();
+    let fields = wire_fields(&args, &computed, &name)?;
+    let capture_caller_fn = quote! { let __probe_caller_fn = ""; };
+    let emit = build_emit_entry_event(
+        false,
+        &probe_name,
+        &format!("{crate_name}_probe"),
+        &fields.fire_fn,
+        &fields.slots,
+        &fields.tracing_fields,
+        &capture_caller_fn,
+    );
+    let WireFields {
+        arg_bindings,
+        computed_bindings,
+        arg_consumes,
+        computed_consumes,
+        ..
+    } = fields;
+    Ok(quote! {{
+        #(#arg_consumes)*
+        #(#computed_consumes)*
+        #(#arg_bindings)*
+        #(#computed_bindings)*
+        #emit
+    }})
 }
 
 fn build_emit_entry_event(

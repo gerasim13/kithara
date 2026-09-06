@@ -120,7 +120,11 @@ reaching its own end seconds into the current item. The five cases are pinned in
 internally. `PlayerConfig::auto_advance_enabled` (default `true`) applies a
 built-in linear policy. **`kithara-queue::Queue` disables that policy and reacts
 to `PlayerEvent::HandoverRequested` through `select_item_with_crossfade`; it
-never calls `arm_next` or `commit_next`.** `select_item_with_crossfade` fails
+never calls `arm_next` or `commit_next`.** `HandoverRequested` carries `ItemRole`
+for the same reason `ItemDidPlayToEnd` does: it is minted by the track that is
+running out while any number of others render, so a consumer that has already
+advanced past that track must be able to tell the request is not about the one it
+now holds. `select_item_with_crossfade` fails
 `PlayError::ItemConsumed` *before any bookkeeping* when the target index is
 neither armed, nor the announced current item, nor still holding a resource - the
 UI must not drift from the audio
@@ -148,6 +152,16 @@ the engine and resource registrations. `worker` is declared after those owners,
 so the final `PlayWorker` reference cannot shut its thread down while a track
 still holds a lease; likewise the dispatcher precedes the base-worker clone, and
 each lease's task handle precedes its worker clone.
+
+**Drop does not take the admission gate.** `close` serialises against admitted
+operations; `invalidate`, which `PlayerImpl::drop` calls, deliberately does not
+(`drop_does_not_wait_for_an_admitted_operation`). A player is dropped by whoever
+last owns it, including a session dispatcher unwinding its own state, and an
+admitted operation can be parked on a reply from that same dispatcher - taking
+the gate there closes the cycle and the session never finishes shutting down.
+Neither teardown step needs it: closing stores an atomic and cancelling fires a
+token, and a cancel exists to interrupt an admitted operation rather than queue
+behind one.
 
 ## Cancel Hierarchy
 `docs/guides/cancel-policy.md` owns the typed propagate-down tree, the

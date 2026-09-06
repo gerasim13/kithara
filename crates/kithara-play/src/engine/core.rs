@@ -350,7 +350,12 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session.start_player(player_id, master_volume)?;
+        self.session.start_player(
+            player_id,
+            master_volume,
+            self.config.render_quantum_frames,
+            self.config.response_budget_frames,
+        )?;
 
         self.running.store(true, Ordering::Release);
 

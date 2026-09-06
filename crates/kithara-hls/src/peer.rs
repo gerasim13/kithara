@@ -51,7 +51,7 @@ where
     /// after a forward seek it still resolves to the *pre-seek* segment until
     /// the decoder recreate's first read lands (the off-RT `wait_range` is now
     /// event-driven, but a native-backend recreate can still take several
-    /// scheduler polls). [`Self::seek_epoch_reset`] already aimed
+    /// scheduler polls). [`Self::apply_seek_change`] already aimed
     /// `reader_segment` + the fetch plan at this target;
     /// [`Self::apply_boundary_crossing`] honours it as a floor so a stale-low
     /// resolved segment cannot drag the cursor back and re-plan the prefix.
@@ -591,7 +591,7 @@ where
         let resolved = demand_segment.unwrap_or_else(|| u32::try_from(prev).unwrap_or(0));
         // Forward-seek settle floor: while the reader's physical byte cursor
         // still lags behind a just-applied seek target, ignore this poll's
-        // stale-low segment. `seek_epoch_reset` already aimed `reader_segment`
+        // stale-low segment. `apply_seek_change` already aimed `reader_segment`
         // + the fetch plan at the target; without this guard the lagging
         // `resolved` re-keys the cursor backward and `rebuild`s the prefix
         // (re-downloading seg 0..target). Only drop the floor once the reader
@@ -606,7 +606,7 @@ where
             {
                 // Decoder-backoff landing, NOT a lagging cursor. The seek
                 // re-aimed the queue + floor at the time-derived target
-                // (`seek_epoch_reset` → `rebuild_at_time`), but the codec's
+                // (`apply_seek_change` → `rebuild_at_time`), but the codec's
                 // recreate seek backs off by its warmup preroll and parks one
                 // segment earlier (60s target → 54s landing). `set_position`
                 // already put the reader cursor in that landing segment, yet
@@ -665,7 +665,19 @@ where
             return;
         }
         self.last_seek_epoch = cur_seek;
-        self.seek_epoch_reset(coord, ctx);
+        kithara::probe_event!(
+            seek_epoch_reset,
+            seek_epoch = cur_seek,
+            segment_index = self.reader_segment.load(Ordering::Acquire),
+            variant = coord.variant_index()
+        );
+        if let Some(target) = self.seek_obs.target()
+            && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
+        {
+            self.reader_segment.store(seg as usize, Ordering::Release);
+            self.reader_variant = coord.variant_index();
+            self.seek_settle_floor = Some(seg);
+        }
     }
 
     /// Drain the eviction channel into a local buffer so the broadcast
@@ -686,27 +698,6 @@ where
             config: self.config,
             seek_epoch: self.seek_obs.epoch(),
             signal: self.coord.signal(),
-        }
-    }
-
-    /// React to a confirmed seek-epoch bump: reposition the active
-    /// variant at the new target time and sync `reader_segment`.
-    /// Extracted from [`Self::apply_seek_change`] so the actual reset
-    /// work owns a USDT probe (`kithara_hls_probe::seek_epoch_reset`)
-    /// — integration tests key off this probe to detect scheduler
-    /// epoch resets without polling cycles flooding the wire.
-    #[kithara::probe(
-        seek_epoch = self.seek_obs.epoch(),
-        segment_index = self.reader_segment.load(Ordering::Acquire),
-        variant = coord.variant_index()
-    )]
-    fn seek_epoch_reset(&mut self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) {
-        if let Some(target) = self.seek_obs.target()
-            && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
-        {
-            self.reader_segment.store(seg as usize, Ordering::Release);
-            self.reader_variant = coord.variant_index();
-            self.seek_settle_floor = Some(seg);
         }
     }
 }

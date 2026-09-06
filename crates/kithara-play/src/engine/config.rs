@@ -1,4 +1,7 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
@@ -15,6 +18,10 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
+    /// Player-owned response contract used to validate session geometry.
+    pub(crate) response_budget_frames: NonZeroUsize,
+    /// Optional resident Warp render quantum supplied by the owning player.
+    pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
@@ -42,6 +49,8 @@ pub struct EngineConfig<S> {
 impl<S> Clone for EngineConfig<S> {
     fn clone(&self) -> Self {
         Self {
+            response_budget_frames: self.response_budget_frames,
+            render_quantum_frames: self.render_quantum_frames,
             grid_id: self.grid_id,
             cancel: self.cancel.clone(),
             session: self.session.clone(),
@@ -61,6 +70,8 @@ impl<S> fmt::Debug for EngineConfig<S> {
             .field("channels", &self.channels)
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
+            .field("response_budget_frames", &self.response_budget_frames)
+            .field("render_quantum_frames", &self.render_quantum_frames)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
     }

@@ -456,7 +456,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn reads_preserve_each_rendered_source_revision() {
+    fn reads_preserve_consecutive_rendered_source_spans_and_revisions() {
         let pools = pools();
         let rate = NonZeroU32::new(48_000).expect("test rate");
         let spec = AudioSpec::new(1, rate);
@@ -481,7 +481,7 @@ mod tests {
             Duration::from_millis(3),
             Duration::from_millis(5),
         );
-        second.meta.frame_offset = 106;
+        second.meta.frame_offset = 1_000;
         second.meta.render_revision = 7;
         let mut changed = timed_chunk(
             &pools,
@@ -490,7 +490,7 @@ mod tests {
             Duration::from_millis(5),
             Duration::from_millis(7),
         );
-        changed.meta.frame_offset = 110;
+        changed.meta.frame_offset = 2_000;
         changed.meta.render_revision = 8;
         data_tx
             .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))

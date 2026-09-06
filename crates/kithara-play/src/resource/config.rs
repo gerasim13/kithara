@@ -366,6 +366,14 @@ mod tests {
     }
 
     #[kithara::test]
+    fn direct_config_preserves_platform_buffer_defaults() {
+        let config = test_config("https://example.com/song.mp3").expect("valid config");
+
+        assert_eq!(config.preload_chunks.get(), DEFAULT_PRELOAD_CHUNKS.get());
+        assert_eq!(config.audio_buffer_chunks, None);
+    }
+
+    #[kithara::test]
     fn config_bitrate_fields_default_zero() {
         let config = test_config("https://example.com/live.m3u8").unwrap();
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);

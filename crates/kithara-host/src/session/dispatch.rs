@@ -127,8 +127,17 @@ where
         Cmd::StartPlayer {
             master_volume,
             player_id,
+            render_quantum_frames,
+            response_budget_frames,
             sample_rate,
-        } => match lifecycle::start_player(state, player_id, sample_rate, master_volume) {
+        } => match lifecycle::start_player(
+            state,
+            player_id,
+            sample_rate,
+            master_volume,
+            render_quantum_frames,
+            response_budget_frames,
+        ) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
@@ -432,7 +441,10 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, sync::atomic::AtomicBool};
+    use std::{
+        num::{NonZeroU32, NonZeroUsize},
+        sync::atomic::AtomicBool,
+    };
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_bufpool::testing::{TestPools, pools};
@@ -590,6 +602,17 @@ mod tests {
         }
     }
 
+    fn start_command(player_id: u64, sample_rate: u32) -> Cmd<TestPools> {
+        Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            render_quantum_frames: None,
+            response_budget_frames: NonZeroUsize::new(448)
+                .expect("fixture response budget is non-zero"),
+            sample_rate,
+        }
+    }
+
     fn deck(state: &TestState, index: usize) -> &Deck<TestPools> {
         state
             .graph
@@ -656,11 +679,7 @@ mod tests {
         assert!(matches!(
             run_cmd(
                 &mut state,
-                Cmd::StartPlayer {
-                    player_id,
-                    sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-                    master_volume: 1.0,
-                },
+                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE),
             ),
             Reply::Ok
         ));
@@ -875,14 +894,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: 48_000,
-                },
-            ),
+            run_cmd(&mut state, start_command(player_id, 48_000),),
             Reply::Ok
         ));
         assert!(matches!(
@@ -916,11 +928,7 @@ mod tests {
         assert!(matches!(
             run_cmd(
                 &mut state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-                },
+                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE),
             ),
             Reply::Ok
         ));
@@ -932,6 +940,34 @@ mod tests {
     }
 
     #[kithara::test]
+    fn measured_output_block_rejects_player_before_graph_start() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        state.requested_max_block_frames = NonZeroU32::new(128);
+        let player_id = register_player(&mut state);
+        let command = Cmd::StartPlayer {
+            master_volume: 1.0,
+            player_id,
+            render_quantum_frames: NonZeroUsize::new(64),
+            response_budget_frames: NonZeroUsize::new(441)
+                .expect("fixture response budget is non-zero"),
+            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
+        };
+
+        assert!(matches!(
+            run_cmd(&mut state, command),
+            Reply::Err(SessionError::ResponseBudgetExceeded {
+                max_block_frames: 512,
+                render_quantum_frames: 64,
+                required_frames: 639,
+                budget_frames: 441,
+            })
+        ));
+        assert!(!deck_by_player_id(&state, player_id).started);
+    }
+
+    #[kithara::test]
     fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
         route_loss(RouteLossProbe::reset);
 
@@ -939,14 +975,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: 0,
-                },
-            ),
+            run_cmd(&mut state, start_command(player_id, 0),),
             Reply::Ok
         ));
         assert!(matches!(
@@ -1032,14 +1061,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: 0,
-                },
-            ),
+            run_cmd(&mut state, start_command(player_id, 0),),
             Reply::Ok
         ));
         assert!(state.ctx.is_some());
@@ -1101,14 +1123,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: 44_100,
-                },
-            ),
+            run_cmd(&mut state, start_command(player_id, 44_100),),
             Reply::Ok
         ));
         assert_eq!(
@@ -1155,14 +1170,7 @@ mod tests {
 
     fn start_player_cmd(state: &mut TestState, player_id: u64) {
         assert!(matches!(
-            run_cmd(
-                &mut *state,
-                Cmd::StartPlayer {
-                    master_volume: 1.0,
-                    player_id,
-                    sample_rate: 44_100,
-                },
-            ),
+            run_cmd(&mut *state, start_command(player_id, 44_100),),
             Reply::Ok
         ));
     }

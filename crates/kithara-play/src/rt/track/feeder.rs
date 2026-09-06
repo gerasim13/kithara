@@ -22,20 +22,20 @@ use crate::{bridge::RtMetrics, worker::ServiceClass};
 pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
-    last_source_end: Option<SourceEnd>,
-    source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,
     channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
+    source_spans: VecDeque<SourceWindow>,
+    last_source_end: Option<SourceEnd>,
 }
 
 #[derive(Clone, Copy)]
 struct SourceWindow {
-    source: Option<SourceSpan>,
     frames: usize,
+    source: Option<SourceSpan>,
 }
 
 impl SourceWindow {
@@ -116,9 +116,9 @@ impl PlayerResource {
         let right = pools.get_with_len::<f32>(buffer_frames)?;
 
         Ok(Self {
-            src,
             channel_buffers: [left, right],
             source_spans: VecDeque::with_capacity(buffer_frames),
+            src,
             resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
@@ -128,43 +128,11 @@ impl PlayerResource {
         })
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
     /// Cached span in seconds: how much of the source is on disk and needs no
     /// further network.
     #[must_use]
     pub fn cached_span(&self) -> f64 {
         self.resource.get().cached_span().as_secs_f64()
-    }
-
-    fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
-        let mut output_start = 0usize;
-        while frames > 0 {
-            let Some(mut span) = self.source_spans.pop_front() else {
-                break;
-            };
-            let consumed = frames.min(span.frames);
-            let output_end = output_start.saturating_add(consumed);
-            match (context, span.take(consumed)) {
-                (Some(context), Some(source)) => {
-                    self.pcm_consumed(context, output_start..output_end, source);
-                }
-                (_, source) => {
-                    self.last_source_end =
-                        source.map(|source| SourceEnd::new(source.end(), source.sample_rate()));
-                }
-            }
-            frames -= consumed;
-            output_start = output_end;
-            if span.frames > 0 {
-                self.source_spans.push_front(span);
-            }
-        }
-        if frames > 0 {
-            self.last_source_end = None;
-        }
     }
 
     /// Decoded-ahead frontier in seconds: how much content has been decoded
@@ -174,11 +142,16 @@ impl PlayerResource {
         self.resource.get().decoded_frontier().as_secs_f64()
     }
 
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
     fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
+            let needed = target_frames - self.write_len;
+            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
             if avail == 0 {
                 break;
             }
@@ -209,7 +182,7 @@ impl PlayerResource {
                 break;
             }
             self.source_spans
-                .push_back(SourceWindow { source, frames: n });
+                .push_back(SourceWindow { frames: n, source });
             self.write_len += n;
             self.write_pos += n;
         }
@@ -226,20 +199,6 @@ impl PlayerResource {
         self.eof_seen.then_some(self.write_len)
     }
 
-    #[kithara::probe(
-        render_revision = source.render_revision(),
-        session_epoch = u64::from(context.session_epoch()),
-        output_start = i64::from(context.output_frames().start)
-            .saturating_add(i64::try_from(output.start).unwrap_or(i64::MAX)),
-        output_end = i64::from(context.output_frames().start)
-            .saturating_add(i64::try_from(output.end).unwrap_or(i64::MAX)),
-        source_start = source.start(),
-        source_end = source.end()
-    )]
-    fn pcm_consumed(&mut self, context: &RenderContext, output: Range<usize>, source: SourceSpan) {
-        self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
-    }
-
     pub(crate) fn playback_rate(&self) -> f32 {
         self.resource.get().playback_rate()
     }
@@ -248,6 +207,45 @@ impl PlayerResource {
         self.write_len
             .saturating_add(callback_frames)
             .min(self.channel_buffers[0].len())
+    }
+
+    fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
+        let mut output_start = 0usize;
+        while frames > 0 {
+            let Some(mut span) = self.source_spans.pop_front() else {
+                break;
+            };
+            let consumed = frames.min(span.frames);
+            let output_end = output_start.saturating_add(consumed);
+            match (context, span.take(consumed)) {
+                (Some(context), Some(source)) => {
+                    kithara::probe_event!(
+                        pcm_consumed,
+                        render_revision = source.render_revision(),
+                        session_epoch = u64::from(context.session_epoch()),
+                        output_start = i64::from(context.output_frames().start)
+                            .saturating_add(i64::try_from(output_start).unwrap_or(i64::MAX)),
+                        output_end = i64::from(context.output_frames().start)
+                            .saturating_add(i64::try_from(output_end).unwrap_or(i64::MAX)),
+                        source_start = source.start(),
+                        source_end = source.end()
+                    );
+                    self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
+                }
+                (_, source) => {
+                    self.last_source_end =
+                        source.map(|source| SourceEnd::new(source.end(), source.sample_rate()));
+                }
+            }
+            frames -= consumed;
+            output_start = output_end;
+            if span.frames > 0 {
+                self.source_spans.push_front(span);
+            }
+        }
+        if frames > 0 {
+            self.last_source_end = None;
+        }
     }
 
     pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
@@ -352,10 +350,6 @@ impl PlayerResource {
         }
     }
 
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.resource.get().render_reader()
-    }
-
     /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
     /// picks up the epoch itself via `sync_seek`.
     pub fn reset_for_seek(&mut self) {
@@ -377,6 +371,10 @@ impl PlayerResource {
     #[must_use]
     pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
         self.resource.get().seek_handle()
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.resource.get().render_reader()
     }
 
     delegate::delegate! {
@@ -431,7 +429,7 @@ mod tests {
     fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
         let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
-        let mut span = SourceWindow { source, frames: 10 };
+        let mut span = SourceWindow { frames: 10, source };
 
         assert_eq!(
             span.take(4),

@@ -166,7 +166,7 @@ where
                 LoadClass::Interactive => &this.interactive_lane,
                 LoadClass::Prefetch => &this.prefetch_lane,
             };
-            admission_started(id);
+            kithara::probe_event!(admission_started, track_id = id.as_u64());
             let permit = tokio::select! {
                 biased;
                 _ = Self::wait_and_cancel_track(&cancel, &track_cancel) => {
@@ -257,9 +257,6 @@ where
         std::future::pending().await
     }
 }
-
-#[kithara::probe(track_id = id.as_u64())]
-fn admission_started(id: TrackId) {}
 
 #[cfg(test)]
 mod tests {

@@ -84,6 +84,10 @@ impl<S> PlayWorker<S> {
     pub fn pools(&self) -> &PoolRegion<S> {
         &self.0.pools
     }
+
+    pub(crate) fn wake(&self) {
+        self.0.dispatcher.wake_handle().wake();
+    }
 }
 
 impl<S> Clone for PlayWorker<S> {

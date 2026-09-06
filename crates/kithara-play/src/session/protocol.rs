@@ -1,4 +1,6 @@
 mod wire {
+    use std::num::NonZeroUsize;
+
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
@@ -51,6 +53,17 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error(
+            "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
+        )]
+        ResponseBudgetExceeded {
+            max_block_frames: u32,
+            render_quantum_frames: usize,
+            required_frames: usize,
+            budget_frames: usize,
+        },
+        #[error("session output response geometry overflowed")]
+        ResponseGeometryOverflow,
         #[error(transparent)]
         Sync(#[from] SyncError),
         #[error(transparent)]
@@ -73,6 +86,8 @@ mod wire {
         StartPlayer {
             master_volume: f32,
             player_id: PlayerId,
+            render_quantum_frames: Option<NonZeroUsize>,
+            response_budget_frames: NonZeroUsize,
             sample_rate: u32,
         },
         StopPlayer {
@@ -201,7 +216,7 @@ mod wire {
 }
 
 mod handle {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroUsize};
 
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
@@ -448,11 +463,15 @@ mod handle {
             &self,
             player_id: PlayerId,
             master_volume: f32,
+            render_quantum_frames: Option<NonZeroUsize>,
+            response_budget_frames: NonZeroUsize,
         ) -> Result<(), PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
+                render_quantum_frames,
+                response_budget_frames,
                 sample_rate,
             })
             .map(|_| ())
@@ -496,7 +515,7 @@ pub use wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError, S
 #[cfg(test)]
 mod tests {
     use std::{
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroUsize},
         sync::atomic::{AtomicU32, Ordering},
     };
 
@@ -608,7 +627,14 @@ mod tests {
         assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
 
         capture.0.store(0, Ordering::Relaxed);
-        handle.start_player(player_id, 1.0).expect("start player");
+        handle
+            .start_player(
+                player_id,
+                1.0,
+                None,
+                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
+            )
+            .expect("start player");
         assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
     }
 }

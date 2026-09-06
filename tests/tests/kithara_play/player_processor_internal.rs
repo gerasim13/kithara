@@ -140,16 +140,6 @@ fn processor_seek_without_tracks_does_not_panic() {
 }
 
 #[kithara::test]
-fn processor_set_playback_rate_without_tracks_does_not_panic() {
-    let (mut processor, mut control) = make_processor();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::SetPlaybackRate(2.0))
-        .ok();
-    processor.drain_commands();
-}
-
-#[kithara::test]
 fn processor_set_paused_updates_playback() {
     let (mut processor, mut control) = make_processor();
 

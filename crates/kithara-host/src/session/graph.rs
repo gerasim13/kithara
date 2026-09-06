@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
@@ -141,6 +143,8 @@ pub(super) mod lifecycle {
         player_id: PlayerId,
         sample_rate: u32,
         master_volume: f32,
+        render_quantum_frames: Option<NonZeroUsize>,
+        response_budget_frames: NonZeroUsize,
     ) -> Result<(), SessionError>
     where
         B: AudioBackend,
@@ -151,6 +155,7 @@ pub(super) mod lifecycle {
             sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
         );
         ensure_ctx(state, sample_rate)?;
+        validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
             return Err(graph_state("session output node is not initialised"));
@@ -197,6 +202,41 @@ pub(super) mod lifecycle {
             ?master_volume_id,
             "[KITHARA-ROUTE] player graph started"
         );
+        Ok(())
+    }
+
+    fn validate_response_geometry<B: AudioBackend, S>(
+        state: &SessionState<B, S>,
+        render_quantum_frames: Option<NonZeroUsize>,
+        response_budget_frames: NonZeroUsize,
+    ) -> Result<(), SessionError> {
+        let Some(render_quantum_frames) = render_quantum_frames else {
+            return Ok(());
+        };
+        let max_block_frames = state
+            .ctx
+            .as_ref()
+            .and_then(FirewheelCtx::stream_info)
+            .ok_or(SessionError::NoContext)?
+            .max_block_frames
+            .get();
+        let block_frames = usize::try_from(max_block_frames)
+            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
+        let quantum_frames = render_quantum_frames.get();
+        let preload_chunks = block_frames.div_ceil(quantum_frames);
+        let required_frames = preload_chunks
+            .checked_add(2)
+            .and_then(|chunks| chunks.checked_mul(quantum_frames))
+            .and_then(|frames| frames.checked_sub(1))
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        if required_frames > response_budget_frames.get() {
+            return Err(SessionError::ResponseBudgetExceeded {
+                max_block_frames,
+                render_quantum_frames: quantum_frames,
+                required_frames,
+                budget_frames: response_budget_frames.get(),
+            });
+        }
         Ok(())
     }
     pub(in crate::session) fn stop_player<B: AudioBackend, S>(
@@ -857,6 +897,9 @@ mod tests {
             state,
             Cmd::StartPlayer {
                 player_id,
+                render_quantum_frames: None,
+                response_budget_frames: NonZeroUsize::new(448)
+                    .expect("fixture response budget is non-zero"),
                 sample_rate,
                 master_volume: 1.0,
             },
