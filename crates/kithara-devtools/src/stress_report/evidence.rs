@@ -740,8 +740,8 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
-            flaky: false,
             secs,
+            flaky: false,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),

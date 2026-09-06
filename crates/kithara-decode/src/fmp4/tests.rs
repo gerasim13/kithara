@@ -173,8 +173,8 @@ fn an_undescribed_segment_is_not_the_end_of_the_stream() {
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(PublishedButUndescribed {
         init_range,
-        count: 3,
         total,
+        count: 3,
     });
     let mut demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build demuxer");

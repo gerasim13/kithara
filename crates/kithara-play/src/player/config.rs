@@ -37,26 +37,15 @@ pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
     #[builder(default = allocate_grid_id())]
     pub(crate) grid_id: BeatGridId,
-    /// Per-deck Warp resources and live temporal controls.
-    #[builder(default = WarpConfig::builder().build())]
-    pub(crate) warp: WarpConfig,
+    /// How resources created for this player trim leading/trailing audio.
+    #[builder(default)]
+    pub(crate) gapless_mode: GaplessMode,
+    /// Initial output sample rate supplied by the owning session.
+    pub(crate) sample_rate: NonZeroU32,
     /// Maximum accepted control-to-presented-audio response in output frames.
     #[builder(default = DEFAULT_RESPONSE_BUDGET_FRAMES)]
     #[field(get, copy)]
     pub(crate) response_budget_frames: NonZeroUsize,
-    /// Explicit shared playback worker. Its pools and cancellation lifetime
-    /// are configured once in [`crate::PlayWorkerConfig`].
-    pub(crate) worker: PlayWorker<S>,
-    /// How resources created for this player trim leading/trailing audio.
-    #[builder(default)]
-    pub(crate) gapless_mode: GaplessMode,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
-    /// in so rendered output never stretches with inserted silence while the
-    /// decode worker catches up. Real-time hosts must keep the default
-    /// (`false`): the audio callback can never block.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
     /// Shared ABR controller. When `None`, a default one is created.
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
@@ -66,12 +55,25 @@ pub struct PlayerConfig<S> {
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    /// Explicit shared playback worker. Its pools and cancellation lifetime
+    /// are configured once in [`crate::PlayWorkerConfig`].
+    pub(crate) worker: PlayWorker<S>,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
+    /// Per-deck Warp resources and live temporal controls.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
     /// Built-in auto-advance handler. Default: `true`.
     #[builder(default = true)]
     pub(crate) auto_advance_enabled: bool,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
+    /// in so rendered output never stretches with inserted silence while the
+    /// decode worker catches up. Real-time hosts must keep the default
+    /// (`false`): the audio callback can never block.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Crossfade duration in seconds. Default: 1.0.
     #[builder(default = 1.0)]
     pub(crate) crossfade_duration: f32,
@@ -81,8 +83,6 @@ pub struct PlayerConfig<S> {
     /// Secondary lead time before EOF at which the next queued item is loaded.
     #[builder(default = 3.5)]
     pub(crate) prefetch_duration: f32,
-    /// Initial output sample rate supplied by the owning session.
-    pub(crate) sample_rate: NonZeroU32,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,

@@ -232,8 +232,8 @@ pub(super) mod lifecycle {
         if required_frames > response_budget_frames.get() {
             return Err(SessionError::ResponseBudgetExceeded {
                 max_block_frames,
-                render_quantum_frames: quantum_frames,
                 required_frames,
+                render_quantum_frames: quantum_frames,
                 budget_frames: response_budget_frames.get(),
             });
         }
@@ -897,10 +897,10 @@ mod tests {
             state,
             Cmd::StartPlayer {
                 player_id,
+                sample_rate,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448)
                     .expect("fixture response budget is non-zero"),
-                sample_rate,
                 master_volume: 1.0,
             },
         ) {

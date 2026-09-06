@@ -604,12 +604,12 @@ mod tests {
 
     fn start_command(player_id: u64, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::StartPlayer {
-            master_volume: 1.0,
             player_id,
+            sample_rate,
+            master_volume: 1.0,
             render_quantum_frames: None,
             response_budget_frames: NonZeroUsize::new(448)
                 .expect("fixture response budget is non-zero"),
-            sample_rate,
         }
     }
 
@@ -947,8 +947,8 @@ mod tests {
         state.requested_max_block_frames = NonZeroU32::new(128);
         let player_id = register_player(&mut state);
         let command = Cmd::StartPlayer {
-            master_volume: 1.0,
             player_id,
+            master_volume: 1.0,
             render_quantum_frames: NonZeroUsize::new(64),
             response_budget_frames: NonZeroUsize::new(441)
                 .expect("fixture response budget is non-zero"),

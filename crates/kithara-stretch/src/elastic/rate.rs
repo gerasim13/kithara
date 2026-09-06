@@ -38,6 +38,23 @@ impl ElasticRateEnvelope {
             && source_frames_per_output <= self.max_source_frames_per_output.next_up()
     }
 
+    pub(crate) fn has_representable_request(
+        self,
+        max_source_frames: usize,
+        max_output_frames: usize,
+    ) -> bool {
+        let accepted_minimum = self.min_source_frames_per_output.next_down();
+        let accepted_maximum = self.max_source_frames_per_output.next_up();
+        let Some(minimum) = binary_midpoint(accepted_minimum.next_down(), accepted_minimum) else {
+            return false;
+        };
+        let Some(maximum) = binary_midpoint(accepted_maximum, accepted_maximum.next_up()) else {
+            return false;
+        };
+        largest_request_between(minimum, maximum, max_source_frames, max_output_frames)
+            .is_some_and(|request| self.contains(request))
+    }
+
     /// Largest request whose exact ratio rounds to `source_frames_per_output`.
     #[must_use]
     pub fn largest_request_at(
@@ -57,23 +74,6 @@ impl ElasticRateEnvelope {
             binary_midpoint(source_frames_per_output, source_frames_per_output.next_up())?;
         largest_request_between(minimum, maximum, max_source_frames, max_output_frames)
             .filter(|request| self.contains(*request))
-    }
-
-    pub(crate) fn has_representable_request(
-        self,
-        max_source_frames: usize,
-        max_output_frames: usize,
-    ) -> bool {
-        let accepted_minimum = self.min_source_frames_per_output.next_down();
-        let accepted_maximum = self.max_source_frames_per_output.next_up();
-        let Some(minimum) = binary_midpoint(accepted_minimum.next_down(), accepted_minimum) else {
-            return false;
-        };
-        let Some(maximum) = binary_midpoint(accepted_maximum, accepted_maximum.next_up()) else {
-            return false;
-        };
-        largest_request_between(minimum, maximum, max_source_frames, max_output_frames)
-            .is_some_and(|request| self.contains(request))
     }
 }
 

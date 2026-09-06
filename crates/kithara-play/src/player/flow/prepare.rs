@@ -27,9 +27,9 @@ fn playback_buffers(
         .ok_or(SessionError::ResponseGeometryOverflow)?;
     if required_frames > budget.get() {
         return Err(SessionError::ResponseBudgetExceeded {
+            required_frames,
             max_block_frames: shape.max_block_frames.get(),
             render_quantum_frames: quantum.get(),
-            required_frames,
             budget_frames: budget.get(),
         });
     }
