@@ -45,8 +45,10 @@ that catalog holds only the window-manager menu words canon has no key for.
 
 ### Where the UI package is read from
 
-`AppConfig.ui_package` names the folder holding the UI package. `main` defaults it to `assets/ui` beside the
-executable, which is where a release lays its documents out, and `--ui-package` overrides it. `AppUi::new`
+`AppConfig.ui_package` names the folder holding the UI package. Three sources name it, most specific first:
+`--ui-package` on the command line, then the document's `app.ui_package`, then `assets/ui` beside the executable,
+which is where a release lays its documents out. `main` seeds the builder with the last, lets the merge write the
+middle, and applies the flag afterwards, so a document key never overrides the path a person just typed. `AppUi::new`
 reads that folder over what the build embeds, so changing a document on disk changes the interface at the next
 start without a rebuild.
 
@@ -272,12 +274,37 @@ configuration mismatch is a miss and `waveform_max_buckets` or beat-analysis tun
 The identity is the source location, not the bytes: a file overwritten in place keeps its entry until the
 version is bumped, acceptable for a library of stable files.
 
-## Baked DRM secrets
+## Configuration document
 
-`build.rs` bakes `app.yaml` provider secrets from the process env (workspace `.env` as fallback) into
-`kithara_app::baked`. A missing `$KITHARA_*` reference degrades silently by design: the cipher key bakes as an
-empty string, headers referencing the variable are omitted, and the binary compiles but the key server rejects
-its requests. That is the intended mode for every build that never talks to a real key server, which is why it
-is not a warning. Builds that do - the CI `network*` lanes, release pipelines - set `KITHARA_DRM_REQUIRE` (any
-non-empty value): an upfront pass validates every env reference in `app.yaml`, not only the providers a given
-lane exercises, and fails the build listing all missing variables.
+Two layers: `build.rs` embeds `crates/kithara-app/app.yaml` verbatim and the application parses that same text at
+startup, so the build decides nothing about what a field means, and a `kithara.yaml` beside the executable — or the
+one `--config <path>` names — is laid over it. `document::merge` and its tests own what merging does to each node.
+`app.yaml` must never name `ui:`, `draw_pool:`, or any future `#[cfg(feature = "gui")]` section: a `lib-only`
+build's `Document` declares no such field, and the integration suites load this exact document.
+
+The pipeline is merge → expand → type, and that order keeps secrets out of the logs. Both earlier steps work on the
+untyped tree, so a schema failure is reported from the *pre*-expansion one, naming `$KITHARA_DRM_PROD_KEY` rather
+than the value behind it, and `Config` keeps that tree for `Config::dump` (`--dump-config`) and its `Debug`. The
+typed tree holds resolved secrets and is therefore deserialize-only: a `Serialize` anywhere in it is a leak.
+
+Secrets are never inlined: a `cipher_key` or header value is a `$KITHARA_...` reference, values live in the
+gitignored workspace `.env` or the build shell, and `build.rs` wraps each baked value in `obfstr!()`. A missing
+reference degrades silently by design — the key bakes empty, headers naming it are dropped, the binary compiles and
+the key server rejects it — which is the intended mode for a build that never talks to one. Builds that do, today
+the CI `network*` lanes, set `KITHARA_DRM_REQUIRE`, and an upfront pass then fails with every missing name.
+
+### Crate sections
+
+Every section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled
+once, in the crate that defines it; `document::schema` is the list, and a list repeated here would only rot. Which
+knobs a section may name, and the argument for each left out, is the owning crate's contract. The patches travel
+whole — `AppConfig` carries `hls`, `file` and `audio` to `ResourceConfig`, and `main` stops the store builder one
+step short with `into_config()` to patch `assets_store` — so a knob those crates add later needs no edit here.
+
+`pools` is the one section no crate patch can carry: `pool_schema!` leaves no shared region type to derive on, and
+`kithara-bufpool` owns that argument.
+
+`app` also carries the audio session. `HostConfig` is a session mode, Realtime or Offline, not a configuration
+struct: it has no patch, and a document cannot flip a running application between them. `app.sample_rate` and
+`app.output_block_frames` reach the Host builder in `main`, both optional; the rate stays spelled once because
+`Deck::build` reads it back off `Host::requested_sample_rate`.

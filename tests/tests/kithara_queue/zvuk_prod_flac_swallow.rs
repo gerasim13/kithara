@@ -13,9 +13,13 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
+use kithara_app::{
+    config::{AppConfig, AppDrm},
+    document::Config,
+    pools::{PoolsSection, build as app_pools},
+};
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer,
+    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow,
 };
 use kithara_test_utils::probe::capture as probe_capture;
@@ -33,7 +37,8 @@ const BLOCKS_PER_WINDOW: usize = 8;
 /// in production (app.log 2026-05-27).
 const PLAY_SECS: f64 = 90.0;
 /// The committed playhead advances ~one decoded chunk (~0.1 s) per
-/// `write_playhead`. A single forward step beyond this is the production
+/// `write_playhead` event from `PlayheadWrite::advance`. A single forward step
+/// beyond this is the production
 /// swallow — the playhead leaping forward by seconds with no seek (app.log
 /// showed +10.4 s in one step).
 const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
@@ -48,9 +53,9 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// `committed_position` runs ahead of decoded content with no seek (app.log
 /// 2026-05-27: committed +10.4 s in one step, ~50 s ahead of decoded).
 ///
-/// Detector: the `committed_ns` USDT probe on `PlayheadState::write_playhead`
-/// fires on every playhead commit. We capture the firing sequence and fail if
-/// the committed playhead ever jumps forward by more than
+/// Detector: the `committed_ns` `write_playhead` USDT probe emitted by
+/// `PlayheadWrite::advance` fires on every playhead commit. We capture the
+/// firing sequence and fail if the committed playhead ever jumps forward by more than
 /// [`MAX_COMMITTED_STEP_SECS`] in a single commit. The player's served-frame
 /// position does **not** expose this jump — only the source playhead does.
 ///
@@ -79,7 +84,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
@@ -87,11 +92,12 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
+        .layouts(document.asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -99,6 +105,11 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
             .build(),
     );
     let config = AppConfig::builder()
+        .drm(AppDrm::new(
+            document
+                .drm_policy()
+                .expect("the shipped providers are valid"),
+        ))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker)
@@ -153,7 +164,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let recorder = probe_capture::install();
 
     let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools())
+        HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
     );

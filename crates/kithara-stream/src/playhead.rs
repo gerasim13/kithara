@@ -115,15 +115,6 @@ impl PlayheadState {
         self.position_ns
             .store(ns.min(self.cap()), Ordering::Release);
     }
-
-    /// Capped playhead write that also fires the `committed_ns` USDT probe.
-    /// The probe lives here because the produce path advances the playhead
-    /// directly through this `PlayheadWrite` handle. The FLAC
-    /// `swallow_detector` consumes this probe (`tests/src/swallow_detector.rs`).
-    #[kithara::probe(committed_ns = pos.end_position_ns)]
-    fn write_playhead(&self, pos: &ChunkPosition) {
-        self.write_ns_capped(pos.end_position_ns);
-    }
 }
 
 impl Default for PlayheadState {
@@ -158,7 +149,8 @@ impl PlayheadRead for PlayheadState {
 
 impl PlayheadWrite for PlayheadState {
     fn advance(&self, pos: &ChunkPosition) {
-        self.write_playhead(pos);
+        kithara::probe_event!(write_playhead, committed_ns = pos.end_position_ns);
+        self.write_ns_capped(pos.end_position_ns);
     }
 
     fn advance_partial(&self, position: Duration) {

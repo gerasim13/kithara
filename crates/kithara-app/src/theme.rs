@@ -1,9 +1,17 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use kithara_macros::Patch;
+use serde::Deserialize;
+
+/// One color, named by a document as the three channel bytes: `[187, 148, 66]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 /// Application color palette. Single source of truth: the frontend
 /// converts from this to its framework-specific color type via [`From`].
-#[derive(Debug, Clone, Copy)]
+///
+/// [`PalettePatch`] is what a configuration document may say about it: every
+/// color is a key of its own, so a document that renames one accent keeps the
+/// other fifteen the theme already chose.
+#[derive(Debug, Clone, Copy, Patch)]
 pub struct Palette {
     pub accent: Rgb,
     pub accent_strong: Rgb,

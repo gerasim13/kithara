@@ -6,7 +6,7 @@ use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::renderer::WarpRenderer;
+use super::renderer::{PreparedQuantum, WarpRenderer};
 
 impl<S> WarpRenderer<S>
 where
@@ -59,6 +59,7 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
     }
@@ -74,6 +75,7 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.reset_pending = false;
         self.active = false;
         self.region = None;
@@ -209,6 +211,10 @@ where
     fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = usize::from(self.spec.channels.max(1));
         if !self.active && self.pending_frames(channels) == 0 {
+            if let Err(error) = self.retain_passthrough_history(chunk.meta, &chunk.samples) {
+                warn!(%error, "time-stretch passthrough history retention failed");
+                self.clear_pending_source();
+            }
             self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
         }
@@ -274,17 +280,16 @@ where
 
         let AudioChunk { meta, samples } = chunk;
         self.last_input_meta = Some(meta);
-        self.output_start_meta = None;
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
 
         let channels = usize::from(self.spec.channels.max(1));
         let frames = samples.len() / channels;
-        if frames > Self::MAX_SOURCE_FRAMES {
+        if frames > self.source_block_frames.get() {
             let error = ElasticError::SourceFrameLimit {
                 frames,
-                limit: Self::MAX_SOURCE_FRAMES,
+                limit: self.source_block_frames.get(),
             };
             warn!(%error, "time-stretch rendering failed; dropping chunk");
             self.defer_scratch(Some(samples));
@@ -357,8 +362,15 @@ where
         let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.controls.rate_target();
+        let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
+            Ok(speed) => speed,
+            Err(error) => {
+                warn!(%error, "time-stretch speed smoothing failed");
+                return None;
+            }
+        };
         chunk.meta.render_revision = rate.revision();
-        self.render_at(chunk, rate.speed(), snapshot)
+        self.render_at(chunk, speed, snapshot, None, rate.speed())
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
@@ -369,7 +381,13 @@ where
         }
         let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(chunk, prepared.rate.speed(), snapshot)
+        self.render_at(
+            chunk,
+            prepared.speed,
+            snapshot,
+            Some(prepared),
+            prepared.rate.speed(),
+        )
     }
 
     fn render_at(
@@ -377,6 +395,8 @@ where
         chunk: AudioChunk,
         speed: f32,
         snapshot: Option<crate::RenderSnapshot>,
+        prepared: Option<PreparedQuantum>,
+        target_speed: f32,
     ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
@@ -396,6 +416,18 @@ where
         let output = if self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
+            let mut chunk = chunk;
+            if let Some(prepared) = prepared {
+                if let Err(error) = self.activate_prepared_quantum(&mut chunk, prepared) {
+                    warn!(%error, "time-stretch activation failed; dropping chunk");
+                    self.retire_engine();
+                    self.clear_render_state();
+                    self.defer_scratch(Some(chunk.samples));
+                    return None;
+                }
+            } else if self.passthrough_history_head.is_some() {
+                self.clear_pending_source();
+            }
             self.process_active(chunk, speed)
         };
         if let Some(output) = output.as_ref() {
@@ -404,6 +436,7 @@ where
                 output.frames(),
                 output.meta.render_revision,
                 speed,
+                target_speed,
             );
         }
         output
@@ -414,5 +447,6 @@ where
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
+        self.snap_speed();
     }
 }

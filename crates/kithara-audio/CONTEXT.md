@@ -315,6 +315,29 @@ a concurrent play-then-seek is applied by the post-construction seek path — so
 `VariantChange` here is a stream-layer state bug. Pinned by
 `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
 
+## Configuration document
+
+`AudioConfig<T, B>` is this crate's one configuration struct — tunables and
+per-call wiring together — and `#[derive(Patch)]` generates `AudioConfigPatch`
+beside it, what a document's `audio:` section may say. Two knobs travel:
+`preload_chunks` and `audio_buffer_chunks`.
+
+`decoder` is a nested section of its own, `AudioDecoderConfigPatch`, and names
+`backend` and `gapless_mode`. `resampler` is skipped inside it: a
+`DecoderResamplerSettings` carries the resampler backend itself, an object the
+construction site hands over, and `None` already means "resample through
+`B::default()` with this crate's own options and quality". `DecoderBackend`'s
+variants are gated by the features and targets that can provide them, so a
+build with no Apple backend refuses `apple` by name rather than accepting a
+value it could not honour.
+
+`host_sample_rate`, `block_on_underrun` and `consumer_wake_mode` are skipped, so
+naming one is refused rather than silently overwritten: every player-managed
+resource writes all three from the host's measured capability, and a document
+value would lose to the first host that disagrees. `kithara-play`'s
+`ResourceConfig` carries the patch rather than a built `AudioConfig`, because no
+`AudioConfig` can exist before a track does.
+
 ## Prepared producer seam
 
 `Audio::prepare` returns the reader plus a still-concrete decoded source and

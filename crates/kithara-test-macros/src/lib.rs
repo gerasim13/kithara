@@ -4,7 +4,8 @@
 //! (Rust requires them in the crate root) and delegates logic to per-macro modules:
 //! - [`test`] — `#[kithara::test]` (sync/async/native/wasm with case+fixture).
 //! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
-//! - [`probe`] — `#[kithara::probe]` + `#[derive(kithara::Probe)]`
+//! - [`probe`] — `#[kithara::probe]`, `kithara::probe_event!`, and
+//!   `#[derive(kithara::Probe)]`
 //!   (USDT + tracing instrumentation; auto-gated
 //!   `cfg(any(test, feature = "probe"))`, with the emit wrapped in a
 //!   `kithara_test_utils::rtsan::permit` guard so probes stay active but
@@ -125,6 +126,13 @@ pub fn facade_allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     probe::expand_attr(attr, item)
+}
+
+/// `kithara::probe_event!(name, field, wire_name = expression)` — emit a probe
+/// from inside the product operation that owns the observed transition.
+#[proc_macro]
+pub fn probe_event(input: TokenStream) -> TokenStream {
+    probe::expand_event_entry(input)
 }
 
 /// `#[kithara::mock]` — workspace replacement for `#[unimock(...)]`.

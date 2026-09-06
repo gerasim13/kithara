@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use bon::bon;
+use kithara_macros::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 
@@ -61,7 +62,13 @@ pub enum TempoError {
 /// The tempo the signal detector searches: the band its period estimates stay
 /// inside and the tempo it prefers within that band, both in BPM, together
 /// with how tightly it holds a tempo once found.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// [`TempoPatch`] is what a configuration document may say about it. Every key
+/// is optional and one a document does not name keeps the value already in
+/// place, but the merged policy is judged as a whole before it is committed:
+/// a band the comb never scores is refused, not clamped.
+#[derive(Clone, Copy, Debug, PartialEq, Patch)]
+#[patch(validate = Self::validated, error = TempoError)]
 pub struct Tempo {
     low: f32,
     high: f32,
@@ -99,30 +106,44 @@ impl Tempo {
     ) -> Result<Self, TempoError> {
         let base = Self::default();
         let band = band.unwrap_or_else(|| base.band());
-        let (low, high) = (*band.start(), *band.end());
-        if !low.is_finite() || !high.is_finite() || low <= 0.0 || high < low {
-            return Err(TempoError::Band { low, high });
+        Self {
+            low: *band.start(),
+            high: *band.end(),
+            prior: prior.unwrap_or(base.prior),
+            tolerance: tolerance.unwrap_or(base.tolerance),
+            drift: drift.unwrap_or(base.drift),
         }
-        let prior = prior.unwrap_or(base.prior);
-        if !prior.is_finite() || prior < low || prior > high {
-            return Err(TempoError::Prior { prior, low, high });
-        }
-        let tolerance = tolerance.unwrap_or(base.tolerance);
-        if !tolerance.is_finite() || tolerance <= 0.0 {
-            return Err(TempoError::Tolerance { tolerance });
-        }
-        let drift = drift.unwrap_or(base.drift);
-        if !drift.is_finite() || drift <= 0.0 {
-            return Err(TempoError::Drift { drift });
-        }
-        let tempo = Self {
+        .validated()
+    }
+
+    /// This policy, once every value in it is one the periodicity stage can
+    /// search. The single gate every route in holds: the fallible builder
+    /// above, and the merge [`TempoPatch`] performs.
+    ///
+    /// # Errors
+    /// [`TempoError`] when a value falls where the periodicity stage reads
+    /// nothing, or is not the finite positive quantity it stands for.
+    fn validated(self) -> Result<Self, TempoError> {
+        let Self {
             low,
             high,
             prior,
             tolerance,
             drift,
-        };
-        let lags = tempo.lags();
+        } = self;
+        if !low.is_finite() || !high.is_finite() || low <= 0.0 || high < low {
+            return Err(TempoError::Band { low, high });
+        }
+        if !prior.is_finite() || prior < low || prior > high {
+            return Err(TempoError::Prior { prior, low, high });
+        }
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            return Err(TempoError::Tolerance { tolerance });
+        }
+        if !drift.is_finite() || drift <= 0.0 {
+            return Err(TempoError::Drift { drift });
+        }
+        let lags = self.lags();
         let scored = PeriodConsts::PERIOD_INDEX;
         if !scored.contains(lags.start()) || !scored.contains(lags.end()) {
             return Err(TempoError::Unscored {
@@ -132,7 +153,7 @@ impl Tempo {
                 scored,
             });
         }
-        Ok(tempo)
+        Ok(self)
     }
 
     /// The preferred tempo, in BPM.
@@ -302,6 +323,80 @@ mod tests {
                 "{seconds} s was accepted as a beat tolerance"
             );
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_keys_it_names() {
+        let mut tempo = Tempo::builder()
+            .band(60.0..=180.0)
+            .prior(150.0)
+            .build()
+            .expect("a policy the comb scores");
+
+        let patch: TempoPatch =
+            serde_yaml_ng::from_str("prior: 90.0\n").expect("valid patch document");
+        tempo.apply(patch).expect("a prior inside the band");
+
+        assert_eq!(tempo.prior(), 90.0);
+        assert_eq!(
+            tempo.band(),
+            60.0..=180.0,
+            "a key the document did not name keeps the value already in place, \
+             not the type default"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_band_the_comb_never_scores_is_refused_by_the_merge() {
+        let mut tempo = Tempo::default();
+        let patch: TempoPatch =
+            serde_yaml_ng::from_str("low: 30.0\n").expect("valid patch document");
+
+        let error = tempo
+            .apply(patch)
+            .expect_err("a band past the scored hypotheses must not merge");
+
+        assert!(
+            matches!(error, TempoPatchError::Invalid(TempoError::Unscored { .. })),
+            "{error}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_refused_merge_leaves_the_policy_it_was_applied_to_untouched() {
+        // Seeded off the default on every key the document names, so a merge
+        // that resets the whole policy fails here instead of matching the
+        // baseline by coincidence.
+        let seeded = Tempo::builder()
+            .band(60.0..=180.0)
+            .tolerance(0.11)
+            .build()
+            .expect("a policy the comb scores");
+        let mut tempo = seeded;
+        let patch: TempoPatch =
+            serde_yaml_ng::from_str("tolerance: 0.05\nlow: 30.0\n").expect("valid patch document");
+
+        tempo
+            .apply(patch)
+            .expect_err("the band is not one the comb scores");
+
+        assert_eq!(
+            tempo, seeded,
+            "a refused document commits none of its keys, not even the ones that \
+             would have been accepted on their own"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_tempo_key_is_refused_and_named() {
+        let error = serde_yaml_ng::from_str::<TempoPatch>("swing: 0.5\n")
+            .expect_err("a key the policy does not carry must not pass silently");
+
+        assert!(error.to_string().contains("swing"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]

@@ -24,6 +24,7 @@ embed-full-int8-model = ["nn", "embed-model"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-macros = { workspace = true }
 kithara-platform = { workspace = true, optional = true }
 
 bon = { workspace = true }
@@ -31,6 +32,7 @@ num-traits = { workspace = true }
 realfft = { workspace = true, optional = true }
 rten = { workspace = true, optional = true }
 rten-tensor = { workspace = true, optional = true }
+serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 
@@ -45,8 +47,10 @@ sha2 = { workspace = true }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true }
 
-serde = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

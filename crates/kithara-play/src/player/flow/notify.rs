@@ -54,8 +54,8 @@ where
             PlayerNotification::Requested => {
                 self.handle_track_requested();
             }
-            PlayerNotification::HandoverRequested => {
-                self.handle_handover_requested();
+            PlayerNotification::HandoverRequested { .. } => {
+                self.handle_handover_requested(item);
             }
             PlayerNotification::RateChanged { rate } => {
                 self.core
@@ -104,14 +104,16 @@ where
         self.announce_current_item(index);
     }
 
-    fn handle_handover_requested(&self) {
+    fn handle_handover_requested(&self, item: Option<ItemRole>) {
         if self.crossfade_duration() <= 0.0 {
             return;
         }
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::HandoverRequested);
+        if let Some(item) = item {
+            self.core
+                .engine
+                .bus()
+                .publish(PlayerEvent::HandoverRequested { item });
+        }
         if self.auto_advance_enabled()
             && let Some(idx) = self.armed_next()
         {
@@ -161,7 +163,8 @@ where
     fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
         let (src, id) = match notification {
             PlayerNotification::PlaybackStarted { src, item_id }
-            | PlayerNotification::PlaybackStopped { src, item_id, .. } => (src, *item_id),
+            | PlayerNotification::PlaybackStopped { src, item_id, .. }
+            | PlayerNotification::HandoverRequested { src, item_id } => (src, *item_id),
             _ => return None,
         };
         let track = TrackRef::new(id, slot_id, Arc::clone(src));

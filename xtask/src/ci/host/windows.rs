@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use super::runners::path_text;
 use crate::ci::{
     config::{CiConfig, WindowsGuest},
     process::Process,
@@ -67,7 +68,7 @@ impl<'a> WindowsHost<'a> {
             return Ok(());
         }
         self.process.run(
-            &self.qemu_img.display().to_string(),
+            path_text(&self.qemu_img)?,
             &[
                 "create",
                 "-f",
@@ -183,7 +184,7 @@ impl<'a> WindowsHost<'a> {
         let owned = self.boot_arguments(boot);
         let arguments: Vec<&str> = owned.iter().map(String::as_str).collect();
         self.process.run(
-            &self.qemu.display().to_string(),
+            path_text(&self.qemu)?,
             &arguments,
             "start the Windows guest",
         )?;
@@ -193,10 +194,10 @@ impl<'a> WindowsHost<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, ffi::OsString, fs};
 
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::ci::{config::fixture, host::testing::install_double};
 
     /// The tracked fixture describes a mac without a Windows guest, because
     /// the guest is the one part of a machine profile most hosts do not have.
@@ -239,6 +240,82 @@ mod tests {
             Path::new("/opt/elsewhere/bin/qemu-system-aarch64")
         );
         assert_eq!(host.qemu_img, Path::new("/opt/elsewhere/bin/qemu-img"));
+    }
+
+    /// `the_guest_boots_the_qemu_its_profile_points_at` pins what `new` reads,
+    /// which a spawn site is free to ignore. This runs one.
+    #[test]
+    fn creating_the_data_disk_runs_the_configured_qemu_img() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut config = config();
+        config.host.brew_root = directory.path().join("brew");
+        config.host.host_root = directory.path().to_path_buf();
+        install_double(&config.host.brew_root.join("bin"), "qemu-img");
+        let sized = config
+            .host
+            .windows
+            .as_ref()
+            .expect("the profile describes a guest")
+            .data_disk_gib;
+        let asked = directory.path().join("asked");
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
+
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a guest")
+            .ensure_data_disk()
+            .expect("create the data disk");
+
+        let arguments = fs::read_to_string(&asked).expect("qemu-img was never asked for anything");
+        assert!(
+            arguments.starts_with("create -f qcow2 "),
+            "qemu-img was asked for {arguments} instead of a disk"
+        );
+        assert!(
+            arguments.contains(&format!("{sized}G")),
+            "the disk was not sized from the guest profile: {arguments}"
+        );
+    }
+
+    /// The second of the two spawn sites, and the one that boots the guest.
+    #[test]
+    fn starting_the_guest_runs_the_configured_qemu() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut config = config();
+        config.host.brew_root = directory.path().join("brew");
+        config.host.host_root = directory.path().to_path_buf();
+        let bin = config.host.brew_root.join("bin");
+        install_double(&bin, "qemu-img");
+        install_double(&bin, "qemu-system-aarch64");
+        let asked = directory.path().join("asked");
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("KITHARA_TEST_TRACE"),
+                asked.clone().into_os_string(),
+            )]),
+        );
+
+        WindowsHost::new(&config, &process)
+            .expect("the profile describes a guest")
+            .start(Boot::Installed)
+            .expect("start the guest");
+
+        let boot = fs::read_to_string(&asked)
+            .expect("nothing was started")
+            .lines()
+            .last()
+            .expect("a boot line")
+            .to_owned();
+        assert!(
+            boot.starts_with("-name kithara-windows"),
+            "started with {boot}"
+        );
     }
 
     /// The page file and `TEMP` are what grow the system image, and Windows

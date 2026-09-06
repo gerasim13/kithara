@@ -99,8 +99,8 @@ guard, so probes stay active but `RTSan`-transparent under `--cfg rtsan`.
   `caller_line`, `seq`, `thread_id`, `thread_seq`, `install_id`). Use for very-frequent production functions whose
   parameters are not `IntoProbeArg` (e.g. `Future::poll_next(&self, cx: &mut Context)`).
 - `#[kithara::probe(field1, field2, …)]` — parameter idents recorded as wire args; each must match a real parameter name.
-- `#[kithara::probe(name = expr, …)]` — records a computed value under wire-name `name`. `expr` is evaluated inside the
-  function body at probe-firing time (so it can read `self`, parameters, locals) and must implement `IntoProbeArg`. A
+- `#[kithara::probe(name = expr, …)]` — records a computed value under wire-name `name`. `expr` is evaluated at function
+  entry (so it can read `self` and parameters, but not later locals) and must implement `IntoProbeArg`. A
   computed name may not collide with a plain ident in the same attribute; `caller` and `probe_return` are reserved.
 - Plain and computed entries share one ceiling: **6 wire args total**, the USDT provider arity limit. Over it, fold fields
   into a `#[derive(kithara::Probe)]` struct or split the function.
@@ -108,3 +108,7 @@ guard, so probes stay active but `RTSan`-transparent under `--cfg rtsan`.
   costs roughly a millisecond per firing; do NOT use on `poll_next`-style hot probes.
 - `#[kithara::probe(probe_return)]` — records the return value through `Probe::record_probe`, emits no entry event, and is
   the only form that drops `#[track_caller]`.
+
+Use `kithara::probe_event!(name, field, wire_name = expression)` when the observed
+values exist only inside a real product operation. Do not extract a one-call or
+one-assignment function just to attach `#[kithara::probe]`.

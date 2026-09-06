@@ -76,88 +76,17 @@ impl NetObserver for RequestObserver {
     }
 }
 
-/// Transition a fetch from queued → in-flight. Increments the
-/// `inflight` counter (the fact subscribers and the watchdog actually
-/// observe) and notifies bus listeners with the realised
-/// queue-residence time.
-#[kithara::probe(request_id, wait_in_queue)]
-fn start_request(
-    bus: Option<&EventBus>,
-    inflight: &std::sync::atomic::AtomicUsize,
-    request_id: RequestId,
-    wait_in_queue: Duration,
-) {
-    inflight.fetch_add(1, Ordering::Relaxed);
-    if let Some(b) = bus {
-        b.publish(DownloaderEvent::RequestStarted {
-            request_id,
-            wait_in_queue,
-        });
-    }
-}
-
-/// Record a fetch as successfully finished. Feeds the realised
-/// bandwidth into ABR (the fact downstream throttling cares about) and
-/// notifies subscribers.
-#[kithara::probe(request_id, bytes_transferred, duration)]
-fn finish_request(
-    bus: Option<&EventBus>,
-    abr: &Arc<AbrController>,
-    peer_id: AbrPeerId,
-    request_id: RequestId,
-    bytes_transferred: u64,
-    duration: Duration,
-) {
-    if bytes_transferred > 0 {
-        abr.record_bandwidth(
-            peer_id,
-            bytes_transferred,
-            duration,
-            BandwidthSource::Network,
-        );
-    }
-    if let Some(b) = bus {
-        b.publish(DownloaderEvent::RequestCompleted {
-            request_id,
-            bytes_transferred,
-            duration,
-            bandwidth_bps: bandwidth_bps(bytes_transferred, duration),
-        });
-    }
-}
-
-/// Abort a fetch and propagate the cancel reason. `was_in_flight`
-/// distinguishes a mid-flight kill (a fetch task was already running)
-/// from a before-start kill the [`deliver_cancelled_with_event`] path
-/// performs on entries that never spawned.
-#[kithara::probe(request_id, reason, bytes_transferred, was_in_flight)]
-fn abort_request(
+fn publish_cancelled(
     bus: Option<&EventBus>,
     request_id: RequestId,
     reason: CancelReason,
     bytes_transferred: u64,
-    was_in_flight: bool,
 ) {
     if let Some(bus) = bus {
         bus.publish(DownloaderEvent::RequestCancelled {
             request_id,
             reason,
             bytes_transferred,
-        });
-    }
-    let _ = was_in_flight;
-}
-
-/// Mark a fetch as failed (network or protocol error). Tags the
-/// failure as retryable or terminal so callers can decide whether to
-/// re-queue.
-#[kithara::probe(request_id, retryable)]
-fn fail_request(bus: Option<&EventBus>, request_id: RequestId, err: &NetError, retryable: bool) {
-    if let Some(bus) = bus {
-        bus.publish(DownloaderEvent::RequestFailed {
-            request_id,
-            retryable,
-            error: err.clone(),
         });
     }
 }
@@ -251,7 +180,14 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
 
-    start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
+    kithara::probe_event!(start_request, request_id, wait_in_queue);
+    inflight.fetch_add(1, Ordering::Relaxed);
+    if let Some(bus) = bus.as_ref() {
+        bus.publish(DownloaderEvent::RequestStarted {
+            request_id,
+            wait_in_queue,
+        });
+    }
 
     task::spawn(async move {
         let slow_bus = bus.clone();
@@ -512,7 +448,23 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                 let elapsed = fetch_elapsed(started);
                 match write_result {
                     Ok(total) => {
-                        finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
+                        kithara::probe_event!(
+                            finish_request,
+                            request_id,
+                            bytes_transferred = total,
+                            duration = elapsed
+                        );
+                        if total > 0 {
+                            abr.record_bandwidth(peer_id, total, elapsed, BandwidthSource::Network);
+                        }
+                        if let Some(bus) = bus.as_ref() {
+                            bus.publish(DownloaderEvent::RequestCompleted {
+                                request_id,
+                                bytes_transferred: total,
+                                duration: elapsed,
+                                bandwidth_bps: bandwidth_bps(total, elapsed),
+                            });
+                        }
                         if let Some(cb) = on_complete_cb {
                             cb(total, Some(&headers), None);
                         }
@@ -564,10 +516,24 @@ fn publish_failure_or_cancel(
 ) {
     if matches!(err, NetError::Cancelled) {
         let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
-        abort_request(bus, request_id, reason, bytes_transferred, true);
+        kithara::probe_event!(
+            abort_request,
+            request_id,
+            reason,
+            bytes_transferred,
+            was_in_flight = true
+        );
+        publish_cancelled(bus, request_id, reason, bytes_transferred);
     } else {
         let retryable = err.retryability() == Retryability::Transient;
-        fail_request(bus, request_id, err, retryable);
+        kithara::probe_event!(fail_request, request_id, retryable);
+        if let Some(bus) = bus {
+            bus.publish(DownloaderEvent::RequestFailed {
+                request_id,
+                retryable,
+                error: err.clone(),
+            });
+        }
     }
 }
 
@@ -584,7 +550,14 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
     let epoch_cancel = internal.cmd.cancel.clone();
     let placeholder_inner = CancelToken::never();
     let reason = classify_cancel(peer_cancel, epoch_cancel.as_ref(), &placeholder_inner);
-    abort_request(bus.as_ref(), request_id, reason, 0, false);
+    kithara::probe_event!(
+        abort_request,
+        request_id,
+        reason,
+        bytes_transferred = 0_u64,
+        was_in_flight = false
+    );
+    publish_cancelled(bus.as_ref(), request_id, reason, 0);
     deliver_cancelled(internal.response, internal.cmd);
 }
 

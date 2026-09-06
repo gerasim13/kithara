@@ -391,7 +391,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         loop {
             match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
-                Ok(Event::Player(PlayerEvent::HandoverRequested)) => handover_seen = true,
+                Ok(Event::Player(PlayerEvent::HandoverRequested { .. })) => handover_seen = true,
                 Ok(Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -655,5 +655,90 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         queue.current_index(),
         Some(0),
         "current_index must stay on the only track"
+    );
+}
+
+/// A queue played straight through has to let its middle track be heard.
+///
+/// Committing an advance moves the queue's cursor at once, while the track
+/// just left keeps leading the mix until the engine hands over. The remaining
+/// playtime on offer in that window belongs to the outgoing track; paired with
+/// the incoming track's identity it reads as "this track is about to end" on
+/// the incoming track's very first tick, and the queue advances straight past
+/// it. Two tracks cannot show this — there is no successor left to jump to, so
+/// the sibling crossfade test above stays green while a playlist skips.
+#[kithara::test(tokio)]
+async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
+    const TRACK_SECS: f64 = 1.5;
+    const CROSSFADE_SECS: f32 = 0.3;
+    const LEVEL_A: f32 = 0.10;
+    const LEVEL_B: f32 = 0.80;
+    const LEVEL_C: f32 = 0.40;
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let queue = harness.insert_control(Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
+        false,
+    )));
+
+    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A));
+    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B));
+    let _ = queue.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C));
+    // The app starts a catalog row exactly this way, with no fade into the
+    // first track, and it is the arrangement that leaves the engine's own
+    // handover trigger disarmed for that track.
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+
+    let onset = first_onset_frame(&pcm, 0.005)
+        .expect("track A must produce non-silence within the render budget");
+    // A track is left one crossfade before its own end, so that is how far
+    // apart the seams stand and how long each track owns the output.
+    let stride_frames = num_traits::cast::<f64, usize>(
+        (TRACK_SECS - f64::from(CROSSFADE_SECS)) * f64::from(SAMPLE_RATE),
+    )
+    .unwrap_or(usize::MAX);
+    let window = SAMPLE_RATE as usize / 8;
+    let middle_of = |index: usize| onset + stride_frames * index + stride_frames / 2;
+
+    let mean_a =
+        mean_abs_window(&pcm, middle_of(0), window).expect("track A's own span fits the take");
+    let mean_b =
+        mean_abs_window(&pcm, middle_of(1), window).expect("track B's own span fits the take");
+    let mean_c =
+        mean_abs_window(&pcm, middle_of(2), window).expect("track C's own span fits the take");
+
+    assert!(
+        mean_a > 0.005,
+        "track A produced no audible signal: mean_a={mean_a}"
+    );
+
+    // Levels are compared as ratios against track A's, so whatever gain the
+    // host applies cancels and only the identity of the track being heard is
+    // left to decide the assertion.
+    let ratio_b = mean_b / mean_a.max(f32::EPSILON);
+    let expected_b = LEVEL_B / LEVEL_A;
+    let expected_c = LEVEL_C / LEVEL_A;
+    assert!(
+        (ratio_b - expected_b).abs() < (ratio_b - expected_c).abs(),
+        "the middle of track B's span is track C: the queue left B before it played. \
+         ratio={ratio_b}, B={expected_b}, C={expected_c} \
+         (mean_a={mean_a}, mean_b={mean_b})"
+    );
+
+    let ratio_c = mean_c / mean_a.max(f32::EPSILON);
+    assert!(
+        (ratio_c - expected_c).abs() < (ratio_c - expected_b).abs(),
+        "the middle of track C's span is not track C: \
+         ratio={ratio_c}, C={expected_c}, B={expected_b} \
+         (mean_a={mean_a}, mean_c={mean_c})"
     );
 }

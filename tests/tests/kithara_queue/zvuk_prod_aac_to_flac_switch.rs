@@ -17,8 +17,14 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
-use kithara_integration_tests::{TestTempDir, bufpool_ext::pools, kithara, offline::OfflinePlayer};
+use kithara_app::{
+    config::{AppConfig, AppDrm},
+    document::Config,
+    pools::{PoolsSection, build as app_pools},
+};
+use kithara_integration_tests::{
+    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
+};
 use tracing::info;
 
 #[path = "source_helper.rs"]
@@ -181,7 +187,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
@@ -189,11 +195,12 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
+        .layouts(document.asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -201,6 +208,11 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
             .build(),
     );
     let config = AppConfig::builder()
+        .drm(AppDrm::new(
+            document
+                .drm_policy()
+                .expect("the shipped providers are valid"),
+        ))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker)
@@ -243,7 +255,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     );
 
     let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools())
+        HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
     );

@@ -4,7 +4,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
-    play::PlayWorkerConfig,
+    play::{PlayWorkerConfig, policy::DomainKeyPolicy},
     stream::dl::{Downloader, DownloaderConfig},
 };
 
@@ -15,7 +15,7 @@ use super::{
 use crate::{
     broadcast::Broadcaster,
     catalog::Catalog,
-    config::{AppBroadcastConfig, AppConfig},
+    config::{AppBroadcastConfig, AppConfig, AppDrm},
     deck::{Deck, DeckId, DeckSet},
     pools::{self, AppHost, AppStore, AppWorker},
     state::test_fixture::controller,
@@ -48,8 +48,8 @@ pub(super) fn state() -> Kithara {
         "/music/local.flac".to_string(),
         "https://example.test/stream.m3u8".to_string(),
     ]);
-    let ui =
-        AppUi::new(Package::load(None).expect("shipped UI package")).expect("shipped UI compiles");
+    let ui = AppUi::new(Package::load(None).expect("shipped UI package"), &config.ui)
+        .expect("shipped UI compiles");
     Kithara::mounted(
         session,
         decks,
@@ -63,7 +63,7 @@ pub(super) fn state() -> Kithara {
 
 fn config() -> AppConfig {
     let shutdown = CancelToken::root();
-    let pools = pools::build().expect("valid app pool policy");
+    let pools = pools::build(&pools::PoolsSection::default()).expect("valid app pool policy");
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -77,6 +77,7 @@ fn config() -> AppConfig {
         .backend(StorageBackend::Memory)
         .build();
     AppConfig::builder()
+        .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker)

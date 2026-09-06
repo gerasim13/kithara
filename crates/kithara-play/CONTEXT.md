@@ -86,6 +86,34 @@ stretch changes output frame count, never `AudioSpec.sample_rate`.
 `PreparedAudioLane` carries it, so there is no second route for load to reach a
 node.
 
+## Configuration document
+
+`PlayerConfig<S>` is this crate's one player configuration, tunables and
+per-call wiring together. `#[derive(Patch)]` generates `PlayerConfigPatch`,
+what a document's `player:` section may say: `gapless_mode`,
+`crossfade_duration`, `default_rate`, `max_slots`, `response_budget_frames`, and
+`warp`, which nests `WarpConfigPatch`. `max_slots` is the engine's:
+`PlayerConfig` owns it and hands it to `EngineConfig::builder`, so one value
+stands behind both and `EngineConfig` needs no patch of its own.
+
+`auto_advance_enabled`, `prefetch_duration`, `block_on_underrun`, `eq_layout`
+and `sample_rate` are skipped, and so refused by name rather than dropped. Each
+names the owner that overwrites it in its own field doc, and `document_tests`
+pins the refusal.
+
+`ResourceConfig<S, B>` is where a document's HLS, file, and audio values wait
+for the track that will use them, as `HlsConfigPatch`, `FileConfigPatch` and
+`AudioConfigPatch` rather than built configurations: an `HlsConfig` needs a URL
+and a store, a `FileConfig` a source, so neither can exist before a track does.
+`resource/build.rs` builds the real configuration and applies the patch onto it,
+so a knob either crate adds later needs no edit here. It then overwrites
+`extension` on the file branch: the per-call `hint` and the source's own
+extension name this very track, so either outranks a blanket `file.extension`.
+There is no `resource:` section — `Document`'s `deny_unknown_fields` refuses one
+(`a_resource_section_is_rejected`) — and the three patches arrive from
+`kithara-app`'s `audio:`, `hls:` and `file:` sections through
+`sources::build_resource_config`, the only construction site a document reaches.
+
 ## Live Equalizer Layout
 `PlayerImpl::set_eq_layout` replaces a running player's master EQ, and **the
 session graph is the actuator**: it builds the replacement on the control thread,
@@ -120,7 +148,11 @@ reaching its own end seconds into the current item. The five cases are pinned in
 internally. `PlayerConfig::auto_advance_enabled` (default `true`) applies a
 built-in linear policy. **`kithara-queue::Queue` disables that policy and reacts
 to `PlayerEvent::HandoverRequested` through `select_item_with_crossfade`; it
-never calls `arm_next` or `commit_next`.** `select_item_with_crossfade` fails
+never calls `arm_next` or `commit_next`.** `HandoverRequested` carries `ItemRole`
+for the same reason `ItemDidPlayToEnd` does: it is minted by the track that is
+running out while any number of others render, so a consumer that has already
+advanced past that track must be able to tell the request is not about the one it
+now holds. `select_item_with_crossfade` fails
 `PlayError::ItemConsumed` *before any bookkeeping* when the target index is
 neither armed, nor the announced current item, nor still holding a resource - the
 UI must not drift from the audio
@@ -148,6 +180,16 @@ the engine and resource registrations. `worker` is declared after those owners,
 so the final `PlayWorker` reference cannot shut its thread down while a track
 still holds a lease; likewise the dispatcher precedes the base-worker clone, and
 each lease's task handle precedes its worker clone.
+
+**Drop does not take the admission gate.** `close` serialises against admitted
+operations; `invalidate`, which `PlayerImpl::drop` calls, deliberately does not
+(`drop_does_not_wait_for_an_admitted_operation`). A player is dropped by whoever
+last owns it, including a session dispatcher unwinding its own state, and an
+admitted operation can be parked on a reply from that same dispatcher - taking
+the gate there closes the cycle and the session never finishes shutting down.
+Neither teardown step needs it: closing stores an atomic and cancelling fires a
+token, and a cancel exists to interrupt an admitted operation rather than queue
+behind one.
 
 ## Cancel Hierarchy
 `docs/guides/cancel-policy.md` owns the typed propagate-down tree, the

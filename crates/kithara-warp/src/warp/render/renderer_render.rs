@@ -1,9 +1,64 @@
+use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
-use kithara_stretch::{ElasticError, ElasticRequest};
+use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::renderer::WarpRenderer;
+
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    pub(super) fn preview_speed(
+        &self,
+        target: f32,
+        output_frames: usize,
+    ) -> Result<f32, ElasticError> {
+        let Some(applied) = self.applied_speed else {
+            return Ok(target);
+        };
+        let (speed, _) = Self::smoothed_speed(applied, target, output_frames)?;
+        Ok(speed)
+    }
+
+    pub(super) fn advance_speed(
+        &mut self,
+        target: f32,
+        output_frames: usize,
+    ) -> Result<(), ElasticError> {
+        let Some(applied) = self.applied_speed else {
+            return Ok(());
+        };
+        let (_, next) = Self::smoothed_speed(applied, target, output_frames)?;
+        self.applied_speed = Some(next);
+        Ok(())
+    }
+
+    fn smoothed_speed(
+        mut applied: SmoothedParam,
+        target: f32,
+        output_frames: usize,
+    ) -> Result<(f32, SmoothedParam), ElasticError> {
+        if output_frames == 0 {
+            return Err(ElasticError::EmptyOutput);
+        }
+        applied.set_value(target);
+        let mut total = 0.0_f64;
+        for _ in 0..output_frames {
+            total += f64::from(applied.next_smoothed());
+        }
+        applied.settle();
+        let frames = output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let speed = (total / frames)
+            .to_f32()
+            .filter(|speed| speed.is_finite() && *speed > 0.0)
+            .ok_or(ElasticError::InvalidRate(total / frames))?;
+        Ok((speed, applied))
+    }
+}
 
 impl<S> WarpRenderer<S>
 where
@@ -23,7 +78,9 @@ where
             && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
             && self.unity_passthrough(speed)
         {
-            return Ok(remaining);
+            return Ok(self
+                .render_quantum_frames
+                .map_or(remaining, |frames| remaining.min(frames.get())));
         }
 
         let channels = usize::from(self.spec.channels.max(1));
@@ -49,8 +106,7 @@ where
             || capabilities.max_output_frames(),
             |frames| capabilities.max_output_frames().min(frames.get()),
         );
-        let source_limit =
-            Self::source_block_limit(stretch, capabilities.max_source_frames(), output_limit)?;
+        let source_limit = Self::source_block_limit(stretch, capabilities, output_limit)?;
         let pending_frames = self.pending_frames(channels);
         let available =
             source_limit
@@ -67,13 +123,26 @@ where
 
     pub(super) fn source_block_limit(
         stretch: f64,
-        max_source_frames: usize,
-        max_output_frames: usize,
+        capabilities: ElasticCapabilities,
+        output_limit: usize,
     ) -> Result<usize, ElasticError> {
         if !stretch.is_finite() || stretch <= 0.0 {
             return Err(ElasticError::InvalidRate(stretch));
         }
-        let output_limit = max_output_frames
+        let envelope = capabilities.rate_envelope();
+        let rate = stretch.recip();
+        let boundary = [
+            envelope.min_source_frames_per_output(),
+            envelope.max_source_frames_per_output(),
+        ]
+        .into_iter()
+        .find(|boundary| boundary.to_f32() == rate.to_f32());
+        if let Some(request) = boundary.and_then(|boundary| {
+            envelope.largest_request_at(boundary, capabilities.max_source_frames(), output_limit)
+        }) {
+            return Ok(request.source_frames());
+        }
+        let output_limit = output_limit
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
         let output_budget = (output_limit - Self::OUTPUT_ROUNDING_MARGIN).max(1.0);
@@ -81,7 +150,7 @@ where
             .floor()
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let source_limit = source_limit.min(max_source_frames);
+        let source_limit = source_limit.min(capabilities.max_source_frames());
         if source_limit == 0 {
             return Err(ElasticError::InvalidRate(1.0 / stretch));
         }
@@ -168,6 +237,41 @@ where
         Ok((output_frames, exact - emitted))
     }
 
+    fn fit_output_to_envelope(
+        source_frames: usize,
+        output_frames: usize,
+        remainder: f64,
+        capabilities: ElasticCapabilities,
+    ) -> Result<(usize, f64), ElasticError> {
+        let source_frames_f = source_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let envelope = capabilities.rate_envelope();
+        let minimum_output = (source_frames_f / envelope.max_source_frames_per_output())
+            .ceil()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let maximum_output = (source_frames_f / envelope.min_source_frames_per_output())
+            .floor()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?
+            .min(capabilities.max_output_frames());
+        if minimum_output == 0 || minimum_output > maximum_output {
+            return Err(ElasticError::InvalidRate(source_frames_f));
+        }
+        let bounded = output_frames.clamp(minimum_output, maximum_output);
+        let displaced = output_frames
+            .to_f64()
+            .and_then(|output| bounded.to_f64().map(|bounded| output - bounded))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((bounded, remainder + displaced))
+    }
+}
+
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
         let source_frames = self.pending_frames(channels);
         if source_frames == 0 {
@@ -265,11 +369,8 @@ where
                 .as_ref()
                 .map(|engine| engine.capabilities())
                 .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            let source_limit = Self::source_block_limit(
-                stretch,
-                capabilities.max_source_frames(),
-                capabilities.max_output_frames(),
-            )?;
+            let source_limit =
+                Self::source_block_limit(stretch, capabilities, capabilities.max_output_frames())?;
             let remaining = usize::try_from(span).unwrap_or(frames - consumed);
             let pending_frames = self.pending_frames(channels);
             let available =
@@ -304,6 +405,12 @@ where
             let source_frames = pending_frames
                 .checked_add(sub)
                 .ok_or(ElasticError::SampleCountOverflow)?;
+            let (output_frames, next_remainder) = Self::fit_output_to_envelope(
+                source_frames,
+                output_frames,
+                next_remainder,
+                capabilities,
+            )?;
             let output_frames = FrameCount::new(output_frames);
             let request = ElasticRequest::new(source_frames, output_frames.get())?;
             let output_samples = output_frames
@@ -318,7 +425,7 @@ where
             if pending_frames > 0 {
                 self.append_pending_source(part, meta, frame)?;
             }
-            if start == 0 {
+            if start == 0 && self.output_start_meta.is_none() {
                 self.output_start_meta = if pending_frames > 0 {
                     self.pending_meta
                 } else {

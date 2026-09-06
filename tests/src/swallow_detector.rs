@@ -37,7 +37,8 @@ pub fn assert_committed_reached(recorder: &Recorder, min_secs: f64) {
 /// `max_step_secs` in a single commit — the FLAC "swallow" signature, where
 /// the source timeline's `committed_position` leaps ahead by ~one segment
 /// with no seek. Reads the `committed_ns` field off the `write_playhead`
-/// USDT probe (the only surface that exposes the jump; the player's
+/// USDT probe emitted by `PlayheadWrite::advance` (the only surface that
+/// exposes the jump; the player's
 /// served-frame position does not). Panics listing the offending jumps.
 pub fn assert_no_committed_swallow(recorder: &Recorder, max_step_secs: f64) {
     let commits = committed_positions(recorder);

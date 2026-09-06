@@ -241,7 +241,7 @@ async fn run_actor(
 
         let ack = match result {
             Ok(WriteOutcome::Committed { final_len }) => {
-                analysis_persistence_committed(revision, final_len);
+                probe::probe_event!(analysis_persistence_committed, revision, bytes = final_len);
                 Ok(())
             }
             Ok(WriteOutcome::AlreadyCommitted) => Ok(()),
@@ -466,9 +466,6 @@ fn abort_join<T>(handle: &JoinHandle<T>) {
 #[cfg(target_arch = "wasm32")]
 fn abort_join<T>(_handle: &JoinHandle<T>) {}
 
-#[probe::probe(revision, bytes = final_len)]
-fn analysis_persistence_committed(revision: u64, final_len: u64) {}
-
 /// Analysis persistence startup, queue, storage, or archive failure.
 #[derive(Debug)]
 pub(crate) enum AnalysisPersistenceError {
@@ -589,7 +586,7 @@ mod tests {
     }
 
     async fn round_trip(backend: StorageBackend) {
-        let pools = pools::build().expect("valid app pool policy");
+        let pools = pools::build(&pools::PoolsSection::default()).expect("valid app pool policy");
         let store = AppStore::builder(pools.clone()).backend(backend).build();
         let resource = AppResourceConfig::for_src(
             ResourceSrc::parse("https://analysis.test.invalid/persistence.mp3")

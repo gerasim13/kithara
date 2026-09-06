@@ -34,14 +34,44 @@ through `Queue`, `QueueControl`, `Loader`, `TrackSource`, and `ResourceConfig`.
   standalone byte pool.
   `TrackSource::Uri` resources share it; a caller-supplied `ResourceConfig` keeps its
   own.
-- `max_concurrent_loads` (default 3) sizes the prefetch lane only.
-- `prefetch_duration` (default 3.5) is applied to the supplied player the queue drives,
-  the same way `auto_advance_enabled` is.
-- `max_history_size` (default 100) caps `NavigationState`'s history.
-- `should_autoplay` (default `true`) is consumed only by the
-  `cfg(any(test, feature = "probe"))` harness. The production append / insert path
-  never starts playback: the caller drives the first `select` / `play`, so order is
-  deterministic and independent of which load finishes first.
+- Four tunables sit beside that wiring, three of which a configuration document may
+  override; see "Configuration document entry point" below.
+  - `max_concurrent_loads` (default 3) sizes the prefetch lane only.
+  - `prefetch_duration` (default 3.5) is applied to the supplied player the queue
+    drives, the same way `auto_advance_enabled` is.
+  - `max_history_size` (default 100) caps `NavigationState`'s history.
+  - `should_autoplay` (default true) is the one a document may **not** name. It is
+    read only under `cfg(any(test, feature = "probe"))`, and `kithara-app` ships
+    without `probe`, so a document key would configure nothing in the binary.
+    `QueueConfigPatch` does not declare it, so naming `queue.should_autoplay` is
+    refused rather than parsed and dropped.
+  - `should_autoplay` (default `true`) is consumed only by the
+    `cfg(any(test, feature = "probe"))` harness. The production append / insert path
+    never starts playback: the caller drives the first `select` / `play`, so order is
+    deterministic and independent of which load finishes first.
+
+## Configuration document entry point
+
+`QueueConfig<S>` is the one configuration struct this crate has: the tunables and the
+live handles live in it together. `QueueConfigPatch` is the second way in: a
+configuration document types into it — `kithara-app`'s `queue:` section — and `apply`
+writes only the fields the document names, leaving the rest of `QueueConfig`
+standing. `kithara-app` carries the patch on `AppConfig` and `Deck::build` applies it
+to the `QueueConfig` it builds — the only construction site a document reaches.
+`kithara-ffi` builds two more (`native/inner.rs`, `web/worker.rs`); neither reads a
+document. `Deserialize` only, never `Serialize`: a typed patch holds resolved secrets
+in the clear.
+
+`prefetch_duration` stays `f32` seconds rather than the campaign's `humantime`
+duration convention: the value already reaches setter and read call sites across
+`kithara-play` as a bare `f32`, and converting the type would only churn those for a
+formatting preference.
+
+`cancel`, `player`, and `store` are absent from the patch: they are live,
+per-construction handles (a `CancelToken`, an already-built `PlayerImpl<S>`, an
+`S`-typed `AssetStore`) that a configuration document has no way to name, the same
+reasoning `kithara-hls::HlsConfig` and `kithara-file::FileConfig` apply to their own
+wiring fields.
 
 ## Track sources
 
@@ -142,7 +172,11 @@ seeking — not from `PlayerImpl::current_index`.
 
 - `HandoverRequested` → `advance_loaded_successor`, which selects the successor only
   if it is already `Loaded`. The queue never consumes `PrefetchRequested` and never
-  calls `arm_next` / `commit_next`.
+  calls `arm_next` / `commit_next`. Gated on `item.track().id == current().id` for the
+  same reason `ItemDidPlayToEnd` is gated on its role: the request names the track that
+  is running out, the advance moves navigation at once, and the outgoing track keeps
+  rendering with its own triggers armed — so its handover can still land after the queue
+  has left it, and applied to the successor it skips that successor unheard.
 - `ItemDidPlayToEnd`: `PlayerImpl::process_notifications` walks every active slot, and one
   slot holds more than one track, so the event names whichever track in the player's
   arena hit EOF — an orphaned slot decoding ahead, or the outgoing half of a crossfade,

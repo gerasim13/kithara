@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
     PlayerTrack, ReadOutcome, RtSink,
-    triggers::{TrackTriggers, TriggerInput},
+    triggers::{TrackTriggers, TriggerInput, TriggerTrack},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
@@ -50,6 +51,20 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
+    /// One track's contribution to one output block.
+    ///
+    /// `range` is the block-relative span this track covers: the outer loop
+    /// renders `0..frames`, while a gapless handover and a promotion render
+    /// `offset..frames`, so the span carries the in-block seam. Together with
+    /// the session-axis base in `context` it names the exact output frames
+    /// this track wrote, which is what attributes a frame to a track.
+    #[kithara::probe(
+        track_id = self.item_id.as_u64(),
+        output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
+        range_start = range.start,
+        range_end = range.end,
+        served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
+    )]
     pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
@@ -95,9 +110,10 @@ impl PlayerTrack {
     fn check_notifications(
         triggers: &mut TrackTriggers,
         notification_tx: &mut HeapProd<PlayerNotification>,
+        track: TriggerTrack<'_>,
         input: TriggerInput,
     ) {
-        triggers.check(notification_tx, input);
+        triggers.check(notification_tx, track, input);
     }
 
     fn handle_failed_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -146,6 +162,10 @@ impl PlayerTrack {
         Self::check_notifications(
             &mut self.triggers,
             sink.notifications,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
             TriggerInput {
                 duration,
                 frames_until_eof,
@@ -188,7 +208,13 @@ impl PlayerTrack {
             return;
         }
         self.triggers.mark_prefetch_requested();
-        self.triggers.emit_handover_requested(notification_tx);
+        self.triggers.emit_handover_requested(
+            notification_tx,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
+        );
         self.set_state(TrackState::Finished);
         self.ended_at_eof = true;
         notification_tx
@@ -225,6 +251,10 @@ impl PlayerTrack {
         Self::check_notifications(
             &mut self.triggers,
             notification_tx,
+            TriggerTrack {
+                src: self.resource.src(),
+                item_id: self.item_id,
+            },
             TriggerInput {
                 block_frames,
                 duration,

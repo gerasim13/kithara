@@ -14,6 +14,7 @@ use kithara_stream::{
     AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, ReaderInput, ReaderProfile,
     ReaderWarmup, needs_exact_byte_sizes,
 };
+use serde::Deserialize;
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
@@ -65,8 +66,15 @@ compile_error!(
      build that decodes nothing is not one this crate can serve."
 );
 
+/// Which decoder implementation constructs the decode path.
+///
+/// A configuration document names the variant in `snake_case`. The variants
+/// are gated by the features and targets that can actually provide them, so a
+/// build that has no Apple backend refuses `apple` by name rather than
+/// accepting a value it could not honour.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, derive_more::Display, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, derive_more::Display, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]

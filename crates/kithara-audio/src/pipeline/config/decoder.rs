@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
+use kithara_macros::Patch;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
 #[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
@@ -27,7 +28,11 @@ where
     }
 }
 
-#[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
+/// Decoder construction settings, including decoder-side resampling.
+///
+/// [`AudioDecoderConfigPatch`] is what a configuration document may say about
+/// it, reached through `audio.decoder`.
+#[derive(Clone, Debug, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
@@ -38,6 +43,11 @@ pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get, copy)]
     pub(crate) gapless_mode: GaplessMode,
+    /// Not a document key: `DecoderResamplerSettings` carries the resampler
+    /// backend itself, an object the construction site hands over and no
+    /// document can name. `None` means the decoder resamples through
+    /// `B::default()` with this crate's own options and quality.
+    #[patch(skip)]
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
 }
 

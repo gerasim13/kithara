@@ -46,7 +46,8 @@ const BLOCKS_PER_WINDOW: usize = 8;
 const PLAY_SECS: f64 = 18.0;
 const MIN_DELAYED_PLAYHEAD_SECS: f64 = 14.0;
 /// The committed playhead advances ~one decoded chunk (~0.1 s) per
-/// `write_playhead`. A single forward step beyond this is the production
+/// `write_playhead` event from `PlayheadWrite::advance`. A single forward step
+/// beyond this is the production
 /// swallow — the playhead leaping forward by ~one segment with no seek.
 const MAX_COMMITTED_STEP_SECS: f64 = 0.5;
 
@@ -112,8 +113,8 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 ///
 /// The bug: the source timeline's `committed_position` jumps forward by ~one
 /// segment with no seek when a slow FLAC segment isn't ready by the real-time
-/// deadline. Detector: the `committed_ns` USDT probe on
-/// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
+/// deadline. Detector: the `committed_ns` `write_playhead` USDT probe emitted by
+/// `PlayheadWrite::advance` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]

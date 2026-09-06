@@ -210,7 +210,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
         .capabilities()
         .latency()
         .source_frames();
-    assert!(source_latency <= WarpRenderer::MAX_SOURCE_FRAMES);
+    assert!(source_latency <= fx.source_block_frames.get());
     controls.set_region_plan(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(
             u64::try_from(source_latency).expect("source latency fits u64") + 1,

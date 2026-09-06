@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -7,7 +7,37 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig};
+use crate::{PlayError, resource::ResourceConfig, rt::StreamShape, session::SessionError};
+
+fn playback_buffers(
+    shape: StreamShape,
+    quantum: NonZeroUsize,
+    budget: NonZeroUsize,
+) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+    let output_frames = usize::try_from(shape.max_block_frames.get())
+        .map_err(|_| SessionError::ResponseGeometryOverflow)?;
+    let preload = output_frames.div_ceil(quantum.get());
+    let ring = preload
+        .checked_add(1)
+        .ok_or(SessionError::ResponseGeometryOverflow)?;
+    let required_frames = ring
+        .checked_add(1)
+        .and_then(|chunks| chunks.checked_mul(quantum.get()))
+        .and_then(|frames| frames.checked_sub(1))
+        .ok_or(SessionError::ResponseGeometryOverflow)?;
+    if required_frames > budget.get() {
+        return Err(SessionError::ResponseBudgetExceeded {
+            max_block_frames: shape.max_block_frames.get(),
+            render_quantum_frames: quantum.get(),
+            required_frames,
+            budget_frames: budget.get(),
+        });
+    }
+    Ok((
+        NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
+        NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
+    ))
+}
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -31,13 +61,21 @@ where
         let warp = self.player.core.warp.clone();
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
+        let stream_shape = self.player.core.engine.stream_shape()?;
+        // A resident render quantum turns the two buffer depths into geometry
+        // the response budget admits rather than a preference, so the computed
+        // pair overwrites whatever the document said under `audio:`.
+        let mut audio = config.audio;
+        if let Some(quantum) = warp.render_quantum_frames() {
+            let shape = stream_shape.ok_or(SessionError::NoContext)?;
+            let (preload, ring) =
+                playback_buffers(shape, quantum, self.player.core.response_budget_frames)?;
+            audio.preload_chunks = Some(preload);
+            audio.audio_buffer_chunks = Some(ring.get());
+        }
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
-            None => self
-                .player
-                .core
-                .engine
-                .stream_shape()?
+            None => stream_shape
                 .map(|shape| {
                     let chunk_size =
                         usize::try_from(shape.max_block_frames.get()).map_err(|_| {
@@ -63,6 +101,7 @@ where
             worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
+            audio,
             host_sample_rate,
             decoder,
             warp,
@@ -104,10 +143,11 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+    use kithara_warp::WarpConfig;
 
     use super::*;
     use crate::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, StreamShape,
+        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
         player::PlayerConfig,
         resource::ResourceSrc,
         session::{Cmd, Reply, SessionDispatcher, testing},
@@ -136,6 +176,31 @@ mod tests {
 
     fn worker() -> PlayWorker<TestPools> {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
+    }
+
+    fn player_with_geometry(
+        quantum: usize,
+        output_buffer: u32,
+        response_budget: usize,
+    ) -> PlayerImpl<TestPools> {
+        let shape = StreamShape::new(
+            NonZeroU32::new(output_buffer).expect("fixture output block is non-zero"),
+            testing::TEST_SAMPLE_RATE,
+        );
+        let warp = WarpConfig::builder()
+            .render_quantum_frames(NonZeroUsize::new(quantum).expect("fixture quantum is non-zero"))
+            .build();
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .worker(worker())
+                .session(testing::test_session_with_shape(Some(shape)))
+                .warp(warp)
+                .response_budget_frames(
+                    NonZeroUsize::new(response_budget).expect("fixture budget is non-zero"),
+                )
+                .build(),
+        )
     }
 
     #[kithara::test]
@@ -249,5 +314,53 @@ mod tests {
                 .chunk_size,
             256
         );
+    }
+
+    #[kithara::test]
+    #[case::industry_budget(32, 128, 441, 4, 5)]
+    #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
+    fn prepare_config_derives_playback_buffering(
+        #[case] quantum: usize,
+        #[case] output_buffer: u32,
+        #[case] response_budget: usize,
+        #[case] expected_preload: usize,
+        #[case] expected_ring: usize,
+    ) {
+        let player = player_with_geometry(quantum, output_buffer, response_budget);
+
+        let prepared = player
+            .prepare_config(resource_config("https://example.com/song.mp3"))
+            .expect("fixture geometry fits the response budget");
+
+        assert_eq!(
+            prepared.audio.preload_chunks.map(NonZeroUsize::get),
+            Some(expected_preload)
+        );
+        assert_eq!(prepared.audio.audio_buffer_chunks, Some(expected_ring));
+    }
+
+    #[kithara::test]
+    #[case::one_frame_over_budget(64, 128, 254, 255)]
+    #[case::large_buffer_over_industry_budget(64, 512, 441, 639)]
+    fn prepare_config_rejects_buffering_over_budget(
+        #[case] quantum: usize,
+        #[case] output_buffer: u32,
+        #[case] response_budget: usize,
+        #[case] required_frames: usize,
+    ) {
+        let player = player_with_geometry(quantum, output_buffer, response_budget);
+
+        assert!(matches!(
+            player.prepare_config(resource_config("https://example.com/song.mp3")),
+            Err(PlayError::Session(SessionError::ResponseBudgetExceeded {
+                max_block_frames,
+                render_quantum_frames,
+                required_frames: actual_required_frames,
+                budget_frames,
+            })) if max_block_frames == output_buffer
+                && render_quantum_frames == quantum
+                && actual_required_frames == required_frames
+                && budget_frames == response_budget
+        ));
     }
 }

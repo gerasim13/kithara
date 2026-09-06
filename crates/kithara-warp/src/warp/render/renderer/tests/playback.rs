@@ -21,7 +21,7 @@ use crate::{Warp, WarpConfig, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_unity(StretchKind::Signalsmith, 1.0, 128)
+    case::signalsmith_unity(StretchKind::Signalsmith, 1.0, 32)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -33,7 +33,7 @@ use crate::{Warp, WarpConfig, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_unity(StretchKind::Bungee, 1.0, 128)
+    case::bungee_unity(StretchKind::Bungee, 1.0, 32)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
@@ -58,6 +58,78 @@ fn source_span_is_planned_from_the_output_quantum(
         .expect("test source span is plannable");
 
     assert_eq!(frames.get(), expected_source_frames);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(1.0);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer.prepare(spec());
+    let latency = renderer
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency();
+    let cue = latency.source_frames();
+    assert!(cue > 0, "activation needs backend history");
+
+    let pools = renderer.pools.clone();
+    let source = sine(cue);
+    let unity = render_serviced(&mut renderer, chunk(&pools, &source))
+        .expect("unity history remains byte-exact");
+    assert_eq!(&unity.samples[..], &source);
+
+    let revision = controls.set_speed(2.0);
+    let mut meta = AudioChunkInfo {
+        frame_offset: u64::try_from(cue).expect("cue fits u64"),
+        spec: spec(),
+        timestamp: spec()
+            .duration_for(u64::try_from(cue).expect("cue fits u64"))
+            .expect("cue timestamp fits"),
+        ..AudioChunkInfo::default()
+    };
+    let input_frames = renderer
+        .prepare_quantum(meta, 128)
+        .expect("activation quantum is plannable")
+        .get();
+    assert!(
+        input_frames > 128,
+        "activation includes lookahead and warmup"
+    );
+    let active = sine(input_frames);
+    meta.frames = u32::try_from(input_frames).expect("input frames fit u32");
+    meta.end_timestamp = meta
+        .timestamp
+        .checked_add(
+            spec()
+                .duration_for(u64::try_from(input_frames).expect("input frames fit u64"))
+                .expect("input duration fits"),
+        )
+        .expect("input end timestamp fits");
+
+    let mut input = chunk(&pools, &active);
+    input.meta = meta;
+    let output = renderer
+        .render_quantum(input)
+        .expect("primed activation emits immediately");
+
+    assert_eq!(
+        output.meta.frame_offset,
+        u64::try_from(cue).expect("cue fits u64")
+    );
+    assert_eq!(output.meta.render_revision, revision);
+    assert!(output.frames() > 0);
 }
 
 #[kithara::test]
@@ -261,15 +333,15 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
     const SOURCE_START: u64 = 10_000;
-    const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
 
     let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
-    let source = sine(SOURCE_FRAMES);
+    let source = sine(source_frames);
     let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     let admitted = SOURCE_START
-        .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
+        .checked_add(u64::try_from(source_frames).expect("source frame count fits u64"))
         .expect("source frontier fits u64");
     let source_latency = renderer
         .engine
@@ -279,7 +351,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
         .latency()
         .source_frames();
     let held =
-        u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
+        u64::try_from(source_latency.min(source_frames)).expect("backend source latency fits u64");
 
     render_serviced(&mut renderer, input).expect("minimum-speed render emits samples");
     assert_eq!(
