@@ -322,6 +322,15 @@ per-call wiring together — and `#[derive(Patch)]` generates `AudioConfigPatch`
 beside it, what a document's `audio:` section may say. Two knobs travel:
 `preload_chunks` and `audio_buffer_chunks`.
 
+`decoder` is a nested section of its own, `AudioDecoderConfigPatch`, and names
+`backend` and `gapless_mode`. `resampler` is skipped inside it: a
+`DecoderResamplerSettings` carries the resampler backend itself, an object the
+construction site hands over, and `None` already means "resample through
+`B::default()` with this crate's own options and quality". `DecoderBackend`'s
+variants are gated by the features and targets that can provide them, so a
+build with no Apple backend refuses `apple` by name rather than accepting a
+value it could not honour.
+
 `host_sample_rate`, `block_on_underrun` and `consumer_wake_mode` are skipped, so
 naming one is refused rather than silently overwritten: every player-managed
 resource writes all three from the host's measured capability, and a document

@@ -23,7 +23,7 @@ use url::Url;
 use crate::pools::AppPools;
 use crate::{
     pools::{AppStore, AppWorker},
-    theme::Palette,
+    theme::{Palette, PalettePatch},
 };
 
 #[cfg(feature = "broadcast")]
@@ -103,9 +103,10 @@ pub struct AppConfig {
     /// Shared HTTP downloader for every track.
     #[patch(skip)]
     pub downloader: Downloader,
-    /// Color palette for the UI.
+    /// Color palette for the UI. A document names it under `app.palette`,
+    /// one color at a time.
     #[builder(default)]
-    #[patch(skip)]
+    #[patch(nested)]
     pub palette: Palette,
     /// What the document's `audio:` section says about every track's audio
     /// pipeline, carried as a patch because no `AudioConfig` exists until a
@@ -175,7 +176,12 @@ pub struct AppConfig {
     /// changed without a rebuild. A path that does not exist means no package
     /// was laid out and the build's own documents draw; `None` means this
     /// configuration names no package at all.
-    #[patch(skip)]
+    ///
+    /// Three sources name it, most specific first: `--ui-package` on the
+    /// command line, then the document's `app.ui_package`, then the package a
+    /// release lays out beside the executable. `main` resolves that order
+    /// before the merge, so a document key never overrides the flag a person
+    /// just typed.
     pub ui_package: Option<PathBuf>,
     /// What the document's `queue:` section says about every deck's queue,
     /// carried as a patch for the same reason [`AppConfig::player`] is.
@@ -224,5 +230,48 @@ impl fmt::Debug for AppConfig {
         #[cfg(feature = "gui")]
         builder.field("ui", &self.ui);
         builder.finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use std::path::PathBuf;
+
+    use kithara_test_utils::kithara;
+
+    use super::AppConfigPatch;
+    use crate::theme::{Palette, Rgb};
+
+    /// One named color is written and the other fifteen keep the theme's own.
+    #[kithara::test(native, flash(false))]
+    fn a_palette_section_repaints_only_the_colors_it_names() {
+        let mut palette = Palette::default();
+        let untouched = palette.bg;
+
+        let patch: AppConfigPatch = serde_yaml_ng::from_str("palette:\n  accent: [10, 20, 30]\n")
+            .expect("the document types");
+        palette.apply(patch.palette);
+
+        assert_eq!(palette.accent, Rgb(10, 20, 30));
+        assert_eq!(
+            palette.bg, untouched,
+            "a color the document never named keeps the theme's own"
+        );
+    }
+
+    /// `Rgb` is a three-byte tuple, so a document naming two channels is
+    /// refused rather than padded with a zero.
+    #[kithara::test(native, flash(false))]
+    fn a_color_short_of_a_channel_is_refused() {
+        serde_yaml_ng::from_str::<AppConfigPatch>("palette:\n  accent: [10, 20]\n")
+            .expect_err("a two-channel color is not one this palette can hold");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_document_names_the_ui_package() {
+        let patch: AppConfigPatch =
+            serde_yaml_ng::from_str("ui_package: /opt/kithara/ui\n").expect("the document types");
+
+        assert_eq!(patch.ui_package, Some(PathBuf::from("/opt/kithara/ui")));
     }
 }

@@ -23,7 +23,7 @@ use kithara::{
         PlayWorkerConfigPatch, PlaybackResamplerBackend, PlayerConfigPatch, policy::DomainKeyPolicy,
     },
     queue::QueueConfigPatch,
-    worker::{ComputePool, DispatcherConfigPatch, WorkerConfigPatch},
+    worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde_yaml_ng::Value;
 
@@ -321,13 +321,6 @@ impl Config {
         self.document.broadcast.clone()
     }
 
-    /// The compute pool the document names, when it names one. `None` leaves
-    /// the pool the caller already installed standing.
-    #[must_use]
-    pub fn worker_pool(&self) -> Option<ComputePool> {
-        self.document.worker_pool.clone()
-    }
-
     /// The media-identity registry the asset store reads.
     #[must_use]
     pub fn asset_layouts(&self) -> AssetLayoutRegistry {
@@ -490,28 +483,27 @@ mod tests {
     }
 
     /// The worker's two keys survive the load pipeline and stay distinct:
-    /// `worker.max_compute_tasks` and `worker_pool` reach the application as
-    /// separate values. `WorkerConfig`'s own fields are `pub(crate)`, so the
-    /// application can only see what the accessors hand it — that the patch
-    /// then writes the ceiling is pinned inside `kithara-worker` by
-    /// `a_patch_writes_only_the_field_it_names`.
+    /// `max_compute_tasks` and `pool` reach the application in one patch.
+    /// `WorkerConfig`'s own fields are `pub(crate)`, so the application can
+    /// only see what the accessor hands it — that the patch then writes the
+    /// ceiling and converts the pool is pinned inside `kithara-worker` by
+    /// `a_patch_writes_only_the_field_it_names` and
+    /// `a_pool_section_carries_the_documents_thread_count_and_name`.
     #[kithara::test(native, flash(false))]
     fn the_worker_keys_survive_the_load_pipeline() {
         let dir = tempdir();
         let path = write(
             &dir,
             "worker-and-pool",
-            "worker:\n  max_compute_tasks: 4\nworker_pool:\n  mode: disabled\n",
+            "worker:\n  max_compute_tasks: 4\n  pool:\n    mode: disabled\n",
         );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let worker = config.worker();
 
-        assert_eq!(
-            config.worker().max_compute_tasks.map(NonZeroUsize::get),
-            Some(4)
-        );
+        assert_eq!(worker.max_compute_tasks.map(NonZeroUsize::get), Some(4));
         assert!(
-            matches!(config.worker_pool(), Some(ComputePool::Disabled {})),
+            matches!(worker.pool, Some(ComputePool::Disabled {})),
             "the accessor hands the application the mode the document named"
         );
     }

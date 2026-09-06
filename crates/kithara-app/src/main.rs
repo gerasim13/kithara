@@ -31,8 +31,10 @@ struct Args {
     #[arg(long, value_enum, default_value_t)]
     host: gui::Host,
 
-    /// Folder holding the UI package to draw from. Defaults to `assets/ui`
-    /// beside the executable.
+    /// Folder holding the UI package to draw from. An override on top of the
+    /// document's `app.ui_package`: a path here wins regardless of what the
+    /// document says. With neither, the package a release lays out beside the
+    /// executable draws.
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
 
@@ -118,9 +120,6 @@ fn main() -> AppResult {
         .with_max_compute_tasks(compute_threads)
         .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
     worker_config.apply(document.worker());
-    if let Some(pool) = document.worker_pool() {
-        worker_config = worker_config.with_compute_pool(pool);
-    }
     let base_worker = Worker::new(worker_config);
     let mut play_worker_config = PlayWorkerConfig::builder(pools.clone())
         .cancel(shutdown.child())
@@ -197,9 +196,12 @@ fn main() -> AppResult {
             args.tracks
         })
         .should_accept_invalid_certs(should_accept_invalid_certs)
-        .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
+        .maybe_ui_package(shipped_ui_package())
         .build();
     config.apply(app);
+    if let Some(package) = args.ui_package {
+        config.ui_package = Some(package);
+    }
 
     let mut host = AppHost::new(
         HostConfig::builder()

@@ -43,6 +43,14 @@ key.
 - `#[patch(nested)]` makes the patch field `<T>Patch` and the merge recurse.
   Nesting is declared, not inferred, so a document's shape is readable from the
   configuration alone.
+- `#[patch(wire = <type>, from = <path>)]` gives the key a type of its own. Use
+  it when the field holds something a document cannot spell — a live handle, or
+  an enum one of whose variants carries one. The key parses as the wire type and
+  the merge writes `#from(value)`, so the choice a document may make is a type
+  in its own right and the variants it may not name are refused by name rather
+  than dropped in silence. Both halves are required; `wire` and `nested` are
+  mutually exclusive, because a replaced type has no nested patch to recurse
+  into.
 - `doc` and `cfg` attributes carry over to the patch field, and a `cfg` also
   gates the merge statement, so a feature-gated field stays gated on both sides.
 

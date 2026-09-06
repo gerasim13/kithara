@@ -30,7 +30,17 @@ the change that lands the work, and keep it short.
   the surviving fields, so `apply` keeps one signature whichever detector a
   build selects. `beat:` is wired end to end: it was a declared-but-dead
   section, and now `Config::beat` merges it onto the analyzer's own defaults and
-  a band the comb never scores stops the launch by name.
+  a band the comb never scores stops the launch by name. The last four skipped
+  fields are keys now. The derive learned a wire form,
+  `#[patch(wire = <type>, from = <path>)]`, for a field holding something a
+  document cannot spell: the key parses as the wire type and the merge converts,
+  so `worker.pool` names the compute pool minus the variant carrying a live
+  `rayon::ThreadPool`, and the top-level `worker_pool:` section that existed only
+  for want of it is gone. `app.palette` names the theme one colour at a time,
+  `app.ui_package` joins `--ui-package` and the package beside the executable as
+  the middle of three sources, and `audio.decoder` names the backend and the
+  gapless mode. `AudioDecoderConfig::resampler` stays skipped: it carries the
+  backend object the construction site owns.
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`. The grid is published at the tempo
   level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the

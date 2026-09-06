@@ -19,7 +19,11 @@ pub struct WorkerConfig {
     #[field(with, option_set_some)]
     #[patch(skip)]
     pub(crate) runtime: Option<Handle>,
-    #[patch(skip)]
+    /// The compute pool this worker admits jobs to. A document names it as a
+    /// [`ComputePool`], which is the same choice minus [`PoolConfig::Shared`]:
+    /// that variant carries a live `rayon::ThreadPool` only code can hand
+    /// over, so it is not a thing a document can spell.
+    #[patch(wire = ComputePool, from = PoolConfig::from)]
     pub(crate) pool: PoolConfig,
 }
 
@@ -33,19 +37,6 @@ impl WorkerConfig {
             pool: PoolConfig::Disabled,
             runtime: None,
         }
-    }
-
-    /// Install the compute pool a configuration document named.
-    #[must_use]
-    pub fn with_compute_pool(mut self, pool: ComputePool) -> Self {
-        self.pool = match pool {
-            ComputePool::Disabled {} => PoolConfig::Disabled,
-            #[cfg(not(target_arch = "wasm32"))]
-            ComputePool::Owned { name, threads } => {
-                PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
-            }
-        };
-        self
     }
 
     /// Lazily create an owned Rayon pool on the first admitted compute job.
@@ -78,6 +69,18 @@ pub(crate) enum PoolConfig {
     OwnedLazy(RayonConfig),
     #[cfg(not(target_arch = "wasm32"))]
     Shared(Arc<rayon::ThreadPool>),
+}
+
+impl From<ComputePool> for PoolConfig {
+    fn from(pool: ComputePool) -> Self {
+        match pool {
+            ComputePool::Disabled {} => Self::Disabled,
+            #[cfg(not(target_arch = "wasm32"))]
+            ComputePool::Owned { name, threads } => {
+                Self::OwnedLazy(RayonConfig::new(threads, name))
+            }
+        }
+    }
 }
 
 /// What a document can say about the compute pool. `Shared` is absent on
@@ -178,16 +181,16 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn with_compute_pool_carries_the_documents_thread_count_and_name() {
-        let owned: ComputePool =
-            serde_yaml_ng::from_str("mode: owned\nname: analysis\nthreads: 2\n")
+    fn a_pool_section_carries_the_documents_thread_count_and_name() {
+        let mut config = WorkerConfig::new().with_owned_pool(RayonConfig::new(
+            NonZeroUsize::new(5).expect("nonzero"),
+            "seed",
+        ));
+
+        let patch: WorkerConfigPatch =
+            serde_yaml_ng::from_str("pool:\n  mode: owned\n  name: analysis\n  threads: 2\n")
                 .expect("a valid owned-pool document parses");
-        let config = WorkerConfig::new()
-            .with_owned_pool(RayonConfig::new(
-                NonZeroUsize::new(5).expect("nonzero"),
-                "seed",
-            ))
-            .with_compute_pool(owned);
+        config.apply(patch);
 
         match &config.pool {
             PoolConfig::OwnedLazy(pool) => {
@@ -202,14 +205,14 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_disabled_document_replaces_the_pool_the_builder_installed() {
-        let disabled: ComputePool = serde_yaml_ng::from_str("mode: disabled\n")
+        let mut config = WorkerConfig::new().with_owned_pool(RayonConfig::new(
+            NonZeroUsize::new(5).expect("nonzero"),
+            "seed",
+        ));
+
+        let patch: WorkerConfigPatch = serde_yaml_ng::from_str("pool:\n  mode: disabled\n")
             .expect("a valid disabled-pool document parses");
-        let config = WorkerConfig::new()
-            .with_owned_pool(RayonConfig::new(
-                NonZeroUsize::new(5).expect("nonzero"),
-                "seed",
-            ))
-            .with_compute_pool(disabled);
+        config.apply(patch);
 
         match &config.pool {
             PoolConfig::Disabled => {}
@@ -217,5 +220,15 @@ mod tests {
                 panic!("a disabled document must replace the seeded pool, not keep it")
             }
         }
+    }
+
+    /// The variant that carries a live `rayon::ThreadPool` is not on the wire,
+    /// so a document naming it is refused rather than silently ignored.
+    #[kithara::test(native, flash(false))]
+    fn a_pool_section_cannot_name_the_shared_variant() {
+        let error = serde_yaml_ng::from_str::<WorkerConfigPatch>("pool:\n  mode: shared\n")
+            .expect_err("a document cannot hand over a pool only code can construct");
+
+        assert!(error.to_string().contains("shared"), "{error}");
     }
 }

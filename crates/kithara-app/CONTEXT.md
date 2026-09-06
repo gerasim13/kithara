@@ -45,8 +45,10 @@ that catalog holds only the window-manager menu words canon has no key for.
 
 ### Where the UI package is read from
 
-`AppConfig.ui_package` names the folder holding the UI package. `main` defaults it to `assets/ui` beside the
-executable, which is where a release lays its documents out, and `--ui-package` overrides it. `AppUi::new`
+`AppConfig.ui_package` names the folder holding the UI package. Three sources name it, most specific first:
+`--ui-package` on the command line, then the document's `app.ui_package`, then `assets/ui` beside the executable,
+which is where a release lays its documents out. `main` seeds the builder with the last, lets the merge write the
+middle, and applies the flag afterwards, so a document key never overrides the path a person just typed. `AppUi::new`
 reads that folder over what the build embeds, so changing a document on disk changes the interface at the next
 start without a rebuild.
 
@@ -296,7 +298,7 @@ and its position.
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once,
 in the crate that defines it: `net`, `hls`, `file`, `audio`, `assets_store`, `queue`, `player`, `play_worker`,
-`dispatcher`, and under `gui`, `ui` and `draw_pool`. Which knobs a section may name — and the argument for each left
+`worker`, `dispatcher`, and under `gui`, `ui` and `draw_pool`. Which knobs a section may name — and the argument for each left
 out — is the owning crate's contract. The patches travel whole: `AppConfig` carries `hls`, `file` and `audio` to
 `ResourceConfig`, and `main` stops the store builder one step short with `into_config()` to patch `assets_store`.
 Nothing is copied field by field, so a knob those crates add later needs no edit here.
@@ -311,7 +313,10 @@ leaves no single crate type to carry. `ui` and `draw_pool` are two sections rath
 `DrawBuffers::try_new`; `Config::ui` therefore reads `draw_pool` before it builds — never onto an already-built
 `UiConfig`, never through `UiConfig::default()`, which would build and discard a second `PoolRegion`. `broadcast` and
 `play_worker` are the two sections no `AppConfig` field carries: both are built in `main`, from the shared worker and
-pools that exist only there, so each section is applied to the built value on the spot. `broadcast` is
+pools that exist only there, so each section is applied to the built value on the spot. `worker.pool` is a key whose
+document type is not the field's: `PoolConfig` has a variant carrying a live `rayon::ThreadPool`, so the key travels
+as `ComputePool` and `kithara-worker` converts — it used to be a second top-level `worker_pool:` section for want of
+that, and is now one key of the crate it belongs to. `broadcast` is
 `#[cfg(feature = "broadcast")]` on both sides, so a build without the service has no such field and refuses a document
 that names one. `beat` is the one section whose merge can refuse: `BeatAnalysisConfig` holds the caller-owned resampler backend, so
 `AppConfig.beat_analysis` is `#[patch(skip)]` and `Config::beat` merges the section onto the analyzer's own defaults
@@ -320,6 +325,11 @@ launch on it the way it stops on a `drm:` policy it cannot honour. `dispatcher` 
 `player` does and names thread budgets only. `name` is
 not among them: a dispatcher is named where it is built, and one document key would hand every dispatcher the app
 builds the same thread name.
+
+`app.palette` names the theme one color at a time, each as its three channel bytes (`accent: [187, 148, 66]`), so a
+document that renames one accent keeps the other fifteen. `app.ui_package` is the middle of three sources: the
+`--ui-package` flag is applied after the merge and wins, and with neither the package a release lays out beside the
+executable draws.
 
 The audio session is the exception `app` carries. `HostConfig` is a session-mode enum, Realtime or Offline, not a
 configuration struct, so it has no patch and a document cannot flip a running application from one mode to the other.

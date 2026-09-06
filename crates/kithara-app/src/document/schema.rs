@@ -14,7 +14,7 @@ use kithara::{
     play::{PlayWorkerConfigPatch, PlayerConfigPatch},
     queue::QueueConfigPatch,
     stream::dl::DownloaderConfigPatch,
-    worker::{ComputePool, DispatcherConfigPatch, WorkerConfigPatch},
+    worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde::Deserialize;
 
@@ -69,7 +69,6 @@ pub(crate) struct Document {
     #[cfg(feature = "gui")]
     pub(crate) ui: UiConfigPatch,
     pub(crate) worker: WorkerConfigPatch,
-    pub(crate) worker_pool: Option<ComputePool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -140,9 +139,9 @@ pub(crate) enum SeedAlphabet {
 mod tests {
     use std::num::NonZeroUsize;
 
-    use kithara::platform::time::Duration;
+    use kithara::{platform::time::Duration, worker::ComputePool};
 
-    use super::{ComputePool, Document};
+    use super::Document;
     use crate::baked::BAKED_DOCUMENT;
 
     #[kithara::test(native, flash(false))]
@@ -182,12 +181,12 @@ mod tests {
         );
         assert!(document.playlist.tracks.is_empty());
         assert!(
-            document.worker_pool.is_none(),
-            "a document naming no compute pool leaves the crate default standing"
-        );
-        assert!(
             document.worker.max_compute_tasks.is_none(),
             "a document naming no worker section leaves the crate default standing"
+        );
+        assert!(
+            document.worker.pool.is_none(),
+            "a document naming no compute pool leaves the crate default standing"
         );
         assert!(
             document.pools.budget_bytes.is_none(),
@@ -286,19 +285,19 @@ mod tests {
             Some(4)
         );
         assert!(
-            document.worker_pool.is_none(),
-            "naming the worker section does not name a pool"
+            document.worker.pool.is_none(),
+            "naming the task ceiling does not name a pool"
         );
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_worker_pool_document_names_the_owned_mode() {
+    fn a_worker_pool_key_names_the_owned_mode() {
         let document: Document = serde_yaml_ng::from_str(
-            "worker_pool:\n  mode: owned\n  name: analysis\n  threads: 2\n",
+            "worker:\n  pool:\n    mode: owned\n    name: analysis\n    threads: 2\n",
         )
         .expect("a valid compute-pool document parses");
 
-        match document.worker_pool {
+        match document.worker.pool {
             Some(ComputePool::Owned { name, threads }) => {
                 assert_eq!(name, "analysis");
                 assert_eq!(threads.get(), 2);

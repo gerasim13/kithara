@@ -28,6 +28,10 @@ enum Merge {
     /// unwrapped. A document names the value bare, and an absent key is the
     /// only way to leave the caller's value standing.
     Optional,
+    /// The field holds something a document cannot spell -- a live handle, a
+    /// variant carrying one -- and a separate wire type is what a document
+    /// says instead. The key carries the wire type and the merge converts.
+    Wire { from: Path },
     /// Everything else: the patch wraps the field's type in `Option`.
     Value,
 }
@@ -134,6 +138,11 @@ impl DocumentField<'_> {
             Merge::Optional => quote! {
                 if patch.#ident.is_some() {
                     #target.#ident = patch.#ident;
+                }
+            },
+            Merge::Wire { ref from } => quote! {
+                if let Some(value) = patch.#ident {
+                    #target.#ident = #from(value);
                 }
             },
             Merge::Value => quote! {
@@ -451,6 +460,8 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
     let mut skip = false;
     let mut nested = false;
     let mut fallible = false;
+    let mut wire: Option<Type> = None;
+    let mut from: Option<Path> = None;
     let mut added: Vec<TokenStream2> = Vec::new();
 
     for attribute in field.attrs.iter().filter(|a| a.path().is_ident("patch")) {
@@ -461,12 +472,19 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
                 nested = true;
             } else if meta.path.is_ident("fallible") {
                 fallible = true;
+            } else if meta.path.is_ident("wire") {
+                wire = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("from") {
+                from = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("attribute") {
                 let content;
                 parenthesized!(content in meta.input);
                 added.push(content.parse()?);
             } else {
-                return Err(meta.error("expected `skip`, `nested`, `fallible` or `attribute(...)`"));
+                return Err(meta.error(
+                    "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
+                     `attribute(...)`",
+                ));
             }
             Ok(())
         })?;
@@ -490,8 +508,23 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
         ));
     }
 
+    let wired = wire_of(field, wire, from)?;
+
+    if wired.is_some() && nested {
+        return Err(Error::new(
+            field.span(),
+            "`wire` replaces the field's type on the document side, so it has no nested patch to \
+             recurse into: drop one of `wire` and `nested`",
+        ));
+    }
+
     let source = field.ty.clone();
-    let (merge, ty) = if nested {
+    let (merge, ty) = if let Some((wire, from)) = wired {
+        (
+            Merge::Wire { from },
+            parse_quote!(::core::option::Option<#wire>),
+        )
+    } else if nested {
         (
             Merge::Nested { fallible },
             renamed(
@@ -518,6 +551,25 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
         source,
         ty,
     })))
+}
+
+/// What a field said about travelling as a type of its own. Both halves are
+/// required: the wire type alone leaves the merge with nothing to convert
+/// with, and the conversion alone leaves the key without a type to parse.
+fn wire_of(field: &Field, wire: Option<Type>, from: Option<Path>) -> Result<Option<(Type, Path)>> {
+    match (wire, from) {
+        (Some(wire), Some(from)) => Ok(Some((wire, from))),
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(Error::new(
+            field.span(),
+            "`wire` needs `from = <path>`: the merge converts what a document said into the \
+             field's own type",
+        )),
+        (None, Some(_)) => Err(Error::new(
+            field.span(),
+            "`from` needs `wire = <type>`: without one the key has no type a document can name",
+        )),
+    }
 }
 
 /// `kithara_beat::Tempo` becomes `kithara_beat::TempoPatchError`.
@@ -645,9 +697,11 @@ mod tests {
         let error = derive(&input).expect_err("the derive refuses the option");
 
         assert!(
-            error
-                .to_string()
-                .contains("expected `skip`, `nested`, `fallible` or `attribute(...)`")
+            error.to_string().contains(
+                "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>` or \
+                 `attribute(...)`"
+            ),
+            "{error}"
         );
     }
 
@@ -848,6 +902,63 @@ mod tests {
 
         assert!(
             error.to_string().contains("needs `error = <type>`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_wired_field_types_as_the_wire_and_lands_converted() {
+        let input: DeriveInput = parse_quote! {
+            struct WorkerConfig {
+                #[patch(wire = ComputePool, from = PoolConfig::from)]
+                pool: PoolConfig,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(
+            expanded.contains("pool : :: core :: option :: Option < ComputePool >"),
+            "the key carries the type a document can name, not the field's own"
+        );
+        assert!(
+            expanded.contains("self . pool = PoolConfig :: from (value)"),
+            "the merge converts before it writes"
+        );
+    }
+
+    #[test]
+    fn a_wire_without_its_conversion_is_refused() {
+        let input: DeriveInput = parse_quote! {
+            struct WorkerConfig {
+                #[patch(wire = ComputePool)]
+                pool: PoolConfig,
+            }
+        };
+
+        let error = derive(&input).expect_err("the derive refuses the option");
+
+        assert!(
+            error.to_string().contains("needs `from = <path>`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_wire_that_also_asks_to_recurse_is_refused() {
+        let input: DeriveInput = parse_quote! {
+            struct WorkerConfig {
+                #[patch(nested, wire = ComputePool, from = PoolConfig::from)]
+                pool: PoolConfig,
+            }
+        };
+
+        let error = derive(&input).expect_err("the derive refuses the combination");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no nested patch to recurse into"),
             "{error}"
         );
     }

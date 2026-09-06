@@ -7,7 +7,10 @@ use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
 
-use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
+use crate::{
+    pipeline::config::{AudioDecoderConfig, AudioDecoderConfigPatch},
+    traits::AudioObserver,
+};
 
 struct Consts;
 
@@ -54,10 +57,11 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[field(get)]
     #[patch(skip)]
     pub(crate) stream: T::Config,
-    /// Decoder construction settings, including decoder-side resampling.
+    /// Decoder construction settings, including decoder-side resampling. A
+    /// document names it under `audio.decoder`.
     #[builder(default)]
     #[field(get)]
-    #[patch(skip)]
+    #[patch(nested)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
@@ -147,9 +151,41 @@ where
 mod document_tests {
     use std::num::NonZeroUsize;
 
+    use kithara_decode::{DecoderBackend, GaplessMode};
     use kithara_test_utils::kithara;
 
     use super::AudioConfigPatch;
+
+    /// The decoder is a section of its own, and the backend object it
+    /// resamples through is not one of its keys.
+    #[kithara::test(native, flash(false))]
+    fn the_decoder_section_names_the_backend_and_the_gapless_mode() {
+        let patch: AudioConfigPatch = serde_yaml_ng::from_str(
+            "decoder:\n  backend: symphonia\n  gapless_mode:\n    mode: disabled\n",
+        )
+        .expect("the document types");
+
+        assert_eq!(patch.decoder.backend, Some(DecoderBackend::Symphonia));
+        assert_eq!(patch.decoder.gapless_mode, Some(GaplessMode::Disabled));
+    }
+
+    /// The decoder-side resampler carries the backend object the construction
+    /// site hands over (see the field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_decoder_resampler_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<AudioConfigPatch>("decoder:\n  resampler: {}\n")
+            .expect_err("a document cannot hand over a resampler backend");
+
+        assert!(error.to_string().contains("resampler"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_decoder_backend_this_build_cannot_provide_is_refused_by_name() {
+        let error = serde_yaml_ng::from_str::<AudioConfigPatch>("decoder:\n  backend: teapot\n")
+            .expect_err("a backend nothing implements must not pass silently");
+
+        assert!(error.to_string().contains("teapot"), "{error}");
+    }
 
     /// `preload_chunks` and `audio_buffer_chunks` are the patch's only
     /// declared fields, and `headroom` is neither a substring of either nor
