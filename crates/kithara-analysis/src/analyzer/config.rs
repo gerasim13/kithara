@@ -1,10 +1,10 @@
 use std::fmt;
 
 use bon::Builder;
-#[cfg(feature = "beat-dsp")]
-use kithara_beat::Tempo;
 #[cfg(feature = "beat-nn")]
 use kithara_beat::{BeatConfig, BeatConfigPatch};
+#[cfg(feature = "beat-dsp")]
+use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
 use kithara_macros::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
@@ -23,9 +23,12 @@ impl Consts {
 /// resampler backend the caller hands over.
 ///
 /// [`BeatAnalysisConfigPatch`] is what a configuration document may say about
-/// it.
+/// it, and [`BeatAnalysisConfigPatchError`] what the merge refuses with. The
+/// refusal is declared here rather than read off the fields, so the merge
+/// keeps one signature whichever detector the build selects.
 #[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
+#[patch(fallible)]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
@@ -51,13 +54,14 @@ pub struct BeatAnalysisConfig<B> {
     #[field(get(copy))]
     #[patch(nested)]
     pub beat: BeatConfig,
-    /// Not a document key: [`Tempo`] is validated as a whole by its fallible
-    /// builder, and a patch merges field by field with nothing to reject a
-    /// band the comb never scores.
+    /// The tempo the signal detector searches. A document patches it key by
+    /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
+    /// before it is committed, so a band the comb never scores is refused by
+    /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
     #[builder(default)]
     #[field(get(copy))]
-    #[patch(skip)]
+    #[patch(nested, fallible)]
     tempo: Tempo,
 }
 
@@ -253,6 +257,8 @@ mod document_tests {
     use kithara_test_utils::kithara;
 
     use super::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
+    #[cfg(feature = "beat-dsp")]
+    use super::{BeatAnalysisConfigPatchError, Tempo, TempoPatchError};
 
     fn config() -> BeatAnalysisConfig<RubatoBackend> {
         BeatAnalysisConfig::builder()
@@ -269,7 +275,9 @@ mod document_tests {
         // resets every unnamed field cannot pass this assertion by chance.
         config.block_frames = 2048;
 
-        config.apply(patch);
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
 
         assert_eq!(config.target_rate, 48_000);
         assert_eq!(
@@ -285,7 +293,9 @@ mod document_tests {
         let mut config = config();
         config.resampler_quality = ResamplerQuality::Normal;
 
-        config.apply(patch);
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
 
         assert_eq!(
             config.resampler_quality,
@@ -302,7 +312,9 @@ mod document_tests {
         let mut config = config();
         config.beat = BeatConfig::builder().dedup_width(4).build();
 
-        config.apply(patch);
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
 
         assert_eq!(config.beat.peak_half_width, 5);
         assert_eq!(
@@ -330,13 +342,65 @@ mod document_tests {
         assert!(format!("{error}").contains("resampler_backend"), "{error}");
     }
 
-    /// The tempo policy is validated as a whole, so it is not a document key.
     #[cfg(feature = "beat-dsp")]
     #[kithara::test(native, flash(false))]
-    fn the_validated_tempo_policy_is_not_a_document_key() {
-        let error = serde_yaml_ng::from_str::<BeatAnalysisConfigPatch>("tempo:\n  prior: 120.0\n")
-            .expect_err("a validated policy must not be settable field by field");
+    fn a_nested_tempo_patch_reaches_the_searched_band() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("tempo:\n  prior: 100.0\n").expect("the document types");
+        let mut config = config();
 
-        assert!(format!("{error}").contains("tempo"), "{error}");
+        config
+            .apply(patch)
+            .expect("a prior inside the default band");
+
+        assert_eq!(config.tempo().prior(), 100.0);
+        assert_eq!(
+            config.tempo().band(),
+            Tempo::default().band(),
+            "a silent inner key must keep the band already in place"
+        );
+    }
+
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_tempo_the_comb_never_scores_is_refused_under_its_own_key() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("tempo:\n  low: 30.0\n").expect("the document types");
+        let mut config = config();
+
+        let error = config
+            .apply(patch)
+            .expect_err("a band past the scored hypotheses must not merge");
+
+        assert!(
+            matches!(
+                error,
+                BeatAnalysisConfigPatchError::Tempo(TempoPatchError::Invalid(_))
+            ),
+            "{error}"
+        );
+        assert!(
+            format!("{error}").starts_with("tempo: "),
+            "the refusal names the document key that carried it, read as {error}"
+        );
+    }
+
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_refused_tempo_leaves_every_other_key_of_the_document_uncommitted() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("target_rate: 48000\ntempo:\n  low: 30.0\n")
+                .expect("the document types");
+        let mut config = config();
+        let before = config.target_rate;
+
+        config
+            .apply(patch)
+            .expect_err("the band is not one the comb scores");
+
+        assert_eq!(
+            config.target_rate, before,
+            "a refused document commits none of its keys"
+        );
     }
 }

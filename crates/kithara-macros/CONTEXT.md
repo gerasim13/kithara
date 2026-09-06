@@ -20,7 +20,10 @@ the derive emits two items in the same module:
   `Default` and `Deserialize`, and attributed `#[serde(default,
   deny_unknown_fields)]` and `#[non_exhaustive]`;
 - an inherent `apply` on the configuration itself, taking that patch by value
-  and repeating the configuration's own generics and where-clause.
+  and repeating the configuration's own generics and where-clause;
+- for a configuration that declares `#[patch(fallible)]`, a third item: the
+  patch error, named with a `PatchError` suffix, carrying one variant per way
+  the merge can be refused.
 
 The patch carries no generic parameters of its own. That is the whole reason the
 derive exists: `struct-patch`, the crate this replaced, copies a struct's
@@ -42,6 +45,34 @@ key.
   configuration alone.
 - `doc` and `cfg` attributes carry over to the patch field, and a `cfg` also
   gates the merge statement, so a feature-gated field stays gated on both sides.
+
+## Merges That Can Refuse
+
+Most configurations accept any combination of their own field types, and their
+`apply` returns nothing. A configuration whose invariants span its fields
+declares that its merge can refuse, and `apply` returns `Result<(),
+<X>PatchError>` instead:
+
+- `#[patch(validate = <path>, error = <type>)]` on the struct names a
+  `fn(Self) -> Result<Self, E>` — the one gate every route into the type holds,
+  the fallible constructor included. The merge builds a whole candidate beside
+  the caller's value, puts it through that gate, and commits only a judged one,
+  so a refused document leaves the caller holding exactly what it had. The
+  refusal reaches the patch error as `Invalid`.
+- `#[patch(nested, fallible)]` on a field says the nested configuration judges
+  itself. Its refusal reaches the parent under a variant named after the field,
+  and the error `Display`s as `"<key>: <what the child said>"`, so a nested
+  refusal reads as the path a document would have to fix. Every fallible child
+  is judged before any key is written, so here too a refused document commits
+  nothing.
+
+The signature is the struct's declaration, never a consequence of the fields the
+current features leave standing. `cfg` is resolved before a derive runs, so a
+gated fallible field is invisible here; inferring fallibility from what is left
+would move `apply`'s signature from build to build. A struct therefore carries
+`#[patch(fallible)]` itself, and a field marked `fallible` without it is
+refused. When the features gate every fallible key out, the patch error is
+still emitted, uninhabited — the callers do not change shape.
 
 ## Security Contract
 

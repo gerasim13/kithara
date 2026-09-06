@@ -13,12 +13,15 @@ use kithara::ui::{
     source::{DrawPoolLimits, UiConfig},
 };
 use kithara::{
+    analysis::{BeatAnalysisConfig, BeatAnalysisConfigPatchError},
     assets::{AssetLayoutRegistry, AssetStoreConfigPatch, StorageBackend},
     audio::AudioConfigPatch,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::{PlayWorkerConfigPatch, PlayerConfigPatch, policy::DomainKeyPolicy},
+    play::{
+        PlayWorkerConfigPatch, PlaybackResamplerBackend, PlayerConfigPatch, policy::DomainKeyPolicy,
+    },
     queue::QueueConfigPatch,
     worker::{ComputePool, DispatcherConfigPatch, WorkerConfigPatch},
 };
@@ -331,6 +334,22 @@ impl Config {
         asset_layouts(&self.document.assets)
     }
 
+    /// What the document's `beat:` section says about source beat analysis,
+    /// merged onto the crate's own defaults. The backend the analyzer resamples
+    /// through is the caller's, never a document key.
+    ///
+    /// # Errors
+    /// Returns the [`BeatAnalysisConfigPatchError`] the merged policy was
+    /// refused with, naming the section that carried the refused value, rather
+    /// than searching a tempo band the detector never scores.
+    pub fn beat(
+        &self,
+    ) -> Result<BeatAnalysisConfig<PlaybackResamplerBackend>, BeatAnalysisConfigPatchError> {
+        let mut config = BeatAnalysisConfig::default();
+        config.apply(self.document.beat.clone())?;
+        Ok(config)
+    }
+
     /// The DRM policy the key registry resolves through.
     ///
     /// # Errors
@@ -579,6 +598,51 @@ mod tests {
             "a default-vs-default check: the document never names path_capacity, and \
              DrawPoolLimits::default already produces 128, so this does not tell a merge \
              apart from a reset"
+        );
+    }
+
+    /// The document's `beat:` section reaches the analyzer configuration the
+    /// application hands the analysis service. `22_050` is the crate's own
+    /// detector rate, so the overlay names one it cannot produce by accident.
+    #[kithara::test(native, flash(false))]
+    fn the_beat_section_reaches_the_analyzer_configuration() {
+        let dir = tempdir();
+        let path = write(&dir, "beat-target-rate", "beat:\n  target_rate: 32000\n");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let beat = config
+            .beat()
+            .unwrap_or_else(|error| panic!("the document's beat section must merge: {error}"));
+
+        assert_eq!(beat.target_rate, 32_000);
+        assert_eq!(
+            beat.detector_window_seconds, 30,
+            "a key the document never names keeps the analyzer's own default"
+        );
+    }
+
+    /// A tempo band the periodicity comb never scores stops the launch under
+    /// the key that carried it rather than being clamped into something the
+    /// detector can search.
+    #[cfg(feature = "beat-dsp")]
+    #[kithara::test(native, flash(false))]
+    fn a_beat_section_the_detector_refuses_names_the_key_that_carried_it() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "beat-unscored-band",
+            "beat:\n  tempo:\n    low: 30.0\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        let error = config
+            .beat()
+            .expect_err("a band past the scored hypotheses must not reach the detector");
+
+        assert!(
+            format!("{error}").starts_with("tempo: "),
+            "the refusal names the section that carried it, read as {error}"
         );
     }
 

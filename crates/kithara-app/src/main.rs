@@ -164,8 +164,16 @@ fn main() -> AppResult {
             std::process::exit(1);
         }
     };
+    let beat_analysis = match document.beat() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("beat: {error}");
+            std::process::exit(1);
+        }
+    };
     let mut config = AppConfig::builder()
         .drm(AppDrm::new(drm_policy))
+        .beat_analysis(beat_analysis)
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)

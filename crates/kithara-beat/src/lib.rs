@@ -5,7 +5,7 @@ mod mark;
 mod nn;
 
 #[cfg(feature = "dsp")]
-pub use dsp::{SpectralBeats, Tempo, TempoError};
+pub use dsp::{SpectralBeats, Tempo, TempoError, TempoPatch, TempoPatchError};
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;
 pub use mark::{BeatMark, RawBeats};

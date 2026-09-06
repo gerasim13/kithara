@@ -21,9 +21,16 @@ the change that lands the work, and keep it short.
   carry the derive too: `play_worker` names the one playback worker's budgets and
   `dispatcher` names every app-owned dispatcher's, minus the thread name each
   construction site keeps. Merged again over the beat split: the picking policy
-  the `beat:` key writes now lives in `kithara_beat::nn`, and the `beat-dsp`
-  `Tempo` is no document key, because its builder judges band, prior, tolerance
-  and drift as one policy and a field-by-field merge has nothing to reject with.
+  the `beat:` key writes now lives in `kithara_beat::nn`. The derive learned to
+  refuse, so the `beat-dsp` `Tempo` is a document key too: a struct declares
+  `#[patch(validate = ..., error = ...)]` and its merge stages a whole copy,
+  judges it, and commits only what the check accepted; a parent carries a
+  child's refusal with `#[patch(nested, fallible)]` and reports it under the
+  document key that carried it. The declaration is the struct's, never read off
+  the surviving fields, so `apply` keeps one signature whichever detector a
+  build selects. `beat:` is wired end to end: it was a declared-but-dead
+  section, and now `Config::beat` merges it onto the analyzer's own defaults and
+  a band the comb never scores stops the launch by name.
 - One owner of track analysis in `kithara-app`, `AnalysisService`, and one
   extent per pass in `kithara-analysis`. The grid is published at the tempo
   level the detector reports, tagged `grid_bpm_from_beats_v4`. Left: the

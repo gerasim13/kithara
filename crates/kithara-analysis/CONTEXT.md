@@ -145,8 +145,12 @@ the policy is printed by the hand-written `Debug` so `cache_tag()` cannot hand
 a moved policy the grid cached for the frozen parity values. A `beat-dsp` build
 also carries the `Tempo` the signal detector searches, `48..=185` BPM around
 `120` by default; it reaches the cache tag, so a grid searched over one band is
-never served for another, and it is no document key because its builder judges
-the whole policy at once. The analyzer never stores whole-track source PCM: it
+never served for another. A document patches it key by key under `tempo:`, and
+`Tempo` judges the merged policy as a whole before it is committed, so a band
+the comb never scores is refused under its own key rather than searched. The
+refusal is declared by the struct (`#[patch(fallible)]`), not read off the
+fields, so `apply` keeps one signature whichever detector the build selects:
+without `beat-dsp` `BeatAnalysisConfigPatchError` is simply uninhabited. The analyzer never stores whole-track source PCM: it
 downmixes to mono and keeps covered spans at detector rate in buffers borrowed
 from the caller's typed region.
 
