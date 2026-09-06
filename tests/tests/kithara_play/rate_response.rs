@@ -416,7 +416,8 @@ fn assert_response(
     );
     assert!(
         presented_response <= budget,
-        "{backend} presented revision {revision} after {presented_response} frames; budget is {budget}"
+        "{backend} presented revision {revision} after {presented_response} frames; applied after {applied_response} frames; apply-to-presentation delay is {} frames; budget is {budget}",
+        presented_response - applied_response
     );
     if case.smooth_frames > 1 {
         let low = case.initial_rate.min(case.target_rate);
