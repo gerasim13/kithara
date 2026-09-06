@@ -34,6 +34,10 @@ count printed ahead of it.
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
 
+`struct_init_order` reads an all-shorthand literal in the order its type
+declares — what `clippy::inconsistent_struct_constructor` demands — so a
+`struct_field_order` rewrite cannot leave the clippy gate red.
+
 Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds only
 what the tool did; `--allow-dirty` mixes its edits into yours. The three lint
 namespaces scope with `--crate <name>` or `--path <path>`, which takes a directory
