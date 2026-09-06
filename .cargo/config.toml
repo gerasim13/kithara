@@ -2,11 +2,6 @@
 xtask = "run --package xtask --"
 
 [env]
-# The keg-only FFmpeg line `ffmpeg-next` binds to; `.config/ci-pins.toml` owns
-# why it is pinned. Absent prefixes are skipped, so one value serves Apple
-# silicon, Intel, and the Linux image alike, and a `PKG_CONFIG_PATH` already in
-# the environment still wins because Cargo does not force this key.
-PKG_CONFIG_PATH = "/opt/homebrew/opt/ffmpeg@8/lib/pkgconfig:/usr/local/opt/ffmpeg@8/lib/pkgconfig"
 RUST_TEST_THREADS = "4"
 
 [target.wasm32-unknown-unknown]

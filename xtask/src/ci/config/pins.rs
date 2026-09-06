@@ -28,9 +28,10 @@ pub(crate) struct CiPins {
     /// for the reference decoder the fixture tests compare against, and it
     /// may track whatever release Homebrew ships. The versioned one is
     /// keg-only and exists for `ffmpeg-next`, which generates its bindings
-    /// against the headers it finds: `.cargo/config.toml` points
-    /// `PKG_CONFIG_PATH` at it so the crate binds to the ABI it declares
-    /// rather than to whatever the unversioned formula became overnight.
+    /// against the headers it finds: the root `justfile` asks brew where this
+    /// formula sits and puts it first on `PKG_CONFIG_PATH`, so the crate binds
+    /// to the ABI it declares rather than to whatever the unversioned formula
+    /// became overnight.
     pub(crate) brew_formulae: Vec<String>,
     /// Chromium the browser lane may run, and the version its `chromedriver` must
     /// report. The image installs both from Debian as one version-matched pair,
@@ -281,13 +282,14 @@ mod tests {
         }
     }
 
-    /// `ffmpeg-next` generates its bindings from the `FFmpeg` headers present on
-    /// the build host, so the crate version and the installed library are one
-    /// fact stated in three files: the formula the image installs, the
-    /// `PKG_CONFIG_PATH` that reaches it past the unversioned formula Homebrew
-    /// keeps upgrading, and the crate version itself. A disagreement surfaces
-    /// deep inside generated code — a missing `AV_CODEC_ID_V408`, or a match
-    /// that stopped being exhaustive — naming neither `FFmpeg` nor the pin.
+    /// `ffmpeg-next` generates its bindings from the `FFmpeg` headers present
+    /// on the build host, so the ABI line the workspace binds to is one fact
+    /// stated twice: the formula the image installs, and the crate version
+    /// itself. A disagreement surfaces deep inside generated code — a missing
+    /// `AV_CODEC_ID_V408`, or a match that stopped being exhaustive — naming
+    /// neither `FFmpeg` nor the pin. Where that formula sits on disk is the
+    /// machine's answer rather than this repository's, so nothing here pins a
+    /// path.
     #[test]
     fn the_installed_ffmpeg_line_matches_the_crate_that_binds_to_it() {
         let pins = CiPins::load(&workspace_root().join(PINS_PATH)).unwrap();
@@ -296,16 +298,6 @@ mod tests {
             .iter()
             .find_map(|formula| formula.strip_prefix("ffmpeg@"))
             .expect("the pins install a versioned ffmpeg formula");
-
-        let cargo_config: toml::Value = toml::from_str(
-            &fs::read_to_string(workspace_root().join(".cargo/config.toml")).unwrap(),
-        )
-        .unwrap();
-        let search_path = cargo_config["env"]["PKG_CONFIG_PATH"].as_str().unwrap();
-        assert!(
-            search_path.contains(&format!("ffmpeg@{line}/")),
-            "PKG_CONFIG_PATH reaches an ffmpeg the image does not install: {search_path}"
-        );
 
         let manifest: toml::Value =
             toml::from_str(&fs::read_to_string(workspace_root().join("Cargo.toml")).unwrap())
@@ -318,5 +310,36 @@ mod tests {
             line,
             "ffmpeg-next {declared} binds to headers ffmpeg@{line} does not carry"
         );
+    }
+
+    /// A package manager's prefix is machine state: Homebrew answers
+    /// `/opt/homebrew` on Apple silicon, `/usr/local` on Intel and
+    /// `/home/linuxbrew/.linuxbrew` on Linux, and an install built by hand
+    /// answers none of them. The files that configure a build therefore ask
+    /// the machine where a library lives and never write the answer down,
+    /// because a written one only holds on the machine it was copied from.
+    #[test]
+    fn the_build_configuration_asks_for_prefixes_instead_of_declaring_them() {
+        const DECLARED: [&str; 3] = ["/opt/homebrew", "/usr/local/opt", "linuxbrew"];
+
+        let root = workspace_root();
+        let mut configs = vec![root.join(".cargo/config.toml"), root.join("justfile")];
+        for entry in fs::read_dir(root.join(".config/just")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|kind| kind == "just") {
+                configs.push(path);
+            }
+        }
+
+        for config in configs {
+            let text = fs::read_to_string(&config).unwrap();
+            for prefix in DECLARED {
+                assert!(
+                    !text.contains(prefix),
+                    "{} writes down {prefix}, which is only one machine's answer",
+                    config.display()
+                );
+            }
+        }
     }
 }
