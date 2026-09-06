@@ -176,6 +176,19 @@ always = ["symphonia"]
 when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
+# `embed-model` is a derived feature with no model of its own. Model features
+# imply it and exclude each other, so the powerset must not select it directly.
+[[health.feature_invariants]]
+when_feature = "embed-model"
+never = ["embed-model"]
+mutually_exclusive = [
+  [
+    "embed-small-model",
+    "embed-full-model",
+    "embed-full-int8-model",
+  ],
+]
+
 [stress]
 # One run, both clocks. The first collapses the fixtures' artificial
 # delays and is fast; the second keeps them and is the only one where a defect
