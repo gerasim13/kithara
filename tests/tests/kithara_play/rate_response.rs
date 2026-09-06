@@ -168,6 +168,7 @@ async fn capture_command_boundary(
     callback_frames: usize,
 ) -> Vec<f32> {
     let mut publish_seq = latest_probe_seq(&recorder.snapshot(), "publish");
+    let mut last_block = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
         let block = capture_frames(harness, callback_frames, callback_frames).await;
         let after = recorder.snapshot();
@@ -177,8 +178,29 @@ async fn capture_command_boundary(
         if published && tone_is_dominant(&block, target) {
             return block;
         }
+        last_block = block;
     }
-    panic!("precondition: no callback presented the initial tone at a transport boundary");
+    let events = recorder.snapshot();
+    let publish = events
+        .iter()
+        .filter(|event| event.probe_name() == Some("publish"))
+        .count();
+    let rendered = events
+        .iter()
+        .filter(|event| event.probe_name() == Some("render_committed"))
+        .count();
+    let consumed = events
+        .iter()
+        .filter(|event| event.probe_name() == Some("pcm_consumed"))
+        .count();
+    let applied = events
+        .iter()
+        .filter(|event| event.probe_name() == Some("rate_applied"))
+        .count();
+    panic!(
+        "precondition: no callback presented the initial tone at a transport boundary; publish={publish}, rendered={rendered}, rate_applied={applied}, pcm_consumed={consumed}, last_rms={}",
+        signal_rms(&last_block)
+    );
 }
 
 fn latest_probe_seq(events: &[ProbeEvent], name: &str) -> Option<u64> {
