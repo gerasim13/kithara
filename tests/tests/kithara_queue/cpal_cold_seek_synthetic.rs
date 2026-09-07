@@ -92,13 +92,19 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build();
     let source = TrackSource::Config(Box::new(cfg));
 
-    let id = queue.append(source).expect("append synthetic HLS track");
+    let id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append synthetic HLS track");
     wait_for_loader_done(&queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load: {e}"));
 
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_at_least(&queue, 1.5, Duration::from_secs(20))
         .await

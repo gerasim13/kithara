@@ -144,7 +144,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source).expect("append silvercomet HLS track");
+    let id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append silvercomet HLS track");
     wait_for_status(
         &mut rx,
         queue.control(),
@@ -155,8 +158,11 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     .await
     .unwrap_or_else(|e| panic!("silvercomet track load failed: {e}"));
 
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_at_least(queue.control(), 2.0, Duration::from_secs(45))
         .await

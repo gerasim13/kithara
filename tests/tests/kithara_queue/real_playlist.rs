@@ -336,7 +336,8 @@ async fn track_plays_end_to_end(
     .unwrap_or_else(|e| panic!("load fail [{url}]: {e}"));
 
     ctx.queue
-        .select(track_id, Transition::None)
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select");
     wait_for_position_at_least(&ctx.queue, 0.5, Duration::from_secs(15))
         .await
@@ -442,13 +443,21 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .iter()
         .map(|u| {
             ctx.queue
-                .append(build_track_source(u, ctx, backend, AbrMode::Auto(None)))
+                .run({
+                    let arg0 = build_track_source(u, ctx, backend, AbrMode::Auto(None));
+                    move |q| q.append(arg0)
+                })
+                .await
                 .expect("append playlist track")
         })
         .collect();
 
     ctx.queue
-        .select(ids[0], Transition::None)
+        .run({
+            let arg0 = ids[0];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .expect("select first");
     wait_for_status(
         &mut rx,
@@ -471,7 +480,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
-    ctx.queue.play();
+    ctx.queue.run(move |q| q.play()).await;
     wait_for_position_at_least(&ctx.queue, during_pause + 0.01, Duration::from_secs(5))
         .await
         .expect("resume did not advance position");
@@ -691,7 +700,8 @@ async fn prod_tracks_sequential_startup_latency() {
             let load_latency = t0.elapsed();
 
             ctx.queue
-                .select(track_id, Transition::None)
+                .run(move |q| q.select(track_id, Transition::None))
+                .await
                 .map_err(|e| format!("select: {e:?}"))?;
             wait_for_position_at_least(&ctx.queue, 0.1, Duration::from_secs(20))
                 .await
@@ -872,7 +882,8 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
     .await
     .unwrap_or_else(|e| panic!("HLS leg load [{HLS_URL}]: {e}"));
     ctx.queue
-        .select(hls, Transition::None)
+        .run(move |q| q.select(hls, Transition::None))
+        .await
         .expect("select the HLS leg");
     wait_for_position_at_least(&ctx.queue, 0.5, Duration::from_secs(15))
         .await

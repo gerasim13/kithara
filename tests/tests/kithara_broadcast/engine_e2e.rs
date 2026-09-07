@@ -47,7 +47,7 @@ async fn playing_harness() -> OfflinePlayerHarness {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(tone_resource(), TrackId::allocate(), None);
             player
                 .select_item(0, true)
@@ -55,7 +55,7 @@ async fn playing_harness() -> OfflinePlayerHarness {
         })
         .await;
     harness.render(BLOCK_FRAMES).await;
-    let _ = harness.tick_and_drain();
+    let _ = harness.tick_and_drain().await;
     harness
 }
 
@@ -63,7 +63,7 @@ async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     rendered
 }
@@ -72,7 +72,7 @@ async fn render_tone(harness: &OfflinePlayerHarness, frames: usize) {
     let mut audible = 0;
     for _ in 0..MAX_BLOCKS {
         let block = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
         audible += block.iter().step_by(2).filter(|s| s.abs() > 0.0).count();
         if audible >= frames {
             return;

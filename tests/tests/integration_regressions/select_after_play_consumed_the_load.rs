@@ -157,9 +157,13 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
 
     let ids: Vec<_> = (0..TRACK_COUNT)
         .map(|index| {
-            queue.append(TrackSource::Config(Box::new(resource_config(
-                &temp_dir, &store, index,
-            ))))
+            queue
+                .run(move |q| {
+                    q.append(TrackSource::Config(Box::new(resource_config(
+                        &temp_dir, &store, index,
+                    ))))
+                })
+                .await
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("queue is open while fixtures are appended");
@@ -168,7 +172,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     // surface does, and parks inside the engine start.
     let playing = tokio::task::spawn_blocking({
         let queue = Arc::clone(&queue);
-        move || queue.play()
+        move || queue.run(move |q| q.play()).await
     });
     tokio::task::spawn_blocking(move || entered_rx.recv())
         .await
@@ -200,7 +204,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     );
 
     queue
-        .select(ids[1], Transition::None)
+        .run({
+            let arg0 = ids[1];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .expect("selecting the second track must be accepted");
     wait_for_event(
         &mut status_rx,
@@ -217,7 +225,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     queue
-        .select(ids[0], Transition::None)
+        .run({
+            let arg0 = ids[0];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .unwrap_or_else(|error| {
             panic!(
                 "switching back to the track `play` consumed was rejected: {error} — the \

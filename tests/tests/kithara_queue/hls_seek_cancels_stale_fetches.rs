@@ -204,9 +204,13 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
             .build();
 
     let track_id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append stale-fetch seek track");
-    queue.select(track_id, Transition::None).expect("select");
+    queue
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
+        .expect("select");
 
     wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE)
         .await

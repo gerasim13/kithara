@@ -80,9 +80,10 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
 
     let mut rx = queue.subscribe();
     queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append play-before-load track");
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let position = wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))
         .await

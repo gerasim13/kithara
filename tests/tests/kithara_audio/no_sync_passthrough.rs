@@ -414,7 +414,9 @@ async fn render_passthrough(
     )
     .await;
     target.set_fade_duration(0.0);
-    target.load_and_fadein(resource_from_reader(target_audio));
+    target
+        .load_and_fadein(resource_from_reader(target_audio))
+        .await;
     let mut load = if let Some(audio) = load_audio.take() {
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
@@ -423,7 +425,7 @@ async fn render_passthrough(
         )
         .await;
         player.set_fade_duration(0.0);
-        player.load_and_fadein(resource_from_reader(audio));
+        player.load_and_fadein(resource_from_reader(audio)).await;
         Some(player)
     } else {
         None
@@ -507,9 +509,14 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
                 .build(),
         ))
         .await;
-    let id = queue.insert_loaded_for_test(resource_from_reader(audio));
-    queue
-        .select(id, Transition::None)
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(resource_from_reader(audio))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
         .expect("select queue passthrough track");
 
     let block_period = Duration::from_secs_f64(
@@ -518,7 +525,10 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     );
     for _ in 0..WARMUP_BLOCKS {
         let started = Instant::now();
-        queue.tick().expect("tick queue during warmup");
+        harness
+            .run(&queue, |q| q.tick())
+            .await
+            .expect("tick queue during warmup");
         let _ = harness.render(BLOCK_FRAMES).await;
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
@@ -526,7 +536,10 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
-        queue.tick().expect("tick queue during capture");
+        harness
+            .run(&queue, |q| q.tick())
+            .await
+            .expect("tick queue during capture");
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }

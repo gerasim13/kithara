@@ -117,12 +117,28 @@ impl OfflinePlayerHarness {
             .expect("offline harness player was already transferred")
     }
 
+    /// Issues player control calls from the host owner thread, as the app
+    /// would.
     pub async fn with_player<R>(
         &self,
-        use_player: impl FnOnce(&PlayerControl<TestPools>) -> R,
-    ) -> R {
+        use_player: impl FnOnce(&PlayerControl<TestPools>) -> R + Send + 'static,
+    ) -> R
+    where
+        R: Send + 'static,
+    {
         self.ensure_player_inserted().await;
-        use_player(&self.player_control)
+        self.run(&self.player_control, use_player).await
+    }
+
+    /// Issues a control call on `control` from the host owner thread, as the
+    /// app would.
+    pub async fn run<C, R>(&self, control: &C, f: impl FnOnce(&C) -> R + Send + 'static) -> R
+    where
+        C: Clone + Send + 'static,
+        R: Send + 'static,
+    {
+        let control = control.clone();
+        self.host.run(move || f(&control)).await
     }
 
     pub const fn worker(&self) -> &PlayWorker<TestPools> {
@@ -191,8 +207,9 @@ impl OfflinePlayerHarness {
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
-    pub fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        self.player_control.process_notifications();
+    pub async fn tick_and_drain(&self) -> Vec<PlayerEvent> {
+        self.run(&self.player_control, PlayerControl::process_notifications)
+            .await;
 
         let mut events = Vec::new();
         let mut rx = self.events.lock();

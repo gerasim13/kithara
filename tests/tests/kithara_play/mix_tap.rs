@@ -32,7 +32,7 @@ async fn playing_harness() -> OfflinePlayerHarness {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(make_resource(), TrackId::allocate(), None);
             player
                 .select_item(0, true)
@@ -40,7 +40,7 @@ async fn playing_harness() -> OfflinePlayerHarness {
         })
         .await;
     harness.render(BLOCK_FRAMES).await;
-    let _ = harness.tick_and_drain();
+    let _ = harness.tick_and_drain().await;
     harness
 }
 
@@ -48,7 +48,7 @@ async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) -> Vec<f32
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     rendered
 }
@@ -114,7 +114,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(make_resource(), TrackId::allocate(), None);
             player
                 .select_item(0, true)

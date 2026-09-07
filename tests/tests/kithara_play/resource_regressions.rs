@@ -914,7 +914,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
     let _warmup = render_offline_window(
         &mut player,
         24,
@@ -1128,7 +1128,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_1 preload deadline")
         .expect("mp3_1 preload");
-    player.load_and_fadein(mp3_1);
+    player.load_and_fadein(mp3_1).await;
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
     let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1136,7 +1136,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("hls_1 preload deadline")
         .expect("hls_1 preload");
-    player.load_and_fadein(hls_1);
+    player.load_and_fadein(hls_1).await;
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
     let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1144,7 +1144,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_2 preload deadline")
         .expect("mp3_2 preload");
-    player.load_and_fadein(mp3_2);
+    player.load_and_fadein(mp3_2).await;
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
     let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
@@ -1152,7 +1152,7 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_3 preload deadline")
         .expect("mp3_3 preload");
-    player.load_and_fadein(mp3_3);
+    player.load_and_fadein(mp3_3).await;
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR).await;
 
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
@@ -1171,7 +1171,7 @@ async fn stress_offline_crossfade_no_gaps() {
             .await
             .expect("hls_n preload deadline")
             .expect("hls_n preload");
-        player.load_and_fadein(hls_n);
+        player.load_and_fadein(hls_n).await;
         let _sh =
             render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR).await;
 
@@ -1180,7 +1180,7 @@ async fn stress_offline_crossfade_no_gaps() {
             .await
             .expect("mp3_n preload deadline")
             .expect("mp3_n preload");
-        player.load_and_fadein(mp3_n);
+        player.load_and_fadein(mp3_n).await;
         let sm =
             render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR).await;
 

@@ -39,7 +39,7 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
         "the control thread must not publish pause before RT applies it"
     );
     let _ = oracle.render(BLOCK_FRAMES).await;
-    let paused_rates = rate_events(oracle.tick_and_drain());
+    let paused_rates = rate_events(oracle.tick_and_drain().await);
     assert_eq!(paused_rates, [0.0]);
     assert_eq!(oracle.player().rate(), 0.0);
 
@@ -52,7 +52,7 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
         "the control thread must not publish the requested rate before RT applies it"
     );
     let _ = oracle.render(BLOCK_FRAMES).await;
-    let resumed_rates = rate_events(oracle.tick_and_drain());
+    let resumed_rates = rate_events(oracle.tick_and_drain().await);
     assert_eq!(resumed_rates, [1.0]);
     assert_eq!(oracle.player().rate(), 1.0);
 
@@ -97,7 +97,7 @@ async fn loaded_harness() -> OfflinePlayerHarness {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(make_resource(1.0), TrackId::allocate(), None);
             player
                 .select_item(0, true)
@@ -107,7 +107,7 @@ async fn loaded_harness() -> OfflinePlayerHarness {
 
     for _ in 0..WARMUP_BLOCKS {
         let _ = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     harness
 }
@@ -119,7 +119,7 @@ async fn blocks_until_silence(rate: f32) -> usize {
     let mut blocks = 0usize;
     for _ in 0..MEASURE_BLOCKS {
         let block = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
         blocks = blocks.saturating_add(1);
         if block.iter().all(|sample| sample.abs() == 0.0) {
             break;
@@ -135,7 +135,7 @@ async fn media_advance(rate: f32) -> f64 {
     harness.player().set_default_rate(rate);
     for _ in 0..CLOCK_BLOCKS {
         let _ = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     let advance = harness.player().position_seconds().unwrap_or(0.0) - start;
     harness.close().await;

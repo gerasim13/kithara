@@ -338,7 +338,7 @@ async fn prepare_player(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and

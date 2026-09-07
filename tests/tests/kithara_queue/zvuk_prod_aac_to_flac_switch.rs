@@ -200,7 +200,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     let pre = render_until(&mut player, "AAC warmup before FLAC switch", |position| {
         position >= PRE_SWITCH_POSITION_SECS

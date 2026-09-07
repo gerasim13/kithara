@@ -170,7 +170,7 @@ fn host_frame(position: f64, label: &str) -> i64 {
 #[kithara::flash(true)]
 async fn render_paced(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f32> {
     let block = harness.render(frames).await;
-    let _ = harness.tick_and_drain();
+    let _ = harness.tick_and_drain().await;
     sleep(Duration::from_secs_f64(
         frames.to_f64().expect("render frame count fits f64") / f64::from(HOST_SAMPLE_RATE),
     ))
@@ -232,15 +232,16 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
+    let select_label = label.to_owned();
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.reserve_slots(1);
             player
                 .replace_item(0, resource, TrackId::allocate())
                 .expect("replace quality-switch fixture item");
-            player
-                .select_item(0, true)
-                .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+            player.select_item(0, true).unwrap_or_else(|error| {
+                panic!("select {select_label} Kithara App resource: {error}")
+            });
         })
         .await;
 

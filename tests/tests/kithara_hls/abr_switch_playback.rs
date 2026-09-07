@@ -416,7 +416,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
     let _warmup = render_offline_window(
         &mut player,
         24,

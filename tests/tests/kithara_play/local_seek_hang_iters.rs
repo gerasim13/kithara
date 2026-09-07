@@ -287,7 +287,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
         let mut events = resource.subscribe();
-        player.load_and_fadein(resource);
+        player.load_and_fadein(resource).await;
 
         // Event-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),

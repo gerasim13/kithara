@@ -295,7 +295,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
         );
     }
 
-    load_decks(case, &decks, &mut failures);
+    load_decks(case, &host, &decks, &mut failures).await;
     runtime::record_transport_state(&host, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
@@ -623,9 +623,7 @@ async fn reset_for_capture(
         return false;
     }
 
-    for deck in &*decks {
-        deck.player.play();
-    }
+    play_decks(host, decks).await;
     let mut completed = false;
     let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
@@ -747,9 +745,7 @@ async fn reset_for_capture(
         ));
         return false;
     }
-    for deck in &*decks {
-        deck.player.play();
-    }
+    play_decks(host, decks).await;
     settle_controls(
         case,
         host,
@@ -861,21 +857,42 @@ fn assess_position_advance(
     }
 }
 
-fn load_decks(case: &Case, decks: &[Deck], failures: &mut Vec<String>) {
+async fn load_decks(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+    failures: &mut Vec<String>,
+) {
     for (deck_index, deck) in decks.iter().enumerate() {
         runtime::record_control_state(case, deck_index, deck, "before playback", failures);
-        deck.player
-            .select_item_with_crossfade(
+        let player = deck.player.control().clone();
+        host.run(move || {
+            player.select_item_with_crossfade(
                 0,
                 SelectTransition {
                     autoplay: false,
                     crossfade_seconds: 0.0,
                 },
             )
-            .unwrap_or_else(|error| {
-                panic!("{} deck {deck_index}: select resource: {error}", case.label)
-            });
+        })
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{} deck {deck_index}: select resource: {error}", case.label)
+        });
     }
+}
+
+async fn play_decks(host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {
+    let players: Vec<_> = decks
+        .iter()
+        .map(|deck| deck.player.control().clone())
+        .collect();
+    host.run(move || {
+        for player in &players {
+            player.play();
+        }
+    })
+    .await;
 }
 
 async fn prepare_deck(

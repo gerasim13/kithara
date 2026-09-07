@@ -149,12 +149,16 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         .iter()
         .enumerate()
         .map(|(index, handle)| {
-            queue.append(TrackSource::Config(Box::new(resource_config(
-                handle,
-                &downloader,
-                &store,
-                index,
-            ))))
+            queue
+                .run(move |q| {
+                    q.append(TrackSource::Config(Box::new(resource_config(
+                        handle,
+                        &downloader,
+                        &store,
+                        index,
+                    ))))
+                })
+                .await
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("queue is open while fixtures are appended");
@@ -163,7 +167,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))
         .await
         .unwrap_or_else(|error| panic!("precondition: first track: {error}"));
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let mut active_gets = HashSet::new();
     drain_active_gets(&mut probe_rx, &mut active_gets);
@@ -176,7 +180,8 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     for round in 0..STORM_ROUNDS {
         let target = ids[round % ids.len()];
         queue
-            .select(target, Transition::None)
+            .run(move |q| q.select(target, Transition::None))
+            .await
             .unwrap_or_else(|error| panic!("switch {round} was rejected: {error}"));
         if queue.current().is_some_and(|entry| entry.id == target) {
             continue;
@@ -227,7 +232,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     wait_for_playing(&queue, false, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("pause was swallowed after the switch storm: {error}"));
-    queue.play();
+    queue.run(move |q| q.play()).await;
     wait_for_playing(&queue, true, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("play was swallowed after the switch storm: {error}"));

@@ -120,14 +120,19 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
     let mut session = build_session(cache_path).await;
     let id = session
         .queue
-        .append(track_source(url, &session))
+        .run({
+            let source = track_source(url, &session);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append replay track");
     wait_for_loader_done(&session.queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("[{label}] load: {e}"));
     session
         .queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .expect("select after load");
     wait_for_position_at_least(&session.queue, min_play_secs, Duration::from_secs(15))
         .await

@@ -70,7 +70,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = queue.tick();
+        let _ = harness.run(queue, |q| q.tick()).await;
         let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
     }
@@ -94,11 +94,16 @@ async fn crossfade_started_requires_a_live_predecessor() {
             false,
         )))
         .await;
-    let id = queue.insert_loaded_for_test(make_resource("initial", 0.2, 0.3));
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("initial", 0.2, 0.3))
+        })
+        .await;
     let mut receiver = queue.subscribe();
 
-    queue
-        .select(id, Transition::Crossfade)
+    harness
+        .run(&queue, move |q| q.select(id, Transition::Crossfade))
+        .await
         .expect("select initial track");
 
     while let Ok(envelope) = receiver.try_recv() {
@@ -113,7 +118,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
     let mut saw_playing = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
+        let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         let is_playing = queue.is_playing();
         saw_playing |= is_playing;
@@ -126,12 +131,20 @@ async fn crossfade_started_requires_a_live_predecessor() {
         "the predecessor must start before reaching EOF"
     );
     assert!(!queue.is_playing(), "the predecessor must reach EOF");
-    queue.tick().expect("process predecessor EOF");
+    harness
+        .run(&queue, |q| q.tick())
+        .await
+        .expect("process predecessor EOF");
 
-    let successor = queue.insert_loaded_for_test(make_resource("successor", 1.0, 0.3));
+    let successor = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("successor", 1.0, 0.3))
+        })
+        .await;
     let mut receiver = queue.subscribe();
-    queue
-        .select(successor, Transition::Crossfade)
+    harness
+        .run(&queue, move |q| q.select(successor, Transition::Crossfade))
+        .await
         .expect("select successor after EOF");
 
     while let Ok(envelope) = receiver.try_recv() {
@@ -162,9 +175,14 @@ async fn repeat_one_natural_advance_keeps_current_track() {
             false,
         )))
         .await;
-    let id = queue.insert_loaded_for_test(make_resource("one", 1.0, 0.3));
-    queue
-        .select(id, Transition::None)
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("one", 1.0, 0.3))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
         .expect("select repeat-one track");
     let mut receiver = queue.subscribe();
     queue.set_repeat(RepeatMode::One);
@@ -176,8 +194,12 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         }))
     ));
     assert_eq!(
-        queue
-            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+        harness
+            .run(&queue, move |q| q.advance_to_next(
+                Transition::Crossfade,
+                AdvanceReason::NaturalEof
+            ))
+            .await
             .expect("advance repeat-one queue"),
         Some(id)
     );
@@ -201,10 +223,19 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
             false,
         )))
         .await;
-    let first = queue.insert_loaded_for_test(make_resource("first", 1.0, 0.2));
-    let last = queue.insert_loaded_for_test(make_resource("last", 1.0, 0.8));
-    queue
-        .select(last, Transition::None)
+    let first = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("first", 1.0, 0.2))
+        })
+        .await;
+    let last = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("last", 1.0, 0.8))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(last, Transition::None))
+        .await
         .expect("select last repeat-all track");
     let mut receiver = queue.subscribe();
     queue.set_repeat(RepeatMode::All);
@@ -216,8 +247,12 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         }))
     ));
     assert_eq!(
-        queue
-            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+        harness
+            .run(&queue, move |q| q.advance_to_next(
+                Transition::Crossfade,
+                AdvanceReason::NaturalEof
+            ))
+            .await
             .expect("advance repeat-all queue"),
         Some(first)
     );
@@ -249,10 +284,19 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
         )))
         .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
@@ -321,10 +365,19 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
         )))
         .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
@@ -402,10 +455,19 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         .await;
     let mut rx = queue.subscribe();
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let mut prefetch_seen = false;
@@ -413,7 +475,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
+        let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
 
         loop {
@@ -480,8 +542,16 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     let id_a = queue.register_for_test();
     let id_b = queue.register_for_test();
 
-    queue.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE));
-    queue.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE));
+    harness
+        .run(&queue, move |q| {
+            q.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| {
+            q.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE))
+        })
+        .await;
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -547,11 +617,20 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         )))
         .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let id_b = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("first select track A");
     let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
     assert_eq!(
@@ -563,8 +642,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_A_VALUE));
     queue.supply_test_resource_for_respawn(id_b, make_resource("b2", TRACK_SECS, TRACK_B_VALUE));
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("second select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
@@ -621,14 +701,19 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         .await;
     let mut rx = queue.subscribe();
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
+        let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         loop {
             match rx.try_recv().map(|env| env.event) {
@@ -640,7 +725,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         }
         if saw_queue_ended {
             for _ in 0..4 {
-                let _ = queue.tick();
+                let _ = harness.run(&queue, |q| q.tick()).await;
                 let _ = harness.render(BLOCK_FRAMES).await;
             }
             break;
@@ -681,7 +766,11 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         )))
         .await;
 
-    let _id = queue.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE));
+    let _id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE))
+        })
+        .await;
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -739,14 +828,27 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
         )))
         .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B));
-    let _ = queue.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C))
+        })
+        .await;
     // The app starts a catalog row exactly this way, with no fade into the
     // first track, and it is the arrangement that leaves the engine's own
     // handover trigger disarmed for that track.
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;

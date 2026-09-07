@@ -170,7 +170,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
     let windows =

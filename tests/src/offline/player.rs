@@ -51,13 +51,16 @@ impl OfflinePlayer {
     /// # Panics
     ///
     /// Panics if the product player rejects the resource.
-    pub fn load_and_fadein(&mut self, resource: Resource) {
-        let control = self.control();
-        control.reserve_slots(1);
-        control
-            .replace_item(0, resource, kithara::events::TrackId::allocate())
-            .expect("replace offline player item");
-        control.play();
+    pub async fn load_and_fadein(&mut self, resource: Resource) {
+        self.player
+            .run(move |control| {
+                control.reserve_slots(1);
+                control
+                    .replace_item(0, resource, kithara::events::TrackId::allocate())
+                    .expect("replace offline player item");
+                control.play();
+            })
+            .await;
     }
 
     /// Set the transition duration used by the next load.

@@ -303,13 +303,19 @@ async fn local_track_plays_end_to_end(
     // so audio sink-truth events arrive here too.
     let mut rx = queue.subscribe();
 
-    let track_id = queue.append(source).expect("append local track");
+    let track_id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append local track");
 
     wait_for_loader_done_event(&mut rx, &queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
 
-    queue.select(track_id, Transition::None).expect("select");
+    queue
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
+        .expect("select");
     wait_for_position_event(&mut rx, &queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail [{label}]: {e}"));
@@ -500,28 +506,33 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     queue.set_crossfade_duration(2.0);
 
     let mut rx = queue.subscribe();
-    let ids: Vec<TrackId> = urls
-        .iter()
-        .map(|u| {
-            let cfg =
-                ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
-                    .downloader(downloader.clone())
-                    .store(store.clone())
-                    .decoder(
-                        kithara::audio::AudioDecoderConfig::builder()
-                            .backend(backend)
-                            .build(),
-                    )
-                    .initial_abr_mode(AbrMode::Auto(None))
-                    .build();
+    let mut ids: Vec<TrackId> = Vec::with_capacity(urls.len());
+    for u in &urls {
+        let cfg =
+            ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .decoder(
+                    kithara::audio::AudioDecoderConfig::builder()
+                        .backend(backend)
+                        .build(),
+                )
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
+        ids.push(
             queue
-                .append(TrackSource::Config(Box::new(cfg)))
-                .expect("append crossfade fixture track")
-        })
-        .collect();
+                .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+                .await
+                .expect("append crossfade fixture track"),
+        );
+    }
 
     queue
-        .select(ids[0], Transition::None)
+        .run({
+            let arg0 = ids[0];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .expect("select first");
     wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
         .await
@@ -543,7 +554,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
-    queue.play();
+    queue.run(move |q| q.play()).await;
     let after_resume = wait_for_position_event(
         &mut rx,
         &queue,
@@ -573,7 +584,8 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
     queue
-        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+        .run(move |q| q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext))
+        .await
         .expect("advance local-track crossfade");
     let started = wait_for_queue_event(
         &mut rx,

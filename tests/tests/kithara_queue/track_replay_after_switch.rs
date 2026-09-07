@@ -235,10 +235,18 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     };
 
     let id_a = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_a)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track A");
     let id_b = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_b)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track B");
 
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
@@ -250,15 +258,20 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 
     let mut events = queue.subscribe();
     queue
-        .select(id_a, Transition::None)
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select A (first)");
     wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
 
-    queue.select(id_b, Transition::None).expect("select B");
+    queue
+        .run(move |q| q.select(id_b, Transition::None))
+        .await
+        .expect("select B");
     wait_for_current_track(&mut events, id_b, Consts::LOAD_DEADLINE).await;
 
     queue
-        .select(id_a, Transition::None)
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
         .expect("re-select A after B");
 
     let result = wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE).await;
@@ -346,10 +359,18 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     };
 
     let id_a = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_a)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track A");
     let id_b = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_b)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track B");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
@@ -371,16 +392,25 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
             .is_some_and(|d| (d - 64.0).abs() < 20.0)
     };
 
-    queue.select(id_a, Transition::None).expect("select A");
+    queue
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select A");
     wait_for_position(&queue, Consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
     assert!(sounds_like_a(&queue), "arena must be sounding the mp3");
 
-    queue.select(id_b, transition).expect("select B");
+    queue
+        .run(move |q| q.select(id_b, transition))
+        .await
+        .expect("select B");
     let switch_deadline = Duration::from_secs(30);
     wait_for(&queue, switch_deadline, "arena sounds B", &sounds_like_b).await;
     wait_for_position(&queue, switch_deadline, "B playing", |p| p >= 2.5).await;
 
-    queue.select(id_a, transition).expect("switch back to A");
+    queue
+        .run(move |q| q.select(id_a, transition))
+        .await
+        .expect("switch back to A");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
         .expect("A reloaded after switch-back");

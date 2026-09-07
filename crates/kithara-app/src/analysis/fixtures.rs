@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     num::{NonZeroU32, NonZeroUsize},
     path::Path,
 };
@@ -28,6 +29,7 @@ use kithara::{
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_test_fixtures::assets;
+use kithara_test_utils::off_thread::OffThread;
 use num_traits::cast::AsPrimitive;
 
 use super::{Entry, Request};
@@ -134,13 +136,36 @@ pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     (host, control)
 }
 
-pub(crate) fn track(queue: &AppQueueControl, id: u64, url: &str) -> (TrackId, AppTrackSource) {
+pub(crate) async fn queue_off() -> (OffThread<(AppHost, AppQueueControl)>, AppQueueControl) {
+    queue_off_named("app-host").await
+}
+
+pub(crate) async fn queue_off_named(
+    name: &'static str,
+) -> (OffThread<(AppHost, AppQueueControl)>, AppQueueControl) {
+    let host = OffThread::spawn(name, || Ok::<_, Infallible>(queue()))
+        .await
+        .expect("app host fixture is infallible");
+    let control = host.call(|(_, control)| control.clone()).await;
+    (host, control)
+}
+
+/// Appends a track from the host owner thread, as the app would.
+pub(crate) async fn track(
+    host: &OffThread<(AppHost, AppQueueControl)>,
+    id: u64,
+    url: &str,
+) -> (TrackId, AppTrackSource) {
     let track_id = TrackId::from(id);
-    queue
-        .append_with_id(track_id, url.to_owned())
-        .expect("append test track");
-    let source = queue.track_source(track_id).expect("track has a source");
-    (track_id, source)
+    let url = url.to_owned();
+    host.call(move |(_, queue)| {
+        queue
+            .append_with_id(track_id, url)
+            .expect("append test track");
+        let source = queue.track_source(track_id).expect("track has a source");
+        (track_id, source)
+    })
+    .await
 }
 
 pub(crate) fn memory_store() -> AppStore {

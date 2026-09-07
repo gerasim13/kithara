@@ -186,7 +186,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     );
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source).expect("append packaged DRM track");
+    let id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append packaged DRM track");
     wait_for_status(
         &mut rx,
         &queue,
@@ -197,7 +200,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     .await
     .unwrap_or_else(|e| panic!("load fail: {e}"));
 
-    queue.select(id, Transition::None).expect("select");
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
     wait_for_position_at_least(&queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail: {e}"));

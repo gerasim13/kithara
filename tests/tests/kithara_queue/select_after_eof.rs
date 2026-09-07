@@ -55,7 +55,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = queue.tick();
+        let _ = harness.run(queue, |q| q.tick()).await;
         let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
     }
@@ -65,8 +65,15 @@ async fn render_loop(
 #[kithara::test(tokio)]
 async fn seek_updates_cached_position_optimistically() {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let id = queue.insert_loaded_for_test(make_resource("seek", 120.0, 0.10));
-    queue.select(id, Transition::None).expect("select track");
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("seek", 120.0, 0.10))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
+        .expect("select track");
 
     queue.seek(54.689_879_542).expect("seek must land");
 
@@ -85,12 +92,17 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE))
+        })
+        .await;
     // Registered but never completed: stands in for a stalled loader.
     let _id_b = queue.register_for_test();
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
     let first_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -99,8 +111,9 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     );
 
     queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_VALUE));
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("re-select of the finished track must be accepted");
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
@@ -132,21 +145,31 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET));
-    let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET))
+        })
+        .await;
+    let id_b = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD))
+        })
+        .await;
 
     match initial_start {
-        InitialStart::Play => queue.play(),
-        InitialStart::Select => queue
-            .select(id_a, Transition::None)
+        InitialStart::Play => harness.run(&queue, move |q| q.play()).await,
+        InitialStart::Select => harness
+            .run(&queue, move |q| q.select(id_a, Transition::None))
+            .await
             .expect("select track A"),
     }
     let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
     assert!(mean_a > 0.005, "track A must start: mean={mean_a}");
 
-    queue
-        .select(id_b, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_b, Transition::None))
+        .await
         .expect("select track B");
     let pcm_b = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_b = mean_abs(&pcm_b[pcm_b.len() / 2..]);
@@ -156,8 +179,9 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
     );
 
     queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, QUIET));
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("switch back to track A");
 
     // Skip the first half of the window: switch latency and the cf=0 cut.
@@ -183,10 +207,18 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
 #[kithara::test(tokio)]
 async fn play_button_marks_current_loaded_track_consumed() {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let id_a = queue.insert_loaded_for_test(make_resource("a", 8.0, 0.3));
-    let _id_b = queue.insert_loaded_for_test(make_resource("b", 8.0, 0.3));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", 8.0, 0.3))
+        })
+        .await;
+    let _id_b = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", 8.0, 0.3))
+        })
+        .await;
 
-    queue.play();
+    harness.run(&queue, move |q| q.play()).await;
     let _ = render_loop(&queue, &harness, 8).await;
 
     let status_a = queue
@@ -215,11 +247,16 @@ async fn reselect_playing_track_cancels_pending_switch() {
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE))
+        })
+        .await;
     let id_b = queue.register_for_test();
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
     let warmup_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     assert!(
@@ -227,11 +264,13 @@ async fn reselect_playing_track_cancels_pending_switch() {
         "track A must be audibly playing before the pending-switch step"
     );
 
-    queue
-        .select(id_b, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_b, Transition::None))
+        .await
         .expect("select of a still-loading track stashes a pending switch");
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("re-select of the playing track");
 
     let status_b = queue

@@ -225,7 +225,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(

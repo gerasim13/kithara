@@ -100,7 +100,7 @@ async fn prepare_tiny_ring_player(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource_from_reader(audio));
+    player.load_and_fadein(resource_from_reader(audio)).await;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;

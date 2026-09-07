@@ -130,7 +130,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        player.load_and_fadein(hls);
+        player.load_and_fadein(hls).await;
         let _hls_warmup = render_offline_window(
             &mut player,
             40,
@@ -146,7 +146,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             .expect("MP3 preload")
             .expect("MP3 preload result");
         let before_fade = Instant::now();
-        player.load_and_fadein(mp3);
+        player.load_and_fadein(mp3).await;
         let fade_stats = render_offline_window(
             &mut player,
             60,

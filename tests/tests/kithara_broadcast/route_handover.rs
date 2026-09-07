@@ -81,13 +81,13 @@ async fn playing_harness() -> OfflinePlayerHarness {
         OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE)
             .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(tone_resource(), TrackId::allocate(), None);
             player.select_item(0, true).expect("select tone");
         })
         .await;
     let _ = harness.render(BLOCK_FRAMES).await;
-    let _ = harness.tick_and_drain();
+    let _ = harness.tick_and_drain().await;
     harness
 }
 
@@ -95,7 +95,7 @@ async fn render_blocks(harness: &OfflinePlayerHarness) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(BLOCKS_PER_RATE * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..BLOCKS_PER_RATE {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     rendered
 }

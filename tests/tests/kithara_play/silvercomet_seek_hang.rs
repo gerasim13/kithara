@@ -225,7 +225,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             let resource =
                 build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
-            player.load_and_fadein(resource);
+            player.load_and_fadein(resource).await;
 
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);

@@ -120,7 +120,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     .await;
 
     let resource = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -182,7 +182,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     .await;
 
     let first = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -191,7 +191,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     )
     .await;
     let second = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -266,7 +266,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     .await;
 
     let first = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -275,7 +275,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     )
     .await;
     let second = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -384,7 +384,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     )
     .await;
     let probe = create_apple_fused_resource(
-        probe_harness.player(),
+        probe_harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -446,7 +446,7 @@ async fn render_apple_fused_deficit_seam(
     .await;
 
     let first = create_apple_fused_resource(
-        harness.player(),
+        harness,
         server,
         cache_dir,
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -455,7 +455,7 @@ async fn render_apple_fused_deficit_seam(
     )
     .await;
     let second = create_apple_fused_resource(
-        harness.player(),
+        harness,
         server,
         cache_dir,
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -519,7 +519,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     .await;
 
     let resource = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -569,7 +569,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     .await;
 
     let resource = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -611,7 +611,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
 
     let first = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -621,7 +621,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     )
     .await;
     let second = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -702,7 +702,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     .await;
 
     let resource = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -755,7 +755,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
 }
 
 async fn create_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -763,7 +763,7 @@ async fn create_resource(
     start_frame: u64,
 ) -> Resource {
     create_resource_with_encoding(
-        player,
+        harness,
         server,
         cache_dir,
         encoder_delay,
@@ -779,7 +779,7 @@ async fn create_resource(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_resource_with_encoding(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -818,8 +818,9 @@ async fn create_resource_with_encoding(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare gapless e2e HLS resource config");
     let mut resource = Resource::new(config)
         .await
@@ -837,7 +838,7 @@ async fn create_resource_with_encoding(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_apple_fused_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -888,8 +889,9 @@ async fn create_apple_fused_resource(
             .build(),
     )
     .build();
-    let config = player
-        .prepare_config(config)
+    let config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare Apple fused HLS resource config");
     let mut resource = Resource::new(config)
         .await
@@ -1028,7 +1030,7 @@ async fn load_tagged_queue<const N: usize>(
 ) -> [TrackId; N] {
     let ids = [(); N].map(|()| TrackId::allocate());
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.reserve_slots(items.len());
             for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
                 player
@@ -1260,6 +1262,7 @@ async fn render_until_item_end_with_post_roll(
         events.extend(
             harness
                 .tick_and_drain()
+                .await
                 .into_iter()
                 .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
@@ -1277,6 +1280,7 @@ async fn render_until_item_end_with_post_roll(
                 events.extend(
                     harness
                         .tick_and_drain()
+                        .await
                         .into_iter()
                         .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );

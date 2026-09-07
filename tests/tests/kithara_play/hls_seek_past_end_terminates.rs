@@ -88,7 +88,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     // Warm-up is state-driven, not a fixed-size burst: the render races the
     // REAL network + decode pipeline, and under flash the burst's virtual

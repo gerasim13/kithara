@@ -214,15 +214,17 @@ async fn resumes_after_outage(
     let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(20));
     let mut rx = queue.subscribe();
     let id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append offline-resume track");
     queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .expect("select HLS track");
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: {error}"));
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let before_outage = wait_for_position_event(
         &mut rx,

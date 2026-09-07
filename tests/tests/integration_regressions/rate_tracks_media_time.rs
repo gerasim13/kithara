@@ -54,7 +54,7 @@ async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &
 async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) {
     for _ in 0..blocks {
         let _ = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
         time::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -85,7 +85,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(resource, TrackId::allocate(), None);
             player
                 .select_item(0, true)
@@ -101,6 +101,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
         blocks += 1;
         let ended = harness
             .tick_and_drain()
+            .await
             .iter()
             .any(|event| matches!(event, PlayerEvent::ItemDidPlayToEnd { .. }));
         if ended {
@@ -129,7 +130,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     std::fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(resource, TrackId::allocate(), None);
             player
                 .select_item(0, true)

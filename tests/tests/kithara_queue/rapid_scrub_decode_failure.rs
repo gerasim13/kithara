@@ -277,14 +277,18 @@ impl Harness {
             .build();
         let mut rx = queue.subscribe();
         let id = queue
-            .append(TrackSource::Config(Box::new(cfg)))
+            .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+            .await
             .expect("append rapid-scrub track");
 
         wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
             .await
             .unwrap_or_else(|e| panic!("Loaded never arrived: {e}"));
-        queue.select(id, Transition::None).expect("select");
-        queue.play();
+        queue
+            .run(move |q| q.select(id, Transition::None))
+            .await
+            .expect("select");
+        queue.run(move |q| q.play()).await;
 
         Self {
             queue,

@@ -316,7 +316,7 @@ async fn create_gapless_hls_resource(
 
 async fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.reserve_slots(items.len());
             for (index, resource) in items.into_iter().enumerate() {
                 player
@@ -352,6 +352,7 @@ async fn render_until_second_item_end(
         events.extend(
             harness
                 .tick_and_drain()
+                .await
                 .into_iter()
                 .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
@@ -364,6 +365,7 @@ async fn render_until_second_item_end(
                 events.extend(
                     harness
                         .tick_and_drain()
+                        .await
                         .into_iter()
                         .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );

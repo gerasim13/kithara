@@ -127,39 +127,46 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     .expect("create product offline queue");
 
     let target = queue
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(
-                ResourceSrc::parse(target_url.as_str()).expect("valid HLS URL"),
-            )
-            .downloader(downloader.clone())
-            .initial_abr_mode(AbrMode::manual(0))
-            .hls(hls_look_ahead(LOOK_AHEAD_BYTES))
-            .store(store.clone())
-            .build(),
-        )))
+        .run(move |q| {
+            q.append(TrackSource::Config(Box::new(
+                ResourceConfig::for_src(
+                    ResourceSrc::parse(target_url.as_str()).expect("valid HLS URL"),
+                )
+                .downloader(downloader.clone())
+                .initial_abr_mode(AbrMode::manual(0))
+                .hls(hls_look_ahead(LOOK_AHEAD_BYTES))
+                .store(store.clone())
+                .build(),
+            )))
+        })
+        .await
         .expect("append target track");
     // A next track is what an auto-skip would move to. Without it the queue
     // has nowhere to go and the regression could not show itself.
     let fallback = queue
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(
-                ResourceSrc::parse(fallback_url.as_str()).expect("valid fallback URL"),
-            )
-            .downloader(downloader)
-            .store(store)
-            .build(),
-        )))
+        .run(move |q| {
+            q.append(TrackSource::Config(Box::new(
+                ResourceConfig::for_src(
+                    ResourceSrc::parse(fallback_url.as_str()).expect("valid fallback URL"),
+                )
+                .downloader(downloader)
+                .store(store)
+                .build(),
+            )))
+        })
+        .await
         .expect("append fallback track");
 
     let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(20));
     let mut rx = queue.subscribe();
     queue
-        .select(target, Transition::None)
+        .run(move |q| q.select(target, Transition::None))
+        .await
         .expect("select target track");
     wait_for_loader_done_event(&mut rx, &queue, target, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: target load failed: {error}"));
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let before_failure = wait_for_position_event(
         &mut rx,

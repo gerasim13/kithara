@@ -78,7 +78,8 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         .build();
 
     let id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("analysis fixture track appends");
     wait_until(Duration::from_secs(60), "playback resource load", || {
         queue
@@ -104,7 +105,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         0,
     );
     queue.attach_observer(id, producer);
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let covered = || {
         analysis

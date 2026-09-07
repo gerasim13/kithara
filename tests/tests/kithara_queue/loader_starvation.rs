@@ -185,7 +185,11 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     for url in &hung_urls {
         hung_ids.push(
             queue
-                .append(TrackSource::Config(Box::new(mk_cfg(url))))
+                .run({
+                    let source = TrackSource::Config(Box::new(mk_cfg(url)));
+                    move |q| q.append(source)
+                })
+                .await
                 .expect("append hung track"),
         );
     }
@@ -199,10 +203,15 @@ async fn hung_loads_must_not_starve_user_selected_track() {
 
     // Reachable track: its load queues behind the saturated semaphore.
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&fast_url))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&fast_url)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;

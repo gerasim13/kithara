@@ -169,7 +169,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     // Pace each render window at ~1x wall clock so the real-time deadline is
     // exercised — the condition under which the playhead swallows.

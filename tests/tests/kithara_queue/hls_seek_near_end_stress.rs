@@ -185,7 +185,10 @@ async fn run_one_attempt(
                 .build(),
         )
         .build();
-    let track_id = match queue.append(TrackSource::Config(Box::new(cfg))) {
+    let track_id = match queue
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
+    {
         Ok(track_id) => track_id,
         Err(error) => {
             drop(tick_handle);
@@ -203,7 +206,10 @@ async fn run_one_attempt(
     // `player.bus()`), so audio sink-truth events arrive here too.
     let mut rx = queue.subscribe();
 
-    if let Err(e) = queue.select(track_id, Transition::None) {
+    if let Err(e) = queue
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
+    {
         drop(tick_handle);
         return IterOutcome::Errored {
             iter,

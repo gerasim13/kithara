@@ -26,7 +26,7 @@ async fn offline_harness_smoke() {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(make_resource(0.1), TrackId::allocate(), None);
             player.insert(make_resource(0.1), TrackId::allocate(), None);
             player
@@ -41,7 +41,7 @@ async fn offline_harness_smoke() {
         let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         total_frames = total_frames.saturating_add(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
 
     assert!(!rendered.is_empty());

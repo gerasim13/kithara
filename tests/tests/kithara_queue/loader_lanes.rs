@@ -175,11 +175,11 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
         build_queue_with_tick(&temp, Consts::BG_CAP).await;
 
     let hung_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &hung.url(),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&hung.url(), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
@@ -189,15 +189,17 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
 
     // Parked: the background lane is saturated by the hung load.
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url(&fast),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source =
+                TrackSource::Config(Box::new(mk_cfg(&fast_url(&fast), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
 
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;
@@ -233,11 +235,11 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     let mut events = queue.subscribe();
 
     let hung_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &hung.url(),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&hung.url(), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
@@ -246,19 +248,22 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url(&fast),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source =
+                TrackSource::Config(Box::new(mk_cfg(&fast_url(&fast), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
 
     // The user clicks the stuck track, then gives up and clicks another.
     queue
-        .select(hung_id, Transition::None)
+        .run(move |q| q.select(hung_id, Transition::None))
+        .await
         .expect("select hung");
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE)

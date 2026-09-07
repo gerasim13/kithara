@@ -261,18 +261,19 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     let mut rx = queue.subscribe();
-    let ids: Vec<TrackId> = resolved
-        .iter()
-        .map(|u| {
-            let cfg = ResourceConfig::for_src(ResourceSrc::parse(u).expect("valid URL"))
-                .downloader(downloader.clone())
-                .store(store.clone())
-                .build();
+    let mut ids: Vec<TrackId> = Vec::with_capacity(resolved.len());
+    for u in &resolved {
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(u).expect("valid URL"))
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
+        ids.push(
             queue
-                .append(TrackSource::Config(Box::new(cfg)))
-                .expect("append cold-seek track")
-        })
-        .collect();
+                .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+                .await
+                .expect("append cold-seek track"),
+        );
+    }
     let selected_id = ids[select_index];
 
     wait_for_status(
@@ -285,8 +286,11 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     .await
     .unwrap_or_else(|e| panic!("selected track never reached Loaded: {e}"));
 
-    queue.select(selected_id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(selected_id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before_seek = wait_for_position_event(&mut rx, &queue, 1.0, Duration::from_secs(15))
         .await
@@ -405,7 +409,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 
     let mut rx = queue.subscribe();
     let id = queue
-        .append(track_source(master.as_str()))
+        .run({
+            let arg0 = track_source(master.as_str());
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append long cold-seek track");
     wait_for_status(
         &mut rx,
@@ -416,8 +424,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|e| panic!("load: {e}"));
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
@@ -495,7 +506,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
 
     let mut rx = queue.subscribe();
     let id = queue
-        .append(track_source(master.as_str()))
+        .run({
+            let arg0 = track_source(master.as_str());
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append multivariant cold-seek track");
     wait_for_status(
         &mut rx,
@@ -506,8 +521,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|e| panic!("load: {e}"));
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await

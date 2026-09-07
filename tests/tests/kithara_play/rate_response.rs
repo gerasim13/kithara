@@ -155,7 +155,7 @@ async fn capture_frames(
         let remaining = frames - samples.len() / usize::from(CHANNELS);
         let block_frames = remaining.min(callback_frames);
         samples.extend(harness.render(block_frames).await);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
         time::sleep(frame_period(block_frames)).await;
     }
     samples
@@ -277,12 +277,16 @@ async fn playing_queue(
     ))
     .build();
     let mut events = queue.subscribe();
-    let id = queue.append(config).expect("append sine fixture");
+    let id = harness
+        .run(queue.control(), move |q| q.append(config))
+        .await
+        .expect("append sine fixture");
     wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(30))
         .await
         .expect("load sine fixture through resident queue");
-    queue
-        .select(id, Transition::None)
+    harness
+        .run(queue.control(), move |q| q.select(id, Transition::None))
+        .await
         .expect("select live-rate fixture");
     (harness, queue)
 }

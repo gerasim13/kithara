@@ -252,9 +252,13 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
             .build();
 
     let track_id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append multivariant HLS track");
-    queue.select(track_id, Transition::None).expect("select");
+    queue
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
+        .expect("select");
 
     let variant_request_ids = match observe_until_loaded(&mut rx, &queue, track_id, &url).await {
         Ok(request_ids) => request_ids,

@@ -68,7 +68,8 @@ fn append_track(
         .store(store.clone())
         .build();
     queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append resume track")
 }
 
@@ -89,7 +90,8 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
-        .select(first_id, Transition::None)
+        .run(move |q| q.select(first_id, Transition::None))
+        .await
         .expect("select first session track");
     wait_for_loader_done_event(
         &mut first_rx,
@@ -102,7 +104,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
 
     // Without this the first session never advances and no position worth
     // saving is ever reached.
-    first_queue.play();
+    first_queue.run(move |q| q.play()).await;
 
     let played = wait_for_position_event(
         &mut first_rx,
@@ -140,7 +142,8 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         &second_store,
     );
     second_queue
-        .select(second_id, Transition::None)
+        .run(move |q| q.select(second_id, Transition::None))
+        .await
         .expect("select second session track");
     wait_for_loader_done_event(
         &mut second_rx,
@@ -160,7 +163,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     );
     // `SeekComplete` is published by the decoder once it reads at the new
     // position, so it cannot arrive while the engine is still paused.
-    second_queue.play();
+    second_queue.run(move |q| q.play()).await;
     wait_for_event(
         &mut second_rx,
         "saved-position seek completion",

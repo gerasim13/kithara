@@ -29,7 +29,7 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -111,6 +111,19 @@ impl Harness {
 
     async fn render(&self, frames: usize) -> Vec<f32> {
         self.host.render(frames).await
+    }
+
+    /// Issues a queue control call from the host owner thread, as the app would.
+    async fn run<R>(
+        &self,
+        queue: &QueueControl<TestPools>,
+        f: impl FnOnce(&QueueControl<TestPools>) -> R + Send + 'static,
+    ) -> R
+    where
+        R: Send + 'static,
+    {
+        let queue = queue.clone();
+        self.host.run(move || f(&queue)).await
     }
 
     async fn close(self) {
@@ -250,17 +263,24 @@ async fn run_case(mode: GateMode) {
         ))
         .await
         .expect("insert queue into product offline Host");
-    let id0 = queue.insert_loaded_for_test(target);
-    let _id1 = queue.insert_loaded_for_test(next);
+    let id0 = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(target))
+        .await;
+    let _id1 = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(next))
+        .await;
 
-    queue.select(id0, Transition::None).expect("select track 0");
-    queue.play();
+    harness
+        .run(&queue, move |q| q.select(id0, Transition::None))
+        .await
+        .expect("select track 0");
+    harness.run(&queue, move |q| q.play()).await;
     assert_eq!(queue.current_index(), Some(0), "starts on track 0");
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
     for _ in 0..WARMUP_BLOCKS {
-        let _ = queue.tick();
+        let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
     assert_eq!(
@@ -279,7 +299,7 @@ async fn run_case(mode: GateMode) {
     let mut trigger = Trigger::NoTerminal;
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
-        let _ = queue.tick();
+        let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let kithara::events::Event::Player(pe) = ev {

@@ -31,7 +31,7 @@ async fn render_no_switch_control() -> Vec<f32> {
     )
     .await;
     harness
-        .with_player(|player| {
+        .with_player(move |player| {
             player.insert(
                 resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
                 TrackId::allocate(),
@@ -46,7 +46,7 @@ async fn render_no_switch_control() -> Vec<f32> {
     let mut rendered = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
     while rendered.len() / usize::from(CHANNELS) < CAPTURE_FRAMES {
         rendered.extend(harness.render(BLOCK_FRAMES).await);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
     rendered.truncate(CAPTURE_FRAMES * usize::from(CHANNELS));
     harness.close().await;

@@ -166,7 +166,7 @@ async fn run_case(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     let chan = CHANNELS as usize;
     let wall_budget_ms = num_traits::cast::<f64, u64>(PLAY_SECS * 1000.0 / 4.0).unwrap_or(u64::MAX)

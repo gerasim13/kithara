@@ -302,7 +302,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
             .build(),
     )
     .await;
-    player.load_and_fadein(resource);
+    player.load_and_fadein(resource).await;
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -468,15 +468,17 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
 
     let mut rx = queue.subscribe();
     let hls_id = queue
-        .append(TrackSource::Config(Box::new(hls_config)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(hls_config))))
+        .await
         .expect("append packaged HLS track");
     wait_for_loader_done_event(&mut rx, &queue, hls_id, Duration::from_secs(20))
         .await
         .expect("packaged HLS track must load");
     queue
-        .select(hls_id, Transition::None)
+        .run(move |q| q.select(hls_id, Transition::None))
+        .await
         .expect("loaded HLS track must select");
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let _ = wait_for_position_event(&mut rx, &queue, 0.75, Duration::from_secs(15))
         .await

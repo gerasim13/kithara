@@ -31,18 +31,22 @@ const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
 
-fn load(queue: &QueueControl<TestPools>, id: TrackId) {
+async fn load(harness: &OfflinePlayerHarness, queue: &QueueControl<TestPools>, id: TrackId) {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
     );
-    queue.complete_load_for_test(
-        id,
-        resource_from_reader_with_src(
-            TestPcmReader::with_value(spec, TRACK_SECS, LOUD),
-            Arc::from(REPEATED_SRC),
-        ),
-    );
+    harness
+        .run(queue, move |q| {
+            q.complete_load_for_test(
+                id,
+                resource_from_reader_with_src(
+                    TestPcmReader::with_value(spec, TRACK_SECS, LOUD),
+                    Arc::from(REPEATED_SRC),
+                ),
+            )
+        })
+        .await;
 }
 
 async fn render_loop(
@@ -51,7 +55,7 @@ async fn render_loop(
     block_budget: usize,
 ) {
     for _ in 0..block_budget {
-        let _ = queue.tick();
+        let _ = harness.run(queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
 }
@@ -73,13 +77,20 @@ async fn fixture_playing_the_second_copy() -> (
     TrackId,
 ) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let first = queue.append(REPEATED_SRC).expect("append first copy");
-    let playing = queue.append(REPEATED_SRC).expect("append second copy");
-    load(&queue, first);
-    load(&queue, playing);
+    let first = harness
+        .run(&queue, move |q| q.append(REPEATED_SRC))
+        .await
+        .expect("append first copy");
+    let playing = harness
+        .run(&queue, move |q| q.append(REPEATED_SRC))
+        .await
+        .expect("append second copy");
+    load(&harness, &queue, first).await;
+    load(&harness, &queue, playing).await;
 
-    queue
-        .select(playing, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(playing, Transition::None))
+        .await
         .expect("select the second copy");
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
