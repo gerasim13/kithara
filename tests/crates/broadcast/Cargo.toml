@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 autotests = false
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["kithara/client-reqwest"]
@@ -21,6 +24,9 @@ broadcast = ["kithara/broadcast"]
 kithara = { workspace = true, features = ["full", "probe", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
 url = { workspace = true }
 
 [lints]

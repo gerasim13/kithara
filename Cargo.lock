@@ -4657,6 +4657,7 @@ name = "kithara-abr-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -4743,6 +4744,7 @@ dependencies = [
  "kithara-app",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
  "num-traits",
 ]
 
@@ -4808,6 +4810,7 @@ dependencies = [
  "bytes",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-utils",
  "rkyv",
  "tempfile",
  "url",
@@ -4871,8 +4874,10 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
  "num-traits",
  "serde",
+ "serial_test",
  "tempfile",
 ]
 
@@ -4934,6 +4939,7 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
  "url",
 ]
 
@@ -4963,6 +4969,8 @@ name = "kithara-bufpool-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-test-utils",
+ "serial_test",
 ]
 
 [[package]]
@@ -5016,8 +5024,10 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
  "num-traits",
  "reqwest",
+ "serial_test",
  "tempfile",
  "tracing",
 ]
@@ -5087,6 +5097,7 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -5116,6 +5127,7 @@ name = "kithara-events-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -5163,6 +5175,7 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
  "reqwest",
  "serde",
  "serde_json",
@@ -5219,6 +5232,8 @@ dependencies = [
  "kithara-app",
  "kithara-integration-tests",
  "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serial_test",
  "tracing",
  "url",
 ]
@@ -5290,6 +5305,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "serial_test",
  "tracing",
  "url",
 ]
@@ -5446,6 +5462,7 @@ dependencies = [
  "futures",
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-utils",
  "unimock",
  "url",
 ]
@@ -5562,6 +5579,7 @@ dependencies = [
  "ringbuf 0.5.0",
  "serde",
  "serde_json",
+ "serial_test",
  "tracing",
  "url",
 ]
@@ -5691,6 +5709,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-integration-tests",
+ "kithara-test-utils",
 ]
 
 [[package]]

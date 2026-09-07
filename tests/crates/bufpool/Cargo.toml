@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 autotests = false
 
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils", "serial_test"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["kithara/client-reqwest"]
@@ -23,6 +26,9 @@ kithara = { workspace = true, default-features = false, features = [
     "probe",
     "tokio-net",
 ] }
+
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+serial_test = { workspace = true }
 
 [lints]
 workspace = true
