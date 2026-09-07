@@ -28,6 +28,7 @@ enum SessionHost<S> {
 
 pub(crate) struct SessionClient<S> {
     host: SessionHost<S>,
+    requested_sample_rate: NonZeroU32,
 }
 
 impl<S> SessionClient<S>
@@ -80,6 +81,10 @@ where
         ConsumerWakeMode::RealtimeDeferred
     }
 
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.requested_sample_rate
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -127,15 +132,18 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         host: SessionHost::Local {
             state: Arc::clone(&state),
         },
+        requested_sample_rate: sample_rate,
     });
     Ok((client, state))
 }
 
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
     tx: mpsc::Sender<HostCmdMsg<S>>,
+    requested_sample_rate: NonZeroU32,
 ) -> Arc<dyn HostDispatcher<S>> {
     let client = Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
+        requested_sample_rate,
     });
     client
 }

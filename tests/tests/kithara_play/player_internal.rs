@@ -7,7 +7,10 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     self,
@@ -70,6 +73,9 @@ impl FixtureSession {
 }
 
 impl SessionDispatcher<TestPools> for FixtureSession {
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        Consts::NON_ZERO_SAMPLE_RATE
+    }
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {

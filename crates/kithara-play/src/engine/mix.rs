@@ -75,6 +75,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_audio::ConsumerWakeMode;
     use kithara_test_utils::kithara;
 
@@ -94,6 +96,10 @@ mod tests {
     impl SessionDispatcher<TestPools> for ForeignSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            testing::TEST_SAMPLE_RATE
         }
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {

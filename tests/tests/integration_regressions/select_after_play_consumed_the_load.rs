@@ -13,6 +13,7 @@
 //! rendezvous rather than a timing window.
 use std::{
     fs,
+    num::NonZeroU32,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -65,6 +66,9 @@ impl StartGatedSession {
 }
 
 impl SessionDispatcher<TestPools> for StartGatedSession {
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        Shared::NON_ZERO_SAMPLE_RATE
+    }
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::StartPlayer { .. } => {

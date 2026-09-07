@@ -161,6 +161,10 @@ mod tests {
             ConsumerWakeMode::ImmediateOffRt
         }
 
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            self.0.requested_sample_rate()
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             self.0.exec(cmd)
         }

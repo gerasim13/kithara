@@ -421,6 +421,10 @@ pub(crate) mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            NonZeroU32::new(44_100).expect("fixture sample rate is non-zero")
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
                 Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),

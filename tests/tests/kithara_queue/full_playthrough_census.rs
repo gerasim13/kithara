@@ -640,6 +640,12 @@ async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDi
 /// quantisation, and a seam that fades rather than sums. A lossy container
 /// carries none of these, so a census over one runs the provenance half
 /// alone.
+///
+/// `no_block`: seconds of frame classification over the whole take, after the
+/// last await and over captured samples only. It occupies the poll it runs in
+/// the way the budget is meant to catch, but there is no product work left to
+/// starve.
+#[kithara::allow_block]
 fn census_acoustics(take: &Take) {
     let rendered = take.rendered.as_slice();
     let ordered = take.ordered.as_slice();

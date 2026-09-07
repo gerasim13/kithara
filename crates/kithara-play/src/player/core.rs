@@ -292,6 +292,10 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(None, 48_000))),

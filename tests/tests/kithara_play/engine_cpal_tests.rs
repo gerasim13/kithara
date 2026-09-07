@@ -1,6 +1,8 @@
 //! The lifecycle contract runs through the same Host graph with a cpal backend.
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
+use std::num::NonZeroU32;
+
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara::{
     audio::ConsumerWakeMode,
@@ -63,6 +65,9 @@ impl Drop for CpalGraphSession {
 }
 
 impl SessionDispatcher<TestPools> for CpalGraphSession {
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        Shared::NON_ZERO_SAMPLE_RATE
+    }
     #[kithara::allow_block]
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();

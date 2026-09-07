@@ -19,6 +19,9 @@ use crate::bufpool_ext::{TestPools, pools};
 struct FixtureSession;
 
 impl SessionDispatcher<TestPools> for FixtureSession {
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        Shared::NON_ZERO_SAMPLE_RATE
+    }
     fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         Ok(Reply::Ok)
     }

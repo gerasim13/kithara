@@ -229,7 +229,7 @@ mod handle {
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
 
     /// Handle used by resident players to reach their session owner.
@@ -252,13 +252,15 @@ mod handle {
             }
         }
 
-        fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
-            let requested = self.sample_rate()?.requested;
-            NonZeroU32::new(requested).ok_or(PlayError::Session(SessionError::InvalidSampleRate(
-                requested,
-            )))
-        }
+        /// Sample rate this session was configured with.
+        ///
+        /// Static session configuration, so the owner already holds it when it
+        /// builds the dispatcher and answers locally. Reading it over the
+        /// command bridge would park the caller on a reply carrying a value the
+        /// caller could have read from its own field.
+        fn requested_sample_rate(&self) -> NonZeroU32;
 
+        /// Rate the running backend settled on, which only the session knows.
         fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
             match self.exec_ok(Cmd::QuerySampleRate)? {
                 Reply::SampleRate(sample_rate) => Ok(sample_rate),
@@ -294,7 +296,8 @@ mod handle {
             Self { dispatcher }
         }
 
-        pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+        #[must_use]
+        pub(crate) fn requested_sample_rate(&self) -> NonZeroU32 {
             self.dispatcher.requested_sample_rate()
         }
     }
@@ -500,9 +503,12 @@ mod handle {
                 .map(|_| ())
         }
 
+        pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
+            Ok(self.dispatcher()?.requested_sample_rate())
+        }
+
         delegate::delegate! {
             to self.dispatcher()? {
-                pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError>;
                 pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
             }
         }
@@ -534,7 +540,10 @@ mod tests {
     struct DefaultSession;
 
     #[derive(Default)]
-    struct RateCapture(AtomicU32);
+    struct RateCapture {
+        applied: AtomicU32,
+        queries: AtomicU32,
+    }
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
@@ -543,6 +552,10 @@ mod tests {
     impl SessionDispatcher<TestPools> for DefaultSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            sample_rate()
         }
 
         fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
@@ -555,18 +568,25 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
+        fn requested_sample_rate(&self) -> NonZeroU32 {
+            sample_rate()
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
-                Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
-                    None,
-                    sample_rate().get(),
-                ))),
+                Cmd::QuerySampleRate => {
+                    self.queries.fetch_add(1, Ordering::Relaxed);
+                    Ok(Reply::SampleRate(SessionSampleRate::new(
+                        None,
+                        sample_rate().get(),
+                    )))
+                }
                 Cmd::RegisterPlayer { sample_rate, .. } => {
-                    self.0.store(sample_rate, Ordering::Relaxed);
+                    self.applied.store(sample_rate, Ordering::Relaxed);
                     Ok(Reply::PlayerRegistered(1))
                 }
                 Cmd::StartPlayer { sample_rate, .. } => {
-                    self.0.store(sample_rate, Ordering::Relaxed);
+                    self.applied.store(sample_rate, Ordering::Relaxed);
                     Ok(Reply::Ok)
                 }
                 _ => Ok(Reply::Ok),
@@ -624,9 +644,9 @@ mod tests {
                 pools(),
             )
             .expect("register player");
-        assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
+        assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
 
-        capture.0.store(0, Ordering::Relaxed);
+        capture.applied.store(0, Ordering::Relaxed);
         handle
             .start_player(
                 player_id,
@@ -635,6 +655,37 @@ mod tests {
                 NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
             )
             .expect("start player");
-        assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());
+        assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
+    }
+
+    #[kithara::test]
+    fn the_requested_rate_never_reaches_the_session() {
+        let capture = Arc::new(RateCapture::default());
+        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
+        let handle = SessionHandle::new(dispatcher);
+
+        assert_eq!(
+            handle.requested_sample_rate().expect("requested rate"),
+            sample_rate()
+        );
+
+        let player_id = handle
+            .register_player(
+                BeatGridId::allocate().expect("player id"),
+                EventBus::default(),
+                Vec::new(),
+                pools(),
+            )
+            .expect("register player");
+        handle
+            .start_player(
+                player_id,
+                1.0,
+                None,
+                NonZeroUsize::new(448).expect("fixture response budget is non-zero"),
+            )
+            .expect("start player");
+
+        assert_eq!(capture.queries.load(Ordering::Relaxed), 0);
     }
 }

@@ -114,6 +114,7 @@ pub struct ManualRingSession {
     lifecycle_gate: Mutex<()>,
     probe: RingBackendProbe,
     reader: Mutex<RingReader>,
+    session_rate: NonZeroU32,
     snapshot: Mutex<RingSnapshot>,
     terminal_error: Mutex<Option<RingSessionError>>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -153,6 +154,7 @@ impl ManualRingSession {
             lifecycle_gate: Mutex::new(()),
             probe,
             reader: Mutex::new(reader),
+            session_rate: config.session_rate,
             snapshot: Mutex::new(RingSnapshot::default()),
             terminal_error: Mutex::new(None),
             worker: Mutex::new(Some(worker)),
@@ -318,6 +320,10 @@ impl SessionDispatcher<TestPools> for ManualRingSession {
     /// The ring backend drives the device callback's processor.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.session_rate
     }
 }
 

@@ -27,6 +27,7 @@ use crate::error::PlayError;
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
+    requested_sample_rate: NonZeroU32,
 }
 
 impl<S> SessionClient<S> {
@@ -54,6 +55,10 @@ impl<S> SessionClient<S> {
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        self.requested_sample_rate
     }
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
@@ -144,6 +149,7 @@ where
     });
     Arc::new(SessionClient {
         cmd_tx: Mutex::new(cmd_tx),
+        requested_sample_rate: sample_rate,
     })
 }
 

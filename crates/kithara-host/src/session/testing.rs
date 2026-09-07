@@ -126,11 +126,20 @@ where
     }
 }
 
+const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(rate) => rate,
+    None => unreachable!(),
+};
+
 pub(crate) struct FixtureSession;
 
 impl<S> SessionDispatcher<S> for FixtureSession {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn requested_sample_rate(&self) -> NonZeroU32 {
+        FIXTURE_SAMPLE_RATE
     }
 
     fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
