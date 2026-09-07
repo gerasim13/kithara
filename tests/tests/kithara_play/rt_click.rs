@@ -238,6 +238,58 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 }
 
 #[kithara::test]
+#[ignore = "ignored-red: SetFadeDuration rebuilds MixDSP mid-fade; the running fade snaps to its target, 2026-09-07"]
+fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
+    let (mut processor, mut control, fading) = fading_in();
+
+    push(
+        &mut control,
+        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
+    );
+    let changed = pump(&mut processor, WARMUP_BLOCKS);
+
+    let step = max_step(&across(&fading, &changed));
+    assert!(
+        step <= MAX_STEP,
+        "a changed crossfade duration must leave the running fade alone (step {step})"
+    );
+    let level = last(&changed);
+    assert!(
+        level < TEST_PCM_DEFAULT_VALUE * 0.9,
+        "the running fade keeps its original duration: it is still climbing after the change \
+         ({level})"
+    );
+}
+
+#[kithara::test]
+fn a_changed_crossfade_duration_applies_to_the_next_fade() {
+    let (mut processor, mut control, _) = fading_in();
+    let settled = pump(&mut processor, SETTLE_BLOCKS * 20);
+    assert!(
+        (last(&settled) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
+        "the first fade has settled under its original duration before the change ({})",
+        last(&settled)
+    );
+
+    push(
+        &mut control,
+        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
+    );
+    let second_id = load(&mut control, "b.mp3", SECOND_LEVEL);
+    push(
+        &mut control,
+        PlayerCmd::Transition(TrackTransition::FadeIn(second_id)),
+    );
+    let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);
+    assert!(
+        (last(&handed_over) - SECOND_LEVEL).abs() < EXACT,
+        "the next fade runs under the new duration: a tenth of the original settles within three \
+         settle windows, the original would not ({})",
+        last(&handed_over)
+    );
+}
+
+#[kithara::test]
 fn a_track_started_without_a_crossfade_is_instant() {
     let (mut processor, mut control) = processor();
     let first_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);

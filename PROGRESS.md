@@ -8,6 +8,12 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Runtime parameter smoothing, PR `queue-sync-smoothing` off `production/main`.
+  Commit 1 pins that every runtime parameter step is ramped before DSP: deck
+  volume is green; EQ gain (the isolator's bypass fast path and its 32-sample
+  gain step), EQ layout (a hard node swap) and a crossfade-duration change
+  mid-fade (the rebuilt mix snaps) are ignored-red until commit 2 delivers one
+  smoothing primitive per parameter with its config on the owner.
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is

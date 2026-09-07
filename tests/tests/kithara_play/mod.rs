@@ -13,6 +13,7 @@ mod mixing;
 #[cfg(not(target_arch = "wasm32"))]
 mod no_sync_deadline;
 mod offline_harness_smoke;
+mod parameter_smoothing;
 mod player_internal;
 mod player_processor_internal;
 mod player_queue_api_regressions;
