@@ -31,4 +31,4 @@ workspace = true
 
 [[test]]
 name = "bufpool"
-path = "../../tests/domain_bufpool.rs"
+path = "tests/bufpool/mod.rs"

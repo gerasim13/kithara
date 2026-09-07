@@ -36,4 +36,4 @@ workspace = true
 
 [[test]]
 name = "storage"
-path = "../../tests/domain_storage.rs"
+path = "tests/storage/mod.rs"

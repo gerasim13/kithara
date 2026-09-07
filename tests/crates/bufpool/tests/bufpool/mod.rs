@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod alloc_regression;
 mod memory_budget;
 mod pool_core;

@@ -39,4 +39,4 @@ workspace = true
 
 [[test]]
 name = "stream"
-path = "../../tests/domain_stream.rs"
+path = "tests/stream/mod.rs"

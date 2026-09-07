@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Integration tests for kithara-stream
 
 #[cfg(not(target_arch = "wasm32"))]
