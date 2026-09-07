@@ -542,7 +542,7 @@ opt-level = 3
 [profile.test-release]
 inherits = "release"
 opt-level = 3
-debug = "line-tables-only"
+debug = false
 debug-assertions = true
 overflow-checks = true
 lto = false
@@ -550,18 +550,67 @@ codegen-units = 16
 panic = "unwind"
 strip = "none"
 
-# Product dependencies stay optimized; the integration harness itself spends
-# most of its build in LLVM and does not contain the runtime being measured.
-[profile.test-release.package.kithara-integration-tests]
+# Product dependencies stay optimized; test packages spend their build in LLVM
+# and do not contain the runtime being measured. Cargo profile overrides require
+# exact workspace package names, so each test package is listed here.
+[profile.test-release.package.kithara-abr-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-app-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-assets-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-audio-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-broadcast-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-bufpool-tests]
 opt-level = 1
 
-[profile.test-release.package.kithara-stream-tests]
+[profile.test-release.package.kithara-decode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-encode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-events-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-file-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-hls-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-integration-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-net-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-play-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-storage-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-stream-tests]
 opt-level = 1
 
 [profile.wasm-release]

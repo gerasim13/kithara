@@ -230,7 +230,7 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-lane = "workspace-combined"
+lane = "workspace"
 backend = "wreq"
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
@@ -507,17 +507,10 @@ features = []
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
 
-# The default product suite runs product crates, the cross-domain package, and
-# every native domain package as separate Cargo feature graphs. They share one
-# target directory, so an edit in one domain reuses the other domains' binaries.
+# The default product suite is one Cargo graph. Domain tests remain separate
+# packages, so Cargo can reuse every unchanged test binary while compiling the
+# shared product closure only once. Browser-only packages have their own lane.
 [test.lanes.workspace]
-program = "just"
-default_features = []
-prefix_args = ["test", "workspace"]
-
-# Stress inventories and repeats one stable nextest selection, so it retains
-# the old combined command. Ordinary tests use the split lane above.
-[test.lanes.workspace-combined]
 program = "cargo"
 default_features = []
 prefix_args = [
@@ -536,6 +529,10 @@ prefix_args = [
   "kithara-test-utils",
   "--exclude",
   "kithara-test-macros",
+  "--exclude",
+  "kithara-ffi-web-tests",
+  "--exclude",
+  "kithara-ffi-web-analysis-tests",
   "--cargo-profile",
   "test-release",
 ]
