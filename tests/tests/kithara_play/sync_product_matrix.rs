@@ -28,6 +28,7 @@ use kithara::{
 use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
@@ -336,6 +337,7 @@ pub(super) struct ProductHarness {
     pub(super) ids: Vec<Vec<TrackId>>,
     pub(super) block_frames: usize,
     pub(super) rendered_frames: u64,
+    tap: Option<AudioArtifactTap>,
     host: Host<TestPools>,
     spec: AudioSpec,
     paced: bool,
@@ -493,6 +495,12 @@ impl ProductHarness {
             block_frames,
             host,
             rendered_frames: 0,
+            tap: AudioArtifactTap::from_env(
+                &format!("{}-{}", artifact_label(), case.id),
+                case.sample_rate,
+                CHANNELS,
+            )
+            .expect("listening tap"),
             paced,
             spec,
         };
@@ -567,6 +575,9 @@ impl ProductHarness {
         );
         self.tick_all(case);
         self.rendered_frames = end;
+        if let Some(tap) = self.tap.as_mut() {
+            tap.push(&sink.samples);
+        }
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -602,6 +613,7 @@ impl ProductHarness {
     }
 
     async fn seek_staggered(&mut self, case: SyncCase) {
+        self.mark("seek");
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
             deck.seek(5.25 + index as f64 * stagger_seconds)
@@ -611,6 +623,7 @@ impl ProductHarness {
     }
 
     pub(super) fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
+        self.mark(&format!("set_tempo-{bpm}"));
         let tempo = Tempo::new(bpm).expect("fixture tempo");
         match self.host.set_tempo(tempo) {
             Ok(()) => {}
@@ -642,6 +655,7 @@ impl ProductHarness {
     }
 
     pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
+        self.mark(&format!("request_sync-{intent:?}"));
         let transport = self.transport_revision(case);
         for index in 0..self.decks.len() {
             {
@@ -684,6 +698,12 @@ impl ProductHarness {
             if matches!(case.order, OperationOrder::SequentialSync) {
                 let _ = self.render(case, self.block_frames).await;
             }
+        }
+    }
+
+    pub(super) fn mark(&mut self, label: &str) {
+        if let Some(tap) = self.tap.as_mut() {
+            tap.mark(label);
         }
     }
 

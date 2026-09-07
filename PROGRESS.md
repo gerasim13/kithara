@@ -13,7 +13,10 @@ the change that lands the work, and keep it short.
   product harness (crossfade length honoured, deck rate carried into the next
   track, continuity with sync off) and then builds the seams; the continuity
   row is green today, the other two are ignored-red until the RT trigger arms
-  the seam and the rate rides the render context.
+  the seam and the rate rides the render context. The listening tap now lives
+  in the offline harness: `just test audio-artifacts <dir> <filter>` publishes
+  every harness's output WAV and manifest with its control marks, and the
+  per-scenario recorders are gone.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every

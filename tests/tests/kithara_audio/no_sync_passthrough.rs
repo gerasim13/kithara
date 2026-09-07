@@ -20,7 +20,6 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    audio_artifact::write_audio_artifact,
     bufpool_ext::{TestPools, pools},
     cochlea::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
@@ -35,7 +34,6 @@ use kithara_test_fixtures::{
     signal::goertzel_magnitude,
 };
 use num_traits::ToPrimitive;
-use serde::Serialize;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -189,16 +187,7 @@ struct RealtimeCapture {
     load_observed_during_capture: bool,
 }
 
-#[derive(Serialize)]
-struct CaptureMetrics {
-    warmup_decode_errors: u64,
-    warmup_underruns: u64,
-    decode_errors: u64,
-    underruns: u64,
-    load_observed_during_capture: bool,
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct SineFit {
     amplitude: f64,
     dc: f64,
@@ -208,71 +197,13 @@ struct SineFit {
     max_stereo_delta: f32,
 }
 
-#[derive(Debug, Serialize)]
-struct ChannelContinuity {
-    channel: usize,
-    peak_step: f32,
-    background_step: f32,
-    step_limit: f32,
-    peak_residual: f32,
-    background_residual: f32,
-    residual_limit: f32,
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct MarkerTiming {
     background_rms: f32,
     expected_interval_frames: usize,
     marker_frames: [usize; 2],
     marker_rms: f32,
     measured_interval_frames: usize,
-}
-
-impl From<&RealtimeCapture> for CaptureMetrics {
-    fn from(capture: &RealtimeCapture) -> Self {
-        Self {
-            warmup_decode_errors: capture.warmup_decode_errors,
-            warmup_underruns: capture.warmup_underruns,
-            decode_errors: capture.decode_errors,
-            underruns: capture.underruns,
-            load_observed_during_capture: capture.load_observed_during_capture,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct PassthroughManifest<'a> {
-    case: &'static str,
-    backend: &'a str,
-    sample_rate: u32,
-    channels: u16,
-    block_frames: usize,
-    baseline: CaptureMetrics,
-    unity: CaptureMetrics,
-    unity_under_load: CaptureMetrics,
-    baseline_source_fit: &'a SineFit,
-    baseline_cochlea: &'a CochleaReport,
-    unity_cochlea: &'a CochleaReport,
-    unity_under_load_cochlea: &'a CochleaReport,
-    failures: &'a [String],
-}
-
-#[derive(Serialize)]
-struct ActiveStretchManifest<'a> {
-    case: &'static str,
-    backend: &'a str,
-    speed: f32,
-    sample_rate: u32,
-    channels: u16,
-    control: CaptureMetrics,
-    candidate: CaptureMetrics,
-    control_cochlea: &'a CochleaReport,
-    candidate_cochlea: &'a CochleaReport,
-    candidate_sine_fit: &'a SineFit,
-    candidate_continuity: &'a [ChannelContinuity],
-    rate_control: &'a MarkerTiming,
-    rate_candidate: &'a MarkerTiming,
-    failures: &'a [String],
 }
 
 fn measure_quiet_sine(samples: &[f32]) -> SineFit {
@@ -663,14 +594,13 @@ fn marker_timing_failures(label: &str, timing: &MarkerTiming) -> Vec<String> {
     failures
 }
 
-fn frame_continuity(samples: &[f32]) -> (Vec<ChannelContinuity>, Vec<String>) {
+fn frame_continuity(samples: &[f32]) -> Vec<String> {
     let channels = usize::from(CHANNELS);
     let frames = samples.len() / channels;
     assert!(frames >= 3, "continuity oracle needs at least three frames");
     let omega = std::f32::consts::TAU * TONE_HZ.to_f32().expect("fixture frequency fits f32")
         / SAMPLE_RATE.to_f32().expect("fixture sample rate fits f32");
     let recurrence = 2.0 * omega.cos();
-    let mut reports = Vec::with_capacity(channels);
     let mut failures = Vec::new();
 
     for channel in 0..channels {
@@ -704,25 +634,16 @@ fn frame_continuity(samples: &[f32]) -> (Vec<ChannelContinuity>, Vec<String>) {
                 "channel {channel}: sine residual {peak_residual:.6} exceeds {residual_limit:.6}",
             ));
         }
-        reports.push(ChannelContinuity {
-            channel,
-            peak_step,
-            background_step,
-            step_limit,
-            peak_residual,
-            background_residual,
-            residual_limit,
-        });
     }
 
-    (reports, failures)
+    failures
 }
 
 fn assert_frame_oracle_load_bearing(control: &[f32]) {
     let channels = usize::from(CHANNELS);
     let frames = control.len() / channels;
     assert!(
-        frame_continuity(control).1.is_empty(),
+        frame_continuity(control).is_empty(),
         "frame oracle control must be continuous"
     );
 
@@ -736,7 +657,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
         *sample = -*sample;
     }
     assert!(
-        !frame_continuity(&clicked).1.is_empty(),
+        !frame_continuity(&clicked).is_empty(),
         "frame oracle accepted an injected sub-clipping one-frame click"
     );
 
@@ -747,7 +668,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
         }
     }
     assert!(
-        !frame_continuity(&comb).1.is_empty(),
+        !frame_continuity(&comb).is_empty(),
         "frame oracle accepted recurring block-boundary clicks"
     );
 
@@ -757,7 +678,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
         held[held_frame * channels + channel] = held[(held_frame - 1) * channels + channel];
     }
     assert!(
-        !frame_continuity(&held).1.is_empty(),
+        !frame_continuity(&held).is_empty(),
         "frame oracle accepted one held PCM frame"
     );
 
@@ -784,7 +705,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
 async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     #[case] backend: StretchKind,
 ) {
-    run_no_sync_passthrough(backend, false).await;
+    run_no_sync_passthrough(backend).await;
 }
 
 #[kithara::test(
@@ -800,44 +721,10 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     case(StretchKind::Bungee)
 )]
 async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backend: StretchKind) {
-    run_active_stretch(backend, false).await;
+    run_active_stretch(backend).await;
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
-#[case(StretchKind::Signalsmith)]
-#[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
-)]
-#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
-    run_no_sync_passthrough(backend, true).await;
-}
-
-#[kithara::test(
-    tokio,
-    flash(false),
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
-#[case(StretchKind::Signalsmith)]
-#[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee)
-)]
-#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_active_keylock_artifacts(#[case] backend: StretchKind) {
-    run_active_stretch(backend, true).await;
-}
-
-async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
+async fn run_no_sync_passthrough(backend: StretchKind) {
     let channels = usize::from(CHANNELS);
     let source = source_pcm();
     let baseline = render_passthrough(source, None, false).await;
@@ -932,42 +819,6 @@ async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
         failures.push("unity+load: no bounded shared-worker burst began during capture".to_owned());
     }
 
-    let backend_label = backend.to_string().to_ascii_lowercase();
-    let manifest = PassthroughManifest {
-        case: "no-sync-unity-passthrough",
-        backend: &backend_label,
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        block_frames: BLOCK_FRAMES,
-        baseline: CaptureMetrics::from(&baseline),
-        unity: CaptureMetrics::from(&unity),
-        unity_under_load: CaptureMetrics::from(&loaded),
-        baseline_source_fit: &baseline_source_fit,
-        baseline_cochlea: &baseline_report,
-        unity_cochlea: &unity_report,
-        unity_under_load_cochlea: &loaded_report,
-        failures: &failures,
-    };
-    if record_artifacts {
-        let artifact_case = format!("no-sync-unity-passthrough-{backend_label}");
-        let written = write_audio_artifact(
-            &artifact_case,
-            SAMPLE_RATE,
-            CHANNELS,
-            &[
-                ("effect-free-control", &baseline.pcm),
-                ("unity", &unity.pcm),
-                ("unity-under-load", &loaded.pcm),
-            ],
-            &manifest,
-        )
-        .expect("no-SYNC audio artifact write");
-        assert!(
-            written.is_some(),
-            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
-        );
-    }
-
     assert_oracle_load_bearing(&baseline.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert!(
         failures.is_empty(),
@@ -976,7 +827,7 @@ async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
     );
 }
 
-async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
+async fn run_active_stretch(backend: StretchKind) {
     let source = source_pcm();
     let marker_source = marked_source_pcm();
     let control = render_passthrough(source, None, false).await;
@@ -987,7 +838,7 @@ async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
     let control_report = CochleaReport::measure(&control.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_report = CochleaReport::measure(&candidate.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_sine_fit = measure_quiet_sine(&candidate.pcm);
-    let (candidate_continuity, continuity_failures) = frame_continuity(&candidate.pcm);
+    let continuity_failures = frame_continuity(&candidate.pcm);
     let mut failures = time_stretch_failures("active keylock", &candidate_report, &control_report);
     failures.extend(continuity_failures);
     let rate_control_timing = marker_timing(&rate_control.pcm, 1.0);
@@ -1067,43 +918,6 @@ async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
     assert_oracle_load_bearing(&control.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_oracle_load_bearing(&candidate.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert_frame_oracle_load_bearing(&candidate.pcm);
-    if record_artifacts {
-        let backend_label = backend.to_string().to_ascii_lowercase();
-        let artifact_case = format!("no-sync-active-keylock-{backend_label}");
-        let manifest = ActiveStretchManifest {
-            case: "no-sync-active-keylock",
-            backend: &backend_label,
-            speed: ACTIVE_SPEED,
-            sample_rate: SAMPLE_RATE,
-            channels: CHANNELS,
-            control: CaptureMetrics::from(&control),
-            candidate: CaptureMetrics::from(&candidate),
-            control_cochlea: &control_report,
-            candidate_cochlea: &candidate_report,
-            candidate_sine_fit: &candidate_sine_fit,
-            candidate_continuity: &candidate_continuity,
-            rate_control: &rate_control_timing,
-            rate_candidate: &rate_candidate_timing,
-            failures: &failures,
-        };
-        let written = write_audio_artifact(
-            &artifact_case,
-            SAMPLE_RATE,
-            CHANNELS,
-            &[
-                ("effect-free-control", &control.pcm),
-                ("active", &candidate.pcm),
-                ("rate-marker-control", &rate_control.pcm),
-                ("rate-marker-active", &rate_candidate.pcm),
-            ],
-            &manifest,
-        )
-        .expect("active no-SYNC audio artifact write");
-        assert!(
-            written.is_some(),
-            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
-        );
-    }
     assert!(
         failures.is_empty(),
         "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}",

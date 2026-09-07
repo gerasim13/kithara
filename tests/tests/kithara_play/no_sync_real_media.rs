@@ -26,15 +26,13 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
-    cochlea::CochleaReport, fixture_protocol::PackagedSignal, memory_asset_store,
-    offline::OfflineHostHarness,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, cochlea::CochleaReport,
+    fixture_protocol::PackagedSignal, memory_asset_store, offline::OfflineHostHarness,
 };
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
-use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
+use oracle::AudioRole;
 use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
-use serde::Serialize;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -141,29 +139,6 @@ const CASES: &[Case] = &[
     },
 ];
 
-#[derive(Serialize)]
-struct ArtifactManifest<'a> {
-    case: &'a str,
-    media: Vec<&'static str>,
-    deck_count: usize,
-    host_sample_rate: u32,
-    channels: u16,
-    requested_frames: usize,
-    captured_frames: usize,
-    capture_start_positions_secs: &'a [f64],
-    reference_path: &'static str,
-    direct_reference_gain: f32,
-    runtime_deck_gain: f32,
-    mix_tap_drops: u64,
-    mix_tap_matches_output: bool,
-    sample_continuity: Option<&'a SampleContinuityReport>,
-    cochlea: Option<&'a CochleaReport>,
-    audio_levels: &'a [AudioLevelReport],
-    matched_mix: Option<&'a MatchedMixReport>,
-    decks: &'a [DeckObservation],
-    failures: &'a [String],
-}
-
 struct CapturedAudio {
     label: String,
     pcm: Vec<f32>,
@@ -182,20 +157,7 @@ struct CapturedAudio {
     timeout(Duration::from_secs(300))
 )]
 async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
-    run_real_media_matrix(false).await;
-}
-
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(360))
-)]
-#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_real_media_artifacts() {
-    run_real_media_matrix(true).await;
+    run_real_media_matrix().await;
 }
 
 /// The one body every HLS deck reads.
@@ -243,13 +205,13 @@ async fn hls_ladder_url(server: &TestServerHelper) -> Url {
         .master_url()
 }
 
-async fn run_real_media_matrix(record_artifacts: bool) {
+async fn run_real_media_matrix() {
     let server = TestServerHelper::new().await;
     let hls = hls_ladder_url(&server).await;
     let mut failures = Vec::new();
     for case in CASES {
         failures.extend(
-            run_case(case, &hls, record_artifacts)
+            run_case(case, &hls)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -262,7 +224,7 @@ async fn run_real_media_matrix(record_artifacts: bool) {
     );
 }
 
-async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
+async fn run_case(case: &Case, hls: &Url) -> Vec<String> {
     let pool_region = pools();
     let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
     let max_block_frames =
@@ -332,7 +294,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
         runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
     runtime::record_transport_state(&host, "after capture", &mut failures);
-    let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
+    let _ = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
 
     let mut audio_levels = direct_references
         .iter()
@@ -370,67 +332,6 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
     ));
     oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
 
-    let observations: Vec<DeckObservation> =
-        decks.into_iter().map(|deck| deck.observation).collect();
-    let manifest = ArtifactManifest {
-        case: case.label,
-        media: case.media.iter().map(|media| media.label()).collect(),
-        deck_count: case.media.len(),
-        host_sample_rate: case.host_rate,
-        channels: CHANNELS,
-        requested_frames: final_mix.requested_frames,
-        captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
-        capture_start_positions_secs: &final_mix.start_positions_secs,
-        reference_path: "independent resource decoder and host resampler",
-        direct_reference_gain: 1.0,
-        runtime_deck_gain: mix_level,
-        mix_tap_drops: final_mix.tap_drops,
-        mix_tap_matches_output: final_mix.tap_matches_output,
-        sample_continuity: oracles.sample_continuity.as_ref(),
-        cochlea: oracles.cochlea.as_ref(),
-        audio_levels: &audio_levels,
-        matched_mix: matched_mix.report.as_ref(),
-        decks: &observations,
-        failures: &failures,
-    };
-    if record_artifacts {
-        let mut audio = direct_references
-            .iter()
-            .enumerate()
-            .map(|(deck_index, reference)| {
-                (
-                    format!("direct-reference-{deck_index}"),
-                    reference.as_slice(),
-                )
-            })
-            .collect::<Vec<_>>();
-        audio.extend(matched_mix.contributions.iter().enumerate().map(
-            |(deck_index, contribution)| {
-                (
-                    format!("contribution-{deck_index}"),
-                    contribution.as_slice(),
-                )
-            },
-        ));
-        audio.push(("reference-mix".to_owned(), &matched_mix.reference));
-        audio.push((final_mix.label.clone(), &final_mix.pcm));
-        let audio_slices = audio
-            .iter()
-            .map(|(label, pcm)| (label.as_str(), *pcm))
-            .collect::<Vec<_>>();
-        let written = write_audio_artifact(
-            case.label,
-            case.host_rate,
-            CHANNELS,
-            &audio_slices,
-            &manifest,
-        )
-        .unwrap_or_else(|error| panic!("{}: write audio artifact: {error}", case.label));
-        assert!(
-            written.is_some(),
-            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
-        );
-    }
     failures
 }
 

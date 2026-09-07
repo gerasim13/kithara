@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
+use std::num::NonZeroU32;
 
 use kithara::{
     decode::DecoderBackend,
@@ -116,45 +116,6 @@ async fn build_resource(
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
         .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
     resource
-}
-
-/// Minimal IEEE-float 32-bit stereo WAV writer (RIFF/WAVE, fmt code 3).
-///
-/// `interleaved` is L,R,L,R,... — same layout
-/// `OfflinePlayer::render` returns.
-fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u16) {
-    let byte_rate = sample_rate
-        .checked_mul(u32::from(channels))
-        .and_then(|v| v.checked_mul(4))
-        .expect("byte_rate fits in u32");
-    let block_align = channels * 4;
-    let data_bytes = u32::try_from(interleaved.len() * 4).expect("WAV data length fits in u32");
-    let riff_size = 36u32
-        .checked_add(data_bytes)
-        .expect("WAV RIFF size fits in u32");
-
-    let mut file = File::create(path).expect("create WAV");
-    file.write_all(b"RIFF").expect("write RIFF");
-    file.write_all(&riff_size.to_le_bytes())
-        .expect("write size");
-    file.write_all(b"WAVE").expect("write WAVE");
-    file.write_all(b"fmt ").expect("write fmt ");
-    file.write_all(&16u32.to_le_bytes())
-        .expect("fmt chunk size");
-    file.write_all(&3u16.to_le_bytes())
-        .expect("format IEEE float");
-    file.write_all(&channels.to_le_bytes()).expect("channels");
-    file.write_all(&sample_rate.to_le_bytes()).expect("sr");
-    file.write_all(&byte_rate.to_le_bytes()).expect("byte rate");
-    file.write_all(&block_align.to_le_bytes())
-        .expect("block align");
-    file.write_all(&32u16.to_le_bytes())
-        .expect("bits per sample");
-    file.write_all(b"data").expect("write data");
-    file.write_all(&data_bytes.to_le_bytes()).expect("data len");
-    for &s in interleaved {
-        file.write_all(&s.to_le_bytes()).expect("sample");
-    }
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
@@ -301,26 +262,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
                 Consts::MIN_WINDOW_RMS,
             );
         }
-
-        // Per-process debug dump path (nextest is process-per-test) so parallel
-        // tests and stale runs never write the same fixed scratch file.
-        let wav_path = std::env::temp_dir().join(format!(
-            "kithara_silvercomet_seek_iter_{iter}_{}.wav",
-            std::process::id()
-        ));
-        write_wav_f32(
-            &wav_path,
-            &iteration_samples,
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
-        );
-        eprintln!(
-            "[iter {iter}] wrote {} samples ({:.1}s stereo) to {}",
-            iteration_samples.len(),
-            iteration_samples.len() as f64
-                / (f64::from(Consts::SAMPLE_RATE) * f64::from(Consts::CHANNELS)),
-            wav_path.display(),
-        );
 
         drop(player);
         drop(downloader);

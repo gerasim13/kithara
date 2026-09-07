@@ -127,11 +127,10 @@ fixture-cache ACTION="path":
       *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
     esac
 
-# Render the same active no-SYNC scenarios into listening artifacts. The
-# recorders are ignored in ordinary CI so filesystem work cannot consume their
-# behavioral-test deadlines.
+# Run any test filter with the listening tap enabled: every offline harness
+# publishes its output WAV and manifest under OUTPUT (absolute path).
 [positional-arguments]
-audio-artifacts OUTPUT:
+audio-artifacts OUTPUT FILTER SUITE="suite_light":
     #!/usr/bin/env bash
     set -euo pipefail
     output="{{ OUTPUT }}"
@@ -140,13 +139,8 @@ audio-artifacts OUTPUT:
       exit 2
     fi
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-integration-tests --test suite_light \
-        --run-ignored=only \
-        -E 'test(/kithara_audio::no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
-    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-integration-tests --test suite_heavy \
-        --run-ignored=only \
-        -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
+      just test run -p kithara-integration-tests --test "{{ SUITE }}" \
+        --run-ignored=all -E "{{ FILTER }}"
 
 # All three lanes require a real output device.
 [positional-arguments]

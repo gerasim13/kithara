@@ -24,6 +24,8 @@ use ringbuf::{
     traits::{Consumer, Observer, Split},
 };
 
+use crate::audio_artifact::{AudioArtifactTap, artifact_label};
+
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 const GAIN_FLOOR_SECS: f64 = 0.9;
@@ -43,6 +45,7 @@ struct HostState<S> {
 /// Test owner for the product offline Host and its monotonic render cursor.
 pub struct OfflineHostHarness<S> {
     state: Mutex<HostState<S>>,
+    tap: Mutex<Option<AudioArtifactTap>>,
     spec: AudioSpec,
     max_block_frames: NonZeroU32,
     pacing: Option<Duration>,
@@ -118,6 +121,9 @@ where
     /// Build the same offline Host used by product rendering.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         let spec = AudioSpec::new(CHANNELS, config.sample_rate());
+        let tap =
+            AudioArtifactTap::from_env(&artifact_label(), config.sample_rate().get(), CHANNELS)
+                .expect("listening tap");
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
@@ -125,6 +131,7 @@ where
         let host = Host::new(config)?;
         Ok(Self {
             state: Mutex::new(HostState { host, position: 0 }),
+            tap: Mutex::new(tap),
             spec,
             max_block_frames,
             pacing,
@@ -166,7 +173,17 @@ where
             .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
         state.position = end;
         drop(state);
+        if let Some(tap) = self.tap.lock().as_mut() {
+            tap.push(&sink.samples);
+        }
         sink.samples
+    }
+
+    /// Stamp a control moment into the listening artifact, if one is open.
+    pub fn mark(&self, label: &str) {
+        if let Some(tap) = self.tap.lock().as_mut() {
+            tap.mark(label);
+        }
     }
 
     /// Current finite-render cursor maintained by this harness.
