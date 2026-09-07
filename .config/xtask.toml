@@ -134,6 +134,7 @@ lockbud_exclude = [
   "kithara-devtools",
   "kithara-encode-tests",
   "kithara-events-tests",
+  "kithara-ffi-web-analysis-tests",
   "kithara-ffi-web-tests",
   "kithara-file-tests",
   "kithara-fuzz",

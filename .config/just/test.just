@@ -96,8 +96,7 @@ wasm BROWSER="chrome" SUITE="all":
       --target wasm32-unknown-unknown \
       -Z build-std=std,panic_abort,core,alloc \
       -Z build-std-features=optimize_for_size \
-      -p kithara-ffi --test web-analysis --no-default-features \
-      --features wasm
+      -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
     if [[ "$suite" == "all" ]]; then
       # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
       # so both lanes rebuild one identical std. The release-grade test profile
