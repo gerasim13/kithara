@@ -118,6 +118,7 @@ uuid = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "analysis-waveform",
+    "audio",
     "backend-web-audio",
     "beat-dsp",
     "hls",
