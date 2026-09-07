@@ -163,6 +163,15 @@ where
         self.off.call(move |state| f(&mut state.host)).await
     }
 
+    /// Runs a control call on the owner thread, the way product callers issue
+    /// it from the app thread rather than from a runtime worker.
+    pub async fn run<R>(&self, f: impl FnOnce() -> R + Send + 'static) -> R
+    where
+        R: Send + 'static,
+    {
+        self.off.call(move |_| f()).await
+    }
+
     /// Transfer one configured player facade into the product Host.
     pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
     where

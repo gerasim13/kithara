@@ -60,27 +60,39 @@ impl MixHarness {
         Self { host, players }
     }
 
-    fn play(&self, values: &[f32]) {
+    async fn play(&self, values: &[f32]) {
         let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
-        for (player, &value) in self.players.iter().zip(values) {
-            player.reserve_slots(1);
-            player
-                .replace_item(
-                    0,
-                    resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),
-                    TrackId::allocate(),
-                )
-                .expect("replace player item");
-            player
-                .select_item_with_crossfade(
-                    0,
-                    SelectTransition {
-                        autoplay: true,
-                        crossfade_seconds: 0.0,
-                    },
-                )
-                .expect("select item");
-        }
+        let players: Vec<_> = self
+            .players
+            .iter()
+            .map(|player| player.control().clone())
+            .collect();
+        let values = values.to_vec();
+        self.host
+            .run(move || {
+                for (player, value) in players.iter().zip(values) {
+                    player.reserve_slots(1);
+                    player
+                        .replace_item(
+                            0,
+                            resource_from_reader(TestPcmReader::with_value(
+                                spec, TRACK_SECS, value,
+                            )),
+                            TrackId::allocate(),
+                        )
+                        .expect("replace player item");
+                    player
+                        .select_item_with_crossfade(
+                            0,
+                            SelectTransition {
+                                autoplay: true,
+                                crossfade_seconds: 0.0,
+                            },
+                        )
+                        .expect("select item");
+                }
+            })
+            .await;
     }
 
     async fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
@@ -149,7 +161,7 @@ async fn players_render_exact_weighted_sum(
 ) {
     let harness = MixHarness::new(values.len()).await;
     harness.apply(levels).await.expect("apply mix");
-    harness.play(values);
+    harness.play(values).await;
 
     let expected = values.iter().zip(levels).map(|(v, l)| v * l).sum();
     assert_near(harness.steady_peak().await, expected, label);
@@ -163,7 +175,7 @@ async fn zeroed_players_are_silent_and_gains_are_independent() {
 
     let harness = MixHarness::new(values.len()).await;
     harness.apply(&levels).await.expect("apply mix");
-    harness.play(&values);
+    harness.play(&values).await;
 
     assert_near(harness.steady_peak().await, 0.4, "independent gains");
     harness.close().await;
@@ -182,7 +194,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
 
     let harness = MixHarness::new(values.len()).await;
     harness.apply(&levels).await.expect("apply mix");
-    harness.play(&values);
+    harness.play(&values).await;
 
     let rendered = harness.steady().await;
     for &s in &rendered {
@@ -199,7 +211,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
 async fn sub_threshold_mix_passes_through_untouched() {
     let harness = MixHarness::new(1).await;
     harness.apply(&[1.0]).await.expect("apply mix");
-    harness.play(&[0.4]);
+    harness.play(&[0.4]).await;
 
     let rendered = harness.steady().await;
     let expected = 0.4;
@@ -219,7 +231,7 @@ async fn sub_threshold_mix_passes_through_untouched() {
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn single_player_without_a_mix_is_unchanged() {
     let harness = MixHarness::new(1).await;
-    harness.play(&[0.4]);
+    harness.play(&[0.4]).await;
     assert_near(
         harness.steady_peak().await,
         0.4,
@@ -233,7 +245,7 @@ async fn rejected_mix_changes_no_rendered_gain() {
     let values = [0.4, 0.2];
     let harness = MixHarness::new(values.len()).await;
     harness.apply(&[0.5, 0.25]).await.expect("apply mix");
-    harness.play(&values);
+    harness.play(&values).await;
 
     let expected = 0.4 * 0.5 + 0.2 * 0.25;
     assert_near(harness.steady_peak().await, expected, "baseline mix");
@@ -254,7 +266,7 @@ async fn rejected_mix_changes_no_rendered_gain() {
 #[kithara::test(tokio)]
 async fn session_mix_does_not_mirror_player_content_volume() {
     let harness = MixHarness::new(1).await;
-    harness.play(&[0.4]);
+    harness.play(&[0.4]).await;
     harness.apply(&[0.5]).await.expect("apply mix");
 
     assert_eq!(
