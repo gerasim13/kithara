@@ -114,9 +114,18 @@ where
             grid_id,
             bus,
             eq_layout,
+            gate_smoothing,
             pools,
             sample_rate,
-        } => match register_player(state, grid_id, bus, eq_layout, pools, sample_rate) {
+        } => match register_player(
+            state,
+            grid_id,
+            bus,
+            eq_layout,
+            pools,
+            sample_rate,
+            gate_smoothing,
+        ) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -454,6 +463,7 @@ mod tests {
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
+    use kithara_play::DEFAULT_GATE_SMOOTHING;
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
@@ -586,6 +596,7 @@ mod tests {
             sample_rate,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
+            gate_smoothing: DEFAULT_GATE_SMOOTHING,
             pools: pools(),
         }
     }

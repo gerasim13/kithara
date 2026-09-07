@@ -1,6 +1,7 @@
 mod wire {
     use std::num::NonZeroUsize;
 
+    use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
@@ -77,6 +78,7 @@ mod wire {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
+            gate_smoothing: SmootherConfig,
             pools: PoolRegion<S>,
             sample_rate: u32,
         },
@@ -218,6 +220,7 @@ mod wire {
 mod handle {
     use std::num::{NonZeroU32, NonZeroUsize};
 
+    use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
@@ -389,12 +392,14 @@ mod handle {
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pools: PoolRegion<S>,
+            gate_smoothing: SmootherConfig,
         ) -> Result<PlayerId, PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
                 eq_layout,
+                gate_smoothing,
                 pools,
                 sample_rate,
             })? {
@@ -527,7 +532,7 @@ mod tests {
 
     use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
     use crate::{
-        PlayError,
+        DEFAULT_GATE_SMOOTHING, PlayError,
         test_pools::{TestPools, pools},
     };
 
@@ -622,6 +627,7 @@ mod tests {
                 EventBus::default(),
                 Vec::new(),
                 pools(),
+                DEFAULT_GATE_SMOOTHING,
             )
             .expect("register player");
         assert_eq!(capture.0.load(Ordering::Relaxed), sample_rate().get());

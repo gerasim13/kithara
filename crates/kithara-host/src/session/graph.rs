@@ -397,7 +397,8 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pools.clone()).with_session_context();
+        let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
+            .with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -609,77 +610,25 @@ pub(super) mod controls {
             return Ok(());
         }
 
-        let (old_eq_id, master_volume_id, slot_volume_ids, pools) = {
+        let (master_eq_id, pools) = {
             let player = deck_at(state, idx)?;
-            let old_eq_id = player
+            let master_eq_id = player
                 .master_eq_node_id
                 .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
-            let master_volume_id = player
-                .master_volume_node_id
-                .ok_or_else(|| graph_state("player master vol node is not initialised"))?;
-            let slot_volume_ids = player
-                .slots
-                .iter()
-                .map(|slot| slot.volume_node_id)
-                .collect::<Vec<NodeID>>();
-            (
-                old_eq_id,
-                master_volume_id,
-                slot_volume_ids,
-                player.pools.clone(),
-            )
+            (master_eq_id, player.pools.clone())
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let eq_config = EqConfig::builder(pools).build();
-        let master_eq = MasterEqNode::new(eq_config, &eq_layout);
-        let master_eq_memo = Memo::new(master_eq.clone());
-        let master_eq_id = fw_ctx.add_node(master_eq, None);
-
-        let swap = slot_volume_ids
-            .into_iter()
-            .try_for_each(|slot_id| {
-                connect_stereo(
-                    fw_ctx,
-                    slot_id,
-                    master_eq_id,
-                    "connect slot_volume->replacement master_eq",
-                )
-            })
-            .and_then(|()| {
-                connect_stereo(
-                    fw_ctx,
-                    master_eq_id,
-                    master_volume_id,
-                    "connect replacement master_eq->master_vol",
-                )
-            })
-            .and_then(|()| {
-                fw_ctx.remove_node(old_eq_id).map_err(|err| {
-                    SessionError::Graph(format!("remove previous master_eq failed: {err}"))
-                })
-            });
-        if let Err(err) = swap {
-            if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
-                warn!(
-                    player_id,
-                    ?remove_err,
-                    "failed to remove rejected replacement EQ node"
-                );
-            }
-            return Err(err);
-        }
-        if let Err(err) = fw_ctx.update() {
-            warn!(
-                player_id,
-                "graph update after EQ layout swap failed: {err:?}"
-            );
-        }
+        let sample_rate = fw_ctx
+            .stream_info()
+            .map(|info| info.sample_rate)
+            .ok_or_else(|| graph_state("session stream is not running"))?;
+        let master_eq = MasterEqNode::new(EqConfig::builder(pools).build(), &eq_layout);
+        fw_ctx.queue_event_for(master_eq_id, master_eq.layout_event(sample_rate));
 
         let player = deck_at_mut(&mut state.graph, idx)?;
         player.eq_layout = eq_layout;
         player.shared_eq.replace(&gains);
-        player.master_eq_node_id = Some(master_eq_id);
-        player.master_eq_memo = Some(master_eq_memo);
+        player.master_eq_memo = Some(Memo::new(master_eq));
         Ok(())
     }
     pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
@@ -882,6 +831,7 @@ mod tests {
                 grid_id,
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
+                gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
                 pools: pools(),
                 sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
@@ -941,7 +891,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
+    fn a_running_player_changes_its_eq_layout_in_place() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
         let player_id = register(&mut state);
@@ -978,7 +928,7 @@ mod tests {
         assert_eq!(player.shared_eq.snapshot(), vec![-6.0, -3.0, 1.5, 4.0]);
         assert_eq!(player.slots.len(), 1);
         assert_eq!(player.slots[0].slot_id, slot);
-        assert_ne!(player.master_eq_node_id, previous_eq);
+        assert_eq!(player.master_eq_node_id, previous_eq);
         assert_eq!(player.master_volume_node_id, previous_volume);
         assert_eq!(
             player.master_eq_memo.as_ref().map(|memo| memo.band_count()),

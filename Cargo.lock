@@ -2879,6 +2879,7 @@ dependencies = [
  "portable-atomic",
  "ringbuf 0.4.8",
  "rtgc",
+ "serde",
  "smallvec",
  "thiserror 2.0.18",
  "thunderdome",

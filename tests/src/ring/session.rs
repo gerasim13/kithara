@@ -382,6 +382,7 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
+        gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
         pools: pools(),
         sample_rate: session_rate.get(),
     }) {

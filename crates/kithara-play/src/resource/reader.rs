@@ -665,7 +665,8 @@ mod tests {
             )
             .expect("static block size"),
         };
-        let mut processor = PlayerNodeProcessor::new(inputs, shape, &pools);
+        let mut processor =
+            PlayerNodeProcessor::new(inputs, shape, &pools, crate::DEFAULT_GATE_SMOOTHING);
         let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
         let mut extra = ProcExtra {
             logger,

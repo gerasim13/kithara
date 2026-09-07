@@ -205,7 +205,6 @@ async fn deck_volume_step_is_ramped() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-#[ignore = "ignored-red: set_eq_gain reaches the band as a step, not a ramp; the tone jumps by 1.6 at the change, 2026-09-07"]
 async fn eq_gain_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(Consts::THREE_BAND),
@@ -234,7 +233,6 @@ async fn eq_gain_step_is_ramped() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-#[ignore = "ignored-red: set_eq_layout replaces the master EQ node; the switch is a hard cut, 2026-09-07"]
 async fn eq_layout_switch_is_crossed_over() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(Consts::THREE_BAND),

@@ -39,7 +39,15 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
-    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    (
+        PlayerNodeProcessor::new(
+            inputs,
+            shape,
+            &pools(),
+            kithara::play::DEFAULT_GATE_SMOOTHING,
+        ),
+        control,
+    )
 }
 
 fn faulty_track(src: &str, fault: Fault) -> Box<PlayerResource> {

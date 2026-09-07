@@ -68,7 +68,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
         max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &pools),
+        PlayerNodeProcessor::new(inputs, shape, &pools, kithara::play::DEFAULT_GATE_SMOOTHING),
         control,
         pools,
     )

@@ -60,6 +60,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
+            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })

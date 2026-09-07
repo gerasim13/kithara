@@ -115,14 +115,14 @@ There is no `resource:` section — `Document`'s `deny_unknown_fields` refuses o
 `sources::build_resource_config`, the only construction site a document reaches.
 
 ## Live Equalizer Layout
-`PlayerImpl::set_eq_layout` replaces a running player's master EQ, and **the
-session graph is the actuator**: it builds the replacement on the control thread,
-reconnects every slot through it, removes the old EQ, and submits one graph
-update. The audio thread never allocates, locks, or rebuilds filters for a layout
-change. `SharedEq` is the control-plane gain mirror shared by session and slot
-handles - **no audio processor reads it**; the DSP takes gains from the session's
-node event queue. Replacement swaps the whole band array behind the `ArcSwap`
-every handle clone points at (`a_handle_clone_sees_the_replacement_band_array`).
+`PlayerImpl::set_eq_layout` keeps the running master EQ node, and **the session
+graph is the actuator**: it builds both isolators on the control thread and sends
+them as one node event. The processor swaps them in, crosses over through
+`MixDSP` over `EqConfig.smoothing`, and returns the retired pair in the event.
+`SharedEq` is the control-plane gain mirror of session and slot handles - **no
+audio processor reads it**; gains travel by node event, and replacement swaps
+the band array behind the `ArcSwap` every handle clone points at
+(`a_handle_clone_sees_the_replacement_band_array`).
 
 ## Events
 One `kithara_events::EventBus` per player: `player.subscribe()` and
@@ -386,6 +386,9 @@ arriving resource down the reselecting-current path, never to be enqueued.
 
 ## Invariants
 - Audio-thread `process()` is allocation-, free-, and lock-free.
+- Runtime parameters reach DSP via `SmoothedParam`/`MixDSP` from an owner
+  `SmootherConfig`; `SmoothingFilter` only in `effects/eq/gain.rs`
+  (`smoothing_primitive_sites`).
 - `duration_seconds()` returns `None` while duration is unknown; the shared
   atomic's `0.0` conflates "unknown" with "empty track", so callers must not read
   it directly.

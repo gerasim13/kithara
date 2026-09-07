@@ -9,6 +9,7 @@ use firewheel::{
         AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
         ProcessStatus,
     },
+    param::smoother::SmootherConfig,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
@@ -115,11 +116,22 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new<S>(inputs: NodeInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
+    pub fn new<S>(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+        gate_smoothing: SmootherConfig,
+    ) -> Self
     where
         S: HasPool<f32>,
     {
-        Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
+        Self::with_context_requirement(
+            inputs,
+            shape,
+            pools,
+            gate_smoothing,
+            ContextRequirement::Standalone,
+        )
     }
 
     /// Clean up finished tracks, dropping `playing` once none is audible.
@@ -269,7 +281,7 @@ impl PlayerNodeProcessor {
 
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
-            .iter()
+            .iter_mut()
             .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
@@ -338,6 +350,7 @@ impl PlayerNodeProcessor {
         inputs: NodeInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
+        gate_smoothing: SmootherConfig,
         context_requirement: ContextRequirement,
     ) -> Self
     where
@@ -352,7 +365,7 @@ impl PlayerNodeProcessor {
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pools, shape),
+            render: RenderPass::new(pools, shape, gate_smoothing),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             tracks: TrackSlots::default(),
@@ -444,7 +457,10 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+        (
+            PlayerNodeProcessor::new(inputs, shape, &pools(), crate::DEFAULT_GATE_SMOOTHING),
+            control,
+        )
     }
 
     fn session_processor() -> PlayerNodeProcessor {
@@ -457,6 +473,7 @@ mod tests {
             inputs,
             shape,
             &pools(),
+            crate::DEFAULT_GATE_SMOOTHING,
             ContextRequirement::Session,
         )
     }

@@ -187,6 +187,7 @@ impl<S> EngineImpl<S> {
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pools().clone(),
+            self.config.gate_smoothing,
         )?;
         *player_id = Some(id);
         drop(player_id);

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use arc_swap::ArcSwap;
 use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
-    node::NodeID, nodes::volume::VolumeNode,
+    node::NodeID, nodes::volume::VolumeNode, param::smoother::SmootherConfig,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
@@ -48,6 +48,7 @@ pub(super) struct Deck<S> {
     pub(super) pools: PoolRegion<S>,
     pub(super) shared_eq: SharedEq,
     pub(super) eq_layout: Vec<EqBandConfig>,
+    pub(super) gate_smoothing: SmootherConfig,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
     pub(super) master_volume: f32,
@@ -62,6 +63,7 @@ impl<S> Deck<S> {
         eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
         master_volume: f32,
+        gate_smoothing: SmootherConfig,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -70,6 +72,7 @@ impl<S> Deck<S> {
         Self {
             bus,
             eq_layout,
+            gate_smoothing,
             pools,
             player_id,
             grid_id,
@@ -266,6 +269,7 @@ pub(super) fn register_player<B: AudioBackend, S>(
     eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
     sample_rate: u32,
+    gate_smoothing: SmootherConfig,
 ) -> Result<PlayerId, SessionError> {
     NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
@@ -286,7 +290,15 @@ pub(super) fn register_player<B: AudioBackend, S>(
             level: master_volume,
         });
     }
-    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, master_volume);
+    let deck = Deck::new(
+        player_id,
+        grid_id,
+        bus,
+        eq_layout,
+        pools,
+        master_volume,
+        gate_smoothing,
+    );
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(

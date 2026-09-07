@@ -41,7 +41,15 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
-    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
+    (
+        PlayerNodeProcessor::new(
+            inputs,
+            shape,
+            &pools(),
+            kithara::play::DEFAULT_GATE_SMOOTHING,
+        ),
+        control,
+    )
 }
 
 fn track(src: &str, level: f32) -> Box<PlayerResource> {
@@ -238,7 +246,6 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 }
 
 #[kithara::test]
-#[ignore = "ignored-red: SetFadeDuration rebuilds MixDSP mid-fade; the running fade snaps to its target, 2026-09-07"]
 fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
     let (mut processor, mut control, fading) = fading_in();
 

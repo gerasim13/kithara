@@ -284,6 +284,9 @@ struct Census {
     tracks: Vec<TrackId>,
 }
 
+/// The census reads the seam itself, so the master EQ carries no bands:
+/// a flat isolator is magnitude-flat but not phase-flat, and its dispersion
+/// on the sawtooth's reset would read as extra peak and a longer zero crossing.
 async fn build_queue(
     origins: &[Origin],
     server: Option<&TestServerHelper>,
@@ -294,6 +297,7 @@ async fn build_queue(
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
+            .eq_layout(Vec::new())
             .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,

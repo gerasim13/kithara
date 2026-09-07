@@ -9,7 +9,6 @@ use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::Gain
 pub struct IsolatorEq {
     filters: CrossoverFilters,
     gains: GainBank,
-    was_in_fastpath: bool,
 }
 
 impl IsolatorEq {
@@ -29,30 +28,18 @@ impl IsolatorEq {
         }
         Ok(Self {
             filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
-            gains: GainBank::new(bands.iter().map(EqBandConfig::gain_db), sample_rate),
-            was_in_fastpath: false,
+            gains: GainBank::new(
+                bands.iter().map(EqBandConfig::gain_db),
+                sample_rate,
+                config.smoothing(),
+            ),
         })
     }
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        // WHY: Guarding the input covers the bypass and silence paths too.
         let input = sanitize_sample(input);
         self.gains.tick();
-        if self.gains.silence_active() {
-            self.filters.record(input);
-            self.was_in_fastpath = true;
-            return 0.0;
-        }
-        if self.gains.bypass_active() {
-            self.filters.record(input);
-            self.was_in_fastpath = true;
-            return input;
-        }
-        if self.was_in_fastpath {
-            self.was_in_fastpath = false;
-            self.filters.rehydrate();
-        }
         match self.gains.len() {
             0 => input,
             1 => sanitize_sample(input * self.gains.linear(0)),
@@ -63,7 +50,6 @@ impl IsolatorEq {
     pub fn reset(&mut self) {
         self.gains.reset();
         self.filters.reset();
-        self.was_in_fastpath = false;
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
@@ -81,16 +67,9 @@ impl IsolatorEq {
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
             #[cfg(test)]
-            pub(crate) fn bypass_active(&self) -> bool;
-            #[cfg(test)]
             pub(crate) fn is_smoothing(&self) -> bool;
             #[call(set)]
             pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
-            #[cfg(test)]
-            #[call(settle)]
-            pub(crate) fn settle_gain(&mut self, band: usize);
-            #[cfg(test)]
-            pub(crate) fn silence_active(&self) -> bool;
         }
     }
 }
@@ -122,6 +101,39 @@ mod tests {
             .count();
 
         assert_eq!(denormals, 0, "impulse tail leaked {denormals} denormals");
+    }
+
+    /// A gain move from unity is a ramp at the sample rate: no output sample
+    /// steps by more than the tone's own slope plus the smoother's per-sample share.
+    #[kithara::test]
+    fn a_gain_move_from_unity_never_steps() {
+        const SAMPLE_RATE: u32 = 48_000;
+        const TONE_HZ: f32 = 440.0;
+        const CHANGE_AT: usize = 480;
+        let bands = super::super::band::generate_log_spaced_bands(3);
+        let config = EqConfig::builder(pools()).build();
+        let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
+            .unwrap_or_else(|error| panic!("test isolator: {error}"));
+        let tone =
+            |n: usize| (n as f32 * TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32).sin();
+        let mut previous = eq.process_sample(tone(0));
+        let mut max_step = 0.0_f32;
+        for n in 1..SAMPLE_RATE as usize {
+            if n == CHANGE_AT {
+                eq.set_gain(1, GainDb::MIN);
+            }
+            let out = eq.process_sample(tone(n));
+            if n >= CHANGE_AT / 2 {
+                max_step = max_step.max((out - previous).abs());
+            }
+            previous = out;
+        }
+        let slope = TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32;
+        let ramp = 1.0 / (config.smoothing().smooth_seconds * SAMPLE_RATE as f32);
+        assert!(
+            max_step <= slope + ramp,
+            "a gain move stepped the output: {max_step} > {slope} + {ramp}"
+        );
     }
 
     #[kithara::test]

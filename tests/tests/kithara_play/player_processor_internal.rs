@@ -49,8 +49,12 @@ fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
 
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
-    let processor =
-        PlayerNodeProcessor::new(inputs, stream_shape(Consts::NON_ZERO_SAMPLE_RATE), &pools());
+    let processor = PlayerNodeProcessor::new(
+        inputs,
+        stream_shape(Consts::NON_ZERO_SAMPLE_RATE),
+        &pools(),
+        kithara::play::DEFAULT_GATE_SMOOTHING,
+    );
     (processor, control)
 }
 
@@ -100,7 +104,12 @@ async fn load_track_propagates_host_sample_rate() {
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-    let mut processor = PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &pools());
+    let mut processor = PlayerNodeProcessor::new(
+        inputs,
+        stream_shape(sample_rate),
+        &pools(),
+        kithara::play::DEFAULT_GATE_SMOOTHING,
+    );
 
     control
         .cmd_tx
