@@ -220,7 +220,6 @@ impl FakeReader {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn idle_ingest() -> crate::producer::ring::Reader {
     crate::producer::ring::open_for(spec().sample_rate).1
 }

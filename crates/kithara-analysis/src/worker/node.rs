@@ -77,9 +77,8 @@ where
     }
 
     fn accept_completion(&mut self) -> bool {
-        let done = match self.completed.try_recv() {
-            Ok(done) => done,
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return false,
+        let Ok(done) = self.completed.try_recv() else {
+            return false;
         };
         self.detector_state = DetectorState::Idle;
         let Some(current) = &mut self.current else {
@@ -112,8 +111,8 @@ where
                 self.current = Some(task);
                 self.tick_current()
             }
-            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
             Err(TryRecvError::Disconnected) => TickResult::Done,
+            Err(_) => TickResult::UpstreamPending,
         }
     }
 

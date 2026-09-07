@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
@@ -204,6 +204,6 @@ pub trait AudioControl {
 /// - `Ok(ReadOutcome::Frames { .. })` — reader is alive and produced frames.
 /// - `Ok(ReadOutcome::Eof { .. })` — natural end of stream.
 /// - `Err(DecodeError)` — decoder or channel failure.
-pub trait AudioReader: AudioRead + AudioSession + AudioControl + MaybeSend {}
+pub trait AudioReader: AudioRead + AudioSession + AudioControl + Send {}
 
-impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + MaybeSend {}
+impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + Send {}

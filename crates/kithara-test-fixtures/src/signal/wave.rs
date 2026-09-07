@@ -26,6 +26,14 @@ pub enum SweepMode {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum Wave {
+    /// Tone bursts at `hz` every `period_frames`, each fading out over
+    /// `burst_frames`.
+    #[non_exhaustive]
+    Clicks {
+        hz: f64,
+        period_frames: usize,
+        burst_frames: usize,
+    },
     /// Ascending saw-tooth: frame 0 is `i16::MIN`, frame 65535 is `i16::MAX`.
     Sawtooth,
     /// Descending saw-tooth: frame 0 is `i16::MAX`, frame 65535 is `i16::MIN`.
@@ -48,10 +56,47 @@ pub enum Wave {
 }
 
 impl Wave {
+    /// A repeating tone burst: `hz` fading to silence across `burst_frames`,
+    /// once every `period_frames`.
+    ///
+    /// # Panics
+    /// Panics unless `hz` is finite and positive and the burst fits one period.
+    #[must_use]
+    pub fn clicks(hz: f64, period_frames: usize, burst_frames: usize) -> Self {
+        assert!(
+            hz.is_finite() && hz > 0.0,
+            "a click burst carries a finite positive frequency, not {hz}"
+        );
+        assert!(burst_frames > 0, "a click burst spans at least one frame");
+        assert!(
+            burst_frames <= period_frames,
+            "a burst of {burst_frames} frames does not fit a period of {period_frames}"
+        );
+
+        Self::Clicks {
+            hz,
+            period_frames,
+            burst_frames,
+        }
+    }
+
     /// One 16-bit sample of this waveform.
     #[must_use]
     pub fn sample(self, frame: usize, sample_rate: u32) -> i16 {
         match self {
+            Self::Clicks {
+                hz,
+                period_frames,
+                burst_frames,
+            } => {
+                let into = frame % period_frames;
+                if into >= burst_frames {
+                    return 0;
+                }
+                let at = seconds(into, sample_rate);
+                let fade = 1.0 - at / seconds(burst_frames, sample_rate);
+                quantize(fade * f64::sin(TAU * hz * at), i16::MAX)
+            }
             Self::Sawtooth => saw(frame),
             Self::SawtoothDescending => saw(SAW_PERIOD - 1 - frame % SAW_PERIOD),
             Self::SawtoothShifted => saw(frame + SAW_PERIOD / 2),
@@ -202,6 +247,14 @@ mod tests {
         &samples[range]
     }
 
+    fn peak(samples: &[i16]) -> i32 {
+        samples
+            .iter()
+            .map(|&s| i32::from(s).abs())
+            .max()
+            .unwrap_or(0)
+    }
+
     #[kithara::test(native, flash(false))]
     fn a_saw_climbs_the_whole_16_bit_range() {
         assert_eq!(Wave::Sawtooth.sample(0, SAMPLE_RATE), i16::MIN);
@@ -247,6 +300,24 @@ mod tests {
         };
 
         assert_eq!(quiet.sample(1, SAMPLE_RATE), 1_000);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn clicks_fade_out_and_leave_the_rest_of_the_period_silent() {
+        let period = SAMPLE_RATE as usize / 2;
+        let burst = SAMPLE_RATE as usize / 100;
+        let clicks = Wave::clicks(1_000.0, period, burst);
+        let samples = render(clicks, period * 2);
+
+        assert!(samples[burst..period].iter().all(|&s| s == 0));
+        let head = peak(window(&samples, 0..burst / 4));
+        let tail = peak(window(&samples, burst * 3 / 4..burst));
+        assert!(head > tail, "{head} > {tail}");
+        assert_eq!(
+            peak(window(&samples, 0..burst)),
+            peak(window(&samples, period..period + burst)),
+            "every period carries the same burst"
+        );
     }
 
     #[kithara::test(native, flash(false))]

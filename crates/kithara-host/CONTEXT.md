@@ -113,6 +113,11 @@ a mismatch before the Player can register or start. Session register/start
 commands derive their rate from the same query rather than accepting another
 caller-supplied value.
 
+Web warm-up creates the `AudioContext` at the session's configured rate, the
+same rate every Player is built for, so the session-rate query answers with a
+rate insertion can validate against. The rate the device settles on reaches the
+resampler as the measured rate.
+
 Route changes keep the existing flow: the Host observes the device change and
 the Player receives the resulting sample-rate update through its current
 control path. Rebuilding the output graph is reserved for a physical route

@@ -1078,9 +1078,8 @@ kinds_github = ["main", "branch"]
 timeout_minutes = 60
 
 # Nightly here, not on the push gate: the full integration suite does not
-# compile for wasm32 today - `Queue` is not `Send` because `Box<dyn AudioReader>`
-# is not, and `BeatGrid` demands it. The lane reports the break every night
-# instead of refusing every push until the type is fixed.
+# compile for wasm32 today. The lane reports the break every night instead of
+# refusing every push until the suite is fixed.
 [ext.ci.lanes.web-firefox]
 cache_group = "linux"
 label = "Web browser"
