@@ -51,12 +51,6 @@ impl LazyAppQueueFixture {
     pub async fn get(&self) -> &AppQueueFixture {
         self.0.get_or_init(insecure_app_queue).await
     }
-
-    pub async fn close(self) {
-        if let Some(fixture) = self.0.into_inner() {
-            fixture.close().await;
-        }
-    }
 }
 
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
