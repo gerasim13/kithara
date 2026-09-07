@@ -230,7 +230,7 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-lane = "workspace"
+lane = "workspace-combined"
 backend = "wreq"
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
@@ -505,25 +505,19 @@ features = ["no-block"]
 features = []
 
 [test.net_backends.apple]
-features = ["kithara-integration-tests/apple-net"]
+features = ["kithara/apple-net"]
 
-# The product suite. What it excludes is not product: `kithara-devtools` and
-# `xtask` are the build tooling, `kithara-test-utils` and `kithara-test-macros`
-# are the harness the product tests are written with. Excluded at cargo level
-# rather than filtered, so they are not compiled either — a filter would still
-# pay for building and linking them. Neither depends on a product crate, so
-# nothing product-side leaves with them.
-#
-# `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
-# two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
-# it against both hosts instead.
-#
-# The remaining support targets live inside product crates and cannot be dropped
-# here without taking product tests along; `default-filter` in
-# `.config/nextest.toml` removes those. The lanes below run all of it.
-#
-# Returning a crate to this suite is one edit: drop its `--exclude` pair.
+# The default product suite runs product crates, the cross-domain package, and
+# every native domain package as separate Cargo feature graphs. They share one
+# target directory, so an edit in one domain reuses the other domains' binaries.
 [test.lanes.workspace]
+program = "just"
+default_features = []
+prefix_args = ["test", "workspace"]
+
+# Stress inventories and repeats one stable nextest selection, so it retains
+# the old combined command. Ordinary tests use the split lane above.
+[test.lanes.workspace-combined]
 program = "cargo"
 default_features = []
 prefix_args = [
@@ -545,6 +539,21 @@ prefix_args = [
   "--cargo-profile",
   "test-release",
 ]
+
+# What the product-only first split excludes is not product:
+# `kithara-devtools` and `xtask` are build tooling, and `kithara-test-utils`
+# and `kithara-test-macros` are the harness the product tests are written with.
+#
+# `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
+# two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
+# it against both hosts instead.
+#
+# The remaining support targets live inside product crates and cannot be dropped
+# here without taking product tests along; `default-filter` in
+# `.config/nextest.toml` removes those. The lanes below run all of it.
+#
+# Returning a support crate to the product-only split is one edit: drop its
+# `--exclude` entry from `.config/just/test.just`.
 
 # The build tooling: lint and architecture checks, similarity, viz, quality
 # assessment, release and publish, the platform commands, the xtask self-cache,

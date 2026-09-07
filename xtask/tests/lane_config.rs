@@ -1,4 +1,107 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, process::Command};
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root")
+}
+
+#[test]
+fn workspace_lane_splits_native_domains_and_keeps_scoped_runs_narrow() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let test = &config["test"];
+    assert_eq!(test["lanes"]["workspace"]["program"].as_str(), Some("just"));
+    assert_eq!(
+        config["stress"]["lane"].as_str(),
+        Some("workspace-combined")
+    );
+    assert_eq!(
+        test["lanes"]["workspace-combined"]["program"].as_str(),
+        Some("cargo")
+    );
+
+    let output = Command::new("just")
+        .current_dir(root)
+        .env("KITHARA_TEST_CARGO", "echo")
+        .env_remove("CI_JOB_NAME")
+        .args(["test", "workspace", "--features", "flash"])
+        .output()
+        .expect("run workspace recipe with echo cargo");
+    assert!(output.status.success(), "workspace recipe must be runnable");
+    let stdout = String::from_utf8(output.stdout).expect("workspace recipe output is UTF-8");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        19,
+        "one product plus eighteen test-package runs"
+    );
+    assert!(
+        lines[0].contains("--workspace") && lines[0].contains("--exclude kithara-*-tests"),
+        "the first run keeps product unit-test coverage"
+    );
+
+    let mut selected: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words
+                .iter()
+                .position(|word| *word == "-p")
+                .and_then(|index| words.get(index + 1).copied())
+        })
+        .collect();
+    selected.sort_unstable();
+
+    let mut expected = vec!["kithara-integration-tests".to_owned()];
+    for entry in fs::read_dir(root.join("tests/crates")).expect("read domain test packages") {
+        let manifest = entry.expect("read domain entry").path().join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let package: toml::Value = toml::from_str(
+            &fs::read_to_string(manifest).expect("domain test manifest is readable"),
+        )
+        .expect("domain test manifest is valid TOML");
+        let name = package["package"]["name"]
+            .as_str()
+            .expect("domain test package has a name");
+        if !name.starts_with("kithara-ffi-web") {
+            expected.push(name.to_owned());
+        }
+    }
+    expected.sort_unstable();
+    assert_eq!(
+        selected, expected,
+        "every native test package runs exactly once"
+    );
+
+    let output = Command::new("just")
+        .current_dir(root)
+        .env("KITHARA_TEST_CARGO", "echo")
+        .env_remove("CI_JOB_NAME")
+        .args([
+            "test",
+            "workspace",
+            "-p",
+            "kithara-hls-tests",
+            "--test",
+            "hls",
+        ])
+        .output()
+        .expect("run scoped workspace recipe with echo cargo");
+    let stdout = String::from_utf8(output.stdout).expect("scoped recipe output is UTF-8");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "a package scope runs one Cargo command"
+    );
+    assert!(stdout.contains("-p kithara-hls-tests --test hls"));
+    assert!(!stdout.contains("--workspace"));
+}
 
 // A browser lane's name is a promise about what ran. The harness reads
 // `KITHARA_SELENIUM_BROWSER` and falls back to chrome when nothing sets it, so
