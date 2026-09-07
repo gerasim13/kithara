@@ -55,7 +55,24 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["analysis", "file", "hls", "queue", "resample-rubato", "worker"] }
+kithara = { workspace = true, default-features = false, features = [
+    "analysis",
+    "audio",
+    "bufpool",
+    "decode",
+    "events",
+    "file",
+    "hls",
+    "host",
+    "platform",
+    "play",
+    "queue",
+    "resample-rubato",
+    "resampler",
+    "stream",
+    "warp",
+    "worker",
+] }
 kithara-assets = { workspace = true }
 kithara-macros = { workspace = true }
 kithara-record = { workspace = true }
