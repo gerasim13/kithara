@@ -2,11 +2,13 @@ use std::num::NonZeroU32;
 
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AlignmentSource, AssetAxis, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
-    BeatGridState, BeatGridUnavailable, BeatsPerMinute, LoadGeneration, MapAxis, SessionAnchor,
-    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncCapability, SyncError,
-    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
-    TopologyOperation, TransportRevision,
+    AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
+    BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal, BeatsPerMinute,
+    FrameUncertainty, LoadGeneration, MapAxis, MapSegment, PresentationFrontier, ReconcileCause,
+    SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
+    TransportRevision,
 };
 
 use super::GroupState;
@@ -451,5 +453,179 @@ fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
         SyncError::CapabilityUnavailable {
             capability: SyncCapability::Alignment,
         }
+    );
+}
+
+fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
+    let sample_rate = NonZeroU32::new(48_000).expect("sample rate");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let marker = |ordinal: u64, frame: u64| {
+        BeatMarker::new(
+            AssetFrame::new(frame as f64)
+                .expect("fixture frame is finite")
+                .into(),
+            Some(BeatOrdinal::new(ordinal as i64)),
+            BeatEvidence::Observed,
+            exact,
+        )
+    };
+    let segments = (0..frames / beat_frames)
+        .map(|beat| {
+            MapSegment::new(
+                marker(beat, beat * beat_frames),
+                marker(beat + 1, (beat + 1) * beat_frames),
+                SegmentFacts::new(BeatEvidence::Observed, exact, None),
+            )
+            .expect("fixture segment advances on both axes")
+        })
+        .collect();
+    BeatGridSnapshot::segments(
+        id,
+        BeatGridRevision::first(),
+        BeatGridState::Complete,
+        SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(sample_rate, frames)),
+            segments,
+        )
+        .expect("fixture segment set is contiguous"),
+    )
+    .expect("fixture asset grid is valid")
+}
+
+fn synced_deck() -> GroupState<PlayerMember> {
+    let mut deck = GroupState::new(
+        session_grid(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            2.0,
+        ),
+        SyncMemberKind::Grid,
+        SyncMode::LocalSync,
+    );
+    let _ = deck
+        .transact(tempo(deck.id(), 120.0))
+        .expect("a local deck accepts its own tempo");
+    deck
+}
+
+fn attach_grid(group: &mut GroupState<PlayerMember>, grid: BeatGridSnapshot) {
+    let base = group.topology().expect("topology").stamp();
+    let _ = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Attach {
+                member: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(TestGrid(grid)),
+                },
+            }]),
+        })
+        .expect("attach");
+}
+
+fn frontier_at_zero() -> PresentationFrontier {
+    PresentationFrontier::builder()
+        .source(0)
+        .output(SessionFrame::new(0))
+        .build()
+}
+
+fn reconcile(
+    group: &mut GroupState<PlayerMember>,
+    target: BeatGridId,
+    cause: ReconcileCause,
+) -> SyncAdmission {
+    let (load, transport) = group.generations();
+    group
+        .transact(SyncOperation::Reconcile {
+            target,
+            load,
+            transport,
+            cause,
+            frontier: frontier_at_zero(),
+        })
+        .expect("reconcile is admitted")
+}
+
+#[kithara::test]
+fn a_track_without_geometry_waits_for_its_grid() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(
+        &mut group,
+        BeatGridSnapshot::unavailable(
+            track,
+            BeatGridRevision::first(),
+            MapAxis::Asset(AssetAxis::new(
+                NonZeroU32::new(48_000).expect("sample rate"),
+                480_000,
+            )),
+        ),
+    );
+
+    let admission = reconcile(&mut group, track, ReconcileCause::GridAvailable);
+
+    assert!(
+        matches!(admission, SyncAdmission::Deferred { .. }),
+        "{admission:?}"
+    );
+    assert!(
+        matches!(group.status(), SyncStatusSnapshot::WaitingForGrid { .. }),
+        "{:?}",
+        group.status()
+    );
+}
+
+#[kithara::test]
+fn a_complete_grid_is_prepared_on_the_next_deck_beat_and_locks_on_acknowledge() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+
+    let SyncAdmission::Prepared {
+        operation,
+        warp_map,
+        activation,
+        ..
+    } = reconcile(&mut group, track, ReconcileCause::GridAvailable)
+    else {
+        panic!("complete grid must be prepared");
+    };
+
+    assert_eq!(
+        activation,
+        SessionFrame::new(0),
+        "a frontier on beat 0 activates on beat 0"
+    );
+    assert!(
+        matches!(group.status(), SyncStatusSnapshot::Prepared { .. }),
+        "{:?}",
+        group.status()
+    );
+    let (load, transport) = group.generations();
+    let applied = || {
+        SyncApplied::builder()
+            .group(group.snapshot().stamp())
+            .load(load)
+            .frontier(frontier_at_zero())
+            .operation(operation)
+            .topology(group.topology().expect("topology").stamp())
+            .transport(transport)
+            .warp_map(warp_map)
+            .build()
+    };
+    let first = applied();
+    let again = applied();
+
+    let status = group.acknowledge(first).expect("acknowledged");
+
+    assert!(
+        matches!(status, SyncStatusSnapshot::Locked { .. }),
+        "{status:?}"
+    );
+    assert_eq!(
+        group.acknowledge(again).expect_err("second acknowledge"),
+        SyncError::DuplicateAcknowledgement { operation }
     );
 }

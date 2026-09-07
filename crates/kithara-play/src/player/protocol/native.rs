@@ -1,6 +1,6 @@
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, SessionAnchor, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 
 use super::Player;
@@ -30,6 +30,14 @@ impl PlayerMember {
             /// Reads the desired Host level used for later graph registration.
             #[must_use]
             pub fn host_level(&self) -> f32;
+        }
+        to self.inner.as_mut() {
+            /// Pushes the Host's committed session anchor into the player.
+            ///
+            /// # Errors
+            ///
+            /// Returns the player's grid publication error.
+            pub fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
         }
     }
 }

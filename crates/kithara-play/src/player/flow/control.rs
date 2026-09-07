@@ -1,6 +1,6 @@
 use kithara_events::RouteDescription;
 use kithara_test_macros as kithara;
-use kithara_warp::StretchControls;
+use kithara_warp::{SessionFrame, StretchControls};
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -110,6 +110,16 @@ impl<S> PlayerRuntime<S> {
         self.core
             .params
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
+    }
+
+    /// The session frame the active slot renders next, or the session origin
+    /// when nothing renders.
+    pub(crate) fn render_frontier(&self) -> SessionFrame {
+        self.slot()
+            .and_then(|slot| self.core.engine.slot_render_snapshot(slot))
+            .map_or(SessionFrame::new(0), |snapshot| {
+                snapshot.context().output_frames().end
+            })
     }
 
     /// Set the requested rate target, clamped to

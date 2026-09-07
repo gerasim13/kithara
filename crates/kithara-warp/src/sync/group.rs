@@ -114,6 +114,9 @@ pub enum SyncError {
     /// A group owner cannot mint another operation identity.
     #[error("synchronization operation identity space is exhausted for group {group_id}")]
     OperationIdExhausted { group_id: BeatGridId },
+    /// A group owner cannot mint another warp-map revision.
+    #[error("warp map revision space is exhausted for group {group_id}")]
+    WarpMapRevisionExhausted { group_id: BeatGridId },
     /// No prepared renderer operation can accept an acknowledgement.
     #[error("synchronization group has no prepared operation")]
     NoPreparedOperation,

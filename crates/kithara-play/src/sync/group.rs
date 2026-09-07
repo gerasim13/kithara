@@ -2,13 +2,14 @@ use std::num::NonZeroU32;
 
 use kithara_warp::{
     AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
-    BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion,
-    SessionAxis, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    BeatGridStamp, BeatGridState, BeatsPerMinute, LoadGeneration, MapAxis, MapPoint, MapPosition,
+    MapRegion, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission,
+    SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
+    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyRevision, TopologyStamp, TransportRevision, WarpMapRevision,
 };
 
-use super::{TempoSource, topology::materialize_topology, transaction};
+use super::{TempoSource, prepare::PreparedSync, topology::materialize_topology, transaction};
 
 /// Canonical mutable state for one recursive synchronization group.
 ///
@@ -23,6 +24,11 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     member_kind: SyncMemberKind,
     mode: SyncMode,
     tempo: TempoSource,
+    generations: (LoadGeneration, TransportRevision),
+    parent_anchor: Option<SessionAnchor>,
+    warp_map: WarpMapRevision,
+    prepared: Option<PreparedSync>,
+    locked: Option<SyncApplied>,
     topology_revision: TopologyRevision,
     members: Vec<SyncMember<G>>,
 }
@@ -38,10 +44,132 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             members: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             tempo: TempoSource::Inherited,
+            generations: (LoadGeneration::first(), TransportRevision::first()),
+            parent_anchor: None,
+            warp_map: WarpMapRevision::first(),
+            prepared: None,
+            locked: None,
             topology_revision: TopologyRevision::first(),
             unavailable: None,
             waiting: None,
         }
+    }
+
+    /// Returns the load generation and transport revision of the last
+    /// accepted transport operation.
+    #[must_use]
+    pub const fn generations(&self) -> (LoadGeneration, TransportRevision) {
+        self.generations
+    }
+
+    /// Every directly nested group, for the owner to push committed state into.
+    pub fn nested_groups_mut(&mut self) -> impl Iterator<Item = &mut G> {
+        self.members.iter_mut().filter_map(|member| match member {
+            SyncMember::Group { group, .. } => Some(group.as_mut()),
+            SyncMember::Grid { .. } => None,
+        })
+    }
+
+    /// Records the parent's committed session anchor; under
+    /// [`SyncMode::HostSync`] republishes this group's session grid on it.
+    pub fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        self.parent_anchor = Some(anchor);
+        if self.mode != SyncMode::HostSync {
+            return Ok(());
+        }
+        self.publish_session_grid(anchor)
+    }
+
+    /// Republishes this group's session grid so it follows the current mode:
+    /// the parent's anchor under `HostSync`, the local tempo continuing from
+    /// the beat under `now` under `LocalSync`, and no grid at all when `Off`.
+    pub fn refresh_session_grid(&mut self, now: SessionFrame) -> Result<(), SyncError> {
+        match (self.mode, self.tempo) {
+            (SyncMode::HostSync, _) => self
+                .parent_anchor
+                .map_or(Ok(()), |anchor| self.publish_session_grid(anchor)),
+            (SyncMode::LocalSync, TempoSource::Local(tempo)) => {
+                let origin = MapPoint::new(self.grid.stamp(), MapPosition::Session(now));
+                let beat = match self.grid.beat_at(origin) {
+                    BeatGridQuery::Resolved(estimate) => f64::from(*estimate.value().value()),
+                    _ => 0.0,
+                };
+                let beat =
+                    SessionBeat::new(beat).map_err(|_| SyncError::InvalidGroupGridState {
+                        state: self.grid.state(),
+                    })?;
+                let anchor = SessionAnchor::new(
+                    now,
+                    beat,
+                    f64::from(tempo) / 60.0,
+                    self.grid.axis().sample_rate(),
+                )
+                .map_err(|_| SyncError::InvalidGroupGridState {
+                    state: self.grid.state(),
+                })?;
+                self.publish_session_grid(anchor)
+            }
+            (SyncMode::LocalSync, TempoSource::Inherited) => {
+                Err(SyncError::InvalidGroupGridState {
+                    state: self.grid.state(),
+                })
+            }
+            (SyncMode::Off, _) => self.publish_unavailable_session_grid(),
+        }
+    }
+
+    fn session_axis(&self) -> Result<SessionAxis, SyncError> {
+        match self.grid.axis() {
+            MapAxis::Session(axis) => Ok(axis),
+            axis => Err(SyncError::GridAxisChanged {
+                expected: MapAxis::Session(SessionAxis::new(
+                    axis.sample_rate(),
+                    SessionEpoch::new(0),
+                )),
+                given: axis,
+            }),
+        }
+    }
+
+    fn next_grid_revision(&self) -> Result<BeatGridRevision, SyncError> {
+        self.grid
+            .revision()
+            .checked_next()
+            .ok_or_else(|| SyncError::TopologyRevisionExhausted {
+                group_id: self.grid.id(),
+            })
+    }
+
+    fn publish_session_grid(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        let axis = self.session_axis()?;
+        let revision = self.next_grid_revision()?;
+        self.publish_grid(BeatGridSnapshot::session(
+            self.grid.id(),
+            revision,
+            axis.epoch(),
+            anchor,
+            None,
+        ))
+    }
+
+    fn publish_unavailable_session_grid(&mut self) -> Result<(), SyncError> {
+        let axis = self.session_axis()?;
+        let revision = self.next_grid_revision()?;
+        let epoch = if self.grid.state() == BeatGridState::Live {
+            u64::from(axis.epoch())
+                .checked_add(1)
+                .map(SessionEpoch::new)
+                .ok_or_else(|| SyncError::TopologyRevisionExhausted {
+                    group_id: self.grid.id(),
+                })?
+        } else {
+            axis.epoch()
+        };
+        self.publish_unavailable_grid(
+            BeatGridStamp::new(self.grid.id(), revision),
+            axis.sample_rate(),
+            epoch,
+        )
     }
 
     /// Publishes a later immutable grid snapshot for this stable owner.
@@ -211,15 +339,54 @@ impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
 impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     type NestedGroup = G;
 
-    fn acknowledge(&mut self, _applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        Err(SyncError::NoPreparedOperation)
+    fn acknowledge(&mut self, given: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+        if let Some(locked) = self.locked
+            && locked.operation() == given.operation()
+        {
+            return Err(SyncError::DuplicateAcknowledgement {
+                operation: given.operation(),
+            });
+        }
+        let prepared = self.prepared.ok_or(SyncError::NoPreparedOperation)?;
+        if given.operation() != prepared.operation {
+            return Err(SyncError::StaleAcknowledgement {
+                expected: prepared.operation,
+                given: given.operation(),
+            });
+        }
+        let (load, transport) = self.generations;
+        let expected = SyncApplied::builder()
+            .group(self.grid.stamp())
+            .load(load)
+            .frontier(given.frontier())
+            .operation(prepared.operation)
+            .topology(TopologyStamp::new(self.grid.id(), self.topology_revision))
+            .transport(transport)
+            .warp_map(prepared.warp_map)
+            .build();
+        if given != expected {
+            return Err(SyncError::AppliedMismatch {
+                expected: Box::new(expected),
+                given: Box::new(given),
+            });
+        }
+        self.locked = Some(given);
+        self.prepared = None;
+        Ok(SyncStatusSnapshot::Locked {
+            applied: given,
+            phase_error_frames: 0.0,
+        })
     }
 
     fn status(&self) -> SyncStatusSnapshot {
         transaction::status(
             TopologyStamp::new(self.grid.id(), self.topology_revision),
-            self.unavailable,
-            self.waiting,
+            &transaction::StatusSlots {
+                unavailable: self.unavailable,
+                waiting: self.waiting,
+                prepared: self.prepared,
+                locked: self.locked,
+            },
         )
     }
 
@@ -237,6 +404,10 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 waiting: &mut self.waiting,
                 mode: &mut self.mode,
                 tempo: &mut self.tempo,
+                generations: &mut self.generations,
+                warp_map: &mut self.warp_map,
+                prepared: &mut self.prepared,
+                locked: &mut self.locked,
                 topology_revision: &mut self.topology_revision,
                 members: &mut self.members,
             },

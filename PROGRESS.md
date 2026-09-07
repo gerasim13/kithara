@@ -21,8 +21,14 @@ the change that lands the work, and keep it short.
   every deck `Off`) and carries a `TempoSource`, inherited until a `Tempo`
   transaction latches a local one; mode and tempo transitions are admitted as
   `StateChanged`, and `Cmd::SetSessionTempo` latches the root tempo through
-  that transaction. Left: deck session grids and track asset grids on the
-  group, the per-block rate input, the RT seam trigger, and the seam rows.
+  that transaction. A deck's session grid follows its mode: the Host pushes
+  its committed session anchor into every deck after each transport commit, a
+  `HostSync` deck republishes on it, a `LocalSync` deck continues its own tempo
+  from the current render frontier, and an `Off` deck publishes no grid; a
+  `Reconcile` against a complete track grid is admitted `Prepared` on the
+  deck's next whole beat and locks on acknowledgement. Left: track asset
+  grids on the group, the per-block rate input, the RT seam trigger, and the
+  seam rows.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every

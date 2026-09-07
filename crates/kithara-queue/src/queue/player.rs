@@ -1,8 +1,8 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding, SyncAdmission,
-    SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionAnchor, SessionBinding,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
     player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
 };
 
@@ -67,6 +67,7 @@ where
         to self.player {
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
+            fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
         }
     }
 }

@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, SessionAnchor, SessionEpoch, SessionFrame,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode,
+    SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
@@ -17,6 +17,25 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
+    pub(crate) fn publish_session_anchor(
+        &mut self,
+        anchor: SessionAnchor,
+    ) -> Result<(), SyncError> {
+        self.owned
+            .as_mut()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.publish_session_anchor(anchor)
+            })
+    }
+
+    pub(crate) fn refresh_session_grid(&mut self, now: SessionFrame) -> Result<(), SyncError> {
+        self.owned
+            .as_mut()
+            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
+                owned.refresh_session_grid(now)
+            })
+    }
+
     pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
         let owned = self.owned.take()?;
         self.grid = owned.snapshot();
@@ -108,6 +127,15 @@ impl PlayerMember {
     #[must_use]
     pub fn host_level(&self) -> f32 {
         self.level.load(Ordering::Relaxed)
+    }
+
+    /// Pushes the Host's committed session anchor into the member's group.
+    ///
+    /// # Errors
+    ///
+    /// Returns the group's grid publication error.
+    pub fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+        self.sync.publish_session_anchor(anchor)
     }
 }
 
