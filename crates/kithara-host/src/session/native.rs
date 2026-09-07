@@ -12,7 +12,6 @@ use kithara_platform::{
     thread::spawn_named,
 };
 use kithara_play::{GroupState, player::PlayerMember};
-use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{
@@ -27,12 +26,9 @@ use crate::error::PlayError;
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
-    requested_sample_rate: NonZeroU32,
 }
 
 impl<S> SessionClient<S> {
-    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
-    #[kithara::allow_block]
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
@@ -55,10 +51,6 @@ impl<S> SessionClient<S> {
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn requested_sample_rate(&self) -> NonZeroU32 {
-        self.requested_sample_rate
     }
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
@@ -149,7 +141,6 @@ where
     });
     Arc::new(SessionClient {
         cmd_tx: Mutex::new(cmd_tx),
-        requested_sample_rate: sample_rate,
     })
 }
 

@@ -284,6 +284,19 @@ struct Census {
     tracks: Vec<TrackId>,
 }
 
+impl Census {
+    async fn close(self) {
+        let Self {
+            harness,
+            queue,
+            tracks,
+        } = self;
+        drop(queue);
+        drop(tracks);
+        harness.close().await;
+    }
+}
+
 async fn build_queue(
     origins: &[Origin],
     server: Option<&TestServerHelper>,
@@ -297,11 +310,12 @@ async fn build_queue(
             .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     harness.set_host_level(CENSUS_LEVEL);
     let mut config = QueueConfig::builder().player(harness.take_player()).build();
     config.should_autoplay = false;
-    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config));
+    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(patterns.len());
     for (index, (origin, pattern)) in origins.iter().zip(patterns).enumerate() {
@@ -354,7 +368,7 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
 
     for _ in 0..BLOCK_BUDGET {
         let _ = census.queue.tick();
-        rendered.extend(census.harness.render(BLOCK_FRAMES));
+        rendered.extend(census.harness.render(BLOCK_FRAMES).await);
 
         if let (Some(index), Some(duration)) = (
             census.queue.current_index(),
@@ -632,6 +646,7 @@ async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDi
         "a crossfade must be announced exactly at the configured boundaries"
     );
 
+    census.close().await;
     Take { rendered, ordered }
 }
 

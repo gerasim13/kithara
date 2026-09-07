@@ -154,7 +154,7 @@ async fn capture_frames(
     while samples.len() / usize::from(CHANNELS) < frames {
         let remaining = frames - samples.len() / usize::from(CHANNELS);
         let block_frames = remaining.min(callback_frames);
-        samples.extend(harness.render(block_frames));
+        samples.extend(harness.render(block_frames).await);
         let _ = harness.tick_and_drain();
         time::sleep(frame_period(block_frames)).await;
     }
@@ -255,14 +255,15 @@ async fn playing_queue(
             )
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let queue = Queue::new(
         QueueConfig::builder()
             .player(harness.take_player())
             .should_autoplay(false)
             .build(),
     );
-    let queue = harness.insert(queue);
+    let queue = harness.insert(queue).await;
     queue.set_default_rate(case.initial_rate);
     let path = signal_mp3_sine880_30s()
         .path()
@@ -506,6 +507,8 @@ async fn run_case(
         "{backend} already contained the target tone before set_rate"
     );
     assert_response(backend, case, command_frame, &samples, &events);
+    drop(queue);
+    harness.close().await;
 }
 
 #[kithara::test(

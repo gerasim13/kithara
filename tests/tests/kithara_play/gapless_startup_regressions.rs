@@ -48,11 +48,14 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
             .gapless_mode(gapless_mode)
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
     let resource =
         create_delayed_gapless_hls_resource(harness.player(), &server, temp_dir.path()).await;
 
-    harness.with_player(|player| player.insert(resource, TrackId::allocate(), None));
+    harness
+        .with_player(|player| player.insert(resource, TrackId::allocate(), None))
+        .await;
 
     let started_at = Instant::now();
     harness.player().play();
@@ -62,7 +65,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     let mut rendered = Vec::new();
 
     loop {
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain();
         rendered.extend_from_slice(&block);
 
@@ -76,8 +79,9 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
             assert!(
                 elapsed < Duration::from_millis(DELAY_MS),
                 "gapless mode {gapless_mode:?} must start before delayed tail segments \
-                 could fully cache; elapsed={elapsed:?}, position={position:.3}s"
+                could fully cache; elapsed={elapsed:?}, position={position:.3}s"
             );
+            harness.close().await;
             return;
         }
 

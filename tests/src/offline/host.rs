@@ -10,7 +10,7 @@ use kithara::{
     platform::{
         CancelScope,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicU64, Ordering},
         },
         time::{Duration, sleep},
@@ -19,6 +19,7 @@ use kithara::{
     queue::{Queue, QueueControl},
     signal::AudioSpec,
 };
+use kithara_test_utils::off_thread::OffThread;
 use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Observer, Split},
@@ -37,12 +38,13 @@ pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
 
 struct HostState<S> {
     host: Host<S>,
-    position: u64,
+    position: Arc<AtomicU64>,
 }
 
 /// Test owner for the product offline Host and its monotonic render cursor.
 pub struct OfflineHostHarness<S> {
-    state: Mutex<HostState<S>>,
+    off: OffThread<HostState<S>>,
+    position: Arc<AtomicU64>,
     spec: AudioSpec,
     max_block_frames: NonZeroU32,
     pacing: Option<Duration>,
@@ -59,17 +61,18 @@ where
 
 impl<P, S> OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S>,
+    P: PlayerControlSource<Schema = S> + Send + 'static,
+    P::Control: Send,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
-        let host = OfflineHostHarness::new(config)?;
-        let member = host.insert(player)?;
+    pub async fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
+        let host = OfflineHostHarness::new(config).await?;
+        let member = host.insert(player).await?;
         Ok(Self { host, member })
     }
 
-    pub fn render(&self, frames: usize) -> Vec<f32> {
-        self.host.render(frames)
+    pub async fn render(&self, frames: usize) -> Vec<f32> {
+        self.host.render(frames).await
     }
 
     pub fn control(&self) -> P::Control {
@@ -78,6 +81,13 @@ where
 
     pub const fn host(&self) -> &OfflineHostHarness<S> {
         &self.host
+    }
+
+    /// Drops the resident before waiting for Host session teardown.
+    pub async fn close(self) {
+        let Self { host, member } = self;
+        drop(member);
+        host.close().await;
     }
 }
 
@@ -116,63 +126,92 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Build the same offline Host used by product rendering.
-    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+    pub async fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         let spec = AudioSpec::new(CHANNELS, config.sample_rate());
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
         let pacing = config.pacing();
-        let host = Host::new(config)?;
+        let position = Arc::new(AtomicU64::new(0));
+        let owned = Arc::clone(&position);
+        let off = OffThread::spawn("offline-host", move || {
+            Host::new(config).map(|host| HostState {
+                host,
+                position: owned,
+            })
+        })
+        .await?;
         Ok(Self {
-            state: Mutex::new(HostState { host, position: 0 }),
+            off,
+            position,
             spec,
             max_block_frames,
             pacing,
         })
     }
 
-    /// Transfer one configured player facade into the product Host.
-    pub fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        self.state.lock().host.insert(player)
+    /// Waits until the owner drops Host and session teardown completes.
+    pub async fn close(self) {
+        self.off.close().await;
     }
 
-    pub fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
+    /// Runs an arbitrary Host operation on the owner thread.
+    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + Send + 'static) -> R
     where
-        P: PlayerControlSource<Schema = S>,
+        R: Send + 'static,
     {
-        self.insert(player).map(|owned| owned.control().clone())
+        self.off.call(move |state| f(&mut state.host)).await
+    }
+
+    /// Transfer one configured player facade into the product Host.
+    pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
+    where
+        P: PlayerControlSource<Schema = S> + Send + 'static,
+        P::Control: Send,
+    {
+        self.off.call(move |state| state.host.insert(player)).await
+    }
+
+    pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
+    where
+        P: PlayerControlSource<Schema = S> + Send + 'static,
+        P::Control: Send,
+    {
+        self.insert(player)
+            .await
+            .map(|owned| owned.control().clone())
     }
 
     /// Render the next finite block through the product offline protocol.
-    pub fn render(&self, frames: usize) -> Vec<f32> {
+    pub async fn render(&self, frames: usize) -> Vec<f32> {
         let frames = u64::try_from(frames).expect("offline render frame count fits u64");
-        let mut state = self.state.lock();
-        let end = state
-            .position
-            .checked_add(frames)
-            .expect("offline render timeline fits u64");
-        let request = OfflineRenderRequest::builder()
-            .spec(self.spec)
-            .frames(state.position..end)
-            .build();
-        let cancel = CancelScope::new(None);
-        let mut sink = VecSink::default();
-        state
-            .host
-            .render(&request, &cancel.token(), &mut sink)
-            .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
-        state.position = end;
-        drop(state);
-        sink.samples
+        let spec = self.spec;
+        self.off
+            .call(move |state| {
+                let start = state.position.load(Ordering::Relaxed);
+                let end = start
+                    .checked_add(frames)
+                    .expect("offline render timeline fits u64");
+                let request = OfflineRenderRequest::builder()
+                    .spec(spec)
+                    .frames(start..end)
+                    .build();
+                let cancel = CancelScope::new(None);
+                let mut sink = VecSink::default();
+                state
+                    .host
+                    .render(&request, &cancel.token(), &mut sink)
+                    .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
+                state.position.store(end, Ordering::Relaxed);
+                sink.samples
+            })
+            .await
     }
 
     /// Current finite-render cursor maintained by this harness.
     #[must_use]
     pub fn position(&self) -> u64 {
-        self.state.lock().position
+        self.position.load(Ordering::Relaxed)
     }
 
     /// Product offline output format.
@@ -193,44 +232,55 @@ where
         self.pacing
     }
 
-    pub fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
+    pub async fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
         let (pcm_tx, pcm_rx) = HeapRb::<f32>::new(capacity).split();
         let drops = Arc::new(AtomicU64::new(0));
-        self.install_mix_tap(MixTapWriter::new(pcm_tx, Arc::clone(&drops)))?;
+        self.install_mix_tap(MixTapWriter::new(pcm_tx, Arc::clone(&drops)))
+            .await?;
         Ok(MixTapProbe { drops, pcm: pcm_rx })
     }
 
-    pub fn install_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
+    pub async fn install_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
         let mut outputs = OutputGroup::new();
         outputs.push(writer);
-        self.enable_outputs(outputs)
+        self.enable_outputs(outputs).await
     }
 
-    pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
-        self.state.lock().host.disable_outputs()
+    pub async fn disable_mix_tap(&self) -> Result<(), PlayError> {
+        self.off.call(|state| state.host.disable_outputs()).await
     }
 
-    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.state.lock().host.enable_outputs(outputs)
+    pub async fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.enable_outputs(outputs))
+            .await
     }
 
-    pub fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
-        self.state.lock().host.restart_stream(sample_rate)
+    pub async fn restart_stream(&self, sample_rate: u32) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.restart_stream(sample_rate))
+            .await
     }
 
-    pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
+    pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,
     {
-        self.state.lock().host.apply_mix(levels)
+        let levels: Vec<HostLevel> = levels.into_iter().collect();
+        self.off
+            .call(move |state| state.host.apply_mix(levels))
+            .await
     }
 
-    pub fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
-        self.state.lock().host.transport_revision()
+    pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
+        self.off.call(|state| state.host.transport_revision()).await
     }
 
-    pub fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {
-        self.state.lock().host.invalidate_audio_route(reason)
+    pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {
+        let reason = reason.into();
+        self.off
+            .call(move |state| state.host.invalidate_audio_route(reason))
+            .await
     }
 }
 

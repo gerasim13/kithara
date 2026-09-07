@@ -27,6 +27,19 @@ pub struct AppQueueFixture {
     pub cache: TestTempDir,
 }
 
+impl AppQueueFixture {
+    pub async fn close(self) {
+        let Self {
+            config,
+            queue,
+            cache,
+        } = self;
+        drop(config);
+        queue.close().await;
+        drop(cache);
+    }
+}
+
 pub struct LazyAppQueueFixture(tokio::sync::OnceCell<AppQueueFixture>);
 
 impl LazyAppQueueFixture {
@@ -36,13 +49,18 @@ impl LazyAppQueueFixture {
     }
 
     pub async fn get(&self) -> &AppQueueFixture {
-        self.0.get_or_init(|| async { insecure_app_queue() }).await
+        self.0.get_or_init(insecure_app_queue).await
+    }
+
+    pub async fn close(self) {
+        if let Some(fixture) = self.0.into_inner() {
+            fixture.close().await;
+        }
     }
 }
 
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
-#[must_use]
-pub fn insecure_app_queue() -> AppQueueFixture {
+pub async fn insecure_app_queue() -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
@@ -88,6 +106,7 @@ pub fn insecure_app_queue() -> AppQueueFixture {
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();

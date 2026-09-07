@@ -135,6 +135,7 @@ impl SimHarness {
                     .build(),
             ),
         )
+        .await
         .expect("create product offline queue");
         let queue = queue_owner.control();
         let queue_for_tick = queue.clone();
@@ -238,12 +239,21 @@ impl SimHarness {
     /// Wait for any in-flight seek to settle, then assert the queue is
     /// at a sane terminal state for the scenario. Used as the final
     /// step in scripted scenarios.
-    pub async fn shutdown(self) {
-        self.tick.abort();
-        let _ = self.tick.await;
-        drop(self.queue);
-        drop(self.queue_owner);
-        drop(self._downloader);
+    pub async fn close(self) {
+        let Self {
+            queue,
+            queue_owner,
+            tick,
+            _downloader,
+            _store,
+            ..
+        } = self;
+        tick.abort();
+        let _ = tick.await;
+        drop(queue);
+        queue_owner.close().await;
+        drop(_downloader);
+        drop(_store);
     }
 
     fn current_codec(&self) -> Option<String> {

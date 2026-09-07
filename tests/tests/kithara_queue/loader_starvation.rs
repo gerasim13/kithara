@@ -84,7 +84,7 @@ async fn build_fast_hls(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
@@ -117,6 +117,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
@@ -174,7 +175,7 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let fast_url = build_fast_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -237,4 +238,6 @@ async fn hung_loads_must_not_starve_user_selected_track() {
             Consts::CAP
         )
     });
+    let _ = tick_handle.await;
+    queue.close().await;
 }

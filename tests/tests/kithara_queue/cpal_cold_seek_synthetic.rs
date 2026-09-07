@@ -74,6 +74,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build(),
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
@@ -157,7 +158,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     );
 
     tick_handle.abort();
-    drop(queue);
+    queue.close().await;
     drop(downloader);
     drop(temp);
 }

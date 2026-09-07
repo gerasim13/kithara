@@ -274,6 +274,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
             .max_block_frames(max_block_frames)
             .build(),
     )
+    .await
     .unwrap_or_else(|error| panic!("{}: create product offline Host: {error}", case.label));
     let mut failures = Vec::new();
 
@@ -295,7 +296,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
     }
 
     load_decks(case, &decks, &mut failures);
-    runtime::record_transport_state(&host, "before first render", &mut failures);
+    runtime::record_transport_state(&host, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
         "startup",
@@ -331,7 +332,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
         runtime::validate_deck(case, deck_index, deck, &mut failures);
         runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
-    runtime::record_transport_state(&host, "after capture", &mut failures);
+    runtime::record_transport_state(&host, "after capture", &mut failures).await;
     let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
 
     let mut audio_levels = direct_references
@@ -431,6 +432,7 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
             "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
         );
     }
+    host.close().await;
     failures
 }
 
@@ -458,6 +460,7 @@ async fn capture_pass(
 
     let mut tap = host
         .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
+        .await
         .unwrap_or_else(|error| panic!("{} {label}: enable mix tap: {error}", case.label));
     let positions_before = decks
         .iter()
@@ -500,7 +503,7 @@ async fn capture_pass(
         &zero_blocks,
         failures,
     );
-    disable_mix_tap(case.label, label, host, failures);
+    disable_mix_tap(case.label, label, host, failures).await;
     assess_position_advance(
         case,
         label,
@@ -550,7 +553,10 @@ async fn reset_for_capture(
         failures,
     )
     .await;
-    if let Err(error) = host.apply_mix(decks.iter().map(|deck| deck.player.level(0.0))) {
+    if let Err(error) = host
+        .apply_mix(decks.iter().map(|deck| deck.player.level(0.0)))
+        .await
+    {
         failures.push(format!(
             "{} {label}: mute before seek failed: {error}",
             case.label,
@@ -726,12 +732,15 @@ async fn reset_for_capture(
         ));
         return false;
     }
-    if let Err(error) = host.apply_mix(
-        decks
-            .iter()
-            .zip(levels.iter().copied())
-            .map(|(deck, level)| deck.player.level(level)),
-    ) {
+    if let Err(error) = host
+        .apply_mix(
+            decks
+                .iter()
+                .zip(levels.iter().copied())
+                .map(|(deck, level)| deck.player.level(level)),
+        )
+        .await
+    {
         failures.push(format!(
             "{} {label}: apply capture levels failed: {error}",
             case.label,
@@ -774,13 +783,13 @@ async fn settle_controls(
     }
 }
 
-fn disable_mix_tap(
+async fn disable_mix_tap(
     case: &str,
     label: &str,
     host: &OfflineHostHarness<TestPools>,
     failures: &mut Vec<String>,
 ) {
-    if let Err(error) = host.disable_mix_tap() {
+    if let Err(error) = host.disable_mix_tap().await {
         failures.push(format!(
             "{case} {label}: disable mix tap dispatch failed: {error}",
         ));
@@ -940,7 +949,7 @@ async fn prepare_deck(
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
     player.insert(resource, TrackId::allocate(), None);
-    let player = host.insert(player).unwrap_or_else(|error| {
+    let player = host.insert(player).await.unwrap_or_else(|error| {
         panic!(
             "{} deck {deck_index}: insert player into product Host: {error}",
             case.label
@@ -1007,7 +1016,7 @@ async fn render_paced(
     for deck in decks {
         deck.player.process_notifications();
     }
-    let block = host.render(BLOCK_FRAMES);
+    let block = host.render(BLOCK_FRAMES).await;
     time::sleep(Duration::from_secs_f64(
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
             / f64::from(sample_rate),

@@ -28,7 +28,8 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let first_id = TrackId::allocate();
     let second_id = TrackId::allocate();
 
@@ -46,10 +47,12 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
         SignalAsset::WAV_SINE880_240MS,
     )
     .await;
-    harness.with_player(|player| {
-        player.insert(first, first_id, None);
-        player.insert(second, second_id, None);
-    });
+    harness
+        .with_player(|player| {
+            player.insert(first, first_id, None);
+            player.insert(second, second_id, None);
+        })
+        .await;
 
     harness.player().play();
     let _ = harness.tick_and_drain();
@@ -62,7 +65,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
     let mut first_item_finished = None;
 
     while Instant::now() <= deadline {
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         let drained = harness.tick_and_drain();
         rendered_frames = rendered_frames.saturating_add(block.len() / 2);
         events.extend(
@@ -121,6 +124,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
         "first track must reach terminal playback before or at the second-track takeover \
          in the zero-crossfade API path; events={events:?}"
     );
+    harness.close().await;
 }
 
 async fn make_signal_resource(

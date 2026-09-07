@@ -109,6 +109,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -138,4 +139,6 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
     assert!(!err.is_empty(), "Failed status must carry a typed error");
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }

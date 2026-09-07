@@ -79,7 +79,7 @@ where
 
     loop {
         for _ in 0..RENDER_BATCH_BLOCKS {
-            let _ = player.render(BLOCK_FRAMES);
+            let _ = player.render(BLOCK_FRAMES).await;
             rendered_blocks = rendered_blocks.saturating_add(1);
         }
 
@@ -198,7 +198,8 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
-    );
+    )
+    .await;
     player.load_and_fadein(resource);
 
     let pre = render_until(&mut player, "AAC warmup before FLAC switch", |position| {
@@ -250,4 +251,5 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
          rendered_blocks={}, window={post:?}",
         post.rendered_blocks
     );
+    player.close().await;
 }

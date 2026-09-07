@@ -125,6 +125,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let mut file = FileConfigPatch::default();
     file.look_ahead_bytes = Some(LOOK_AHEAD_BYTES);
@@ -194,4 +195,5 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     queue.clear();
     ticker.abort();
     let _ = ticker.await;
+    queue.close().await;
 }

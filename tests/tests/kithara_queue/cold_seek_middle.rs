@@ -67,7 +67,7 @@ async fn wait_for_status(
     Err(format!("timeout waiting for {target:?}"))
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -91,6 +91,7 @@ fn build_queue_with_tick(
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
@@ -221,6 +222,7 @@ async fn observe_seek_advance_or_panic(
     }
 
     tick_handle.abort();
+    let _ = tick_handle.await;
 }
 
 async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
@@ -258,6 +260,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
@@ -349,7 +352,8 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     }
 
     tick_handle.abort();
-    drop(queue);
+    let _ = tick_handle.await;
+    queue.close().await;
     let _ = ids;
 }
 
@@ -404,7 +408,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         .expect("create long HLS fixture");
     let master = created.master_url();
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -448,7 +452,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         "long-cold",
     )
     .await;
-    drop(queue);
+    queue.close().await;
 }
 
 /// Multi-variant ABR variant: 3 variants × 30 segments × 4s = 120s each,
@@ -494,7 +498,7 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         .expect("create multi-variant HLS fixture");
     let master = created.master_url();
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -538,5 +542,5 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         "multi-variant-cold",
     )
     .await;
-    drop(queue);
+    queue.close().await;
 }

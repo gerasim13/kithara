@@ -173,6 +173,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -228,6 +229,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
 
     tick_handle.abort();
     queue.remove(id).expect("remove");
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 #[kithara::test(tokio)]

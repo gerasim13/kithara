@@ -126,7 +126,7 @@ async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
         tracing::debug!(action = %label, "user_sim: applying");
         harness.apply(action).await;
     }
-    harness.shutdown().await;
+    harness.close().await;
 }
 
 async fn run_single(kind: TrackKind, abr: AbrMode, actions: Vec<Action>) {
@@ -387,6 +387,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
     let q_for_tick = queue.control();
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash

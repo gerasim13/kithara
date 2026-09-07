@@ -95,7 +95,7 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -125,6 +125,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -189,7 +190,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let url = build_hls_with_delay(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     let mut rx = queue.subscribe();
 
@@ -454,6 +455,8 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
          (seek dropped silently, or the target starved behind stale fetches)",
         Consts::POST_SEEK_OBSERVATION,
     );
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 async fn observe_post_seek(

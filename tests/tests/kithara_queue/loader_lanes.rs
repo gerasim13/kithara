@@ -78,7 +78,7 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
     handle.child_url("track.mp3")
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
@@ -111,6 +111,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -174,7 +175,8 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
+    let (queue, downloader, store, tick_handle) =
+        build_queue_with_tick(&temp, Consts::BG_CAP).await;
 
     let hung_id = queue
         .append(TrackSource::Config(Box::new(mk_cfg(
@@ -219,6 +221,8 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     );
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 /// A follow-up selection is not blocked by a superseded hung one, and
@@ -229,7 +233,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
+    let (queue, downloader, store, tick_handle) =
+        build_queue_with_tick(&temp, Consts::BG_CAP).await;
     let mut events = queue.subscribe();
 
     let hung_id = queue
@@ -285,6 +290,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     );
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 /// Setup invariant: the hung track must still be mid-load when the fast

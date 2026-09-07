@@ -66,9 +66,6 @@ impl StartGatedSession {
 }
 
 impl SessionDispatcher<TestPools> for StartGatedSession {
-    fn requested_sample_rate(&self) -> NonZeroU32 {
-        Shared::NON_ZERO_SAMPLE_RATE
-    }
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::StartPlayer { .. } => {
@@ -152,7 +149,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
-            .session(session)
+            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
     let player_control = player.control();

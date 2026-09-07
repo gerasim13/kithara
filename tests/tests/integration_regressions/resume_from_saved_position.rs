@@ -27,7 +27,7 @@ use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 
-fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
+async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
@@ -42,6 +42,7 @@ fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPo
             .build(),
         Queue::new(QueueConfig::builder().player(player).store(store).build()),
     )
+    .await
     .expect("create product offline queue")
 }
 
@@ -82,7 +83,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
             root: temp_dir.path().into(),
         })
         .build();
-    let first_queue = new_queue(&first_pools, first_store.clone());
+    let first_queue = new_queue(&first_pools, first_store.clone()).await;
     let first_downloader = new_downloader(first_pools);
     let first_tick = tokio::task::spawn(drive_queue_ticks(
         first_queue.control(),
@@ -123,7 +124,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     first_queue.clear();
     first_tick.abort();
     let _ = first_tick.await;
-    drop(first_queue);
+    first_queue.close().await;
     drop(first_downloader);
 
     let second_pools = pools();
@@ -132,7 +133,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
             root: temp_dir.path().into(),
         })
         .build();
-    let second_queue = new_queue(&second_pools, second_store.clone());
+    let second_queue = new_queue(&second_pools, second_store.clone()).await;
     let second_downloader = new_downloader(second_pools);
     let second_tick = tokio::task::spawn(drive_queue_ticks(
         second_queue.control(),
@@ -206,4 +207,5 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
 
     second_tick.abort();
     let _ = second_tick.await;
+    second_queue.close().await;
 }

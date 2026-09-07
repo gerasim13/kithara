@@ -5,12 +5,12 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_warp::BeatGridId;
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
-    session::SessionDispatcher,
+    session::SessionBinding,
 };
 
 /// Configuration for the audio engine.
@@ -30,9 +30,9 @@ pub struct EngineConfig<S> {
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
-    /// Optional pre-bound dispatcher for isolated harnesses. Production
-    /// engines receive their session when the owning Player enters a Host.
-    pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    /// Optional pre-bound session for isolated harnesses. Production engines
+    /// receive theirs when the owning Player enters a Host.
+    pub(crate) session: Option<SessionBinding<S>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
     /// EQ band layout per player. Default: 10-band log-spaced. Not a

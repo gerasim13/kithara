@@ -102,7 +102,7 @@ fn build_prod_ctx() -> ProdCtx {
     }
 }
 
-fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
+async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
     let session = HostConfig::offline(prod.config.worker.pools().clone())
         .maybe_pacing(pacing)
         .build();
@@ -116,12 +116,13 @@ fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue")
 }
 
 async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
     let q_for_tick = queue.control();
     let tick = tokio::task::spawn(async move {
         loop {
@@ -161,6 +162,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
 
     tick.abort();
     let _ = tick.await;
+    queue.close().await;
 }
 
 async fn apply_action_to_queue(queue: &QueueControl<AppPools>, action: &Action) {
@@ -712,7 +714,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     use kithara::play::SeekOutcome;
 
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, None);
+    let queue = prod_queue(&prod, None).await;
     let ten_seconds_frames = usize::try_from(queue.host().spec().sample_rate.get())
         .expect("offline sample rate fits usize")
         .checked_mul(10)
@@ -765,6 +767,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             assert_audio_live(&pcm_phase2, &phase2);
         }
     }
+    queue.close().await;
 }
 
 /// PROD DRM multi-track near-end seek + ABR up-switch hang repro from

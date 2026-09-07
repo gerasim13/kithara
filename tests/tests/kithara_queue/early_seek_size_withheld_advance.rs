@@ -80,11 +80,13 @@ struct Harness {
 }
 
 impl Harness {
-    fn new(pools: Pools) -> Self {
+    async fn new(pools: Pools) -> Self {
         let session = HostConfig::offline(pools.clone())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
             .build();
-        let host = OfflineHostHarness::new(session).expect("create product offline Host");
+        let host = OfflineHostHarness::new(session)
+            .await
+            .expect("create product offline Host");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
@@ -107,8 +109,19 @@ impl Harness {
         self.player.take().expect("harness player was transferred")
     }
 
-    fn render(&self, frames: usize) -> Vec<f32> {
-        self.host.render(frames)
+    async fn render(&self, frames: usize) -> Vec<f32> {
+        self.host.render(frames).await
+    }
+
+    async fn close(self) {
+        let Self {
+            player,
+            worker,
+            host,
+        } = self;
+        drop(player);
+        drop(worker);
+        host.close().await;
     }
 }
 
@@ -218,7 +231,7 @@ async fn run_case(mode: GateMode) {
         .build(),
     );
 
-    let mut harness = Harness::new(pools);
+    let mut harness = Harness::new(pools).await;
     let mut rx = harness.player().subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
@@ -235,6 +248,7 @@ async fn run_case(mode: GateMode) {
                 .player(player)
                 .build(),
         ))
+        .await
         .expect("insert queue into product offline Host");
     let id0 = queue.insert_loaded_for_test(target);
     let _id1 = queue.insert_loaded_for_test(next);
@@ -247,7 +261,7 @@ async fn run_case(mode: GateMode) {
     // genuinely playing before the seek arrives.
     for _ in 0..WARMUP_BLOCKS {
         let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.render(BLOCK_FRAMES).await;
     }
     assert_eq!(
         gate.head_requested(),
@@ -266,7 +280,7 @@ async fn run_case(mode: GateMode) {
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
         let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let kithara::events::Event::Player(pe) = ev {
                 match pe {
@@ -328,4 +342,5 @@ async fn run_case(mode: GateMode) {
     queue.clear();
     drop(queue);
     drop(server);
+    harness.close().await;
 }

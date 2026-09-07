@@ -55,6 +55,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
@@ -126,4 +127,6 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
          the attached producer"
     );
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }

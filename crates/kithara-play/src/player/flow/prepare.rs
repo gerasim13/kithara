@@ -150,7 +150,7 @@ mod tests {
         PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
         player::PlayerConfig,
         resource::ResourceSrc,
-        session::{Cmd, Reply, SessionDispatcher, testing},
+        session::{Cmd, Reply, SessionBinding, SessionDispatcher, testing},
         test_pools::{TestPools, pools},
     };
 
@@ -159,10 +159,6 @@ mod tests {
     impl SessionDispatcher<TestPools> for ImmediateSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::ImmediateOffRt
-        }
-
-        fn requested_sample_rate(&self) -> NonZeroU32 {
-            self.0.requested_sample_rate()
         }
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
@@ -209,8 +205,10 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_propagates_session_consumer_wake_mode_to_audio() {
-        let session: Arc<dyn SessionDispatcher<TestPools>> =
-            Arc::new(ImmediateSession(testing::test_session()));
+        let session = SessionBinding::new(
+            Arc::new(ImmediateSession(testing::test_session().dispatcher())),
+            testing::TEST_SAMPLE_RATE,
+        );
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(testing::TEST_SAMPLE_RATE)

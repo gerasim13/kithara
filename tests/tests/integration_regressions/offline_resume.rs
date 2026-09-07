@@ -202,6 +202,7 @@ async fn resumes_after_outage(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
@@ -304,4 +305,5 @@ async fn resumes_after_outage(
     queue.clear();
     ticker.abort();
     let _ = ticker.await;
+    queue.close().await;
 }

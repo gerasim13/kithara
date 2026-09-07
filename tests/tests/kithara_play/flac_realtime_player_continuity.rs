@@ -100,7 +100,7 @@ async fn render_into(
     let mut rendered = 0u32;
     while rendered < target_blocks {
         for _ in 0..BATCH {
-            out.extend_from_slice(&player.render(BLOCK_FRAMES));
+            out.extend_from_slice(&player.render(BLOCK_FRAMES).await);
             rendered += 1;
         }
         if Instant::now() >= deadline {
@@ -164,7 +164,8 @@ async fn run_case(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(out_rate).expect("output rate is non-zero"))
             .build(),
-    );
+    )
+    .await;
     player.load_and_fadein(resource);
 
     let chan = CHANNELS as usize;
@@ -235,6 +236,7 @@ async fn run_case(
         "rendered FLAC playback has {} phase discontinuit(ies) (scenario={scenario:?} backend={backend:?} delay_ms={delay_ms:?}): {drifts:?}",
         drifts.len(),
     );
+    player.close().await;
 }
 
 /// Phase-continuity guard for the real player loop (`PlayerProcessor` /

@@ -25,7 +25,7 @@ impl OfflinePlayer {
     ///
     /// Panics if the product offline Host cannot be initialised.
     #[must_use]
-    pub fn new(session: HostConfig<TestPools>) -> Self {
+    pub async fn new(session: HostConfig<TestPools>) -> Self {
         let sample_rate = session.sample_rate();
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
@@ -37,6 +37,7 @@ impl OfflinePlayer {
         );
         let events = player.subscribe();
         let player = OfflineResident::new(session, player)
+            .await
             .unwrap_or_else(|error| panic!("create product offline player: {error}"));
         Self { events, player }
     }
@@ -77,8 +78,8 @@ impl OfflinePlayer {
     }
 
     /// Render `frames` of interleaved stereo audio through the product Host.
-    pub fn render(&mut self, frames: usize) -> Vec<f32> {
-        let output = self.player.render(frames);
+    pub async fn render(&mut self, frames: usize) -> Vec<f32> {
+        let output = self.player.render(frames).await;
         self.control().process_notifications();
         output
     }
@@ -112,6 +113,12 @@ impl OfflinePlayer {
             notifications.extend(kind);
         }
         notifications
+    }
+
+    pub async fn close(self) {
+        let Self { events, player } = self;
+        drop(events);
+        player.close().await;
     }
 }
 

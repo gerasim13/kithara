@@ -252,14 +252,6 @@ mod handle {
             }
         }
 
-        /// Sample rate this session was configured with.
-        ///
-        /// Static session configuration, so the owner already holds it when it
-        /// builds the dispatcher and answers locally. Reading it over the
-        /// command bridge would park the caller on a reply carrying a value the
-        /// caller could have read from its own field.
-        fn requested_sample_rate(&self) -> NonZeroU32;
-
         /// Rate the running backend settled on, which only the session knows.
         fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
             match self.exec_ok(Cmd::QuerySampleRate)? {
@@ -286,19 +278,45 @@ mod handle {
     /// this capability down to their resident Player.
     pub struct SessionBinding<S> {
         dispatcher: Arc<dyn SessionDispatcher<S>>,
+        requested_sample_rate: NonZeroU32,
     }
 
     impl<S> SessionBinding<S> {
         /// Wraps the canonical session for one Host insertion.
+        ///
+        /// The rate is the session's own configuration, so it travels from the
+        /// owner that chose it. Asking the session for it would send a command
+        /// and park the caller on a reply carrying a value the owner holds.
         #[doc(hidden)]
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
-            Self { dispatcher }
+        pub fn new(
+            dispatcher: Arc<dyn SessionDispatcher<S>>,
+            requested_sample_rate: NonZeroU32,
+        ) -> Self {
+            Self {
+                dispatcher,
+                requested_sample_rate,
+            }
         }
 
         #[must_use]
         pub(crate) fn requested_sample_rate(&self) -> NonZeroU32 {
-            self.dispatcher.requested_sample_rate()
+            self.requested_sample_rate
+        }
+
+        #[cfg(test)]
+        #[must_use]
+        pub(crate) fn dispatcher(&self) -> Arc<dyn SessionDispatcher<S>> {
+            Arc::clone(&self.dispatcher)
+        }
+    }
+
+    impl<S> Clone for SessionBinding<S> {
+        fn clone(&self) -> Self {
+            Self {
+                dispatcher: Arc::clone(&self.dispatcher),
+                requested_sample_rate: self.requested_sample_rate,
+            }
         }
     }
 
@@ -316,9 +334,9 @@ mod handle {
 
     impl<S> SessionHandle<S> {
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
+        pub fn new(binding: SessionBinding<S>) -> Self {
             Self(Arc::new(SessionSlot {
-                binding: Mutex::new(Some(SessionBinding::new(dispatcher))),
+                binding: Mutex::new(Some(binding)),
             }))
         }
 
@@ -504,7 +522,12 @@ mod handle {
         }
 
         pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
-            Ok(self.dispatcher()?.requested_sample_rate())
+            self.0
+                .binding
+                .lock()
+                .as_ref()
+                .map(SessionBinding::requested_sample_rate)
+                .ok_or(PlayError::SessionUnbound)
         }
 
         delegate::delegate! {
@@ -554,10 +577,6 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn requested_sample_rate(&self) -> NonZeroU32 {
-            sample_rate()
-        }
-
         fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
@@ -566,10 +585,6 @@ mod tests {
     impl SessionDispatcher<TestPools> for RateCapture {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn requested_sample_rate(&self) -> NonZeroU32 {
-            sample_rate()
         }
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
@@ -596,7 +611,8 @@ mod tests {
 
     #[kithara::test]
     fn session_handle_delegates_explicit_consumer_wake_mode() {
-        let handle: SessionHandle<TestPools> = SessionHandle::new(Arc::new(DefaultSession));
+        let handle: SessionHandle<TestPools> =
+            SessionHandle::new(SessionBinding::new(Arc::new(DefaultSession), sample_rate()));
 
         assert_eq!(
             handle.consumer_wake_mode(),
@@ -617,7 +633,7 @@ mod tests {
         ));
 
         handle
-            .bind(SessionBinding::new(Arc::new(DefaultSession)))
+            .bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate()))
             .expect("bind canonical session");
         assert_eq!(
             handle.consumer_wake_mode(),
@@ -625,7 +641,7 @@ mod tests {
         );
         assert!(matches!(handle.exec(Cmd::Tick), Ok(Reply::Ok)));
         assert!(matches!(
-            handle.bind(SessionBinding::new(Arc::new(DefaultSession))),
+            handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
             Err(PlayError::SessionAlreadyBound)
         ));
     }
@@ -634,7 +650,7 @@ mod tests {
     fn session_commands_use_the_bound_host_rate() {
         let capture = Arc::new(RateCapture::default());
         let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
-        let handle = SessionHandle::new(dispatcher);
+        let handle = SessionHandle::new(SessionBinding::new(dispatcher, sample_rate()));
 
         let player_id = handle
             .register_player(
@@ -662,7 +678,7 @@ mod tests {
     fn the_requested_rate_never_reaches_the_session() {
         let capture = Arc::new(RateCapture::default());
         let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
-        let handle = SessionHandle::new(dispatcher);
+        let handle = SessionHandle::new(SessionBinding::new(dispatcher, sample_rate()));
 
         assert_eq!(
             handle.requested_sample_rate().expect("requested rate"),

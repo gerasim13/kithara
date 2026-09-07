@@ -65,7 +65,7 @@ fn render_and_collect(
 
     for _ in 0..blocks {
         let started = Instant::now();
-        let out = player.render(Consts::BLOCK_FRAMES);
+        let out = player.render(Consts::BLOCK_FRAMES).await;
         let elapsed = started.elapsed();
 
         if !out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
@@ -216,7 +216,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
-        );
+        )
+        .await;
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
@@ -322,7 +323,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             wav_path.display(),
         );
 
-        drop(player);
+        player.close().await;
         drop(downloader);
         drop(temp);
         let _ = iter_label;

@@ -104,7 +104,7 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -112,10 +112,10 @@ fn build_queue_with_tick(
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
-    build_queue_with_tick_cf(temp_dir, 0.0)
+    build_queue_with_tick_cf(temp_dir, 0.0).await
 }
 
-fn build_queue_with_tick_cf(
+async fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
 ) -> (
@@ -147,6 +147,7 @@ fn build_queue_with_tick_cf(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -227,7 +228,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let url_b = build_hls(&helper, mode).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -281,6 +282,8 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         matches!(status, TrackStatus::Loaded | TrackStatus::Consumed),
         "[{mode:?}] track A re-load ended in unexpected terminal status: {status:?}"
     );
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 /// Wait until the engine-reported position satisfies `pred`. The position
@@ -337,7 +340,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) =
-        build_queue_with_tick_cf(&temp, crossfade_seconds);
+        build_queue_with_tick_cf(&temp, crossfade_seconds).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -411,6 +414,8 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     );
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.

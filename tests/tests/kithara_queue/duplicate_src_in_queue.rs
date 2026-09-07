@@ -45,14 +45,14 @@ fn load(queue: &QueueControl<TestPools>, id: TrackId) {
     );
 }
 
-fn render_loop(
+async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     block_budget: usize,
 ) {
     for _ in 0..block_budget {
         let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.render(BLOCK_FRAMES).await;
     }
 }
 
@@ -66,13 +66,13 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 }
 
 /// The failing track is the *second* entry carrying this URL.
-fn fixture_playing_the_second_copy() -> (
+async fn fixture_playing_the_second_copy() -> (
     OfflinePlayerHarness,
     QueueControl<TestPools>,
     TrackId,
     TrackId,
 ) {
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let first = queue.append(REPEATED_SRC).expect("append first copy");
     let playing = queue.append(REPEATED_SRC).expect("append second copy");
     load(&queue, first);
@@ -81,7 +81,7 @@ fn fixture_playing_the_second_copy() -> (
     queue
         .select(playing, Transition::None)
         .expect("select the second copy");
-    render_loop(&queue, &harness, WARMUP_BLOCKS);
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     (harness, queue, first, playing)
 }
@@ -99,10 +99,10 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
 #[case::played_entry(true)]
 #[case::same_url_entry(false)]
 async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
-    let (harness, queue, first, playing) = fixture_playing_the_second_copy();
+    let (harness, queue, first, playing) = fixture_playing_the_second_copy().await;
 
     publish_leading_failure(&harness, playing);
-    render_loop(&queue, &harness, WARMUP_BLOCKS);
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     let id = if played_entry { playing } else { first };
     let status = status_of(&queue, id);
@@ -111,4 +111,6 @@ async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) 
         played_entry,
         "only the entry that played may be flagged: {status:?}"
     );
+    drop(queue);
+    harness.close().await;
 }

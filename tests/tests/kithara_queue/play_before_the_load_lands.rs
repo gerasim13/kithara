@@ -58,6 +58,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
@@ -99,4 +100,6 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     );
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }

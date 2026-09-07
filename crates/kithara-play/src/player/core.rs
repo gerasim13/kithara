@@ -285,15 +285,16 @@ mod tests {
         PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
+    const FOREIGN_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
+        Some(sample_rate) => sample_rate,
+        None => unreachable!(),
+    };
+
     struct ForeignRateSession;
 
     impl SessionDispatcher<TestPools> for ForeignRateSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn requested_sample_rate(&self) -> NonZeroU32 {
-            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
         }
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
@@ -839,7 +840,7 @@ mod tests {
                 .worker(worker())
                 .build(),
         );
-        let binding = SessionBinding::new(Arc::new(ForeignRateSession));
+        let binding = SessionBinding::new(Arc::new(ForeignRateSession), FOREIGN_SAMPLE_RATE);
 
         assert!(matches!(
             PlayerControlSource::attach_session(&mut player, binding),
@@ -856,7 +857,10 @@ mod tests {
             PlayerConfig::builder()
                 .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
-                .session(Arc::new(ForeignRateSession))
+                .session(SessionBinding::new(
+                    Arc::new(ForeignRateSession),
+                    FOREIGN_SAMPLE_RATE,
+                ))
                 .build(),
         );
 

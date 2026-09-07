@@ -75,8 +75,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use kithara_audio::ConsumerWakeMode;
     use kithara_test_utils::kithara;
 
@@ -85,7 +83,7 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::{
-            Cmd, Reply, SessionDispatcher, SessionSampleRate,
+            Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate,
             testing::{self, test_session},
         },
         test_pools::{TestPools, pools},
@@ -96,10 +94,6 @@ mod tests {
     impl SessionDispatcher<TestPools> for ForeignSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn requested_sample_rate(&self) -> NonZeroU32 {
-            testing::TEST_SAMPLE_RATE
         }
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
@@ -113,7 +107,7 @@ mod tests {
         }
     }
 
-    fn player(session: Arc<dyn SessionDispatcher<TestPools>>) -> PlayerImpl<TestPools> {
+    fn player(session: SessionBinding<TestPools>) -> PlayerImpl<TestPools> {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
@@ -166,7 +160,10 @@ mod tests {
         let session = test_session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher<TestPools>>);
+        let foreign = player(SessionBinding::new(
+            Arc::new(ForeignSession),
+            testing::TEST_SAMPLE_RATE,
+        ));
 
         let err = apply_mix([(&a, 0.5), (&foreign, 0.5)]).unwrap_err();
         assert!(matches!(err, PlayError::MixForeignSession));

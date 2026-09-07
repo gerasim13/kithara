@@ -46,6 +46,22 @@ struct DesktopPrepared {
     capture_frame: i64,
 }
 
+impl DesktopPrepared {
+    async fn close(self) {
+        let Self {
+            _temp,
+            harness,
+            abr,
+            events,
+            capture_frame: _,
+        } = self;
+        drop(abr);
+        drop(events);
+        harness.close().await;
+        drop(_temp);
+    }
+}
+
 #[derive(Debug)]
 struct DesktopRender {
     capture_frame: i64,
@@ -153,7 +169,7 @@ fn host_frame(position: f64, label: &str) -> i64 {
 /// the decode worker.
 #[kithara::flash(true)]
 async fn render_paced(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f32> {
-    let block = harness.render(frames);
+    let block = harness.render(frames).await;
     let _ = harness.tick_and_drain();
     sleep(Duration::from_secs_f64(
         frames.to_f64().expect("render frame count fits f64") / f64::from(HOST_SAMPLE_RATE),
@@ -176,7 +192,8 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
             )
             .build(),
         HOST_SAMPLE_RATE,
-    );
+    )
+    .await;
     let temp = TestTempDir::new();
     let bus = EventBus::new(4_096);
     let mut events = bus.subscribe();
@@ -215,15 +232,17 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    harness.with_player(|player| {
-        player.reserve_slots(1);
-        player
-            .replace_item(0, resource, TrackId::allocate())
-            .expect("replace quality-switch fixture item");
-        player
-            .select_item(0, true)
-            .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
-    });
+    harness
+        .with_player(|player| {
+            player.reserve_slots(1);
+            player
+                .replace_item(0, resource, TrackId::allocate())
+                .expect("replace quality-switch fixture item");
+            player
+                .select_item(0, true)
+                .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+        })
+        .await;
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;
@@ -340,10 +359,12 @@ async fn render_desktop(master_url: &url::Url, switch: bool) -> DesktopRender {
         );
     }
 
-    DesktopRender {
+    let result = DesktopRender {
         capture_frame: prepared.capture_frame,
         samples,
-    }
+    };
+    prepared.close().await;
+    result
 }
 
 fn desktop_silent_buckets(samples: &[f32]) -> usize {

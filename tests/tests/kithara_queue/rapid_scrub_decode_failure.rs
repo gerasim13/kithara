@@ -266,6 +266,7 @@ impl Harness {
             session,
             Queue::new(QueueConfig::builder().player(player).build()),
         )
+        .await
         .expect("create product offline queue");
 
         let tick = tokio::task::spawn(drive_queue_ticks(
@@ -334,8 +335,18 @@ impl Harness {
         }
     }
 
-    fn shutdown(self) {
-        self.tick.abort();
+    async fn close(self) {
+        let Self {
+            queue,
+            rx,
+            master_url,
+            tick,
+        } = self;
+        tick.abort();
+        let _ = tick.await;
+        drop(rx);
+        drop(master_url);
+        queue.close().await;
     }
 }
 
@@ -408,13 +419,13 @@ async fn seek_into_cold_range_does_not_fail(
     let first_outcome = harness.scrub(first_target, first_tag).await;
 
     let Some(second_ratio) = second_ratio else {
-        harness.shutdown();
+        harness.close().await;
         assert_not_failed(first_outcome, first_target, first_tag);
         return;
     };
 
     if let ScrubOutcome::ItemDidFail { src } = first_outcome {
-        harness.shutdown();
+        harness.close().await;
         panic!("[first] CRASHED before second scrub (src={src})");
     }
 
@@ -433,7 +444,7 @@ async fn seek_into_cold_range_does_not_fail(
 
     let second_target = TRACK_DURATION_S * second_ratio;
     let second_outcome = harness.scrub(second_target, "second").await;
-    harness.shutdown();
+    harness.close().await;
     assert_not_failed(second_outcome, second_target, "second");
 }
 
@@ -466,6 +477,6 @@ async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] 
         SEEK_OBSERVE_BUDGET,
     )
     .await;
-    harness.shutdown();
+    harness.close().await;
     assert_not_failed(outcome, final_target, "drag");
 }

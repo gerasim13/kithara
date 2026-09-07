@@ -3,6 +3,7 @@
 use kithara::{
     decode::DecoderBackend,
     events::{Event, EventReceiver, PlayerEvent},
+    hls::AbrMode,
     platform::time::{Duration, Instant, timeout},
     queue::{QueueControl, Transition},
 };
@@ -293,26 +294,35 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
+        .append(super::source_helper::app_track_source(
             SENTINEL_BEFORE,
-            &ctx,
+            &ctx.config,
+            super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
             backend,
+            AbrMode::Auto(None),
+            None,
         ))
         .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
+        .append(super::source_helper::app_track_source(
             TARGET_TRACK,
-            &ctx,
+            &ctx.config,
+            super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
             backend,
+            AbrMode::Auto(None),
+            None,
         ))
         .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
+        .append(super::source_helper::app_track_source(
             SENTINEL_AFTER,
-            &ctx,
+            &ctx.config,
+            super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
             backend,
+            AbrMode::Auto(None),
+            None,
         ))
         .expect("append trailing sentinel");
 

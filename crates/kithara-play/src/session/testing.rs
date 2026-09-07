@@ -6,7 +6,7 @@ use std::{
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::{AllocatedSlot, Cmd, Reply, SessionDispatcher, SessionSampleRate};
+use super::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate};
 use crate::{
     PlayError, SessionDuckingMode, SharedEq, SlotId, StreamShape,
     bridge::{NodeInputs, slot_channels},
@@ -29,10 +29,6 @@ impl<S> SessionDispatcher<S> for TestSession {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn requested_sample_rate(&self) -> NonZeroU32 {
-        NonZeroU32::new(44_100).expect("fixture sample rate is non-zero")
-    }
-
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
@@ -53,17 +49,18 @@ impl<S> SessionDispatcher<S> for TestSession {
     }
 }
 
-pub(crate) fn test_session<S>() -> Arc<dyn SessionDispatcher<S>> {
+pub(crate) fn test_session<S>() -> SessionBinding<S> {
     test_session_with_shape(None)
 }
 
-pub(crate) fn test_session_with_shape<S>(
-    shape: Option<StreamShape>,
-) -> Arc<dyn SessionDispatcher<S>> {
-    Arc::new(TestSession {
-        shape,
-        next_player: AtomicU64::new(1),
-        next_slot: AtomicU64::new(0),
-        nodes: Mutex::default(),
-    })
+pub(crate) fn test_session_with_shape<S>(shape: Option<StreamShape>) -> SessionBinding<S> {
+    SessionBinding::new(
+        Arc::new(TestSession {
+            shape,
+            next_player: AtomicU64::new(1),
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
+        }),
+        TEST_SAMPLE_RATE,
+    )
 }

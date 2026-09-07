@@ -65,9 +65,6 @@ impl Drop for CpalGraphSession {
 }
 
 impl SessionDispatcher<TestPools> for CpalGraphSession {
-    fn requested_sample_rate(&self) -> NonZeroU32 {
-        Shared::NON_ZERO_SAMPLE_RATE
-    }
     #[kithara::allow_block]
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
@@ -105,7 +102,7 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(session)
+            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
     contract(player.engine());

@@ -55,7 +55,7 @@ async fn build_hls(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -85,6 +85,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -238,7 +239,7 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let url = build_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     let mut rx = queue.subscribe();
 
@@ -295,4 +296,5 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
         Consts::VARIANT_COUNT,
         format_variant_request_ids(&variant_request_ids),
     );
+    queue.close().await;
 }

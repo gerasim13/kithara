@@ -139,6 +139,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let ticker = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -257,4 +258,5 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
     queue.clear();
     ticker.abort();
     let _ = ticker.await;
+    queue.close().await;
 }

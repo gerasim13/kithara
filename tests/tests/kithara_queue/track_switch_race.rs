@@ -110,7 +110,7 @@ async fn build_hls(
         .expect("create local HLS fixture")
 }
 
-fn build_queue(
+async fn build_queue(
     temp_dir: &TestTempDir,
 ) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
@@ -135,6 +135,7 @@ fn build_queue(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -328,7 +329,7 @@ async fn supersede_while_loading_cancels_slow_track() {
     let slow_url = slow.master_url();
 
     let temp = temp_dir();
-    let (queue, downloader, store) = build_queue(&temp);
+    let (queue, downloader, store) = build_queue(&temp).await;
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
         Duration::from_millis(50),
@@ -438,6 +439,8 @@ async fn supersede_while_loading_cancels_slow_track() {
         .unwrap_or_else(|e| panic!("{e}"));
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 /// Drain any backlog already buffered on `rx` so the completion-race watch
@@ -505,7 +508,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
         let temp = temp_dir();
         // No tick: auto-advance is disabled, so `slow` can only become current
         // via the loader-completion race we are probing.
-        let (queue, downloader, store) = build_queue(&temp);
+        let (queue, downloader, store) = build_queue(&temp).await;
 
         let fast_id = queue
             .append(TrackSource::Config(Box::new(mk_cfg(
@@ -573,6 +576,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
                 break;
             }
         }
+        queue.close().await;
     }
 
     assert!(

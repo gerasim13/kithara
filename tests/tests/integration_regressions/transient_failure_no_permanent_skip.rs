@@ -123,6 +123,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
 
     let target = queue
@@ -242,4 +243,5 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     queue.clear();
     ticker.abort();
     let _ = ticker.await;
+    queue.close().await;
 }

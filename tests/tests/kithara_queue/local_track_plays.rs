@@ -177,7 +177,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
     }
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -207,6 +207,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
     let tick_handle = tokio::task::spawn(async move {
@@ -290,7 +291,7 @@ async fn local_track_plays_end_to_end(
     let label = format!("{kind:?}/{backend:?}");
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
@@ -406,6 +407,8 @@ async fn local_track_plays_end_to_end(
 
     queue.remove(track_id).expect("remove");
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }
 
 async fn wait_for_queue_event<F>(
@@ -501,7 +504,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     }
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     queue.set_crossfade_duration(2.0);
 
@@ -682,4 +685,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     }
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    queue.close().await;
 }

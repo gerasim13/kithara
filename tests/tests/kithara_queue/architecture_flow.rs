@@ -44,13 +44,16 @@ async fn queue_playback_architecture() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(
-        QueueConfig::builder()
-            .player(harness.take_player())
-            .store(store.clone())
-            .build(),
-    ));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .store(store.clone())
+                .build(),
+        ))
+        .await;
     let downloader = create_test_downloader();
     let config = resource_config(url.as_str(), downloader, store);
     let mut events = queue.subscribe();
@@ -68,7 +71,7 @@ async fn queue_playback_architecture() {
     let peak = kithara::platform::time::timeout(Duration::from_secs(30), async {
         for _ in 0..RENDER_BLOCK_BUDGET {
             let _ = queue.tick();
-            let block = harness.render(BLOCK_FRAMES);
+            let block = harness.render(BLOCK_FRAMES).await;
             let peak = block.iter().copied().map(f32::abs).fold(0.0, f32::max);
             if peak > 0.005 {
                 return Some(peak);
@@ -114,6 +117,7 @@ async fn queue_playback_architecture() {
     ];
     architecture_trace::write(trace_path.as_ref(), records, &probes)
         .expect("write queue architecture trace");
+    harness.close().await;
 }
 
 fn resource_config(

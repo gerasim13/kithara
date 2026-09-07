@@ -106,7 +106,7 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
@@ -136,6 +136,7 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let tick_handle = tokio::task::spawn(drive_queue_ticks(
         queue.control(),
@@ -164,7 +165,7 @@ async fn run_one_attempt(
     backend: DecoderBackend,
 ) -> IterOutcome {
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
 
     let src = match ResourceSrc::parse(url.as_str()) {
         Ok(src) => src,
@@ -308,6 +309,8 @@ async fn run_one_attempt(
     {
         PostSeekAdvance::Advanced => {
             tick_handle.abort();
+            let _ = tick_handle.await;
+            queue.close().await;
             IterOutcome::Ok
         }
         PostSeekAdvance::Failed(err) => {

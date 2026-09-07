@@ -317,6 +317,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -457,6 +458,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
             setup.queue.current_index(),
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -498,6 +500,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
         "app-layer crossfade resampled FLAC queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(240)), hang_timeout_secs(5))]
@@ -550,6 +553,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         "app-layer crossfade resampled FLAC real geometry queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -690,6 +694,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -764,6 +769,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
         "app-layer crossfade FLAC queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -877,6 +883,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
@@ -981,11 +988,20 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         "queue.current_index must advance to track B for AAC; {}",
         diagnostics()
     );
+    setup.close().await;
 }
 
 struct QueueSetup {
     harness: OfflinePlayerHarness,
     queue: QueueControl<TestPools>,
+}
+
+impl QueueSetup {
+    async fn close(self) {
+        let Self { harness, queue } = self;
+        drop(queue);
+        harness.close().await;
+    }
 }
 
 struct RenderProgress {
@@ -1038,6 +1054,7 @@ async fn run_crossfade_flac_case(
         collapse_runs,
         label,
     );
+    setup.close().await;
 }
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
@@ -1062,16 +1079,21 @@ async fn setup_queue_with_sample_rate(
     flac: bool,
     render_sample_rate: u32,
 ) -> QueueSetup {
-    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        render_sample_rate,
-    ));
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .crossfade_duration(0.0)
+                .build(),
+            render_sample_rate,
+        )
+        .await,
+    );
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
     let resource_a = hls_resource(
         harness.player(),
@@ -1103,16 +1125,21 @@ async fn setup_multivariant_flac_queue(
     server: &TestServerHelper,
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
-    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        SAMPLE_RATE,
-    ));
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .crossfade_duration(0.0)
+                .build(),
+            SAMPLE_RATE,
+        )
+        .await,
+    );
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
     let resource_a = hls_multivariant_flac_resource(
         harness.player(),
@@ -1190,16 +1217,18 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     should_autoplay: bool,
     provenance_headroom: bool,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
+    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
     let harness = if provenance_headroom {
         with_provenance_headroom(harness)
     } else {
         harness
     };
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        should_autoplay,
-    )));
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            should_autoplay,
+        )))
+        .await;
 
     let resource_a = hls_resource_with_segments_and_duration(
         harness.player(),
@@ -1244,11 +1273,14 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
     let resource_a = hls_sine_aac_resource(
         harness.player(),
@@ -1423,7 +1455,7 @@ async fn render_until_b_with_postroll(
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, class_tolerance, Some(0));
 
         if expected_a_frames.is_none()
@@ -1460,7 +1492,7 @@ async fn render_until_b_with_late_variant_switch(
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_frames.is_none()
@@ -1531,7 +1563,7 @@ async fn render_crossfade_until_b_with_postroll(
 
     for _ in 0..CROSSFADE_BLOCK_BUDGET {
         let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_end_frame.is_none()
@@ -1586,7 +1618,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
         let _ = queue.tick();
         drive_app_layer_crossfade_advance(queue, &mut auto_advanced_index);
 
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_end_frame.is_none()
@@ -1675,7 +1707,7 @@ async fn render_seek_near_end_until_b_with_postroll(
             }
         }
 
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
 
         if seek_issue_frame.is_none()
@@ -1716,7 +1748,7 @@ async fn render_until_tone_b_with_postroll(
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, render_sample_rate);
 
         if track_duration.is_none()
