@@ -23,8 +23,6 @@ kithara = { workspace = true, default-features = false, features = [
     "probe",
     "tokio-net",
 ] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
-serial_test = { workspace = true }
 
 [lints]
 workspace = true

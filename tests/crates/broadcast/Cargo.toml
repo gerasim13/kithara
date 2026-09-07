@@ -21,11 +21,6 @@ broadcast = ["kithara/broadcast"]
 kithara = { workspace = true, features = ["full", "probe", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
-
-futures = { workspace = true }
-tempfile = { workspace = true }
-tracing = { workspace = true }
 url = { workspace = true }
 
 [lints]

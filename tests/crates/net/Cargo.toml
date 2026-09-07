@@ -27,7 +27,6 @@ kithara = { workspace = true, features = [
     "tokio-net",
 ] }
 kithara-integration-tests = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }

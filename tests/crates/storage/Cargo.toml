@@ -7,10 +7,6 @@ license.workspace = true
 publish = false
 autotests = false
 
-[lib]
-name = "kithara_integration_tests"
-path = "src/lib.rs"
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 client-reqwest = ["kithara/client-reqwest"]
@@ -28,8 +24,7 @@ kithara = { workspace = true, default-features = false, features = [
     "storage",
     "tokio-net",
 ] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
-tempfile = { workspace = true }
+kithara-integration-tests = { workspace = true }
 
 [lints]
 workspace = true

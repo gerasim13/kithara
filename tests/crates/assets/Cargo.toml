@@ -19,7 +19,6 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 [dependencies]
 kithara = { workspace = true, features = ["assets", "bufpool", "platform", "probe", "storage"] }
 kithara-integration-tests = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 bytes = { workspace = true }
 rkyv = { workspace = true }

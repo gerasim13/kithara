@@ -29,16 +29,11 @@ kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 cochlea-features = { workspace = true }
 firewheel = { workspace = true }
-futures = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
-rand = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
 ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serial_test = { workspace = true }
-tempfile = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 

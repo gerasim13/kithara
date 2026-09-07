@@ -80,7 +80,6 @@ cbc = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
-rkyv = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -94,7 +93,6 @@ thiserror = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 # HTTP/URL
 url = { workspace = true }

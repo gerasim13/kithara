@@ -21,14 +21,10 @@ kithara = { workspace = true, features = ["full", "probe", "symphonia", "resampl
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
-serial_test = { workspace = true }
-tempfile = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 

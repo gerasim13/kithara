@@ -28,7 +28,6 @@ kithara = { workspace = true, features = [
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 num-traits = { workspace = true }
 
 [lints]

@@ -18,7 +18,6 @@ no-block = ["kithara/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = ["abr", "events", "platform", "probe"] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 [lints]
 workspace = true

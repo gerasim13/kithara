@@ -28,18 +28,12 @@ kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 aes = { workspace = true }
 bytes = { workspace = true }
-cbc = { workspace = true }
-futures = { workspace = true }
-hex = { workspace = true }
 num-traits = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["apple", "client-wreq"] }
