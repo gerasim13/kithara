@@ -5576,6 +5576,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "reqwest",
  "ringbuf 0.5.0",
  "serde",
  "serde_json",
