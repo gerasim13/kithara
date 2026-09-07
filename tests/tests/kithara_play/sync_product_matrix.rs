@@ -5,7 +5,7 @@ use std::{env, io, num::NonZeroU32, path::Path};
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
-    events::TrackStatus,
+    events::{TrackId, TrackStatus},
     hls::AbrMode,
     host::{Host, HostConfig, HostOwned, testing::HostProbe},
     output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
@@ -47,7 +47,7 @@ use kithara_test_fixtures::{
 pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
-const START_BPM: f64 = 120.0;
+pub(super) const START_BPM: f64 = 120.0;
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -126,6 +126,10 @@ pub(super) struct SyncCase {
     paused: bool,
     ride: TempoRide,
     updates_hz: u32,
+    /// Tracks appended to every deck's queue and played back to back.
+    pub(super) tracks_per_deck: usize,
+    /// Player crossfade the seam must honour, in seconds.
+    pub(super) crossfade_secs: f32,
 }
 
 impl SyncCase {
@@ -143,7 +147,22 @@ impl SyncCase {
             paused: false,
             ride: TempoRide::Triangle,
             updates_hz: 60,
+            tracks_per_deck: 1,
+            crossfade_secs: 0.0,
         }
+    }
+
+    /// One deck whose queue holds `tracks_per_deck` tracks with a real crossfade.
+    pub(super) const fn queued(
+        id: &'static str,
+        sample_rate: u32,
+        tracks_per_deck: usize,
+        crossfade_secs: f32,
+    ) -> Self {
+        let mut case = Self::running(id, 1, sample_rate, OperationOrder::PlaySyncSeek);
+        case.tracks_per_deck = tracks_per_deck;
+        case.crossfade_secs = crossfade_secs;
+        case
     }
 
     const fn paused(mut self) -> Self {
@@ -314,10 +333,11 @@ pub(super) enum HlsProtection {
 pub(super) struct ProductHarness {
     pub(super) decks: Vec<HostOwned<Queue<TestPools>>>,
     pub(super) failures: Vec<String>,
-    block_frames: usize,
+    pub(super) ids: Vec<Vec<TrackId>>,
+    pub(super) block_frames: usize,
+    pub(super) rendered_frames: u64,
     host: Host<TestPools>,
     spec: AudioSpec,
-    output_frames: u64,
     paced: bool,
 }
 
@@ -416,7 +436,7 @@ impl ProductHarness {
         paced: bool,
     ) -> Self {
         let server = TestServerHelper::new().await;
-        let sources = sources(provider, case.decks, &server).await;
+        let sources = sources(provider, case.decks * case.tracks_per_deck, &server).await;
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
@@ -431,14 +451,14 @@ impl ProductHarness {
             .build();
         let mut host = Host::new(session)
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
-        let mut decks = Vec::with_capacity(sources.len());
-        let mut ids = Vec::with_capacity(sources.len());
-        for (index, source) in sources.into_iter().enumerate() {
+        let mut decks = Vec::with_capacity(case.decks);
+        let mut ids: Vec<Vec<TrackId>> = Vec::with_capacity(case.decks);
+        for (index, deck_sources) in sources.chunks(case.tracks_per_deck).enumerate() {
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
-                    .crossfade_duration(0.0)
+                    .crossfade_duration(case.crossfade_secs)
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());
@@ -446,32 +466,39 @@ impl ProductHarness {
             let deck = host
                 .insert(queue)
                 .unwrap_or_else(|error| panic!("{}: insert deck {index}: {error}", case.id));
-            let config = ResourceConfig::for_src(
-                ResourceSrc::parse(&source)
-                    .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
-            )
-            .store(memory_asset_store())
-            .initial_abr_mode(AbrMode::manual(0))
-            .discriminator(format!("{}-{provider:?}-{index}", case.id))
-            .build();
-            let id = deck
-                .append(TrackSource::Config(Box::new(config)))
-                .unwrap_or_else(|error| panic!("{}: append deck {index}: {error}", case.id));
+            let mut deck_ids = Vec::with_capacity(deck_sources.len());
+            for (track, source) in deck_sources.iter().enumerate() {
+                let config =
+                    ResourceConfig::for_src(ResourceSrc::parse(source).unwrap_or_else(|error| {
+                        panic!("{}: parse source {source}: {error}", case.id)
+                    }))
+                    .store(memory_asset_store())
+                    .initial_abr_mode(AbrMode::manual(0))
+                    .discriminator(format!("{}-{provider:?}-{index}-{track}", case.id))
+                    .build();
+                deck_ids.push(
+                    deck.append(TrackSource::Config(Box::new(config)))
+                        .unwrap_or_else(|error| {
+                            panic!("{}: append deck {index} track {track}: {error}", case.id)
+                        }),
+                );
+            }
             decks.push(deck);
-            ids.push(id);
+            ids.push(deck_ids);
         }
         let mut harness = Self {
             decks,
             failures: Vec::new(),
+            ids,
             block_frames,
             host,
-            output_frames: 0,
+            rendered_frames: 0,
             paced,
             spec,
         };
-        harness.wait_loaded(case, &ids).await;
-        for (index, (deck, id)) in harness.decks.iter().zip(ids).enumerate() {
-            deck.select(id, Transition::None)
+        harness.wait_loaded(case, &harness.ids).await;
+        for (index, deck) in harness.decks.iter().enumerate() {
+            deck.select(harness.ids[index][0], Transition::None)
                 .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
         }
         harness.set_tempo(case, case.start_bpm(), true);
@@ -482,18 +509,20 @@ impl ProductHarness {
         harness
     }
 
-    async fn wait_loaded(&mut self, case: SyncCase, ids: &[kithara::events::TrackId]) {
+    async fn wait_loaded(&self, case: SyncCase, ids: &[Vec<TrackId>]) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         loop {
             self.tick_all(case);
             let mut loaded = true;
-            for (index, (deck, id)) in self.decks.iter().zip(ids).enumerate() {
-                match deck.track(*id).map(|track| track.status) {
-                    Some(TrackStatus::Loaded) => {}
-                    Some(TrackStatus::Failed(error)) => {
-                        panic!("{}: deck {index} failed to load: {error}", case.id)
+            for (index, deck) in self.decks.iter().enumerate() {
+                for id in &ids[index] {
+                    match deck.track(*id).map(|track| track.status) {
+                        Some(TrackStatus::Loaded) => {}
+                        Some(TrackStatus::Failed(error)) => {
+                            panic!("{}: deck {index} failed to load: {error}", case.id)
+                        }
+                        Some(_) | None => loaded = false,
                     }
-                    Some(_) | None => loaded = false,
                 }
             }
             if loaded {
@@ -518,7 +547,7 @@ impl ProductHarness {
     pub(super) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
         let started = Instant::now();
         self.tick_all(case);
-        let start = self.output_frames;
+        let start = self.rendered_frames;
         let end = start
             .checked_add(u64::try_from(frames).expect("render frame count fits u64"))
             .expect("offline render timeline fits u64");
@@ -537,7 +566,7 @@ impl ProductHarness {
             u64::try_from(frames).expect("frame count fits u64")
         );
         self.tick_all(case);
-        self.output_frames = end;
+        self.rendered_frames = end;
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -624,7 +653,7 @@ impl ProductHarness {
                         PresentationFrontier::builder()
                             .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
                             .output(SessionFrame::new(
-                                i64::try_from(self.output_frames).unwrap_or(i64::MAX),
+                                i64::try_from(self.rendered_frames).unwrap_or(i64::MAX),
                             ))
                             .build(),
                     )
@@ -639,7 +668,7 @@ impl ProductHarness {
                         transport,
                         source,
                         activation: SessionFrame::new(
-                            i64::try_from(self.output_frames).unwrap_or(i64::MAX),
+                            i64::try_from(self.rendered_frames).unwrap_or(i64::MAX),
                         ),
                         intent,
                     })

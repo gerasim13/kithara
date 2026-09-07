@@ -8,6 +8,13 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
+- Queue sync under warp and timestretch, three independent PRs off
+  `production/main`. `queue-sync-core` pins the queue seam contract on the sync
+  product harness (crossfade length honoured, deck rate carried into the next
+  track, continuity with sync off) and then builds the seams; the continuity
+  row is green today, the other two are ignored-red until the RT trigger arms
+  the seam and the rate rides the render context.
+
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is
