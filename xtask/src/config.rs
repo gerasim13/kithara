@@ -62,6 +62,9 @@ pub(crate) struct CiLaneConfig {
     /// runners on one host buy a check per push that a single Mac mini can
     /// only afford weekly. Empty means both fleets agree.
     pub(crate) kinds_github: Vec<String>,
+    /// A stable GitHub runner label for lanes whose persistent build cache
+    /// must stay on one runner slot. Empty keeps the lane on the shared pool.
+    pub(crate) github_runner: Option<String>,
     pub(crate) timeout_minutes: u32,
     /// Checkout depth. Zero is full history, which a lane comparing against a
     /// base revision needs and a shallow clone does not carry.
@@ -201,6 +204,9 @@ impl CiProjectConfig {
                 bail!(
                     "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
                 );
+            }
+            if lane.github_runner.as_deref().is_some_and(str::is_empty) {
+                bail!("ext.ci.lanes.{name}.github_runner must not be empty");
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");

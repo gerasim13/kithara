@@ -1394,6 +1394,7 @@ timeout_minutes = 60
 # diagnostic, because the compiler never reached one.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
+github_runner = "kithara-test-simulated"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1656,6 +1657,7 @@ timeout_minutes = 60
 # and reclaim machinery would not know about.
 [ext.ci.lanes.linux-test-real-clock]
 cache_group = "linux"
+github_runner = "kithara-test-real"
 label = "Linux"
 os = "linux"
 fetch_depth = 1

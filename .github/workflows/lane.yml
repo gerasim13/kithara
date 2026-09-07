@@ -53,6 +53,10 @@ on:
           depends on one lane's output. Empty downloads nothing.
         default: ''
         type: string
+      runner:
+        description: Stable runner label for a lane-owned persistent build cache.
+        default: ''
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -85,7 +89,7 @@ jobs:
   # the tree says which lanes ran only through the API.
   run:
     name: ${{ inputs.lane }}
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: ${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:
