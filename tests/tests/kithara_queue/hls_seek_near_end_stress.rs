@@ -10,7 +10,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, timeout},
-        tokio,
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -19,7 +18,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
@@ -112,7 +111,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -138,10 +137,7 @@ async fn build_queue_with_tick(
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -165,12 +161,12 @@ async fn run_one_attempt(
     backend: DecoderBackend,
 ) -> IterOutcome {
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let src = match ResourceSrc::parse(url.as_str()) {
         Ok(src) => src,
         Err(e) => {
-            tick_handle.abort();
+            drop(tick_handle);
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
@@ -192,7 +188,7 @@ async fn run_one_attempt(
     let track_id = match queue.append(TrackSource::Config(Box::new(cfg))) {
         Ok(track_id) => track_id,
         Err(error) => {
-            tick_handle.abort();
+            drop(tick_handle);
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
@@ -208,7 +204,7 @@ async fn run_one_attempt(
     let mut rx = queue.subscribe();
 
     if let Err(e) = queue.select(track_id, Transition::None) {
-        tick_handle.abort();
+        drop(tick_handle);
         return IterOutcome::Errored {
             iter,
             target: f64::NAN,
@@ -219,7 +215,7 @@ async fn run_one_attempt(
     if let Err(e) =
         wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
     {
-        tick_handle.abort();
+        drop(tick_handle);
         return IterOutcome::Errored {
             iter,
             target: f64::NAN,
@@ -235,7 +231,7 @@ async fn run_one_attempt(
     )
     .await
     {
-        tick_handle.abort();
+        drop(tick_handle);
         return IterOutcome::Errored {
             iter,
             target: f64::NAN,
@@ -246,7 +242,7 @@ async fn run_one_attempt(
     let duration = if let Some(d) = queue.duration_seconds() {
         d
     } else {
-        tick_handle.abort();
+        drop(tick_handle);
         return IterOutcome::Errored {
             iter,
             target: f64::NAN,
@@ -258,7 +254,7 @@ async fn run_one_attempt(
     let pos_before = queue.position_seconds().unwrap_or(0.0);
 
     if let Err(e) = queue.seek(target) {
-        tick_handle.abort();
+        drop(tick_handle);
         return IterOutcome::Errored {
             iter,
             target,
@@ -274,7 +270,7 @@ async fn run_one_attempt(
     match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
         SeekLanded::Landed => {}
         SeekLanded::Failed(err) => {
-            tick_handle.abort();
+            drop(tick_handle);
             return IterOutcome::Errored {
                 iter,
                 target,
@@ -283,7 +279,7 @@ async fn run_one_attempt(
         }
         SeekLanded::Timeout => {
             let pos_after = queue.position_seconds().unwrap_or(0.0);
-            tick_handle.abort();
+            drop(tick_handle);
             return IterOutcome::Hung {
                 iter,
                 target,
@@ -308,13 +304,12 @@ async fn run_one_attempt(
     .await
     {
         PostSeekAdvance::Advanced => {
-            tick_handle.abort();
-            let _ = tick_handle.await;
+            tick_handle.stop().await;
             queue.close().await;
             IterOutcome::Ok
         }
         PostSeekAdvance::Failed(err) => {
-            tick_handle.abort();
+            drop(tick_handle);
             IterOutcome::Errored {
                 iter,
                 target,
@@ -322,7 +317,7 @@ async fn run_one_attempt(
             }
         }
         PostSeekAdvance::Timeout(pos_after) => {
-            tick_handle.abort();
+            drop(tick_handle);
             IterOutcome::Hung {
                 iter,
                 target,

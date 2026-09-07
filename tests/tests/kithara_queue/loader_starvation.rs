@@ -19,7 +19,6 @@ use kithara::{
         CancelToken,
         sync::Arc,
         time::{Duration, sleep},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -27,7 +26,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
+    waits::wait_for_loader_done,
 };
 use url::Url;
 
@@ -91,7 +92,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -120,14 +121,7 @@ async fn build_queue_with_tick(
     .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -175,7 +169,8 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let fast_url = build_fast_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP).await;
+    let (queue, downloader, store, mut tick_handle) =
+        build_queue_with_tick(&temp, Consts::CAP).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -219,7 +214,7 @@ async fn hung_loads_must_not_starve_user_selected_track() {
         .filter(|&id| is_loading(&queue, id))
         .collect();
 
-    tick_handle.abort();
+    tick_handle.stop().await;
 
     assert_eq!(
         hung_still_loading.len(),
@@ -238,6 +233,5 @@ async fn hung_loads_must_not_starve_user_selected_track() {
             Consts::CAP
         )
     });
-    let _ = tick_handle.await;
     queue.close().await;
 }

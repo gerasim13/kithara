@@ -15,7 +15,7 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::{kithara, offline::QueueTicker, temp_dir};
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -130,14 +130,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     queue.set_volume(kithara_integration_tests::e2e::volume());
 
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(16)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(16));
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(URL).expect("valid silvercomet URL"))
         .downloader(downloader.clone())
@@ -199,7 +192,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     }
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited without panic"),
             Err(e) => panic!("SEEK HANG REPRODUCED on silvercomet: {e}"),
         }
@@ -243,7 +236,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     }
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited without panic"),
             Err(e) => panic!("BACKWARD SEEK HANG REPRODUCED on silvercomet: {e}"),
         }
@@ -256,8 +249,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         queue.position_seconds(),
     );
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     host.remove(queue.as_ref())
         .expect("detach queue from playback host");
     drop(queue);

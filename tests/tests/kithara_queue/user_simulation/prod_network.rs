@@ -124,14 +124,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
     let q_for_tick = queue.control();
-    let tick = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if q_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
         .append(prod_drm_spec(url, &prod))
         .expect("append production DRM track");
@@ -160,8 +153,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
         apply_action_to_queue(&queue, &action).await;
     }
 
-    tick.abort();
-    let _ = tick.await;
+    tick.stop().await;
     queue.close().await;
 }
 
@@ -379,14 +371,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
     let q_for_tick = queue.control();
-    let tick = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if q_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
 
     let track0 = queue
         .append(prod_drm_spec(PROD_DRM_TRACK, &prod))
@@ -426,8 +411,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     time::sleep(Duration::from_secs(5)).await;
     check_not_advanced("after 5s settle");
 
-    tick.abort();
-    let _ = tick.await;
+    tick.stop().await;
 }
 
 /// Like `run_prod_drm_scenario` but seeks AS SOON AS the queue reports
@@ -440,14 +424,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
     let q_for_tick = queue.control();
-    let tick = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if q_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
         .append(prod_drm_spec(url, &prod))
         .expect("append no-warmup production DRM track");
@@ -524,8 +501,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
          post-seek+2s={post_seek_pos:.2}s)"
     );
 
-    tick.abort();
-    let _ = tick.await;
+    tick.stop().await;
 }
 
 /// Live prod-DRM tracks, all on `cdn-hls-slicer.zvuk.com` behind the same

@@ -1,7 +1,7 @@
 use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::spawn_named,
-    tokio::sync::oneshot,
+    tokio::{runtime::Handle, sync::oneshot},
 };
 
 type Job<T> = Box<dyn FnOnce(&mut T) + Send>;
@@ -14,6 +14,9 @@ pub struct OffThread<T> {
 
 impl<T: 'static> OffThread<T> {
     /// Runs `init` on the owner thread, so `T` does not need to be `Send`.
+    ///
+    /// The owner thread enters the caller's runtime for its whole life, the
+    /// way the product app thread does, so a call may spawn tasks.
     ///
     /// # Errors
     ///
@@ -30,8 +33,10 @@ impl<T: 'static> OffThread<T> {
         let (jobs, receiver) = mpsc::channel::<Job<T>>();
         let (ready, ready_receiver) = oneshot::channel();
         let (done, done_receiver) = oneshot::channel();
+        let runtime = Handle::current();
 
         drop(spawn_named(name, move || {
+            let _runtime = runtime.enter();
             let mut value = match init() {
                 Ok(value) => value,
                 Err(error) => {

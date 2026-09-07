@@ -28,7 +28,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, sleep},
-        tokio,
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -37,7 +36,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 use url::Url;
@@ -330,10 +329,7 @@ async fn supersede_while_loading_cancels_slow_track() {
 
     let temp = temp_dir();
     let (queue, downloader, store) = build_queue(&temp).await;
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let fast_id = queue
         .append(TrackSource::Config(Box::new(mk_cfg(
@@ -438,8 +434,7 @@ async fn supersede_while_loading_cancels_slow_track() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }
 

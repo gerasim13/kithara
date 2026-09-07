@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -135,10 +135,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .store(store)
         .build();
 
-    let ticker = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(20),
-    ));
+    let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(20));
     let mut rx = queue.subscribe();
     // Separate subscriber: the warm-up below drains `rx`, and the body can
     // finish transferring before the pause — the completion must not be eaten
@@ -193,7 +190,6 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     );
 
     queue.clear();
-    ticker.abort();
-    let _ = ticker.await;
+    ticker.stop().await;
     queue.close().await;
 }

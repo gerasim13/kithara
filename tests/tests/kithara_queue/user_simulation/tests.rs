@@ -8,7 +8,7 @@ use kithara::{
     events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::{
@@ -17,8 +17,11 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::EncryptionRequest, kithara,
-    offline::OfflineQueue, temp_dir,
+    HlsFixtureBuilder, TestServerHelper,
+    fixture_protocol::EncryptionRequest,
+    kithara,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
@@ -390,20 +393,10 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .await
     .expect("create product offline queue");
     let q_for_tick = queue.control();
-    // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
-    // this makes the tick driver a quiescence participant with a
-    // virtual `sleep`, so the virtual clock cannot race past the ticks
-    // that drive loading. A raw spawn runs uncounted on real time.
-    let tick = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if q_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |queue| queue.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append immediate-seek track");
 
     use super::harness::wait_for_loaded;
@@ -411,7 +404,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         .await
         .unwrap_or_else(|e| panic!("load fail: {e}"));
     queue
-        .select(track_id, Transition::None)
+        .run(move |queue| queue.select(track_id, Transition::None))
+        .await
         .expect("select track");
 
     // IMMEDIATELY (no warmup) seek — exactly like the user's UI click
@@ -434,8 +428,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
         );
     }
 
-    tick.abort();
-    let _ = tick.await;
+    tick.stop().await;
 }
 
 /// Aggressive seek storm — many seeks in rapid succession, like a

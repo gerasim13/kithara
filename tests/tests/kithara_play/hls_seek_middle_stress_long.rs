@@ -26,7 +26,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue, drive_queue_ticks},
+    offline::{OfflinePlayer, OfflineQueue, QueueTicker},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -450,10 +450,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let hls_config = ResourceConfig::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid packaged HLS URL"),
@@ -579,8 +576,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     );
 
     shutdown.cancel();
-    tick_handle.abort();
-    let _tick_result = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
     drop(downloader);
     drop(temp);

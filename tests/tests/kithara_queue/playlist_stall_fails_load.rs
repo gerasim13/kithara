@@ -9,7 +9,6 @@ use kithara::{
         CancelToken,
         sync::Arc,
         time::{Duration, Instant, timeout},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -17,7 +16,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 
@@ -111,10 +110,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
         .downloader(downloader)
@@ -138,7 +134,6 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(!err.is_empty(), "Failed status must carry a typed error");
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }

@@ -11,7 +11,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{self, Duration, sleep},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -110,7 +109,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     build_queue_with_tick_cf(temp_dir, 0.0).await
 }
@@ -122,7 +121,7 @@ async fn build_queue_with_tick_cf(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -149,10 +148,7 @@ async fn build_queue_with_tick_cf(
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -228,7 +224,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let url_b = build_hls(&helper, mode).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -267,7 +263,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 
     let result = wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE).await;
 
-    tick_handle.abort();
+    tick_handle.stop().await;
 
     let status = result.unwrap_or_else(|e| {
         panic!(
@@ -282,7 +278,6 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         matches!(status, TrackStatus::Loaded | TrackStatus::Consumed),
         "[{mode:?}] track A re-load ended in unexpected terminal status: {status:?}"
     );
-    let _ = tick_handle.await;
     queue.close().await;
 }
 
@@ -339,7 +334,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         .master_url();
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) =
+    let (queue, downloader, store, mut tick_handle) =
         build_queue_with_tick_cf(&temp, crossfade_seconds).await;
 
     let mk_cfg = |url: &Url| {
@@ -413,8 +408,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         "queue must report track A as current after the switch-back"
     );
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }
 

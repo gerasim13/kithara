@@ -11,7 +11,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep, timeout},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 
@@ -181,7 +180,7 @@ struct Harness {
     queue: OfflineQueue<TestPools>,
     rx: EventReceiver,
     master_url: String,
-    tick: tokio::task::JoinHandle<()>,
+    tick: QueueTicker,
 }
 
 impl Harness {
@@ -269,10 +268,7 @@ impl Harness {
         .await
         .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(
-            queue.control(),
-            Duration::from_millis(50),
-        ));
+        let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
             .downloader(downloader)
@@ -340,10 +336,9 @@ impl Harness {
             queue,
             rx,
             master_url,
-            tick,
+            mut tick,
         } = self;
-        tick.abort();
-        let _ = tick.await;
+        tick.stop().await;
         drop(rx);
         drop(master_url);
         queue.close().await;

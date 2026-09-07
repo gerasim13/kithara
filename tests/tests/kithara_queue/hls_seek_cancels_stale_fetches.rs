@@ -23,7 +23,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::DelayRule,
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     waits::wait_for_loader_done,
 };
@@ -101,7 +101,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -127,10 +127,7 @@ async fn build_queue_with_tick(
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -190,7 +187,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let url = build_hls_with_delay(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let mut rx = queue.subscribe();
 
@@ -309,7 +306,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         ),
     );
 
-    tick_handle.abort();
+    tick_handle.stop().await;
 
     let probe_events = probe_recorder.snapshot();
     let total_probes = probe_events.len();
@@ -455,7 +452,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
          (seek dropped silently, or the target starved behind stale fetches)",
         Consts::POST_SEEK_OBSERVATION,
     );
-    let _ = tick_handle.await;
     queue.close().await;
 }
 

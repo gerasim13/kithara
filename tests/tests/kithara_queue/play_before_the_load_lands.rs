@@ -4,13 +4,16 @@
 use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::OfflineQueue, temp_dir, waits::wait_for_position_event,
+    TestServerHelper, kithara,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
+    waits::wait_for_position_event,
 };
 use kithara_test_fixtures::SignalAsset;
 
@@ -61,14 +64,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -99,7 +95,6 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
         "playback must advance past 0.2s, got {position}"
     );
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }

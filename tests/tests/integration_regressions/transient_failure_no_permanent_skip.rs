@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -151,10 +151,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         )))
         .expect("append fallback track");
 
-    let ticker = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(20),
-    ));
+    let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(20));
     let mut rx = queue.subscribe();
     queue
         .select(target, Transition::None)
@@ -241,7 +238,6 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     });
 
     queue.clear();
-    ticker.abort();
-    let _ = ticker.await;
+    ticker.stop().await;
     queue.close().await;
 }

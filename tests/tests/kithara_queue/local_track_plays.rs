@@ -9,8 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, sleep, timeout},
-        tokio,
+        time::{Duration, timeout},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, offline_gain_window},
+    offline::{OfflineQueue, QueueTicker, offline_gain_window},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -183,7 +182,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -210,14 +209,7 @@ async fn build_queue_with_tick(
     .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -291,7 +283,7 @@ async fn local_track_plays_end_to_end(
     let label = format!("{kind:?}/{backend:?}");
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
@@ -406,8 +398,7 @@ async fn local_track_plays_end_to_end(
     );
 
     queue.remove(track_id).expect("remove");
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }
 
@@ -504,7 +495,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     }
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     queue.set_crossfade_duration(2.0);
 
@@ -684,7 +675,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         );
     }
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }

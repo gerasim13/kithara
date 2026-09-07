@@ -99,15 +99,8 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(20)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
+fn spawn_ticker(queue: &Queue<TestPools>) -> QueueTicker {
+    QueueTicker::spawn(QueueControl::clone(queue), Duration::from_millis(20))
 }
 
 /// A local fixture per track: the load has to run and land asynchronously,
@@ -159,7 +152,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .store(store.clone())
             .build(),
     ));
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let mut ticker = spawn_ticker(&queue);
     let mut status_rx = queue.subscribe();
 
     let ids: Vec<_> = (0..TRACK_COUNT)
@@ -233,6 +226,5 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         });
 
     queue.clear();
-    ticker.abort();
-    let _ = ticker.await;
+    ticker.stop().await;
 }

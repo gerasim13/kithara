@@ -7,7 +7,7 @@ mod window;
 pub use app::{AppQueueFixture, LazyAppQueueFixture, insecure_app_queue};
 pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture};
 pub use host::{
-    MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, drive_queue_ticks,
+    MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, QueueTicker,
     offline_gain_window,
 };
 pub use player::{

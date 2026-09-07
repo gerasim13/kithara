@@ -7,8 +7,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep, timeout},
-        tokio,
+        time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -17,7 +16,10 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
-    fixture_protocol::DelayRule, kithara, offline::OfflineQueue, temp_dir,
+    fixture_protocol::DelayRule,
+    kithara,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
     waits::wait_for_position_event,
 };
 
@@ -73,7 +75,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let pools = pools();
     let session = HostConfig::offline(pools.clone())
@@ -94,14 +96,7 @@ async fn build_queue_with_tick(
     .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -198,7 +193,7 @@ async fn wait_for_post_seek_progress(
 async fn observe_seek_advance_or_panic(
     rx: &mut EventReceiver,
     queue: &QueueControl<TestPools>,
-    tick_handle: tokio::task::JoinHandle<()>,
+    mut tick_handle: QueueTicker,
     seek_target: f64,
     observation_window: Duration,
     pos_before: f64,
@@ -207,7 +202,7 @@ async fn observe_seek_advance_or_panic(
     let progress = wait_for_post_seek_progress(rx, queue, pos_before, observation_window).await;
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("[{label}] tick task exited unexpectedly"),
             Err(e) => panic!("[{label}] seek watchdog panicked — hang reproduced: {e}"),
         }
@@ -221,8 +216,7 @@ async fn observe_seek_advance_or_panic(
         ),
     }
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
 }
 
 async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
@@ -264,14 +258,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     let mut rx = queue.subscribe();
     let ids: Vec<TrackId> = resolved
@@ -329,7 +316,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             .await;
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited unexpectedly without panic"),
             Err(e) => panic!("seek watchdog panicked (expected on bug reproduction): {e}"),
         }
@@ -351,8 +338,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         ),
     }
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
     let _ = ids;
 }

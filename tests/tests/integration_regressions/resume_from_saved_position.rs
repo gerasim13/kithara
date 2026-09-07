@@ -18,7 +18,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -85,10 +85,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let first_queue = new_queue(&first_pools, first_store.clone()).await;
     let first_downloader = new_downloader(first_pools);
-    let first_tick = tokio::task::spawn(drive_queue_ticks(
-        first_queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut first_tick = QueueTicker::spawn(first_queue.control(), Duration::from_millis(50));
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
@@ -122,8 +119,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     first_queue.pause();
     let saved = played;
     first_queue.clear();
-    first_tick.abort();
-    let _ = first_tick.await;
+    first_tick.stop().await;
     first_queue.close().await;
     drop(first_downloader);
 
@@ -135,10 +131,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         .build();
     let second_queue = new_queue(&second_pools, second_store.clone()).await;
     let second_downloader = new_downloader(second_pools);
-    let second_tick = tokio::task::spawn(drive_queue_ticks(
-        second_queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut second_tick = QueueTicker::spawn(second_queue.control(), Duration::from_millis(50));
     let mut second_rx = second_queue.subscribe();
     let second_id = append_track(
         &second_queue,
@@ -205,7 +198,6 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
          saved position {saved:.2}s"
     );
 
-    second_tick.abort();
-    let _ = second_tick.await;
+    second_tick.stop().await;
     second_queue.close().await;
 }

@@ -9,7 +9,7 @@ use kithara::{
     events::TrackStatus,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     resampler::NoResamplerBackend,
@@ -17,7 +17,11 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, analysis_pass::stalled_reader, kithara, offline::OfflineQueue, temp_dir,
+    TestServerHelper,
+    analysis_pass::stalled_reader,
+    kithara,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
     waits::wait_until,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -58,14 +62,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -126,7 +123,6 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         "the pass's own reader only stalls, so every covered frame arrived through \
          the attached producer"
     );
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }

@@ -9,14 +9,14 @@ use kithara::{
     events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -31,7 +31,7 @@ struct Session {
     downloader: Downloader,
     store: AssetStore<TestPools>,
     flush_hub: Arc<FlushHub>,
-    tick: tokio::task::JoinHandle<()>,
+    tick: QueueTicker,
 }
 
 impl Session {
@@ -41,10 +41,9 @@ impl Session {
             downloader,
             store,
             flush_hub,
-            tick,
+            mut tick,
         } = self;
-        tick.abort();
-        let _ = tick.await;
+        tick.stop().await;
         drop(downloader);
         drop(store);
         drop(flush_hub);
@@ -85,10 +84,7 @@ async fn build_session(cache_path: &Path) -> Session {
     )
     .await
     .expect("create product offline queue");
-    let tick = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -121,7 +117,7 @@ fn track_source(url: &Url, session: &Session) -> TrackSource<TestPools> {
 }
 
 async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, label: &str) {
-    let session = build_session(cache_path).await;
+    let mut session = build_session(cache_path).await;
     let id = session
         .queue
         .append(track_source(url, &session))
@@ -136,7 +132,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
     wait_for_position_at_least(&session.queue, min_play_secs, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("[{label}] play: {e}"));
-    session.tick.abort();
+    session.tick.stop().await;
     // Durable checkpoint: returns only once the on-disk indexes
     // (availability / lru / pins) are committed, so the next warm-cache
     // session observes a fully-written cache. This is a state-completion

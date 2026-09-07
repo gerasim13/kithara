@@ -9,7 +9,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, Instant, timeout},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::{Queue, QueueConfig, QueueControl, Transition},
@@ -23,7 +22,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
@@ -175,10 +174,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let source = super::app_track_source(
         url.as_str(),
@@ -227,9 +223,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         );
     }
 
-    tick_handle.abort();
     queue.remove(id).expect("remove");
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
     queue.close().await;
 }
 

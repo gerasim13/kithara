@@ -2,11 +2,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, sleep},
-        tokio,
-    },
+    platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
@@ -17,7 +13,7 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 
-use super::OfflineQueue;
+use super::{OfflineQueue, QueueTicker};
 use crate::TestTempDir;
 
 #[non_exhaustive]
@@ -104,12 +100,10 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            let _ = queue_for_tick.tick();
-        }
-    });
+    drop(QueueTicker::spawn(
+        queue_for_tick,
+        Duration::from_millis(50),
+    ));
 
     AppQueueFixture {
         config,

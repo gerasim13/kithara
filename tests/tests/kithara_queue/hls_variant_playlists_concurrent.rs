@@ -12,7 +12,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, timeout},
-        tokio,
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -21,7 +20,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 use kithara_test_utils::probe::capture as probe_capture;
@@ -61,7 +60,7 @@ async fn build_queue_with_tick(
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -87,10 +86,7 @@ async fn build_queue_with_tick(
     )
     .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -239,7 +235,7 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let url = build_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp).await;
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let mut rx = queue.subscribe();
 
@@ -263,14 +259,12 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let variant_request_ids = match observe_until_loaded(&mut rx, &queue, track_id, &url).await {
         Ok(request_ids) => request_ids,
         Err(error) => {
-            tick_handle.abort();
-            let _ = tick_handle.await;
+            tick_handle.stop().await;
             panic!("{error}");
         }
     };
     let probes = recorder.snapshot();
-    tick_handle.abort();
-    let _ = tick_handle.await;
+    tick_handle.stop().await;
 
     let process_dump = format_process_probes(&probes);
     let max_batch = max_playlist_batch_size(&probes, &variant_request_ids);
