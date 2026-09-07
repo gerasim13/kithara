@@ -41,6 +41,7 @@ members = [
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
     "tests",
+    "tests/crates/*",
     "tests/fuzz",
     "xtask",
 ]
@@ -79,6 +80,7 @@ default-members = [
     "crates/kithara-warp",
     "crates/kithara-worker",
     "tests",
+    "tests/crates/*",
 ]
 
 [workspace.lints.rust]
@@ -550,6 +552,15 @@ strip = "none"
 # Product dependencies stay optimized; the integration harness itself spends
 # most of its build in LLVM and does not contain the runtime being measured.
 [profile.test-release.package.kithara-integration-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-stream-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-storage-tests]
 opt-level = 1
 
 [profile.wasm-release]

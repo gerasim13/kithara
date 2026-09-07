@@ -14,6 +14,10 @@ pub struct TestTempDir {
 
 impl TestTempDir {
     /// Create a new temporary directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the native temporary directory cannot be created.
     #[must_use]
     pub fn new() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
@@ -32,6 +36,10 @@ impl TestTempDir {
     ///
     /// Generated bodies live in the fixture store or inside the binary; a test
     /// that opens a file by path needs them on a real filesystem first.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the file cannot be written.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
@@ -61,14 +69,22 @@ impl Default for TestTempDir {
     }
 }
 
-/// Common fixture for temporary directory
+/// Common fixture for a temporary directory.
+///
+/// # Panics
+///
+/// Panics when the native temporary directory cannot be created.
 #[must_use]
 #[kithara::fixture]
 pub fn temp_dir() -> TestTempDir {
     TestTempDir::new()
 }
 
-/// Fixture returning both `TestTempDir` and `PathBuf`
+/// Fixture returning both `TestTempDir` and `PathBuf`.
+///
+/// # Panics
+///
+/// Panics when the native temporary directory cannot be created.
 #[must_use]
 #[kithara::fixture]
 pub fn temp_path() -> (TestTempDir, PathBuf) {

@@ -3,7 +3,7 @@
 use std::io::{self, Read, Seek, SeekFrom};
 
 use kithara::platform::time::Duration;
-use kithara_integration_tests::memory_source::{MemorySource, memory_stream, unknown_len_stream};
+use kithara_stream_test_support::{MemorySource, memory_stream, unknown_len_stream};
 
 #[kithara::fixture]
 fn test_data() -> Vec<u8> {

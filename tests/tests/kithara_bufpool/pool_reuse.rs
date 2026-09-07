@@ -1,8 +1,10 @@
 use kithara::{
     self,
-    bufpool::{PoolConfig, PoolError},
+    bufpool::{
+        PoolConfig, PoolError,
+        testing::{pools, pools_with},
+    },
 };
-use kithara_integration_tests::bufpool_ext::{pools, pools_with};
 
 #[kithara::test]
 fn oversized_sample_buffer_is_trimmed_on_return() {

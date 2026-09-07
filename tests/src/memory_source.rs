@@ -17,11 +17,6 @@ use kithara::{
     },
 };
 
-/// Error type for memory-backed sources.
-#[derive(Debug, thiserror::Error)]
-#[error("memory source error")]
-pub struct MemorySourceError;
-
 /// Constant-length byte-space probe for [`MemorySource`]: `Eof` at or past the
 /// known total, `Ready` otherwise — mirroring the source's own `phase_at`.
 /// `None` total never reaches `Eof`. `reported` mirrors the source's `len()`
@@ -147,7 +142,9 @@ impl Source for MemorySource {
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
-        let offset = offset as usize;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(ReadOutcome::Eof);
+        };
         if offset >= self.data.len() {
             return Ok(ReadOutcome::Eof);
         }
@@ -193,9 +190,6 @@ impl Source for MemorySource {
         }
     }
 }
-
-/// Backwards-compatible alias for `MemorySource::without_len`.
-pub type UnknownLenSource = MemorySource;
 
 /// `StreamType` using `MemorySource` (known length).
 pub struct MemStream;
@@ -244,21 +238,29 @@ impl StreamType for UnknownLenStream {
 pub type UnknownLenStreamConfig = MemStreamConfig;
 
 /// Create a `Stream` from a `MemorySource`.
+///
+/// # Panics
+///
+/// Panics if the configured source cannot be created.
 #[must_use]
 pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     let config = MemStreamConfig {
         source: Some(source),
         event_bus: None,
     };
-    block_on(Stream::new(config)).unwrap()
+    block_on(Stream::new(config)).expect("memory stream config always contains a source")
 }
 
 /// Create a `Stream` from a `MemorySource` with unknown length.
+///
+/// # Panics
+///
+/// Panics if the configured source cannot be created.
 #[must_use]
 pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),
         event_bus: None,
     };
-    block_on(Stream::new(config)).unwrap()
+    block_on(Stream::new(config)).expect("memory stream config always contains a source")
 }

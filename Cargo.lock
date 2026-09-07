@@ -4897,6 +4897,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-bufpool-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-test-utils",
+ "serial_test",
+]
+
+[[package]]
 name = "kithara-decode"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5486,6 +5495,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-storage-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-test-utils",
+ "tempfile",
+]
+
+[[package]]
 name = "kithara-stream"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5521,6 +5539,16 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
+]
+
+[[package]]
+name = "kithara-stream-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "futures",
+ "kithara",
+ "kithara-test-utils",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -26,7 +26,6 @@ mod events;
 mod kithara_analysis;
 mod kithara_assets;
 mod kithara_audio;
-mod kithara_bufpool;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_encode {
@@ -106,8 +105,6 @@ mod kithara_abr_integration;
 mod kithara_net;
 mod kithara_play;
 mod kithara_queue;
-mod kithara_storage;
-mod kithara_stream;
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 mod no_block;
 mod thread_budget;

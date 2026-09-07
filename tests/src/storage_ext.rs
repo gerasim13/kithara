@@ -9,6 +9,12 @@ use kithara::{
 use crate::bufpool_ext::{TestPools, pools};
 
 pub trait PooledRead {
+    /// Reads bytes starting at `offset` into `buf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the underlying resource cannot read the
+    /// requested range.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 }
 
@@ -27,6 +33,11 @@ impl PooledRead for AssetReader<TestPools> {
     }
 }
 
+/// Reads up to `len` bytes from a pooled resource.
+///
+/// # Panics
+///
+/// Panics when the requested test buffer exceeds the shared pool budget.
 pub fn read_bytes<R: PooledRead>(resource: &R, offset: u64, len: usize) -> Vec<u8> {
     let pools = pools();
     let mut buf = pools
@@ -40,6 +51,10 @@ pub fn read_bytes<R: PooledRead>(resource: &R, offset: u64, len: usize) -> Vec<u
 ///
 /// Mirrors the old `MemResource::with_bytes` test constructor over the
 /// public `MemResource::open` API.
+///
+/// # Panics
+///
+/// Panics if the in-memory resource rejects its initial data.
 #[must_use]
 pub fn mem_resource_with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     MemResource::open(
