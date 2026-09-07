@@ -81,8 +81,7 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
 /// Connects a Worker facade to the main thread's canonical Host owner.
 #[must_use]
 pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S>) -> Host<S> {
-    let requested_sample_rate = sender.root_view.grid().axis().sample_rate();
-    let dispatcher = host_session::remote(sender.tx, requested_sample_rate);
+    let dispatcher = host_session::remote(sender.tx);
     Host::remote(sender.id, sender.root_view, dispatcher)
 }
 
