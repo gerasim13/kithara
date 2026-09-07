@@ -3,9 +3,10 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
-use kithara_play::{PlayError, StreamShape, player::PlayerMember};
+use kithara_play::{PlayError, StreamShape, Tempo, player::PlayerMember};
 use kithara_warp::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
+    BeatGrid, BeatsPerMinute, SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected,
+    TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
@@ -82,6 +83,21 @@ fn transact_root<B: AudioBackend, S>(
         ));
     }
     state.root.transact(operation)
+}
+
+fn set_root_tempo<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    tempo: Tempo,
+) -> Result<(), SessionError> {
+    let tempo = BeatsPerMinute::try_from(tempo.beats_per_minute())
+        .map_err(|error| SessionError::TransportSync(error.to_string()))?;
+    let target = state.root.id();
+    let _ = state
+        .root
+        .transact(SyncOperation::Tempo { target, tempo })
+        .map_err(|rejected| SessionError::TransportSync(rejected.error().to_string()))?;
+    state.publish_root();
+    Ok(())
 }
 
 fn topology_conflicts_with_graph<B: AudioBackend, S>(
@@ -199,10 +215,12 @@ where
             Reply::Ok
         }
         Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
-        Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
+        Cmd::SetSessionTempo { tempo } => {
+            match transport::set_tempo(state, tempo).and_then(|()| set_root_tempo(state, tempo)) {
+                Ok(()) => Reply::Ok,
+                Err(err) => Reply::Err(err),
+            }
+        }
         Cmd::SetSessionPlaying { playing } => match transport::set_playing(state, playing) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),

@@ -11,8 +11,8 @@ use kithara_play::{
 };
 use kithara_warp::{
     BeatGrid, BeatGridId, SessionEpoch, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncRejected,
+    SyncStatusSnapshot, TopologyOperation,
 };
 mod config;
 #[cfg(feature = "offline")]
@@ -301,6 +301,7 @@ impl<S> Host<S> {
             sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Group,
+            SyncMode::LocalSync,
         );
         let view = RootView::new(&group);
         Ok(SessionRoot {

@@ -2,9 +2,11 @@ use std::num::NonZeroU32;
 
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AssetAxis, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-    BeatGridUnavailable, MapAxis, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
-    SessionFrame, SyncError, SyncMemberKind,
+    AlignmentSource, AssetAxis, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+    BeatGridState, BeatGridUnavailable, BeatsPerMinute, LoadGeneration, MapAxis, SessionAnchor,
+    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncCapability, SyncError,
+    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
+    TopologyOperation, TransportRevision,
 };
 
 use super::GroupState;
@@ -44,7 +46,57 @@ fn fixture_group() -> GroupState<PlayerMember> {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
         SessionEpoch::new(0),
         SyncMemberKind::Grid,
+        SyncMode::Off,
     )
+}
+
+struct TestGrid(BeatGridSnapshot);
+
+impl BeatGrid for TestGrid {
+    fn id(&self) -> BeatGridId {
+        self.0.id()
+    }
+
+    fn snapshot(&self) -> BeatGridSnapshot {
+        self.0.clone()
+    }
+}
+
+fn live_deck() -> GroupState<PlayerMember> {
+    GroupState::new(
+        session_grid(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            2.0,
+        ),
+        SyncMemberKind::Grid,
+        SyncMode::Off,
+    )
+}
+
+fn sync(target: BeatGridId, intent: SyncIntent) -> SyncOperation<PlayerMember> {
+    SyncOperation::Sync {
+        target,
+        load: LoadGeneration::first(),
+        transport: TransportRevision::first(),
+        source: AlignmentSource::Prepared,
+        activation: SessionFrame::new(0),
+        intent,
+    }
+}
+
+fn tempo(target: BeatGridId, value: f64) -> SyncOperation<PlayerMember> {
+    SyncOperation::Tempo {
+        target,
+        tempo: BeatsPerMinute::try_from(value).expect("finite positive bpm"),
+    }
+}
+
+fn transport_unavailable() -> SyncError {
+    SyncError::CapabilityUnavailable {
+        capability: SyncCapability::Transport,
+    }
 }
 
 #[kithara::test]
@@ -259,4 +311,145 @@ fn group_requires_each_unavailable_route_boundary() {
         .publish_grid(next_live.clone())
         .expect("the unavailable boundary admits the negotiated live axis");
     assert_eq!(group.snapshot(), next_live);
+}
+
+#[kithara::test]
+fn a_new_deck_is_off_so_a_tempo_has_no_owner() {
+    let mut group = fixture_group();
+    let rejected = group
+        .transact(tempo(group.id(), 126.0))
+        .expect_err("tempo under off is rejected");
+    assert_eq!(*rejected.error(), transport_unavailable());
+}
+
+#[kithara::test]
+fn enable_enters_host_sync_where_tempo_is_inherited() {
+    let mut group = fixture_group();
+    let admission = group
+        .transact(sync(group.id(), SyncIntent::Enable))
+        .expect("enable is admitted");
+    assert!(
+        matches!(admission, SyncAdmission::StateChanged { .. }),
+        "{admission:?}"
+    );
+    let rejected = group
+        .transact(tempo(group.id(), 126.0))
+        .expect_err("tempo under host sync is rejected");
+    assert_eq!(
+        *rejected.error(),
+        SyncError::TempoInherited { owner: group.id() }
+    );
+}
+
+#[kithara::test]
+fn disable_from_host_sync_latches_a_local_tempo() {
+    let mut group = live_deck();
+    let _ = group
+        .transact(sync(group.id(), SyncIntent::Enable))
+        .expect("enable");
+    let admission = group
+        .transact(sync(group.id(), SyncIntent::Disable))
+        .expect("disable seeds the local tempo from the live grid");
+    assert!(
+        matches!(admission, SyncAdmission::StateChanged { .. }),
+        "{admission:?}"
+    );
+    let admission = group
+        .transact(tempo(group.id(), 126.0))
+        .expect("a group that owns its tempo accepts a new one");
+    assert!(
+        matches!(admission, SyncAdmission::StateChanged { .. }),
+        "{admission:?}"
+    );
+}
+
+#[kithara::test]
+fn disable_without_any_grid_waits_for_one() {
+    let mut group = fixture_group();
+    let admission = group
+        .transact(sync(group.id(), SyncIntent::Disable))
+        .expect("disable is admitted as deferred");
+    assert!(
+        matches!(admission, SyncAdmission::Deferred { .. }),
+        "{admission:?}"
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::WaitingForGrid { .. }
+    ));
+    let rejected = group
+        .transact(tempo(group.id(), 126.0))
+        .expect_err("the mode changes only once a tempo exists");
+    assert_eq!(*rejected.error(), transport_unavailable());
+}
+
+#[kithara::test]
+fn free_leaves_the_beat_timeline() {
+    let mut group = live_deck();
+    let _ = group
+        .transact(sync(group.id(), SyncIntent::Disable))
+        .expect("disable seeds local sync");
+    let admission = group
+        .transact(sync(group.id(), SyncIntent::Free))
+        .expect("free");
+    assert!(
+        matches!(admission, SyncAdmission::StateChanged { .. }),
+        "{admission:?}"
+    );
+    let rejected = group
+        .transact(tempo(group.id(), 126.0))
+        .expect_err("a free group has no tempo owner");
+    assert_eq!(*rejected.error(), transport_unavailable());
+}
+
+#[kithara::test]
+fn a_root_built_local_sync_takes_its_first_tempo_from_the_host() {
+    let mut root = GroupState::<PlayerMember>::unavailable(
+        BeatGridId::allocate().expect("grid id"),
+        NonZeroU32::new(48_000).expect("sample rate"),
+        SessionEpoch::new(0),
+        SyncMemberKind::Group,
+        SyncMode::LocalSync,
+    );
+    let admission = root
+        .transact(tempo(root.id(), 128.0))
+        .expect("root tempo is admitted without any grid");
+    assert!(
+        matches!(admission, SyncAdmission::StateChanged { .. }),
+        "{admission:?}"
+    );
+}
+
+#[kithara::test]
+fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
+    let mut group = live_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let base = group.topology().expect("topology").stamp();
+    let _ = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Attach {
+                member: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(TestGrid(BeatGridSnapshot::unavailable(
+                        track,
+                        BeatGridRevision::first(),
+                        MapAxis::Asset(AssetAxis::new(
+                            NonZeroU32::new(48_000).expect("sample rate"),
+                            480_000,
+                        )),
+                    ))),
+                },
+            }]),
+        })
+        .expect("attach");
+    let rejected = group
+        .transact(sync(track, SyncIntent::Enable))
+        .expect_err("a track has no mode");
+    assert_eq!(
+        *rejected.error(),
+        SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Alignment,
+        }
+    );
 }

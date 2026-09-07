@@ -16,7 +16,13 @@ the change that lands the work, and keep it short.
   the seam and the rate rides the render context. The listening tap now lives
   in the offline harness: `just test audio-artifacts <dir> <filter>` publishes
   every harness's output WAV and manifest with its control marks, and the
-  per-scenario recorders are gone.
+  per-scenario recorders are gone. Sync mode and tempo have one owner: a
+  `GroupState` is built with its `SyncMode` (the session root `LocalSync`,
+  every deck `Off`) and carries a `TempoSource`, inherited until a `Tempo`
+  transaction latches a local one; mode and tempo transitions are admitted as
+  `StateChanged`, and `Cmd::SetSessionTempo` latches the root tempo through
+  that transaction. Left: deck session grids and track asset grids on the
+  group, the per-block rate input, the RT seam trigger, and the seam rows.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every

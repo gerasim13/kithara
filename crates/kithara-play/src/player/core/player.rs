@@ -7,7 +7,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use kithara_warp::{SessionEpoch, SyncMemberKind};
+use kithara_warp::{SessionEpoch, SyncMemberKind, SyncMode};
 
 use super::{PlayerCore, PlayerLifecycle, PlayerRuntime};
 use crate::{
@@ -45,6 +45,7 @@ impl<S> PlayerImpl<S> {
             config.sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
+            SyncMode::Off,
         );
 
         let bus = config.bus.clone().unwrap_or_default();

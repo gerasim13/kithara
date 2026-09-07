@@ -55,6 +55,9 @@ pub enum SyncError {
     /// This group does not implement the requested operation yet.
     #[error("synchronization capability {capability:?} is unavailable")]
     CapabilityUnavailable { capability: SyncCapability },
+    /// The group inherits its tempo from its parent; set it there.
+    #[error("tempo of group {owner:?} is inherited from its parent")]
+    TempoInherited { owner: BeatGridId },
     /// A topology transaction was based on another published revision.
     #[error("topology base is {given:?}, expected {expected:?}")]
     StaleTopology {

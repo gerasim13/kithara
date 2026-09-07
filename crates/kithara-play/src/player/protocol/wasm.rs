@@ -2,7 +2,8 @@ use std::num::NonZeroU32;
 
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected,
+    SyncStatusSnapshot,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
@@ -28,8 +29,9 @@ impl PlayerSync {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
+        mode: SyncMode,
     ) -> Self {
-        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind);
+        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind, mode);
         Self {
             grid: owned.snapshot(),
             topology: owned.topology(),

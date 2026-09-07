@@ -31,7 +31,7 @@ pub use segment::{
 pub use sync::{
     AlignmentSource, BeatAlignment, LoadGeneration, PresentationFrontier, ReconcileCause,
     SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot,
+    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
     SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
     TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
 };

@@ -1,13 +1,14 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    MapAxis, SessionAxis, SessionEpoch, SyncAdmission, SyncApplied, SyncCapability, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncOperationId,
-    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
+    BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion,
+    SessionAxis, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
 };
 
-use super::{topology::materialize_topology, transaction};
+use super::{TempoSource, topology::materialize_topology, transaction};
 
 /// Canonical mutable state for one recursive synchronization group.
 ///
@@ -18,7 +19,10 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     grid: BeatGridSnapshot,
     next_operation: Option<SyncOperationId>,
     unavailable: Option<(SyncOperationId, SyncCapability)>,
+    waiting: Option<(SyncOperationId, MapRegion)>,
     member_kind: SyncMemberKind,
+    mode: SyncMode,
+    tempo: TempoSource,
     topology_revision: TopologyRevision,
     members: Vec<SyncMember<G>>,
 }
@@ -26,14 +30,17 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Creates an empty group around an already-published grid.
     #[must_use]
-    pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind) -> Self {
+    pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind, mode: SyncMode) -> Self {
         Self {
             grid,
+            mode,
             member_kind,
             members: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
+            tempo: TempoSource::Inherited,
             topology_revision: TopologyRevision::first(),
             unavailable: None,
+            waiting: None,
         }
     }
 
@@ -127,6 +134,35 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ))
     }
 
+    /// The tempo a `Disable` latches from the group or its first live grid.
+    pub(crate) fn seed_local_tempo(&self) -> Option<BeatsPerMinute> {
+        if let TempoSource::Local(tempo) = self.tempo {
+            return Some(tempo);
+        }
+        let live = (self.grid.state() == BeatGridState::Live).then(|| {
+            let origin = MapPoint::new(
+                self.grid.stamp(),
+                MapPosition::Session(SessionFrame::new(0)),
+            );
+            self.grid.tempo_at(origin)
+        });
+        let member = self.members.iter().find_map(|member| match member {
+            SyncMember::Grid { grid, .. } => {
+                let snapshot = grid.snapshot();
+                let origin = MapPoint::new(
+                    snapshot.stamp(),
+                    MapPosition::Asset(AssetFrame::new(0.0).ok()?),
+                );
+                Some(snapshot.tempo_at(origin))
+            }
+            SyncMember::Group { .. } => None,
+        });
+        live.or(member).and_then(|query| match query {
+            BeatGridQuery::Resolved(estimate) => Some(*estimate.value()),
+            _ => None,
+        })
+    }
+
     /// Creates an empty group whose session-axis grid is not available yet.
     #[must_use]
     pub fn unavailable(
@@ -134,6 +170,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
         member_kind: SyncMemberKind,
+        mode: SyncMode,
     ) -> Self {
         Self::new(
             BeatGridSnapshot::unavailable(
@@ -142,6 +179,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
             ),
             member_kind,
+            mode,
         )
     }
 
@@ -181,6 +219,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
         transaction::status(
             TopologyStamp::new(self.grid.id(), self.topology_revision),
             self.unavailable,
+            self.waiting,
         )
     }
 
@@ -189,13 +228,20 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     }
 
     fn transact(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>> {
+        let seed = self.seed_local_tempo();
         transaction::transact(
             &self.grid,
-            &mut self.topology_revision,
-            &mut self.members,
-            &mut self.next_operation,
-            &mut self.unavailable,
+            transaction::GroupSlots {
+                next_operation: &mut self.next_operation,
+                unavailable: &mut self.unavailable,
+                waiting: &mut self.waiting,
+                mode: &mut self.mode,
+                tempo: &mut self.tempo,
+                topology_revision: &mut self.topology_revision,
+                members: &mut self.members,
+            },
             self.member_kind,
+            seed,
             operation,
         )
     }
