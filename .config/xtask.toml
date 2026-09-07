@@ -14,7 +14,7 @@ exclude = ["target/**", "**/target/**"]
 exclude_crates = [
   "kithara-devtools",
   "kithara-fuzz",
-  "kithara-integration-tests",
+  "kithara-*-tests",
   "kithara-test-*",
   "kithara-workspace-hack",
   "xtask",
@@ -24,9 +24,9 @@ exclude_modules = ["*::tests"]
 [[architecture.runtime.scenarios]]
 name = "queue-playback"
 command = "test"
-package = "kithara-integration-tests"
-test = "suite_light"
-filter = "kithara_queue::architecture_flow::queue_playback_architecture"
+package = "kithara-queue-tests"
+test = "queue"
+filter = "architecture_flow::queue_playback_architecture"
 ignored = true
 timeout_secs = 120
 
@@ -123,9 +123,27 @@ machete_exclude = ["kithara-workspace-hack"]
 # `[health]` list is. Product crates are not listed: kithara-storage's 8
 # `possibly` double locks fail the stage until that code is fixed.
 lockbud_exclude = [
+  "kithara-abr-tests",
+  "kithara-analysis-tests",
+  "kithara-app-tests",
+  "kithara-assets-tests",
+  "kithara-audio-tests",
+  "kithara-broadcast-tests",
+  "kithara-bufpool-tests",
+  "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-encode-tests",
+  "kithara-events-tests",
+  "kithara-ffi-web-tests",
+  "kithara-file-tests",
   "kithara-fuzz",
+  "kithara-hls-tests",
   "kithara-integration-tests",
+  "kithara-net-tests",
+  "kithara-play-tests",
+  "kithara-queue-tests",
+  "kithara-storage-tests",
+  "kithara-stream-tests",
   "kithara-test-macros",
   "kithara-test-utils",
   "kithara-workspace-hack",
@@ -737,23 +755,22 @@ default_flash = false
 # graph, otherwise the compile-time alias picks Rubato).
 #
 # All three need a real output device, so they run on the Apple executor and are
-# absent from the Linux container fleet. `suite_e2e` reaches nothing outside the
-# runner. The tests that need the zvuk CDN or the corporate VPN live in
-# `suite_network` behind the `network` feature, so no amount of `--run-ignored`
-# can pull them in here.
+# absent from the Linux container fleet. The e2e target reaches nothing outside
+# the runner. Tests that need the zvuk CDN or the corporate VPN live behind
+# separate network features.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-rubato"]
+default_features = ["kithara-play-tests/e2e", "kithara/resample-rubato"]
 default_flash = false
 
 [test.lanes.e2e-fused]
@@ -762,13 +779,17 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-rubato", "apple-fused-src"]
+default_features = [
+  "kithara-play-tests/e2e",
+  "kithara/resample-rubato",
+  "kithara/apple-fused-src",
+]
 default_flash = false
 
 [test.lanes.e2e-glide]
@@ -777,13 +798,13 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_e2e",
+  "e2e",
 ]
-default_features = ["e2e", "kithara/resample-glide"]
+default_features = ["kithara-play-tests/e2e", "kithara/resample-glide"]
 default_flash = false
 
 # The network tests a runner can reach: the public zvuk CDN and silvercomet.
@@ -798,13 +819,19 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_network",
+  "network",
 ]
-default_features = ["network", "kithara/resample-rubato"]
+default_features = [
+  "kithara-play-tests/network",
+  "kithara-queue-tests/network",
+  "kithara/resample-rubato",
+]
 default_flash = false
 
 # The half of the network tests no runner can serve: `*.zvq.me`, which resolves
@@ -817,13 +844,19 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-integration-tests",
+  "kithara-play-tests",
+  "-p",
+  "kithara-queue-tests",
   "--cargo-profile",
   "test-release",
   "--test",
-  "suite_network_manual",
+  "network_manual",
 ]
-default_features = ["network-manual", "kithara/resample-rubato"]
+default_features = [
+  "kithara-play-tests/network-manual",
+  "kithara-queue-tests/network-manual",
+  "kithara/resample-rubato",
+]
 default_flash = false
 
 # What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
@@ -836,16 +869,16 @@ prefix_args = [
   "-p",
   "kithara-app",
   "-p",
-  "kithara-integration-tests",
+  "kithara-broadcast-tests",
   "--cargo-profile",
   "test-release",
   "--lib",
   "--test",
-  "suite_broadcast",
+  "broadcast",
 ]
 default_features = [
   "kithara-app/broadcast",
-  "kithara-integration-tests/broadcast",
+  "kithara-broadcast-tests/broadcast",
 ]
 default_flash = true
 # The detector these tests were failing under. Declared here so two schedulers
@@ -855,7 +888,7 @@ default_no_block = true
 # `broadcast::engine` needs the feature.
 suffix_args = [
   "-E",
-  "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+  "binary(broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
 ]
 
 # Integration regression tests are red by design and stay outside the main gate.
@@ -874,7 +907,7 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-# The harness (tests/tests/kithara_ffi_web/selenium.rs) reads
+# The harness (tests/crates/ffi-web/tests/ffi_web/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
 # Naming the browser in the lane itself, rather than leaving it to whatever
 # the caller happens to export, is what makes `--lane=selenium-firefox` an
@@ -887,11 +920,11 @@ prefix_args = [
   "+nightly",
   "test",
   "-p",
-  "kithara-integration-tests",
+  "kithara-ffi-web-tests",
   "--test",
-  "suite_heavy",
+  "ffi_web",
 ]
-default_features = ["selenium"]
+default_features = ["kithara-ffi-web-tests/selenium"]
 suffix_args = ["selenium", "--", "--nocapture"]
 passthrough = "after-suffix"
 default_flash = false

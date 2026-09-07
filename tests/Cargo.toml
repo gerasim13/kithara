@@ -28,14 +28,6 @@ test = false
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
-# End-to-end playback through a real cpal output device. Gated off by default so
-# `just test` never compiles `suite_e2e`. Real devices run at arbitrary sample
-# rates, so every e2e lane in `.config/xtask.toml` pairs this with a fixed-ratio
-# SRC backend (rubato / glide / apple fused); that axis is why there are three
-# lanes rather than one. Only a machine with a sound card can run them: the
-# Apple executor does, a container does not, so no container lane carries them.
-# The engine-lifecycle tests that need no device moved to `suite_light`.
-e2e = []
 # Tests of the harness rather than of the product: that `timeout(...)` actually
 # kills a wedged test, and that
 # `flash` rewrites the test body and not its callees. They answer questions about
@@ -53,24 +45,6 @@ harness = []
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
 integration-regressions = []
-# Tests that reach a host this workspace does not own, and that a runner can
-# reach: the zvuk production CDN and silvercomet, both on the public internet.
-# The CDN is auth-gated, so the lane needs `KITHARA_DRM_PROD_*` in the build
-# environment; without them the tests compile and fail on the key request,
-# which is why no gate job enables this and a dedicated lane does.
-network = []
-# The half of those a runner cannot serve: `*.zvq.me` resolves only inside the
-# corporate network, and a real output device is not a thing a container has.
-# Kept apart so the reachable half can run unattended — together, the whole set
-# stayed off CI because part of it could not go there.
-network-manual = []
-# Selenium-driven WebDriver tests. Gated off by default so `just test`
-# doesn't try to spin up trunk + a webdriver. Run via
-# `just test run --lane=selenium-firefox`.
-selenium = []
-# Live HLS packaging. `suite_broadcast` requires it, so `just test` never runs
-# it; `just test run --lane=broadcast` does.
-broadcast = ["kithara/broadcast"]
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
@@ -206,7 +180,6 @@ kithara = { workspace = true, features = [
     "stretch-signalsmith",
     "backend-cpal",
     "encode",
-    "ffmpeg",
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
@@ -298,26 +271,6 @@ path = "tests/suite_heavy.rs"
 [[test]]
 name = "suite_stress"
 path = "tests/suite_stress.rs"
-
-[[test]]
-name = "suite_broadcast"
-path = "tests/suite_broadcast.rs"
-required-features = ["broadcast"]
-
-[[test]]
-name = "suite_e2e"
-path = "tests/suite_e2e.rs"
-required-features = ["e2e"]
-
-[[test]]
-name = "suite_network_manual"
-path = "tests/suite_network_manual.rs"
-required-features = ["network-manual"]
-
-[[test]]
-name = "suite_network"
-path = "tests/suite_network.rs"
-required-features = ["network"]
 
 [[test]]
 name = "suite_integration_regressions"

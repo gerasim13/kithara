@@ -223,6 +223,7 @@ kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
+kithara-integration-tests = { path = "tests" }
 kithara-macros = { path = "crates/kithara-macros", version = "0.0.1-alpha4" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
