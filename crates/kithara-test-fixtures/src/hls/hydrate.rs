@@ -69,7 +69,7 @@ impl Kind {
 pub(crate) struct RedactedUrl(String);
 
 impl RedactedUrl {
-    fn new(url: &Url) -> Self {
+    pub(crate) fn new(url: &Url) -> Self {
         Self(format!(
             "{}{}",
             url.origin().ascii_serialization(),
@@ -152,12 +152,12 @@ pub(crate) enum HydrateError {
 }
 
 #[derive(Clone, Copy)]
-struct Deadline {
+pub(crate) struct Deadline {
     end: Instant,
 }
 
 impl Deadline {
-    fn new(timeout: Duration) -> Self {
+    pub(crate) fn new(timeout: Duration) -> Self {
         Self {
             end: Instant::now() + timeout,
         }
@@ -177,7 +177,7 @@ fn refresh_names(names: &[&str]) -> String {
     names.join(", ")
 }
 
-fn fetch(
+pub(crate) fn fetch(
     client: &Client,
     url: &Url,
     headers: &HeaderMap,

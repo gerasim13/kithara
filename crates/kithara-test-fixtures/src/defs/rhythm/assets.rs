@@ -8,6 +8,8 @@ use kithara_test_macros as kithara;
 
 use super::score::{self, Control, Style};
 
+const RHYTHM_FRAMES: u64 = 48_000 * 12;
+
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::ambient_dub_62_aligned(Style::AmbientDub, Control::Aligned)]
 #[case::ambient_dub_62_one_frame_late(Style::AmbientDub, Control::OneFrameLate)]
@@ -67,7 +69,10 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 #[case::breakbeat_140_one_beat_bar_late(Style::Breakbeat, Control::OneBeatBarLate)]
 #[case::breakbeat_140_missing_beat(Style::Breakbeat, Control::MissingBeat)]
 fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -> Vec<u8> {
-    analysis_file(BeatArtifact::from(score::truth(style, control)))
+    analysis_file(
+        BeatArtifact::from(score::truth(style, control)),
+        RHYTHM_FRAMES,
+    )
 }
 
 #[kithara::asset(
@@ -100,26 +105,28 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
 #[case::breakbeat_140_one_beat_bar_late()]
 #[case::breakbeat_140_missing_beat()]
 fn rhythm_analyzed_analysis(inputs: &[&[u8]]) -> Vec<u8> {
-    analysis_file(super::analyze::beat(
-        inputs
-            .first()
-            .expect("invariant: the declared rhythm WAV dependency is present"),
-    ))
+    analysis_file(
+        super::analyze::beat(
+            inputs
+                .first()
+                .expect("invariant: the declared rhythm WAV dependency is present"),
+        ),
+        RHYTHM_FRAMES,
+    )
 }
 
-fn analysis_file(artifact: BeatArtifact) -> Vec<u8> {
+pub(in crate::defs) fn analysis_file(artifact: BeatArtifact, frames: u64) -> Vec<u8> {
     const CHUNK_SECONDS: u64 = 16;
-    const EXTENT: u64 = 48_000 * 12;
     const FINGERPRINT: &str = "rhythm-fixture:v1";
 
     let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
     let mut coverage = Coverage::default();
-    coverage.insert(FrameRange::new(0, EXTENT));
+    coverage.insert(FrameRange::new(0, frames));
     let analysis = TrackAnalysis::builder()
         .token(AnalysisToken::from("rhythm-fixture"))
         .revision(1)
         .source_sample_rate(sample_rate)
-        .extent(EXTENT)
+        .extent(frames)
         .coverage(coverage)
         .fingerprint(AnalysisFingerprint::new(Some(FINGERPRINT), None))
         .settled(true)

@@ -14,6 +14,8 @@ mod defs;
 mod encoders;
 #[path = "src/registry.rs"]
 mod registry;
+#[path = "src/remote_file.rs"]
+mod remote_file;
 // `fmp4`, `signal`, and `store` keep the visibility they have in the library:
 // the same source files, reached from two roots.
 #[path = "src/fmp4/mod.rs"]
@@ -55,9 +57,10 @@ const HASHED_TREES: [&str; 5] = [
     "../kithara-encode/src",
 ];
 /// Individual sources outside those trees that decide the same.
-const HASHED_FILES: [&str; 4] = [
+const HASHED_FILES: [&str; 5] = [
     "build.rs",
     "src/encoders.rs",
+    "src/remote_file.rs",
     "src/registry.rs",
     "src/store.rs",
 ];
@@ -165,10 +168,15 @@ fn materialize(
 
     for level in levels {
         for batch in level.chunks(parallelism) {
+            let unavailable_snapshot = &unavailable;
             let results = thread::scope(|scope| {
                 batch
                     .iter()
-                    .map(|&index| scope.spawn(move || materialize_one(namespace, resolved, index)))
+                    .map(|&index| {
+                        scope.spawn(move || {
+                            materialize_one(namespace, resolved, index, unavailable_snapshot)
+                        })
+                    })
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|handle| handle.join().unwrap_or_else(|panic| resume_unwind(panic)))
@@ -184,6 +192,7 @@ fn materialize_one(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
     index: usize,
+    unavailable: &HashMap<String, String>,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
     if store::has_entry(namespace, id, def.ext) {
@@ -199,6 +208,21 @@ fn materialize_one(
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
     if store::has_entry(namespace, id, def.ext) {
         return None;
+    }
+    if let Some((dependency, reason)) = def.dependencies.iter().find_map(|dependency| {
+        unavailable
+            .get(*dependency)
+            .map(|reason| (dependency, reason))
+    }) {
+        if def.optional {
+            return Some((
+                name.clone(),
+                format!("dependency `{dependency}` unavailable: {reason}"),
+            ));
+        }
+        panic!(
+            "kithara-test-fixtures: required fixture `{name}` depends on unavailable `{dependency}`: {reason}"
+        );
     }
     let dependency_bytes: Vec<_> = def
         .dependencies
