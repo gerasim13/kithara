@@ -584,6 +584,8 @@ impl WaitPark {
 
     /// Block until the holder is inside `wait_range` — i.e. the control
     /// mutex is held by a parked blocking read.
+    /// `no_block`: this synchronization point deliberately waits for that state.
+    #[kithara::allow_block]
     pub(super) fn wait_entered(&self) {
         let mut state = self.state.lock();
         while !state.entered {
