@@ -28,6 +28,7 @@ pub struct PoolConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
+    use serde::Deserialize;
 
     use super::{Percent, PoolConfig, PoolConfigPatch};
 
@@ -38,8 +39,10 @@ mod tests {
             .trim_capacity(4_096)
             .build();
 
-        let patch: PoolConfigPatch =
-            serde_yaml_ng::from_str("max_buffers: 32\n").expect("a valid patch document parses");
+        let patch = PoolConfigPatch::deserialize(serde_yaml_ng::Deserializer::from_str(
+            "max_buffers: 32\n",
+        ))
+        .expect("a valid patch document parses");
         config.apply(patch);
 
         assert_eq!(config.max_buffers, 32, "the named field is written");
