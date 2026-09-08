@@ -1,26 +1,14 @@
 # Progress
 
-What is in flight right now. The
-[GitHub Projects board](https://github.com/users/gerasim13/projects/3) owns
-capability status and the roadmap, and git owns the facts. This file owns
-intent: what is being worked on, what comes next, what is stuck. Update it in
-the change that lands the work, and keep it short.
+Current work, next steps, and blockers. The
+[Projects board](https://github.com/users/gerasim13/projects/3) owns roadmap
+status; git owns completed changes. Keep this file short.
 
 ## In Flight
 
-- Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
-  moved to the `compare_exchange_weak` loop it compiles into, keeping every
-  ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is
-  1.95, and `kithara-app`'s GUI-only modules are gated on `gui`.
-
-- The `sccache` trap in the Clippy path, closed: a non-zero `CARGO_INCREMENTAL`
-  makes `sccache` abort rather than fall back, for any language, and no site
-  sets one now.
-
-- Lint debt worked down by autofix. `struct_init_order`, `derivable_from` and
-  `qualified_path_depth` answer to the clippy gate they used to break, the arch
-  baseline drops what nothing violates, and `lint fast` runs `style`, so the
-  commit hook refuses what used to reach CI.
+- Build warnings and the Clippy `sccache` configuration trap are resolved.
+  MSRV is 1.95; GUI-only app modules require `gui`. Lint autofixes reduced
+  debt, and the commit hook now includes the style gate.
 
 - Configuration document for `kithara-app`: `app.yaml` plus an optional
   overlay, env-expanded before typing, each section carrying its owning
@@ -39,7 +27,12 @@ the change that lands the work, and keep it short.
   extent per pass in `kithara-analysis`. Left: the deck scenario on a release
   build with the full model, and the size of the resume blob.
 
-- `suite_network` has been dark since `#260`; the handover census found it.
+- PR #322 review fixes retain the app fixture ticker through teardown and
+  complete async harness calls in the opt-in network suites. Both network
+  binaries compile; the local ticker regression passes with `no_block` and
+  fails when the ticker is stopped at construction.
+  Analysis tests use generated fixture files instead of global `/tmp` paths.
+  Remote playback and device acceptance remain unverified.
 
 - `kithara-analysis` builds and runs its pass on `wasm32`: the worker's compute
   seam spawns a thread per admitted job under the `OwnedPoolConfig` the native

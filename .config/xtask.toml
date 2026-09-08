@@ -1422,10 +1422,11 @@ steps = [
   { args = [
     "test",
     "run",
+    "--no-block=on",
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux tests", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2080,8 +2081,7 @@ kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
 # A review ref asks the same question the default branch asks: what a reviewer
-# would have to fix anyway is cheaper to learn before merge. Quarantine keeps
-# its plain profile probe.
+# would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
@@ -2102,12 +2102,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" }, args_by_kind = { quarantine = [
-    "test",
-    "run",
-    "--profile",
-    "ci",
-  ] } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [

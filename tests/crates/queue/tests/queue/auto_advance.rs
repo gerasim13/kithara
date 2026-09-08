@@ -63,22 +63,22 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 
 /// Render until either EOF count or block budget is reached. Returns the
 /// concatenated stereo-interleaved PCM.
-fn render_loop(
+async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
     }
     pcm
 }
 
-#[kithara::test]
-fn crossfade_started_requires_a_live_predecessor() {
+#[kithara::test(tokio)]
+async fn crossfade_started_requires_a_live_predecessor() {
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -86,16 +86,24 @@ fn crossfade_started_requires_a_live_predecessor() {
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
-    let id = queue.insert_loaded_for_test(make_resource("initial", 0.2, 0.3));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("initial", 0.2, 0.3))
+        })
+        .await;
     let mut receiver = queue.subscribe();
 
-    queue
-        .select(id, Transition::Crossfade)
+    harness
+        .run(&queue, move |q| q.select(id, Transition::Crossfade))
+        .await
         .expect("select initial track");
 
     while let Ok(envelope) = receiver.try_recv() {
@@ -110,8 +118,8 @@ fn crossfade_started_requires_a_live_predecessor() {
 
     let mut saw_playing = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
         let is_playing = queue.is_playing();
         saw_playing |= is_playing;
         if saw_playing && !is_playing {
@@ -123,12 +131,20 @@ fn crossfade_started_requires_a_live_predecessor() {
         "the predecessor must start before reaching EOF"
     );
     assert!(!queue.is_playing(), "the predecessor must reach EOF");
-    queue.tick().expect("process predecessor EOF");
+    harness
+        .run(&queue, |q| q.tick())
+        .await
+        .expect("process predecessor EOF");
 
-    let successor = queue.insert_loaded_for_test(make_resource("successor", 1.0, 0.3));
+    let successor = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("successor", 1.0, 0.3))
+        })
+        .await;
     let mut receiver = queue.subscribe();
-    queue
-        .select(successor, Transition::Crossfade)
+    harness
+        .run(&queue, move |q| q.select(successor, Transition::Crossfade))
+        .await
         .expect("select successor after EOF");
 
     while let Ok(envelope) = receiver.try_recv() {
@@ -140,6 +156,8 @@ fn crossfade_started_requires_a_live_predecessor() {
             "a completed predecessor cannot start a crossfade"
         );
     }
+    drop(queue);
+    harness.close().await;
 }
 
 #[kithara::test(tokio)]
@@ -149,14 +167,22 @@ async fn repeat_one_natural_advance_keeps_current_track() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
-    let id = queue.insert_loaded_for_test(make_resource("one", 1.0, 0.3));
-    queue
-        .select(id, Transition::None)
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("one", 1.0, 0.3))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
         .expect("select repeat-one track");
     let mut receiver = queue.subscribe();
     queue.set_repeat(RepeatMode::One);
@@ -168,12 +194,18 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         }))
     ));
     assert_eq!(
-        queue
-            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+        harness
+            .run(&queue, move |q| q.advance_to_next(
+                Transition::Crossfade,
+                AdvanceReason::NaturalEof
+            ))
+            .await
             .expect("advance repeat-one queue"),
         Some(id)
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
+    drop(queue);
+    harness.close().await;
 }
 
 #[kithara::test(tokio)]
@@ -183,15 +215,27 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
-    let first = queue.insert_loaded_for_test(make_resource("first", 1.0, 0.2));
-    let last = queue.insert_loaded_for_test(make_resource("last", 1.0, 0.8));
-    queue
-        .select(last, Transition::None)
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
+    let first = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("first", 1.0, 0.2))
+        })
+        .await;
+    let last = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("last", 1.0, 0.8))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(last, Transition::None))
+        .await
         .expect("select last repeat-all track");
     let mut receiver = queue.subscribe();
     queue.set_repeat(RepeatMode::All);
@@ -203,12 +247,18 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         }))
     ));
     assert_eq!(
-        queue
-            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+        harness
+            .run(&queue, move |q| q.advance_to_next(
+                Transition::Crossfade,
+                AdvanceReason::NaturalEof
+            ))
+            .await
             .expect("advance repeat-all queue"),
         Some(first)
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(first));
+    drop(queue);
+    harness.close().await;
 }
 
 /// cf=0: queue.tick must drive `process_notifications`, the audio thread
@@ -225,19 +275,31 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
@@ -275,6 +337,8 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
         Some(1),
         "queue.current_index must follow the audio thread to track B"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// cf>0: queue.tick observes `HandoverRequested`, calls `commit_next`,
@@ -292,19 +356,31 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
@@ -345,6 +421,8 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
         Some(1),
         "queue.current_index must advance to track B after crossfade commit"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// Sanity guard: if `Queue::tick` regresses to skipping
@@ -367,17 +445,29 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
     let mut rx = queue.subscribe();
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let mut prefetch_seen = false;
@@ -385,8 +475,8 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
 
         loop {
             match rx.try_recv().map(|env| env.event) {
@@ -415,6 +505,8 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         item_end_seen,
         "ItemDidPlayToEnd must reach the bus via Queue::tick → process_notifications"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// Behavioural autoplay test that **simulates the actual race** that
@@ -438,19 +530,30 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        true,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            true,
+        )))
+        .await;
 
     let id_a = queue.register_for_test();
     let id_b = queue.register_for_test();
 
-    queue.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE));
-    queue.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE));
+    harness
+        .run(&queue, move |q| {
+            q.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| {
+            q.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE))
+        })
+        .await;
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("autoplay must start producing audio without an explicit select");
@@ -477,6 +580,8 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
         Some(1),
         "after track A finishes, queue must auto-advance to track B"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// Replay regression: after a full cf=0 playthrough every track is
@@ -503,19 +608,31 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
-    let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+        })
+        .await;
+    let id_b = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+        })
+        .await;
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("first select track A");
-    let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
     assert_eq!(
         queue.current_index(),
         Some(1),
@@ -525,11 +642,12 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_A_VALUE));
     queue.supply_test_resource_for_respawn(id_b, make_resource("b2", TRACK_SECS, TRACK_B_VALUE));
 
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("second select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset = first_onset_frame(&pcm, 0.005).expect("track A must produce non-silence on replay");
     let track_a_frames =
@@ -553,6 +671,8 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         Some(1),
         "second playthrough must also reach track B"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// When the last track finishes, the live playback snapshot must become inactive
@@ -571,22 +691,30 @@ async fn queue_stops_live_playback_when_last_track_ends() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
     let mut rx = queue.subscribe();
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30));
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
         loop {
             match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
@@ -597,8 +725,8 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         }
         if saw_queue_ended {
             for _ in 0..4 {
-                let _ = queue.tick();
-                let _ = harness.render(BLOCK_FRAMES);
+                let _ = harness.run(&queue, |q| q.tick()).await;
+                let _ = harness.render(BLOCK_FRAMES).await;
             }
             break;
         }
@@ -612,6 +740,8 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         !queue.is_playing(),
         "live playback must stop after the last EOF"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// Regression: `PrefetchRequested` can arrive before `current_index` is
@@ -627,15 +757,22 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        true,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            true,
+        )))
+        .await;
 
-    let _id = queue.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE));
+    let _id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE))
+        })
+        .await;
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset =
         first_onset_frame(&pcm, 0.005).expect("autoplay'd track must produce audible samples");
@@ -656,6 +793,8 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         Some(0),
         "current_index must stay on the only track"
     );
+    drop(queue);
+    harness.close().await;
 }
 
 /// A queue played straight through has to let its middle track be heard.
@@ -680,23 +819,39 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
-    let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A));
-    let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B));
-    let _ = queue.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C));
+    let id_a = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B))
+        })
+        .await;
+    let _ = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C))
+        })
+        .await;
     // The app starts a catalog row exactly this way, with no fade into the
     // first track, and it is the arrangement that leaves the engine's own
     // handover trigger disarmed for that track.
-    queue
-        .select(id_a, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
@@ -741,4 +896,6 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
          ratio={ratio_c}, C={expected_c}, B={expected_b} \
          (mean_a={mean_a}, mean_c={mean_c})"
     );
+    drop(queue);
+    harness.close().await;
 }

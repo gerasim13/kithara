@@ -17,6 +17,8 @@ pub mod flight;
 pub mod hang;
 pub mod mock;
 pub mod no_block;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod off_thread;
 pub mod probe;
 pub mod rtsan;
 #[cfg(any(test, feature = "probe"))]

@@ -10,10 +10,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{
-        Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands,
-        player::PlayerControl,
-    },
+    play::{Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     warp::{StretchControls, WarpConfig},
 };
@@ -317,6 +314,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -457,6 +455,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
             setup.queue.current_index(),
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -498,6 +497,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
         "app-layer crossfade resampled FLAC queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(240)), hang_timeout_secs(5))]
@@ -550,6 +550,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         "app-layer crossfade resampled FLAC real geometry queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -690,6 +691,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -764,6 +766,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
         "app-layer crossfade FLAC queue.current_index must advance to track B at end; {}",
         context.dump()
     );
+    setup.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
@@ -877,6 +880,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
             setup.queue.current_index()
         )
     );
+    setup.close().await;
 }
 
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
@@ -981,11 +985,20 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         "queue.current_index must advance to track B for AAC; {}",
         diagnostics()
     );
+    setup.close().await;
 }
 
 struct QueueSetup {
     harness: OfflinePlayerHarness,
     queue: QueueControl<TestPools>,
+}
+
+impl QueueSetup {
+    async fn close(self) {
+        let Self { harness, queue } = self;
+        drop(queue);
+        harness.close().await;
+    }
 }
 
 struct RenderProgress {
@@ -1038,6 +1051,7 @@ async fn run_crossfade_flac_case(
         collapse_runs,
         label,
     );
+    setup.close().await;
 }
 
 fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
@@ -1062,19 +1076,24 @@ async fn setup_queue_with_sample_rate(
     flac: bool,
     render_sample_rate: u32,
 ) -> QueueSetup {
-    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        render_sample_rate,
-    ));
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .crossfade_duration(0.0)
+                .build(),
+            render_sample_rate,
+        )
+        .await,
+    );
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
     let resource_a = hls_resource(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("a"),
         PcmPattern::Ascending,
@@ -1082,7 +1101,7 @@ async fn setup_queue_with_sample_rate(
     )
     .await;
     let resource_b = hls_resource(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("b"),
         PcmPattern::Descending,
@@ -1090,10 +1109,15 @@ async fn setup_queue_with_sample_rate(
     )
     .await;
 
-    let id_a = queue.insert_loaded_for_test(resource_a);
-    let _ = queue.insert_loaded_for_test(resource_b);
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
+        .await;
+    let _ = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     QueueSetup { harness, queue }
@@ -1103,36 +1127,46 @@ async fn setup_multivariant_flac_queue(
     server: &TestServerHelper,
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
-    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .build(),
-        SAMPLE_RATE,
-    ));
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
+    let harness = with_provenance_headroom(
+        OfflinePlayerHarness::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .crossfade_duration(0.0)
+                .build(),
+            SAMPLE_RATE,
+        )
+        .await,
+    );
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
     let resource_a = hls_multivariant_flac_resource(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("a"),
         PcmPattern::Ascending,
     )
     .await;
     let resource_b = hls_multivariant_flac_resource(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("b"),
         PcmPattern::Descending,
     )
     .await;
 
-    let id_a = queue.insert_loaded_for_test(resource_a);
-    let _ = queue.insert_loaded_for_test(resource_b);
-    queue
-        .select(id_a, Transition::None)
+    let id_a = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
+        .await;
+    let _ = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     QueueSetup { harness, queue }
@@ -1190,19 +1224,21 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     should_autoplay: bool,
     provenance_headroom: bool,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
+    let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate).await;
     let harness = if provenance_headroom {
         with_provenance_headroom(harness)
     } else {
         harness
     };
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        should_autoplay,
-    )));
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            should_autoplay,
+        )))
+        .await;
 
     let resource_a = hls_resource_with_segments_and_duration(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("a"),
         PcmPattern::Ascending,
@@ -1212,7 +1248,7 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     )
     .await;
     let resource_b = hls_resource_with_segments_and_duration(
-        harness.player(),
+        &harness,
         server,
         &temp_dir.path().join("b"),
         PcmPattern::Descending,
@@ -1225,13 +1261,22 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     if should_autoplay {
         let id_a = queue.register_for_test();
         let id_b = queue.register_for_test();
-        queue.complete_load_for_test(id_b, resource_b);
-        queue.complete_load_for_test(id_a, resource_a);
+        harness
+            .run(&queue, move |q| q.complete_load_for_test(id_b, resource_b))
+            .await;
+        harness
+            .run(&queue, move |q| q.complete_load_for_test(id_a, resource_a))
+            .await;
     } else {
-        let id_a = queue.insert_loaded_for_test(resource_a);
-        let _ = queue.insert_loaded_for_test(resource_b);
-        queue
-            .select(id_a, Transition::None)
+        let id_a = harness
+            .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
+            .await;
+        let _ = harness
+            .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
+            .await;
+        harness
+            .run(&queue, move |q| q.select(id_a, Transition::None))
+            .await
             .expect("select track A");
     }
 
@@ -1244,48 +1289,46 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
-    let queue = harness.insert_control(Queue::new(with_autoplay(
-        QueueConfig::builder().player(harness.take_player()).build(),
-        false,
-    )));
-
-    let resource_a = hls_sine_aac_resource(
-        harness.player(),
-        server,
-        &temp_dir.path().join("a"),
-        TONE_A_FREQ_HZ,
     )
     .await;
-    let resource_b = hls_sine_aac_resource(
-        harness.player(),
-        server,
-        &temp_dir.path().join("b"),
-        TONE_B_FREQ_HZ,
-    )
-    .await;
+    let queue = harness
+        .insert_control(Queue::new(with_autoplay(
+            QueueConfig::builder().player(harness.take_player()).build(),
+            false,
+        )))
+        .await;
 
-    let id_a = queue.insert_loaded_for_test(resource_a);
-    let _ = queue.insert_loaded_for_test(resource_b);
-    queue
-        .select(id_a, Transition::None)
+    let resource_a =
+        hls_sine_aac_resource(&harness, server, &temp_dir.path().join("a"), TONE_A_FREQ_HZ).await;
+    let resource_b =
+        hls_sine_aac_resource(&harness, server, &temp_dir.path().join("b"), TONE_B_FREQ_HZ).await;
+
+    let id_a = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
+        .await;
+    let _ = harness
+        .run(&queue, move |q| q.insert_loaded_for_test(resource_b))
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select track A");
 
     QueueSetup { harness, queue }
 }
 
 async fn hls_resource(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
     flac: bool,
 ) -> Resource {
-    hls_resource_with_segments(player, server, cache_dir, pattern, flac, SEGMENTS).await
+    hls_resource_with_segments(harness, server, cache_dir, pattern, flac, SEGMENTS).await
 }
 
 async fn hls_resource_with_segments(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1293,7 +1336,7 @@ async fn hls_resource_with_segments(
     segments: usize,
 ) -> Resource {
     hls_resource_with_segments_and_duration(
-        player,
+        harness,
         server,
         cache_dir,
         pattern,
@@ -1305,7 +1348,7 @@ async fn hls_resource_with_segments(
 }
 
 async fn hls_resource_with_segments_and_duration(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1332,8 +1375,9 @@ async fn hls_resource_with_segments_and_duration(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare advance-boundary HLS resource");
     let mut resource = Resource::new(config)
         .await
@@ -1343,7 +1387,7 @@ async fn hls_resource_with_segments_and_duration(
 }
 
 async fn hls_multivariant_flac_resource(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1368,8 +1412,9 @@ async fn hls_multivariant_flac_resource(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare advance-boundary multivariant FLAC resource");
     let mut resource = Resource::new(config)
         .await
@@ -1379,7 +1424,7 @@ async fn hls_multivariant_flac_resource(
 }
 
 async fn hls_sine_aac_resource(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -1400,8 +1445,9 @@ async fn hls_sine_aac_resource(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare advance-boundary sine AAC resource");
     let mut resource = Resource::new(config)
         .await
@@ -1422,8 +1468,8 @@ async fn render_until_b_with_postroll(
     let mut expected_a_frames: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, class_tolerance, Some(0));
 
         if expected_a_frames.is_none()
@@ -1459,8 +1505,8 @@ async fn render_until_b_with_late_variant_switch(
     let mut committed_variant: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_frames.is_none()
@@ -1530,8 +1576,8 @@ async fn render_crossfade_until_b_with_postroll(
     let mut expected_a_end_frame: Option<usize> = None;
 
     for _ in 0..CROSSFADE_BLOCK_BUDGET {
-        let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_end_frame.is_none()
@@ -1583,10 +1629,10 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     let mut auto_advanced_index: Option<usize> = None;
 
     for _ in 0..block_budget {
-        let _ = queue.tick();
-        drive_app_layer_crossfade_advance(queue, &mut auto_advanced_index);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        drive_app_layer_crossfade_advance(harness, queue, &mut auto_advanced_index).await;
 
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
         if expected_a_end_frame.is_none()
@@ -1609,7 +1655,8 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     )
 }
 
-fn drive_app_layer_crossfade_advance(
+async fn drive_app_layer_crossfade_advance(
+    harness: &OfflinePlayerHarness,
     queue: &QueueControl<TestPools>,
     auto_advanced_index: &mut Option<usize>,
 ) {
@@ -1621,8 +1668,11 @@ fn drive_app_layer_crossfade_advance(
         let current = queue.current_index().unwrap_or(0);
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
-            queue
-                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+            harness
+                .run(queue, move |q| {
+                    q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+                })
+                .await
                 .expect("advance provenance crossfade");
         }
     }
@@ -1662,7 +1712,7 @@ async fn render_seek_near_end_until_b_with_postroll(
     let mut seek_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = queue.tick();
+        let _ = harness.run(queue, |q| q.tick()).await;
 
         loop {
             match events.try_recv().map(|envelope| envelope.event) {
@@ -1675,7 +1725,7 @@ async fn render_seek_near_end_until_b_with_postroll(
             }
         }
 
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
 
         if seek_issue_frame.is_none()
@@ -1715,8 +1765,8 @@ async fn render_until_tone_b_with_postroll(
     let mut track_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = queue.tick();
-        let block = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(queue, |q| q.tick()).await;
+        let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, render_sample_rate);
 
         if track_duration.is_none()

@@ -3,6 +3,7 @@
 use kithara::{
     decode::DecoderBackend,
     events::{Event, EventReceiver, PlayerEvent},
+    hls::AbrMode,
     platform::time::{Duration, Instant, timeout},
     queue::{QueueControl, Transition},
 };
@@ -47,7 +48,7 @@ const OUTCOME_BUDGET: Duration = Duration::from_secs(45);
 const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
 
 async fn build_ctx() -> AppQueueFixture {
-    insecure_app_queue()
+    insecure_app_queue().await
 }
 
 /// Wait until the decoder has produced at least one PCM chunk for the
@@ -293,27 +294,48 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
-            SENTINEL_BEFORE,
-            &ctx,
-            backend,
-        ))
+        .run({
+            let source = super::source_helper::app_track_source(
+                SENTINEL_BEFORE,
+                &ctx.config,
+                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
         .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
-            TARGET_TRACK,
-            &ctx,
-            backend,
-        ))
+        .run({
+            let source = super::source_helper::app_track_source(
+                TARGET_TRACK,
+                &ctx.config,
+                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
         .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(super::source_helper::app_drm_track_source(
-            SENTINEL_AFTER,
-            &ctx,
-            backend,
-        ))
+        .run({
+            let source = super::source_helper::app_track_source(
+                SENTINEL_AFTER,
+                &ctx.config,
+                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
         .expect("append trailing sentinel");
 
     wait_for_loader_done_event(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
@@ -321,7 +343,8 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
         .unwrap_or_else(|e| panic!("Loaded never arrived for {TARGET_TRACK}: {e}"));
 
     ctx.queue
-        .select(target_id, Transition::None)
+        .run(move |q| q.select(target_id, Transition::None))
+        .await
         .expect("select target");
 
     // Production-truth warmup signal: the first PCM chunk has been
@@ -342,7 +365,10 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     let chunks_at_seek = count_build_chunks(&recorder);
     eprintln!("[harness] chunks_at_seek={chunks_at_seek}");
 
-    ctx.queue.seek(SCRUB_TARGET_SECS).expect("seek");
+    ctx.queue
+        .run(move |q| q.seek(SCRUB_TARGET_SECS))
+        .await
+        .expect("seek");
     let started_at = Instant::now();
     let mut event_log: Vec<TimedEvent> = Vec::new();
 

@@ -98,8 +98,9 @@ async fn prepare_tiny_ring_player(
         HostConfig::offline(pools)
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource_from_reader(audio));
+    )
+    .await;
+    player.load_and_fadein(resource_from_reader(audio)).await;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
@@ -188,10 +189,12 @@ async fn render_tiny_ring_control(
         decoder_events.is_empty(),
         "{label} must not recreate its decoder: {decoder_events:?}",
     );
-    Render {
+    let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
-    }
+    };
+    prepared.close().await;
+    result
 }
 
 async fn render_tiny_ring_switch(
@@ -229,10 +232,12 @@ async fn render_tiny_ring_switch(
         Some(expected_variant),
         "{label} target variant"
     );
-    Render {
+    let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
-    }
+    };
+    prepared.close().await;
+    result
 }
 
 fn cochlea_silent_buckets(samples: &[f32]) -> usize {

@@ -96,8 +96,9 @@ async fn hls_seek_middle_repeated_seeks_stress(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -139,7 +140,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
         }
     }
 
-    drop(player);
+    player.close().await;
     drop(downloader);
     drop(temp);
 

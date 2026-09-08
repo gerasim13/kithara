@@ -134,10 +134,9 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
     tx: mpsc::Sender<HostCmdMsg<S>>,
 ) -> Arc<dyn HostDispatcher<S>> {
-    let client = Arc::new(SessionClient {
+    Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
-    });
-    client
+    })
 }
 
 pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmdMsg<S>>, mpsc::Receiver<HostCmdMsg<S>>) {

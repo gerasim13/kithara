@@ -342,12 +342,12 @@ pub(super) fn record_control_state(
     }
 }
 
-pub(super) fn record_transport_state(
+pub(super) async fn record_transport_state(
     host: &OfflineHostHarness<TestPools>,
     phase: &str,
     failures: &mut Vec<String>,
 ) {
-    match host.transport_revision() {
+    match host.transport_revision().await {
         Err(PlayError::Session(SessionError::TransportNotProcessed)) => {}
         Err(error) => failures.push(format!(
             "session transport returned {error} {phase}, expected unconfigured",

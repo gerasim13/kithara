@@ -18,7 +18,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -27,7 +27,7 @@ use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 
-fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
+async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
@@ -42,6 +42,7 @@ fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPo
             .build(),
         Queue::new(QueueConfig::builder().player(player).store(store).build()),
     )
+    .await
     .expect("create product offline queue")
 }
 
@@ -67,7 +68,8 @@ fn append_track(
         .store(store.clone())
         .build();
     queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append resume track")
 }
 
@@ -82,16 +84,14 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
             root: temp_dir.path().into(),
         })
         .build();
-    let first_queue = new_queue(&first_pools, first_store.clone());
+    let first_queue = new_queue(&first_pools, first_store.clone()).await;
     let first_downloader = new_downloader(first_pools);
-    let first_tick = tokio::task::spawn(drive_queue_ticks(
-        first_queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut first_tick = QueueTicker::spawn(first_queue.control(), Duration::from_millis(50));
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
-        .select(first_id, Transition::None)
+        .run(move |q| q.select(first_id, Transition::None))
+        .await
         .expect("select first session track");
     wait_for_loader_done_event(
         &mut first_rx,
@@ -104,7 +104,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
 
     // Without this the first session never advances and no position worth
     // saving is ever reached.
-    first_queue.play();
+    first_queue.run(move |q| q.play()).await;
 
     let played = wait_for_position_event(
         &mut first_rx,
@@ -121,9 +121,8 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     first_queue.pause();
     let saved = played;
     first_queue.clear();
-    first_tick.abort();
-    let _ = first_tick.await;
-    drop(first_queue);
+    first_tick.stop().await;
+    first_queue.close().await;
     drop(first_downloader);
 
     let second_pools = pools();
@@ -132,12 +131,9 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
             root: temp_dir.path().into(),
         })
         .build();
-    let second_queue = new_queue(&second_pools, second_store.clone());
+    let second_queue = new_queue(&second_pools, second_store.clone()).await;
     let second_downloader = new_downloader(second_pools);
-    let second_tick = tokio::task::spawn(drive_queue_ticks(
-        second_queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut second_tick = QueueTicker::spawn(second_queue.control(), Duration::from_millis(50));
     let mut second_rx = second_queue.subscribe();
     let second_id = append_track(
         &second_queue,
@@ -146,7 +142,8 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
         &second_store,
     );
     second_queue
-        .select(second_id, Transition::None)
+        .run(move |q| q.select(second_id, Transition::None))
+        .await
         .expect("select second session track");
     wait_for_loader_done_event(
         &mut second_rx,
@@ -166,7 +163,7 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     );
     // `SeekComplete` is published by the decoder once it reads at the new
     // position, so it cannot arrive while the engine is still paused.
-    second_queue.play();
+    second_queue.run(move |q| q.play()).await;
     wait_for_event(
         &mut second_rx,
         "saved-position seek completion",
@@ -204,6 +201,6 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
          saved position {saved:.2}s"
     );
 
-    second_tick.abort();
-    let _ = second_tick.await;
+    second_tick.stop().await;
+    second_queue.close().await;
 }

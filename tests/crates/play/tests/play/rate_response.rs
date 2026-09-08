@@ -154,8 +154,8 @@ async fn capture_frames(
     while samples.len() / usize::from(CHANNELS) < frames {
         let remaining = frames - samples.len() / usize::from(CHANNELS);
         let block_frames = remaining.min(callback_frames);
-        samples.extend(harness.render(block_frames));
-        let _ = harness.tick_and_drain();
+        samples.extend(harness.render(block_frames).await);
+        let _ = harness.tick_and_drain().await;
         time::sleep(frame_period(block_frames)).await;
     }
     samples
@@ -255,14 +255,15 @@ async fn playing_queue(
             )
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let queue = Queue::new(
         QueueConfig::builder()
             .player(harness.take_player())
             .should_autoplay(false)
             .build(),
     );
-    let queue = harness.insert(queue);
+    let queue = harness.insert(queue).await;
     queue.set_default_rate(case.initial_rate);
     let path = signal_mp3_sine880_30s()
         .path()
@@ -276,12 +277,16 @@ async fn playing_queue(
     ))
     .build();
     let mut events = queue.subscribe();
-    let id = queue.append(config).expect("append sine fixture");
+    let id = harness
+        .run(queue.control(), move |q| q.append(config))
+        .await
+        .expect("append sine fixture");
     wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(30))
         .await
         .expect("load sine fixture through resident queue");
-    queue
-        .select(id, Transition::None)
+    harness
+        .run(queue.control(), move |q| q.select(id, Transition::None))
+        .await
         .expect("select live-rate fixture");
     (harness, queue)
 }
@@ -506,6 +511,8 @@ async fn run_case(
         "{backend} already contained the target tone before set_rate"
     );
     assert_response(backend, case, command_frame, &samples, &events);
+    drop(queue);
+    harness.close().await;
 }
 
 #[kithara::test(

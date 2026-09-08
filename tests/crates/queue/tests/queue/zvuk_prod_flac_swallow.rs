@@ -167,8 +167,9 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         HostConfig::offline(test_pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     // Pace each render window at ~1x wall clock so the real-time deadline is
     // exercised — the condition under which the playhead swallows.
@@ -177,7 +178,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     for _ in 0..windows {
         let started = Instant::now();
         for _ in 0..BLOCKS_PER_WINDOW {
-            let _ = player.render(BLOCK_FRAMES);
+            let _ = player.render(BLOCK_FRAMES).await;
         }
         let elapsed = started.elapsed().as_secs_f64();
         if window_secs > elapsed {
@@ -186,4 +187,5 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     }
 
     assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
+    player.close().await;
 }

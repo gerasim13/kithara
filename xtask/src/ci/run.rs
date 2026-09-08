@@ -603,6 +603,7 @@ mod tests {
     fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
         for kind in [
             PipelineKind::MergeRequest,
+            PipelineKind::Quarantine,
             PipelineKind::Branch,
             PipelineKind::Main,
             PipelineKind::Platforms,
@@ -624,13 +625,6 @@ mod tests {
                 "{kind:?} must run the explicit gate"
             );
         }
-    }
-
-    #[test]
-    fn quarantine_keeps_its_plain_profile_probe() {
-        let (args, _) = gate("apple-test", PipelineKind::Quarantine);
-
-        assert_eq!(args, ["test", "run", "--profile", "ci"]);
     }
 
     #[test]

@@ -472,7 +472,7 @@
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
-  just test run --profile ci
+  just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
@@ -1801,7 +1801,7 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1811,7 +1811,7 @@
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1821,7 +1821,7 @@
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1831,7 +1831,7 @@
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1841,7 +1841,7 @@
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1851,7 +1851,7 @@
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1861,7 +1861,7 @@
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
@@ -1871,7 +1871,7 @@
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --profile ci --timings
+  just test run --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info

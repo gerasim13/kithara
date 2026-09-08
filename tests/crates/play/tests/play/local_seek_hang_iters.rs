@@ -92,7 +92,7 @@ async fn render_and_collect(
         // frames for it; a silent block is an underrun, so we let virtual time
         // advance and re-pull rather than counting ring-empty silence.
         let out = loop {
-            let out = player.render(Consts::BLOCK_FRAMES);
+            let out = player.render(Consts::BLOCK_FRAMES).await;
             // Drain progress/lifecycle events so the bounded bus cannot lag and
             // so polling them rides the virtual clock alongside the sleep below.
             drain_events(events);
@@ -161,7 +161,7 @@ async fn render_until_audio(
     let min_position_ms = Duration::from_secs_f64(min_position_secs).as_millis();
 
     loop {
-        let _ = player.render(Consts::BLOCK_FRAMES);
+        let _ = player.render(Consts::BLOCK_FRAMES).await;
 
         let mut advanced = false;
         loop {
@@ -279,14 +279,15 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
             HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
-        );
+        )
+        .await;
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         let resource = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
         let mut events = resource.subscribe();
-        player.load_and_fadein(resource);
+        player.load_and_fadein(resource).await;
 
         // Event-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),
@@ -393,7 +394,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
             Consts::MIN_WINDOW_RMS,
         );
 
-        drop(player);
+        player.close().await;
         drop(downloader);
         drop(temp);
     }
