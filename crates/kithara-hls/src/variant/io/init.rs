@@ -62,7 +62,7 @@ where
     /// expects `ftyp` ("`re_mp4`: ftyp not found") or wedges with no progress.
     /// `None` is the old `VariantInit::NotApplicable`: no `#EXT-X-MAP`, or a
     /// byte-range-embedded init living in segment 0's byte range. See the crate
-    /// `CONTEXT.md` "Variant init".
+    /// [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) "Variant Init, Header Range, Probe Rebuild".
     pub(super) fn build_init_entry(
         playlist_state: &PlaylistState,
         variant_idx: usize,

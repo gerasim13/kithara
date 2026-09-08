@@ -6,7 +6,7 @@ use std::{
 /// Single-writer seqlock version counter: even = stable, odd = write in
 /// progress. The produce-core SET path is the only body writer; off-RT
 /// readers (settle) and on-core readers retry on a torn snapshot. See the
-/// crate `CONTEXT.md` "Seek-state primitives".
+/// crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) "EOF, Exact Sizes, Seek Aliases".
 struct SeqVersion {
     version: AtomicU32,
 }

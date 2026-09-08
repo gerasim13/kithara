@@ -628,7 +628,7 @@ impl Drop for NativeInner {
     /// Fire the master cancel pulse so the shutdown signal reaches
     /// subsystems before structural Arc teardown unwinds. The facade
     /// owns `NativeInner` by value, so this runs exactly when the
-    /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
+    /// `AudioPlayer` is dropped. See [kithara-play contracts](https://github.com/zvuk/kithara/wiki/kithara-play)
     /// "Cancel Hierarchy".
     fn drop(&mut self) {
         if let Err(error) = super::session::remove(&self.queue_owner) {

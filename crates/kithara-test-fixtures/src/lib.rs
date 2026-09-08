@@ -6,7 +6,7 @@
 //! script, and never enter the library. The signal primitives they render with
 //! do enter it: `signal` is the workspace's one way to make a waveform, a PCM
 //! buffer, or a RIFF body, whether at build time or at run time. See
-//! `CONTEXT.md` for the store layout and the invalidation contract.
+//! [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-fixtures) for the store layout and the invalidation contract.
 
 /// Every accessor that reads the store carries its own `cfg`, because the store
 /// is a host filesystem the browser cannot reach; an `embed` accessor carries

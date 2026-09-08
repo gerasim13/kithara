@@ -11,7 +11,7 @@ use proc_macro::TokenStream;
 /// document may say about a configuration struct, and the `apply` that merges
 /// one onto the other.
 ///
-/// See the crate `README.md` for the field attributes and `CONTEXT.md` for the
+/// See the crate `README.md` for the field attributes and [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-macros) for the
 /// contract the generated code keeps.
 #[proc_macro_derive(Patch, attributes(patch))]
 pub fn patch(input: TokenStream) -> TokenStream {

@@ -84,7 +84,7 @@ where
     ///
     /// `Ok(init_range)` for `served_from() == 0`, else
     /// `Err(FormatChangeNotApplicable)` for byte-shifted same-codec
-    /// commits. See the crate `CONTEXT.md` "Format-change header byte range".
+    /// commits. See the crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) "Variant Init, Header Range, Probe Rebuild".
     pub(crate) fn header_byte_range(&self) -> StreamResult<Range<u64>> {
         if self.served_from() != 0 {
             return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));

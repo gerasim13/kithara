@@ -19,7 +19,7 @@ use super::seqlock::AnchorEntry;
 /// a tick later — the non-blocking analog of the original `Mutex`'s blocking
 /// wait. `active` is the present generation (0 = `None`), published *inside* the
 /// version critical section so two writers' publishes can never lost-update
-/// each other. See the crate `CONTEXT.md` "Seek-state primitives".
+/// each other. See the crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) "EOF, Exact Sizes, Seek Aliases".
 pub(super) struct CasAnchorCell {
     segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired

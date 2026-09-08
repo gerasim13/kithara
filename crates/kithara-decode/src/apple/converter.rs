@@ -10,7 +10,7 @@ use crate::GaplessInfo;
 pub(crate) type ConverterInputState = AudioConverterPacketInput;
 
 /// Rate the codec's embedded `AudioConverter` should emit at, given the
-/// conversion the caller asked for. See CONTEXT.md "Resampler integration".
+/// conversion the caller asked for. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) "Resampler placement".
 #[cfg(feature = "apple-codec-embedded-resampler")]
 pub(crate) fn embedded_target_output_rate(requested: Option<NonZeroU32>) -> Option<u32> {
     requested.map(NonZeroU32::get)

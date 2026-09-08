@@ -296,7 +296,7 @@ impl Track<WaitingForSource> {
         }
 
         // WHY: Source ready - resume into the phase that initiated the wait. `Eof` resumes like `Ready`: byte-space EOF is not end of PCM,
-        // only the decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
+        // only the decode path finalizes `AtEof` (see [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-audio), "Track FSM").
         match context {
             WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),

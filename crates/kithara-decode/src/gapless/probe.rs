@@ -78,7 +78,7 @@ where
 /// exists (MP4 `udta`/`iTunSMPB`/`elst` for AAC, Xing/Info+LAME for
 /// MP3); `None` otherwise. Decoder-side algorithmic delay is added by
 /// each [`crate::codec::FrameCodec`] impl separately. See
-/// `kithara-decode/CONTEXT.md` "Gapless probe contract" for the full
+/// [kithara-decode contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) "Two independent silence layers" for the full
 /// per-backend table and empirical justification.
 pub(crate) fn probe_codec_gapless<S>(
     codec: AudioCodec,

@@ -130,7 +130,7 @@ where
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // WHY: Unified reader-wake handle: the shared readiness gate for the off-RT `wait_range(_, None)` park (CONTEXT.md "Seek and
+        // WHY: Unified reader-wake handle: the shared readiness gate for the off-RT `wait_range(_, None)` park ([crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) "Seek and
         // wait_range Contract") paired with the late-bound audio-worker wake.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));

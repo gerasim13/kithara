@@ -56,4 +56,4 @@ let stream = Stream::<Hls<AppPools>>::new(config).await?;
 `HlsCoord` and `HlsPeer` are internal orchestration types. Re-exports cover the
 ABR mode plus DRM key-processor registry types used to configure encrypted HLS.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-hls) for detailed contracts, invariants, and internals.

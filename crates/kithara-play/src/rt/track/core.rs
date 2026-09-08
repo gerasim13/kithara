@@ -59,7 +59,7 @@ pub struct PlayerTrack {
     /// matching `PlayerCmd::Seek`, so a render block that sees a newer
     /// published epoch is rendering a position the user has already left.
     /// [`read`](Self::read) uses the gap to refuse natural-EOF finalization
-    /// until the re-base arrives; see the crate `CONTEXT.md`.
+    /// until the re-base arrives; see the crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-play).
     pub(super) seek_epoch: u64,
 }
 

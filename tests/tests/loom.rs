@@ -135,7 +135,7 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
     // `active` for the woken signaller under the core lock before the waiter's
     // own park drops its credit. Waiter first, and it parks with nothing
     // counted: the clock jumps the whole backstop before the signaller exists.
-    // See `kithara-platform/CONTEXT.md`, "Quiescence engine".
+    // See [kithara-platform contracts](https://github.com/zvuk/kithara/wiki/kithara-platform), "Quiescence engine".
     let second_gate = Arc::clone(&gate);
     let signaller = thread::spawn_named("threadgate-handoff-signaller", move || {
         assert_eq!(snapshot_rx.recv(), Ok(()));

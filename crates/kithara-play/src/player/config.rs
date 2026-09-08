@@ -59,7 +59,7 @@ pub struct PlayerConfig<S> {
     pub eq_layout: Vec<EqBandConfig>,
     /// Built-in auto-advance handler. The queue overwrites this for every
     /// queue-driven player at construction, so it is not a document key.
-    /// See `crates/kithara-play/CONTEXT.md` for the owning contract.
+    /// See [kithara-play contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for the owning contract.
     #[builder(default = true)]
     #[patch(skip)]
     pub auto_advance_enabled: bool,
@@ -82,7 +82,7 @@ pub struct PlayerConfig<S> {
     /// Secondary lead time before EOF at which the next queued item is
     /// loaded. The queue overwrites this for every queue-driven player at
     /// construction, so it is not a document key. See
-    /// `crates/kithara-play/CONTEXT.md` for the owning contract.
+    /// [kithara-play contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for the owning contract.
     #[builder(default = 3.5)]
     #[patch(skip)]
     pub prefetch_duration: f32,

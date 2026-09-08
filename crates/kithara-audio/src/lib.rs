@@ -5,7 +5,7 @@
 //! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`AudioReader`] for pull-based audio consumers
 //!
-//! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
+//! See the crate `README.md` for usage and [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-audio) for threading model and architecture.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]

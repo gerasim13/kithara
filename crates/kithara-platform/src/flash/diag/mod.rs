@@ -8,7 +8,7 @@
 //! [`register`] returns `None` and a wrapped primitive pays only a null check.
 //! `KITHARA_FLASH_SYNC_BT=1` adds backtraces: the dumping thread's, and — for
 //! deadline-less waiters, captured where they park — the waiter's own. See the
-//! crate `CONTEXT.md` "Virtual time (`flash`)".
+//! crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-platform) "Virtual time (`flash`)".
 
 mod registry;
 mod thread;

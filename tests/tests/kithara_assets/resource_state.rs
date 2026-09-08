@@ -307,7 +307,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     // `AssetStore` over the same directory is a second owner of
     // `_index/pins.bin`: it hydrates its own copy at build time, and its flush
     // hub later republishes that snapshot over the first store's unpin. See
-    // `crates/kithara-assets/CONTEXT.md`.
+    // [kithara-assets contracts](https://github.com/zvuk/kithara/wiki/kithara-assets).
     let scope_a = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
