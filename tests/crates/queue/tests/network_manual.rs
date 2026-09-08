@@ -6,12 +6,12 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
-#[path = "queue/source_helper.rs"]
+#[path = "source_helper.rs"]
 mod source_helper;
 
-#[path = "queue/cold_seek_cpal.rs"]
+#[path = "cold_seek_cpal.rs"]
 mod cold_seek_cpal;
-#[path = "queue/zvuk_drm_trace.rs"]
+#[path = "zvuk_drm_trace.rs"]
 mod zvuk_drm_trace;
-#[path = "queue/zvuk_stage_drm_e2e.rs"]
+#[path = "zvuk_stage_drm_e2e.rs"]
 mod zvuk_stage_drm_e2e;

@@ -39,7 +39,7 @@ workspace = true
 
 [[test]]
 name = "audio"
-path = "tests/audio/mod.rs"
+path = "tests/suite.rs"
 
 [[test]]
 name = "audio_heavy"

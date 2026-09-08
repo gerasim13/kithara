@@ -51,7 +51,7 @@ workspace = true
 
 [[test]]
 name = "play"
-path = "tests/play/mod.rs"
+path = "tests/suite.rs"
 
 [[test]]
 name = "play_heavy"

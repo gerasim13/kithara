@@ -9,15 +9,15 @@ mod common {
 }
 pub use kithara_integration_tests::gapless as gapless_common;
 
-#[path = "decode/fixture_integration.rs"]
+#[path = "fixture_integration.rs"]
 mod fixture_integration;
-#[path = "decode/gapless_encoding_parity.rs"]
+#[path = "gapless_encoding_parity.rs"]
 mod gapless_encoding_parity;
-#[path = "decode/gapless_parity.rs"]
+#[path = "gapless_parity.rs"]
 mod gapless_parity;
-#[path = "decode/hls_abr_variant_switch.rs"]
+#[path = "hls_abr_variant_switch.rs"]
 mod hls_abr_variant_switch;
-#[path = "decode/stress_seek_random.rs"]
+#[path = "stress_seek_random.rs"]
 mod stress_seek_random;
-#[path = "decode/stress_timeline.rs"]
+#[path = "stress_timeline.rs"]
 mod stress_timeline;

@@ -44,4 +44,4 @@ workspace = true
 
 [[test]]
 name = "net"
-path = "tests/net/mod.rs"
+path = "tests/suite.rs"

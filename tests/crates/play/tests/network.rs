@@ -6,5 +6,5 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
-#[path = "play/silvercomet_seek_hang.rs"]
+#[path = "silvercomet_seek_hang.rs"]
 mod silvercomet_seek_hang;

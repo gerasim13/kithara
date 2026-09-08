@@ -138,9 +138,11 @@ lockbud_exclude = [
   "kithara-ffi-web-tests",
   "kithara-file-tests",
   "kithara-fuzz",
+  "kithara-harness-tests",
   "kithara-hls-tests",
   "kithara-integration-tests",
   "kithara-net-tests",
+  "kithara-platform-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
   "kithara-storage-tests",
@@ -486,7 +488,7 @@ features = []
 shared_paths = [
   ".config/xtask.toml",
   ".config/nextest.toml",
-  "tests/Cargo.toml",
+  "tests/crates/integration/Cargo.toml",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -630,10 +632,10 @@ prefix_args = [
 [test.lanes.fixtures]
 program = "cargo"
 owns = [
-  "tests/src/",
-  "tests/tests/suite_harness.rs",
-  "tests/tests/flash_lexical.rs",
-  "tests/tests/timeout_guard.rs",
+  "tests/crates/integration/src/",
+  "tests/crates/harness/tests/suite_harness.rs",
+  "tests/crates/harness/tests/flash_lexical.rs",
+  "tests/crates/harness/tests/timeout_guard.rs",
 ]
 default_features = ["harness"]
 prefix_args = [
@@ -643,6 +645,8 @@ prefix_args = [
   "support",
   "-p",
   "kithara-integration-tests",
+  "-p",
+  "kithara-harness-tests",
   "--lib",
   "--test",
   "suite_harness",
@@ -905,7 +909,7 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-# The harness (tests/crates/ffi-web/tests/ffi_web/selenium.rs) reads
+# The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
 # Naming the browser in the lane itself, rather than leaving it to whatever
 # the caller happens to export, is what makes `--lane=selenium-firefox` an
@@ -975,6 +979,16 @@ pins = ".config/ci-pins.toml"
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
+"kithara-integration-tests::suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
+"suite_light::browser_runner_smoke::" = "kithara-harness-tests::suite_light::browser_runner_smoke::"
+"kithara-integration-tests::suite_light::browser_runner_smoke::" = "kithara-harness-tests::suite_light::browser_runner_smoke::"
+"suite_light::no_block::" = "kithara-harness-tests::suite_light::no_block::"
+"kithara-integration-tests::suite_light::no_block::" = "kithara-harness-tests::suite_light::no_block::"
+"suite_stress::abr_contract::" = "kithara-abr-tests::abr_stress::abr_contract::"
+"loom::" = "kithara-platform-tests::loom::"
+"kithara-integration-tests::suite_stress::abr_contract::" = "kithara-abr-tests::abr_stress::abr_contract::"
+"kithara-integration-tests::loom::" = "kithara-platform-tests::loom::"
 "suite_heavy::no_sync_real_media::" = "kithara-play-tests::play_heavy::no_sync_real_media::"
 "suite_light::kithara_audio::" = "kithara-audio-tests::audio::"
 "suite_light::kithara_play::" = "kithara-play-tests::play::"

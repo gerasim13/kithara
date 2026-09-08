@@ -43,7 +43,7 @@ workspace = true
 
 [[test]]
 name = "queue"
-path = "tests/queue/mod.rs"
+path = "tests/suite.rs"
 
 [[test]]
 name = "network"

@@ -6,5 +6,5 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
-#[path = "play/live_remote_network.rs"]
+#[path = "live_remote_network.rs"]
 mod live_remote_network;

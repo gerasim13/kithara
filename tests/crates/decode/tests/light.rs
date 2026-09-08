@@ -8,21 +8,21 @@ mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
 
-#[path = "decode/aac_priming_regression.rs"]
+#[path = "aac_priming_regression.rs"]
 mod aac_priming_regression;
-#[path = "decode/apple_mp3_priming_probe.rs"]
+#[path = "apple_mp3_priming_probe.rs"]
 mod apple_mp3_priming_probe;
-#[path = "decode/decoder_seek_tests.rs"]
+#[path = "decoder_seek_tests.rs"]
 mod decoder_seek_tests;
-#[path = "decode/decoder_tests.rs"]
+#[path = "decoder_tests.rs"]
 mod decoder_tests;
-#[path = "decode/factory_tests.rs"]
+#[path = "factory_tests.rs"]
 mod factory_tests;
-#[path = "decode/protocol_tests.rs"]
+#[path = "protocol_tests.rs"]
 mod protocol_tests;
-#[path = "decode/symphonia_seek_stale_duration.rs"]
+#[path = "symphonia_seek_stale_duration.rs"]
 mod symphonia_seek_stale_duration;
-#[path = "decode/symphonia_tests.rs"]
+#[path = "symphonia_tests.rs"]
 mod symphonia_tests;
-#[path = "decode/timeline_tests.rs"]
+#[path = "timeline_tests.rs"]
 mod timeline_tests;

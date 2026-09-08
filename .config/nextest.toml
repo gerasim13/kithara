@@ -1,7 +1,7 @@
 # On-disk fixture cache (L2). ON BY DEFAULT: when KITHARA_FIXTURE_CACHE is unset
 # (the default profile, `just test`, `cargo test`, `just test rtsan`, IDE), the test
 # code falls back to a build-fingerprinted temp dir (see
-# tests/src/fixture_cache.rs::resolve_cache_dir), so encode/mux output is reused
+# tests/crates/integration/src/fixture_cache.rs::resolve_cache_dir), so encode/mux output is reused
 # across the per-test processes in a run. Without L2, nextest's process-per-test
 # model re-encodes every AAC fixture from scratch — under CPU oversubscription a
 # single test's ffmpeg encode can exhaust its whole time budget and time out.

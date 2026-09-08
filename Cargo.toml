@@ -40,7 +40,6 @@ members = [
     "crates/kithara-warp",
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
-    "tests",
     "tests/crates/*",
     "tests/fuzz",
     "xtask",
@@ -79,7 +78,6 @@ default-members = [
     "crates/kithara-ui",
     "crates/kithara-warp",
     "crates/kithara-worker",
-    "tests",
     "tests/crates/*",
 ]
 
@@ -223,7 +221,7 @@ kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
-kithara-integration-tests = { path = "tests" }
+kithara-integration-tests = { path = "tests/crates/integration" }
 kithara-macros = { path = "crates/kithara-macros", version = "0.0.1-alpha4" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
@@ -592,6 +590,9 @@ opt-level = 1
 [profile.test-release.package.kithara-file-tests]
 opt-level = 1
 
+[profile.test-release.package.kithara-harness-tests]
+opt-level = 1
+
 [profile.test-release.package.kithara-hls-tests]
 opt-level = 1
 
@@ -599,6 +600,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-net-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-platform-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-play-tests]

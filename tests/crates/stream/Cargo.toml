@@ -9,7 +9,7 @@ autotests = false
 
 [lib]
 name = "kithara_stream_test_support"
-path = "../../src/memory_source.rs"
+path = "../integration/src/memory_source.rs"
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
@@ -39,4 +39,4 @@ workspace = true
 
 [[test]]
 name = "stream"
-path = "tests/stream/mod.rs"
+path = "tests/suite.rs"

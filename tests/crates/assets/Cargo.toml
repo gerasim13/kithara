@@ -35,4 +35,4 @@ workspace = true
 
 [[test]]
 name = "assets"
-path = "tests/assets/mod.rs"
+path = "tests/suite.rs"

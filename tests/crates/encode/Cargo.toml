@@ -43,4 +43,4 @@ workspace = true
 
 [[test]]
 name = "encode"
-path = "tests/encode/mod.rs"
+path = "tests/suite.rs"

@@ -453,7 +453,7 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
         --features {{ FEATURES }} \
         --target "$target" $repeats {{ FILTER }}
 
-rtsan-async FILTER="no_block": (_rtsan "-p kithara-integration-tests --test suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
+rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.

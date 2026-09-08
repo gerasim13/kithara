@@ -6,7 +6,7 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
-#[path = "play/engine_cpal_tests.rs"]
+#[path = "engine_cpal_tests.rs"]
 mod engine_cpal_tests;
-#[path = "play/engine_session_contract.rs"]
+#[path = "engine_session_contract.rs"]
 mod engine_session_contract;

@@ -9,7 +9,7 @@ per-crate behavior contracts live in each crate's wiki page.
 
 The canonical gate is plain `just test` (the product workspace, all backends,
 `flash` ON, `test-release` profile). Backend features (symphonia / apple /
-android) are activated automatically by `tests/Cargo.toml`, so a single run
+android) are activated automatically by `tests/crates/integration/Cargo.toml`, so a single run
 exercises every compiled-in decoder.
 
 ```sh
@@ -90,7 +90,7 @@ the full suite but passes alone is load-correlated, not deterministic.
 
 Encode/mux fixtures are expensive to regenerate, so an on-disk cache is **on by
 default** (unset `KITHARA_FIXTURE_CACHE` ⇒ a persistent default dir; see
-`tests/src/fixture_cache.rs`). The opt-in `cold` profile gives an isolated,
+`tests/crates/integration/src/fixture_cache.rs`). The opt-in `cold` profile gives an isolated,
 freshly recreated per-run cache without touching that persistent default.
 
 Whichever root is in effect, the build fingerprint is appended to it, so an

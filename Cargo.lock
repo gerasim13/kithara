@@ -4657,7 +4657,9 @@ name = "kithara-abr-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-integration-tests",
  "kithara-test-utils",
+ "serial_test",
 ]
 
 [[package]]
@@ -4937,7 +4939,9 @@ dependencies = [
 name = "kithara-broadcast-tests"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bytes",
  "kithara",
+ "kithara-app",
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5193,6 +5197,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serial_test",
  "thirtyfour",
  "tracing",
  "tracing-wasm",
@@ -5263,6 +5268,20 @@ dependencies = [
  "libfuzzer-sys",
  "tempfile",
  "url",
+]
+
+[[package]]
+name = "kithara-harness-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "js-sys",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "serial_test",
+ "tempfile",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -5525,6 +5544,14 @@ dependencies = [
  "wasm_safe_thread",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "kithara-platform-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-test-utils",
 ]
 
 [[package]]

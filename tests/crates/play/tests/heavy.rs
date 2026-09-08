@@ -7,5 +7,5 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
-#[path = "play/no_sync_real_media.rs"]
+#[path = "no_sync_real_media.rs"]
 mod no_sync_real_media;
