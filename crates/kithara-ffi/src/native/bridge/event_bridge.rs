@@ -41,6 +41,9 @@ impl EventBridge {
         event: &Event,
     ) {
         if let Event::Player(pe) = event {
+            if let PlayerEvent::CurrentItemChanged { item } = pe {
+                *last_current.lock() = *item;
+            }
             Self::route_player_event_to_item(items, last_current, pe);
             let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
                 return;
@@ -49,10 +52,6 @@ impl EventBridge {
             return;
         }
         if let Event::Queue(qe) = event {
-            if let QueueEvent::CurrentTrackChanged { id } = qe {
-                let mut prev = last_current.lock();
-                *prev = *id;
-            }
             Self::dispatch_queue_event(observer, items, qe);
             return;
         }
@@ -650,6 +649,29 @@ mod tests {
             current_observer.take_events().is_empty(),
             "an outgoing failure must not be delivered to another item with the same source"
         );
+    }
+
+    #[kithara::test]
+    fn a_current_item_event_updates_the_last_current_identity() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
+        let last_current = Mutex::new(None);
+        let id = TrackId::from(11_u64);
+
+        EventBridge::dispatch(
+            &observer,
+            &items,
+            &last_current,
+            &Event::Player(PlayerEvent::CurrentItemChanged { item: Some(id) }),
+        );
+        assert_eq!(*last_current.lock(), Some(id));
+        EventBridge::dispatch(
+            &observer,
+            &items,
+            &last_current,
+            &Event::Queue(QueueEvent::CurrentTrackChanged { id: None }),
+        );
+        assert_eq!(*last_current.lock(), Some(id));
     }
 
     #[kithara::test]

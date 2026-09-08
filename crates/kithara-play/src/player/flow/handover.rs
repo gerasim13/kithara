@@ -312,7 +312,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(Envelope {
-                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                event: Event::Player(PlayerEvent::CurrentItemChanged { .. }),
                 ..
             })
         ));

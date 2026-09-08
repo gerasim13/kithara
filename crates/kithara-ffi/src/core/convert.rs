@@ -1206,7 +1206,7 @@ mod tests {
             assert!(preserves_contract(&event), "unexpected event: {event:?}");
         }
         assert!(matches!(
-            FfiPlayerEvent::try_from(&PlayerEvent::CurrentItemChanged),
+            FfiPlayerEvent::try_from(&PlayerEvent::CurrentItemChanged { item: None }),
             Err(NotForwarded)
         ));
     }

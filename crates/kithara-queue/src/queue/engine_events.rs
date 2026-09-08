@@ -178,7 +178,7 @@ where
             Event::Player(PlayerEvent::ItemDidFail { item }) => {
                 self.handle_item_did_fail(item);
             }
-            Event::Player(PlayerEvent::CurrentItemChanged) => {
+            Event::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
             }
             Event::Player(PlayerEvent::HandoverRequested { item }) => {

@@ -391,7 +391,9 @@ pub enum PlayerEvent {
     MuteChanged {
         muted: bool,
     },
-    CurrentItemChanged,
+    CurrentItemChanged {
+        item: Option<TrackId>,
+    },
     PrerollCompleted {
         success: bool,
     },
