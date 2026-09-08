@@ -7,7 +7,7 @@ use crate::Percent;
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 pub struct PoolConfig {
     /// Maximum share of the region budget this pool may hold.
-    #[builder(default = Percent::FULL)]
+    #[builder(default)]
     pub(crate) max_share: Percent,
     /// Number of reusable payloads allocated during region construction.
     #[builder(default)]
@@ -54,7 +54,7 @@ mod tests {
         let patch: PoolConfigPatch = serde_yaml_ng::from_str("max_share: 100\n")
             .expect("100 percent is inside the invariant");
 
-        assert_eq!(patch.max_share, Some(Percent::FULL));
+        assert_eq!(patch.max_share, Some(Percent::MAX));
     }
 
     #[kithara::test(native, flash(false))]

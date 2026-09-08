@@ -50,7 +50,7 @@ pub fn build() -> Result<Pools, PoolError> {
                 .initial_buffers(0)
                 .max_buffers(Consts::BYTE_MAX_BUFFERS)
                 .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
-                .max_share(Percent::FULL)
+                .max_share(Percent::MAX)
                 .build(),
         )
         .samples(
@@ -59,7 +59,7 @@ pub fn build() -> Result<Pools, PoolError> {
                 .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
                 .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
                 .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
-                .max_share(Percent::FULL)
+                .max_share(Percent::MAX)
                 .build(),
         )
         .build()

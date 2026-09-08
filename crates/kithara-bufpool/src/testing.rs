@@ -87,7 +87,7 @@ fn byte_config() -> crate::PoolConfig {
     crate::PoolConfig::builder()
         .max_buffers(Consts::BYTE_MAX_BUFFERS)
         .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
-        .max_share(crate::Percent::FULL)
+        .max_share(crate::Percent::MAX)
         .build()
 }
 
@@ -95,7 +95,7 @@ fn sample_config() -> crate::PoolConfig {
     crate::PoolConfig::builder()
         .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
         .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
-        .max_share(crate::Percent::FULL)
+        .max_share(crate::Percent::MAX)
         .build()
 }
 

@@ -61,7 +61,7 @@ never reaches a checked-out guard.
 
 `OverallBudget` is the hard cap shared by every slot in a region. A slot's
 `max_share` is an additional hard ceiling, not a reservation or partition: two
-slots may both use `Percent::FULL` and compete for the same peak capacity.
+slots may both use `Percent::MAX` and compete for the same peak capacity.
 
 Accounting measures `Vec` capacity multiplied by element size and `String`
 capacity in bytes. It deliberately does not claim to measure RSS, allocator
@@ -110,12 +110,8 @@ consumer, so no shared type exists to derive on; the section naming a
 particular application's pools belongs beside that application's schema
 invocation: the region's byte budget, then one field per pool it declares.
 
-`Percent` carries a hand-written `Deserialize` that refuses a value above 100
-at parse time and names it. That is deliberate duplication of the check in
-`BuildContext::pool_limit`, which stays: `Percent`'s field is public, so code can
-still construct an invalid share, and `pool_limit` is the backstop for that
-path. The document refuses earlier and points at the offending key instead of
-surfacing a late `PoolError::InvalidConfig` from region construction. `Percent`
-is not a `ranged!` type: that macro's generated body is float-only, and its
-`From` clamps an out-of-range value rather than refusing it — the opposite of
-what a document must do.
+`Percent` derives `Ranged` with a private field and bounds `0..=100`.
+`checked` and the generated `Deserialize` refuse invalid shares; document
+errors name the offending key. The default is `Percent::MAX`. Region
+construction receives a valid percentage, so `pool_limit` only computes its
+byte ceiling.
