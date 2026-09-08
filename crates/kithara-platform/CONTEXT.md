@@ -70,15 +70,6 @@ under `flash` it is the virtual clock. `web_time` is internal to this crate and
 `std::time::{Instant, Duration}` is banned outside it. Gates: `arch.no-direct-time`,
 `arch.no-direct-thread-wait`, and `arch.no-implicit-clock` (hidden clock reads in library code).
 
-## Ranged Values
-
-`ranged!` declares a float newtype that cannot hold a value outside its range, so a bound
-crosses a crate boundary as a type rather than as loose constants a caller must remember to
-clamp against. `From` clamps and maps `NaN` to `DEFAULT` rather than propagating it through every
-later comparison; `checked` rejects instead. The owning crate declares the type next to the code
-that defines the range; every other crate imports it. Plain `f32` stays at ABI and RT-message
-boundaries, which convert once at the door.
-
 ## Virtual Time (`flash`)
 
 `flash` replaces the wall clock with a process-global virtual timeline so warm-cache offline

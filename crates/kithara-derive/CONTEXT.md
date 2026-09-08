@@ -91,9 +91,13 @@ and adding one to a configuration must not add one to its patch.
 
 ## Bounded Scalars
 
-`Ranged` is the only declaration of a bounded numeric newtype. `checked` and
-`Deserialize` refuse invalid values; `clamp` is the explicit knob exception
-and maps NaN to the declared default. Standard derives stay on the declaration.
-Generated paths use only `::core` and `::serde`, so declaring crates need
-`serde`. The derive never emits `Serialize`: configuration values are read,
-not exported by the derive.
+`#[derive(Ranged)]` declares a newtype that cannot hold a value outside its
+range, so a bound crosses a crate boundary as a type rather than as loose
+constants a caller must remember to clamp against. It is the only way a
+bounded newtype enters the workspace: a hand-written `MIN`/`MAX` pair with a
+`contains` check or a clamping constructor is a defect, and `derivable_ranged`
+says so. `checked` and the generated `Deserialize` refuse; `clamp` is the
+explicit exception a knob opts into, and it maps `NaN` to `DEFAULT` rather
+than propagating it through every later comparison. `Serialize` is never
+emitted. The generated code names `::core` and `::serde` only, so a crate that
+declares a `Ranged` type must carry `serde`. Standard derives stay at the site.
