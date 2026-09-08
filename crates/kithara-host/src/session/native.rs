@@ -12,7 +12,6 @@ use kithara_platform::{
     thread::spawn_named,
 };
 use kithara_play::{GroupState, player::PlayerMember};
-use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{
@@ -30,8 +29,6 @@ pub(crate) struct SessionClient<S> {
 }
 
 impl<S> SessionClient<S> {
-    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
-    #[kithara::allow_block]
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {

@@ -2,11 +2,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, sleep},
-        tokio,
-    },
+    platform::{CancelToken, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
@@ -17,7 +13,7 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 
-use super::OfflineQueue;
+use super::{OfflineQueue, QueueTicker};
 use crate::TestTempDir;
 
 #[non_exhaustive]
@@ -25,6 +21,22 @@ pub struct AppQueueFixture {
     pub config: AppConfig,
     pub queue: OfflineQueue<AppPools>,
     pub cache: TestTempDir,
+    ticker: QueueTicker,
+}
+
+impl AppQueueFixture {
+    pub async fn close(self) {
+        let Self {
+            config,
+            queue,
+            cache,
+            mut ticker,
+        } = self;
+        ticker.stop().await;
+        drop(config);
+        queue.close().await;
+        drop(cache);
+    }
 }
 
 pub struct LazyAppQueueFixture(tokio::sync::OnceCell<AppQueueFixture>);
@@ -36,13 +48,16 @@ impl LazyAppQueueFixture {
     }
 
     pub async fn get(&self) -> &AppQueueFixture {
-        self.0.get_or_init(|| async { insecure_app_queue() }).await
+        self.0.get_or_init(insecure_app_queue).await
     }
 }
 
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
-#[must_use]
-pub fn insecure_app_queue() -> AppQueueFixture {
+pub async fn insecure_app_queue() -> AppQueueFixture {
+    app_queue(Config::load(None, None).expect("the shipped configuration loads")).await
+}
+
+pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
@@ -51,7 +66,6 @@ pub fn insecure_app_queue() -> AppQueueFixture {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -88,19 +102,16 @@ pub fn insecure_app_queue() -> AppQueueFixture {
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            let _ = queue_for_tick.tick();
-        }
-    });
+    let ticker = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     AppQueueFixture {
         config,
         queue,
         cache: TestTempDir::new(),
+        ticker,
     }
 }

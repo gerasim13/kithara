@@ -97,7 +97,7 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
     for _ in 0..windows {
         let started = Instant::now();
         for _ in 0..BLOCKS_PER_WINDOW {
-            let _ = player.render(BLOCK_FRAMES);
+            let _ = player.render(BLOCK_FRAMES).await;
         }
         let elapsed = started.elapsed().as_secs_f64();
         if window_secs > elapsed {
@@ -168,8 +168,9 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
     let windows =
@@ -186,4 +187,5 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
     assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
+    player.close().await;
 }

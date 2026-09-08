@@ -912,22 +912,25 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         HostConfig::offline(region.clone())
             .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
     let _warmup = render_offline_window(
         &mut player,
         24,
         "packaged warmup",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
-    );
+    )
+    .await;
     let steady = render_offline_window(
         &mut player,
         80,
         "packaged steady-state",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
-    );
+    )
+    .await;
     assert!(
         steady.max_silence_run <= 1,
         "{codec:?}: offline output produced {} silent blocks ({steady})",
@@ -938,6 +941,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         "{codec:?}: offline output exceeded render budget {} times ({steady})",
         steady.slow_renders
     );
+    player.close().await;
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
@@ -1068,7 +1072,8 @@ async fn stress_offline_crossfade_no_gaps() {
         HostConfig::offline(region.clone())
             .sample_rate(NonZeroU32::new(SR).expect("sample rate is non-zero"))
             .build(),
-    );
+    )
+    .await;
 
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
@@ -1123,32 +1128,32 @@ async fn stress_offline_crossfade_no_gaps() {
         .await
         .expect("mp3_1 preload deadline")
         .expect("mp3_1 preload");
-    player.load_and_fadein(mp3_1);
-    let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
+    player.load_and_fadein(mp3_1).await;
+    let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
     let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, hls_1.preload())
         .await
         .expect("hls_1 preload deadline")
         .expect("hls_1 preload");
-    player.load_and_fadein(hls_1);
-    let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
+    player.load_and_fadein(hls_1).await;
+    let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
     let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, mp3_2.preload())
         .await
         .expect("mp3_2 preload deadline")
         .expect("mp3_2 preload");
-    player.load_and_fadein(mp3_2);
-    let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
+    player.load_and_fadein(mp3_2).await;
+    let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
     let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, mp3_3.preload())
         .await
         .expect("mp3_3 preload deadline")
         .expect("mp3_3 preload");
-    player.load_and_fadein(mp3_3);
-    let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
+    player.load_and_fadein(mp3_3).await;
+    let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR).await;
 
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
     for s in [&s1a, &s1b, &s2, &s3] {
@@ -1166,16 +1171,18 @@ async fn stress_offline_crossfade_no_gaps() {
             .await
             .expect("hls_n preload deadline")
             .expect("hls_n preload");
-        player.load_and_fadein(hls_n);
-        let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
+        player.load_and_fadein(hls_n).await;
+        let _sh =
+            render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR).await;
 
         let mut mp3_n = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
         time::timeout(Consts::READ_TIMEOUT, mp3_n.preload())
             .await
             .expect("mp3_n preload deadline")
             .expect("mp3_n preload");
-        player.load_and_fadein(mp3_n);
-        let sm = render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR);
+        player.load_and_fadein(mp3_n).await;
+        let sm =
+            render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR).await;
 
         info!("  {sm}");
         if sm.max_silence_run > worst_silence {
@@ -1231,6 +1238,7 @@ async fn stress_offline_crossfade_no_gaps() {
         "HLS→MP3 repeated: {worst_slow} blocks exceeded budget, \
          max_render={worst_render:?} — sustained blocking during crossfade"
     );
+    player.close().await;
 }
 
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,

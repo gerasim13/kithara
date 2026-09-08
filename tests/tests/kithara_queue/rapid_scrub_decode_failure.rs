@@ -11,7 +11,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep, timeout},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 
@@ -181,7 +180,7 @@ struct Harness {
     queue: OfflineQueue<TestPools>,
     rx: EventReceiver,
     master_url: String,
-    tick: tokio::task::JoinHandle<()>,
+    tick: QueueTicker,
 }
 
 impl Harness {
@@ -266,12 +265,10 @@ impl Harness {
             session,
             Queue::new(QueueConfig::builder().player(player).build()),
         )
+        .await
         .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(
-            queue.control(),
-            Duration::from_millis(50),
-        ));
+        let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
             .downloader(downloader)
@@ -280,14 +277,18 @@ impl Harness {
             .build();
         let mut rx = queue.subscribe();
         let id = queue
-            .append(TrackSource::Config(Box::new(cfg)))
+            .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+            .await
             .expect("append rapid-scrub track");
 
         wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
             .await
             .unwrap_or_else(|e| panic!("Loaded never arrived: {e}"));
-        queue.select(id, Transition::None).expect("select");
-        queue.play();
+        queue
+            .run(move |q| q.select(id, Transition::None))
+            .await
+            .expect("select");
+        queue.run(move |q| q.play()).await;
 
         Self {
             queue,
@@ -334,8 +335,17 @@ impl Harness {
         }
     }
 
-    fn shutdown(self) {
-        self.tick.abort();
+    async fn close(self) {
+        let Self {
+            queue,
+            rx,
+            master_url,
+            mut tick,
+        } = self;
+        tick.stop().await;
+        drop(rx);
+        drop(master_url);
+        queue.close().await;
     }
 }
 
@@ -408,13 +418,13 @@ async fn seek_into_cold_range_does_not_fail(
     let first_outcome = harness.scrub(first_target, first_tag).await;
 
     let Some(second_ratio) = second_ratio else {
-        harness.shutdown();
+        harness.close().await;
         assert_not_failed(first_outcome, first_target, first_tag);
         return;
     };
 
     if let ScrubOutcome::ItemDidFail { src } = first_outcome {
-        harness.shutdown();
+        harness.close().await;
         panic!("[first] CRASHED before second scrub (src={src})");
     }
 
@@ -433,7 +443,7 @@ async fn seek_into_cold_range_does_not_fail(
 
     let second_target = TRACK_DURATION_S * second_ratio;
     let second_outcome = harness.scrub(second_target, "second").await;
-    harness.shutdown();
+    harness.close().await;
     assert_not_failed(second_outcome, second_target, "second");
 }
 
@@ -466,6 +476,6 @@ async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] 
         SEEK_OBSERVE_BUDGET,
     )
     .await;
-    harness.shutdown();
+    harness.close().await;
     assert_not_failed(outcome, final_target, "drag");
 }

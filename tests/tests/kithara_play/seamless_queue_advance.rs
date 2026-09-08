@@ -67,7 +67,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
+    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
     let first = create_gapless_hls_resource(
         harness.player(),
         &server,
@@ -89,7 +89,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
     )
     .await;
 
-    load_queue(&harness, [first, second]);
+    load_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_second_item_end(&harness).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -142,6 +142,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         ms_int = max_silence_ms_x10 / 10,
         ms_frac = max_silence_ms_x10 % 10
     );
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -155,7 +156,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
+    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
     let first = create_gapless_hls_resource(
         harness.player(),
         &server,
@@ -173,7 +174,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
     )
     .await;
 
-    load_queue(&harness, [first, second]);
+    load_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_second_item_end(&harness).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -259,8 +260,9 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         max_silence < BLOCK_FRAMES as usize,
         "no extended silence allowed inside the overlap; \
          max_silence={max_silence} frames, overlap=[{overlap_start}..{overlap_end}), \
-         events={events:?}"
+        events={events:?}"
     );
+    harness.close().await;
 }
 
 async fn create_gapless_hls_resource(
@@ -312,18 +314,20 @@ async fn create_gapless_hls_resource(
     resource
 }
 
-fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
-    harness.with_player(|player| {
-        player.reserve_slots(items.len());
-        for (index, resource) in items.into_iter().enumerate() {
+async fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
+    harness
+        .with_player(move |player| {
+            player.reserve_slots(items.len());
+            for (index, resource) in items.into_iter().enumerate() {
+                player
+                    .replace_item(index, resource, TrackId::allocate())
+                    .expect("replace seamless fixture item");
+            }
             player
-                .replace_item(index, resource, TrackId::allocate())
-                .expect("replace seamless fixture item");
-        }
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
 }
 
 async fn render_until_second_item_end(
@@ -342,24 +346,26 @@ async fn render_until_second_item_end(
     let mut events = Vec::new();
 
     loop {
-        let block = harness.render(BLOCK_FRAMES as usize);
+        let block = harness.render(BLOCK_FRAMES as usize).await;
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
         events.extend(
             harness
                 .tick_and_drain()
+                .await
                 .into_iter()
                 .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
 
         if count_item_end(&events) >= 2 {
             for _ in 0..POST_ROLL_BLOCKS {
-                let block = harness.render(BLOCK_FRAMES as usize);
+                let block = harness.render(BLOCK_FRAMES as usize).await;
                 rendered.extend_from_slice(&block);
                 rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
                 events.extend(
                     harness
                         .tick_and_drain()
+                        .await
                         .into_iter()
                         .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );

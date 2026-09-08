@@ -414,22 +414,25 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         HostConfig::offline(pools.clone())
             .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
     let _warmup = render_offline_window(
         &mut player,
         24,
         "packaged abr warmup",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
-    );
+    )
+    .await;
     let seam = render_offline_window(
         &mut player,
         220,
         "packaged abr seam window",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
-    );
+    )
+    .await;
     assert!(
         seam.max_silence_run <= 2,
         "packaged ABR switch produced {} silent blocks ({seam})",
@@ -440,6 +443,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         "packaged ABR switch exceeded render budget {} times ({seam})",
         seam.slow_renders
     );
+    player.close().await;
 }
 
 /// Stream must continue producing chunks after seek sequence.

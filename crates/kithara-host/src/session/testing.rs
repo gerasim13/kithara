@@ -10,7 +10,7 @@ use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
 use kithara_play::{
-    GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+    GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
     SessionDuckingMode, player::PlayerMember,
 };
 use kithara_warp::{
@@ -126,6 +126,11 @@ where
     }
 }
 
+const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(rate) => rate,
+    None => unreachable!(),
+};
+
 pub(crate) struct FixtureSession;
 
 impl<S> SessionDispatcher<S> for FixtureSession {
@@ -187,7 +192,10 @@ fn attach_player_with_id<B, S>(
             .grid_id(grid_id)
             .sample_rate(state.root_view.grid().axis().sample_rate())
             .worker(worker)
-            .session(Arc::new(FixtureSession))
+            .session(SessionBinding::new(
+                Arc::new(FixtureSession),
+                FIXTURE_SAMPLE_RATE,
+            ))
             .build(),
     );
     let base = state
@@ -219,7 +227,10 @@ pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> Pl
             .grid_id(grid_id)
             .sample_rate(sample_rate)
             .worker(worker)
-            .session(Arc::new(FixtureSession))
+            .session(SessionBinding::new(
+                Arc::new(FixtureSession),
+                FIXTURE_SAMPLE_RATE,
+            ))
             .build(),
     );
     target_member(player)

@@ -14,7 +14,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, Instant, timeout},
-        tokio,
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
@@ -28,7 +27,7 @@ use url::Url;
 use crate::{
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     user_sim::actions::Action,
 };
 
@@ -62,7 +61,7 @@ const SWITCH_PROGRESS_TICKS: u32 = 200;
 pub struct SimHarness {
     queue: QueueControl<TestPools>,
     queue_owner: OfflineQueue<TestPools>,
-    tick: tokio::task::JoinHandle<()>,
+    tick: QueueTicker,
     _downloader: Downloader,
     _store: AssetStore<TestPools>,
     track_ids: Vec<TrackId>,
@@ -135,16 +134,11 @@ impl SimHarness {
                     .build(),
             ),
         )
+        .await
         .expect("create product offline queue");
         let queue = queue_owner.control();
         let queue_for_tick = queue.clone();
-        // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
-        // flash this installs the quiescence poll-wrapper + ambient gate so the
-        // driver participates in the virtual clock. The active flag that makes
-        // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
-        // `drive_queue_ticks` (the async chokepoint propagates ambient only) — see
-        // that fn's doc for why a real-paced driver false-HANGs buffered sources.
-        let tick = tokio::task::spawn(drive_queue_ticks(queue_for_tick, Duration::from_millis(50)));
+        let tick = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
@@ -169,8 +163,11 @@ impl SimHarness {
             )
             .initial_abr_mode(spec.abr_mode)
             .build();
-            let id = queue
-                .append(TrackSource::Config(Box::new(cfg)))
+            let control = queue.clone();
+            let id = queue_owner
+                .host()
+                .run(move || control.append(TrackSource::Config(Box::new(cfg))))
+                .await
                 .expect("queue is open while the harness is being built");
             track_ids.push(id);
         }
@@ -190,6 +187,15 @@ impl SimHarness {
         &self.queue
     }
 
+    /// Issues a control call from the host owner thread, as the app would.
+    async fn run<R>(&self, f: impl FnOnce(&QueueControl<TestPools>) -> R + Send + 'static) -> R
+    where
+        R: Send + 'static,
+    {
+        let queue = self.queue.clone();
+        self.queue_owner.host().run(move || f(&queue)).await
+    }
+
     pub fn track_id(&self, idx: usize) -> TrackId {
         self.track_ids[idx]
     }
@@ -203,8 +209,8 @@ impl SimHarness {
     /// pre-roll, then snapshot the codec so `SetQuality` has a baseline.
     pub async fn enter_track(&mut self, idx: usize, warmup: Duration) {
         let id = self.track_ids[idx];
-        self.queue
-            .select(id, Transition::None)
+        self.run(move |queue| queue.select(id, Transition::None))
+            .await
             .unwrap_or_else(|e| panic!("select track {idx}: {e}"));
 
         wait_for_loaded(&self.queue, id, Duration::from_secs(30))
@@ -229,8 +235,8 @@ impl SimHarness {
             Action::SelectAt(i) => self.do_select_at(i).await,
             Action::SetQuality(idx) => self.do_set_quality(idx).await,
             Action::QualityAuto => self.do_quality_auto().await,
-            Action::Pause => self.do_pause(),
-            Action::Resume => self.do_resume(),
+            Action::Pause => self.do_pause().await,
+            Action::Resume => self.do_resume().await,
             Action::PlayFor(d) | Action::RenderFor(d) => self.do_play_for(d).await,
         }
     }
@@ -238,12 +244,20 @@ impl SimHarness {
     /// Wait for any in-flight seek to settle, then assert the queue is
     /// at a sane terminal state for the scenario. Used as the final
     /// step in scripted scenarios.
-    pub async fn shutdown(self) {
-        self.tick.abort();
-        let _ = self.tick.await;
-        drop(self.queue);
-        drop(self.queue_owner);
-        drop(self._downloader);
+    pub async fn close(self) {
+        let Self {
+            queue,
+            queue_owner,
+            mut tick,
+            _downloader,
+            _store,
+            ..
+        } = self;
+        tick.stop().await;
+        drop(queue);
+        queue_owner.close().await;
+        drop(_downloader);
+        drop(_store);
     }
 
     fn current_codec(&self) -> Option<String> {
@@ -436,8 +450,8 @@ impl SimHarness {
     async fn do_select_at(&mut self, idx: usize) {
         let bounded = idx % self.track_ids.len();
         let id = self.track_ids[bounded];
-        self.queue
-            .select(id, Transition::None)
+        self.run(move |queue| queue.select(id, Transition::None))
+            .await
             .unwrap_or_else(|e| panic!("[SelectAt({bounded})] select failed: {e}"));
         wait_for_loaded(&self.queue, id, Duration::from_secs(20))
             .await
@@ -631,12 +645,12 @@ impl SimHarness {
         let _ = timeout(Duration::from_millis(100), settle).await;
     }
 
-    fn do_pause(&mut self) {
-        self.queue.pause();
+    async fn do_pause(&mut self) {
+        self.run(QueueControl::pause).await;
     }
 
-    fn do_resume(&mut self) {
-        self.queue.play();
+    async fn do_resume(&mut self) {
+        self.run(QueueControl::play).await;
     }
 
     async fn do_play_for(&mut self, at_least: Duration) {

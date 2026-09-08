@@ -25,7 +25,6 @@ Every fact below has one owner. Link to the owner; do not restate it.
 | Fact | Owner |
 | --- | --- |
 | Capability status, roadmap, blockers | [GitHub Projects board](https://github.com/users/gerasim13/projects/3) |
-| What is in flight right now | `PROGRESS.md` |
 | Project architecture | [Wiki architecture](https://github.com/zvuk/kithara/wiki/kithara) |
 | Crate contracts, invariants, lifecycle | [Owning crate wiki page](https://github.com/zvuk/kithara/wiki/Crates) |
 | Toolchain, image, and tool versions | `.config/ci-pins.toml` |
@@ -125,6 +124,8 @@ Reject a design before coding when it:
 - Introduces shared mutable god-state, globals, god objects, callback spirals,
   or unrelated responsibilities in one file, type, trait, or facade.
 - Requires a lint suppress, new baseline entry, or "temporary" bypass to pass.
+- Requires every change to update a repository-wide document. Track active
+  work in issues on the GitHub Projects board instead.
 
 `docs/guides/red-flags.md` expands this gate for non-trivial work.
 
@@ -135,14 +136,14 @@ A change is done only when all of these hold:
 - A test that failed before the change now passes, and it pins the contract
   rather than an incidental detail.
 - `just fmt check` and `just lint fast` are clean, with no new baseline
-  entries and no lint suppressions. `lint fast` runs the `style` ratchet the
-  lint lane denies on, so the commit hook refuses what CI would.
+  entries and no lint suppressions. Both `lint fast` (the commit hook) and
+  `lint full` run `style` through `_shared`. The `linux-lint` gate runs
+  `lint full` on main and branch pushes.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.
 - Update the owning wiki page only when its described contract changes;
   unrelated changes require no documentation edit. Track unfinished work in
   issues, not explanatory pages or repository progress documents.
-- `PROGRESS.md` names what landed and what is left.
 
 ## Working Rules
 
