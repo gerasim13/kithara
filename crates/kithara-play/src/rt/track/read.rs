@@ -347,14 +347,36 @@ impl PlayerTrack {
     /// `offset..frames`, so the span carries the in-block seam. Together with
     /// the session-axis base in `context` it names the exact output frames
     /// this track wrote, which is what attributes a frame to a track.
-    #[kithara::probe(
-        track_id = self.item_id.as_u64(),
-        output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
-        range_start = range.start,
-        range_end = range.end,
-        served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
-    )]
     pub(crate) fn render(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        let range_start = range.start;
+        let range_end = range.end;
+        let outcome = self.render_inner(context, scratch_bufs, mix_bufs, range, sink);
+        let rendered_frames = match outcome {
+            TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
+                frames
+            }
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => 0,
+        };
+        kithara::probe_event!(
+            render,
+            track_id = self.item_id.as_u64(),
+            output_base = context.map(|ctx| i64::from(ctx.output_frames().start)),
+            range_start,
+            range_end,
+            rendered_frames,
+            served_media_frames = AsPrimitive::<u64>::as_(self.served_media_frames)
+        );
+        outcome
+    }
+
+    fn render_inner(
         &mut self,
         context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
