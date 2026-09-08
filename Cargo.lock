@@ -4944,6 +4944,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha4"
 dependencies = [
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "proc-macro2",
  "quote",

@@ -1,6 +1,7 @@
 //! Behaviour of the code `#[derive(Ranged)]` emits.
 
 use kithara_derive::Ranged;
+use kithara_test_utils::kithara;
 
 /// Asymmetric on purpose: the two ends have to be read separately.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
@@ -22,89 +23,66 @@ struct GainDoc {
     gain: Probe,
 }
 
-#[test]
-fn a_value_above_the_range_lands_on_the_ceiling() {
-    assert_eq!(Probe::from(100.0), Probe::MAX);
+#[kithara::test]
+#[case::above_the_ceiling(100.0, Probe::MAX)]
+#[case::below_the_floor(-100.0, Probe::MIN)]
+#[case::not_a_number(f32::NAN, Probe::DEFAULT)]
+fn clamping_uses_the_declared_bound_or_default(#[case] value: f32, #[case] expected: Probe) {
+    assert_eq!(Probe::from(value), expected);
 }
 
-#[test]
-fn a_value_below_the_range_lands_on_the_floor() {
-    assert_eq!(Probe::from(-100.0), Probe::MIN);
-}
-
-#[test]
+#[kithara::test]
 fn a_value_inside_the_range_is_kept_exactly() {
     assert_eq!(f32::from(Probe::from(-3.5)), -3.5);
 }
 
-#[test]
-fn a_nan_becomes_the_default() {
-    assert_eq!(Probe::from(f32::NAN), Probe::DEFAULT);
-}
-
-#[test]
+#[kithara::test]
 fn the_default_value_is_the_declared_one() {
     assert_eq!(Probe::default(), Probe::DEFAULT);
 }
 
-#[test]
-fn checked_construction_keeps_an_in_range_value() {
-    assert_eq!(Probe::checked(-3.5), Some(Probe::from(-3.5)));
+#[kithara::test]
+#[case::inside_the_range(-3.5, Some(Probe::from(-3.5)))]
+#[case::below_the_floor(-24.1, None)]
+#[case::above_the_ceiling(6.1, None)]
+#[case::not_a_number(f32::NAN, None)]
+#[case::positive_infinity(f32::INFINITY, None)]
+#[case::negative_infinity(f32::NEG_INFINITY, None)]
+fn checked_construction_enforces_the_float_range(
+    #[case] value: f32,
+    #[case] expected: Option<Probe>,
+) {
+    assert_eq!(Probe::checked(value), expected);
 }
 
-#[test]
-fn checked_construction_rejects_a_value_below_the_floor() {
-    assert_eq!(Probe::checked(-24.1), None);
+#[kithara::test]
+#[case::at_the_ceiling(100, Some(Share::MAX))]
+#[case::above_the_ceiling(101, None)]
+fn checked_construction_enforces_the_integer_range(
+    #[case] value: u8,
+    #[case] expected: Option<Share>,
+) {
+    assert_eq!(Share::checked(value), expected);
 }
 
-#[test]
-fn checked_construction_rejects_a_value_above_the_ceiling() {
-    assert_eq!(Probe::checked(6.1), None);
-}
-
-#[test]
-fn checked_construction_rejects_a_nan() {
-    assert_eq!(Probe::checked(f32::NAN), None);
-}
-
-#[test]
-fn checked_construction_rejects_a_positive_infinity() {
-    assert_eq!(Probe::checked(f32::INFINITY), None);
-}
-
-#[test]
-fn checked_construction_rejects_a_negative_infinity() {
-    assert_eq!(Probe::checked(f32::NEG_INFINITY), None);
-}
-
-#[test]
-fn an_integer_at_the_ceiling_is_accepted() {
-    assert_eq!(Share::checked(100), Some(Share::MAX));
-}
-
-#[test]
-fn an_integer_above_the_ceiling_is_refused() {
-    assert_eq!(Share::checked(101), None);
-}
-
-#[test]
+#[kithara::test]
 fn an_integer_unwraps_to_its_primitive() {
     assert_eq!(u8::from(Share::MAX), 100);
 }
 
-#[test]
+#[kithara::test]
 fn an_integer_default_is_the_declared_one() {
     assert_eq!(Share::default(), Share::MAX);
 }
 
-#[test]
+#[kithara::test]
 fn a_document_value_inside_the_range_parses() {
     let doc: Doc = serde_yaml_ng::from_str("max_share: 100\n").expect("100 is inside the range");
 
     assert_eq!(doc.max_share, Share::MAX);
 }
 
-#[test]
+#[kithara::test]
 fn a_document_value_outside_the_range_is_refused_by_name_and_by_bounds() {
     let error =
         serde_yaml_ng::from_str::<Doc>("max_share: 140\n").expect_err("140 is outside the range");
@@ -124,7 +102,7 @@ fn a_document_value_outside_the_range_is_refused_by_name_and_by_bounds() {
 
 /// A knob clamps in Rust. A document never does — this is the one place the
 /// declarative macro would have let a `NaN` through silently.
-#[test]
+#[kithara::test]
 fn a_document_never_clamps_even_for_a_clamping_type() {
     let doc: GainDoc = serde_yaml_ng::from_str("gain: 0.0\n").expect("unity is inside the range");
     assert_eq!(doc.gain, Probe::DEFAULT);
