@@ -229,8 +229,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn explicit_root_wins_over_the_default() {
-        // Read-only probe: assert the default only when nothing overrides it,
-        // because the `cold` profile exports the variable.
+        // The build environment may override the store root.
         if std::env::var_os(STORE_ENV).is_some() {
             return;
         }

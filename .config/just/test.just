@@ -132,21 +132,6 @@ wasm BROWSER="chrome" SUITE="all":
         --test webcodecs_browser
     fi
 
-# Locate or drop the on-disk fixture cache. Each build fingerprint gets its own
-# sub-directory, so an obsolete one wastes disk rather than serving stale bytes;
-# dropping the roots costs the next run one re-encode of everything it touches.
-fixture-cache ACTION="path":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tmp="${TMPDIR:-/tmp}"
-    warm="${tmp%/}/kithara-fixture-cache"
-    cold="${tmp%/}/kithara-fixture-cold"
-    case "{{ ACTION }}" in
-      path) printf '%s\n%s\n' "$warm" "$cold" ;;
-      clear) rm -rf "$warm" "$cold" && echo "==> dropped $warm and $cold" ;;
-      *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
-    esac
-
 # Render the same active no-SYNC scenarios into listening artifacts. The
 # recorders are ignored in ordinary CI so filesystem work cannot consume their
 # behavioral-test deadlines.

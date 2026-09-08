@@ -83,24 +83,16 @@ the full suite but passes alone is load-correlated, not deterministic.
 - `ci` — CI tuning.
 - `fast` — quick local iteration.
 - `stress` — for the stress lanes (`--stress-count N` / `--stress-duration`).
-- `cold` — `default` plus a setup script that recreates a separate cold root
-  and exports it as `KITHARA_FIXTURE_CACHE` without touching the default cache.
 
-### Fixture cache (L2)
+### Build-time audio fixtures
 
-Encode/mux fixtures are expensive to regenerate, so an on-disk cache is **on by
-default** (unset `KITHARA_FIXTURE_CACHE` ⇒ a persistent default dir; see
-`tests/src/fixture_cache.rs`). The opt-in `cold` profile gives an isolated,
-freshly recreated per-run cache without touching that persistent default.
+`kithara-test-fixtures` generates audio inputs during the build. Tests receive
+prepared values through `#[kithara::fixture]` parameters; they do not generate
+or encode their input audio at runtime.
 
-Whichever root is in effect, the build fingerprint is appended to it, so an
-encoder change lands in a fresh sub-directory instead of reusing bytes the
-previous encoder produced. `just test fixture-cache path` prints the roots and
-`just test fixture-cache clear` drops them; the next run then re-encodes every
-fixture it touches, which costs a full suite roughly +64% wall time.
-
-Generated fixtures and test logs must stay a reasonable size — `src/` is
-production code, large fixtures belong under `tests/`.
+Set `KITHARA_FIXTURE_CACHE` before building to select the asset store. For a
+cold build, point it at an empty, separate directory. Changing the variable
+only when launching an already-built test binary cannot change its manifest.
 
 ## Test attributes (`kithara-test-macros`)
 

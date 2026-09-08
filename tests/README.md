@@ -55,16 +55,14 @@ hand back ordinary `Url`s, so a test never sees the token.
 
 `tests/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
 `InitMode`, `DelayRule`, `EncryptionRequest`) and the deterministic byte oracles,
-so byte assertions agree across helpers. Every waveform, PCM buffer and RIFF
-body comes from `kithara_test_fixtures::signal`; the workspace has no second
-route to a generated signal.
+so byte assertions agree across helpers. Audio inputs, including small PCM
+arrays and encoded `/signal/*` assets, are prepared by `kithara-test-fixtures`
+at build time and injected through `#[kithara::fixture]` parameters. Encoding
+under test remains part of the test action.
 
-Encoded `/signal/*` fixtures (mp3, flac, aac, m4a) build through
-`kithara-encode`, which links system FFmpeg: without ffmpeg and pkgconf the build
-of ffmpeg-sys-next fails before any test runs. Output is cached on disk because
-nextest runs a process per test and an uncached AAC re-encode can eat a test's
-whole budget. `just test fixture-cache` locates or drops it; the opt-in `cold`
-profile uses a separate root and never touches the default one.
+The build uses `kithara-encode` and system FFmpeg. Set `KITHARA_FIXTURE_CACHE`
+before building to select the prepared-asset store; use an empty, separate
+directory for a cold build. Runtime helpers serve the prepared bytes.
 
 ## WASM
 
