@@ -59,9 +59,14 @@ so the build decision and the gate's readiness decision cannot disagree.
   producing PCM, so the loop reports `SourcePending` rather than consuming the
   demuxer to EOF. Positive PCM output and every seek reset the counter.
 - `timeline_gap_frames` is `max(head_strip, timestamp_bias_frames + observed
-  forward PTS jumps)`. The maximum is what makes a head-start decode (strip split
-  between modelled bias and observed jump) and a mid-stream decode (resyncs on
-  seek, no jump) agree on the number a splice cuts on.
+  forward PTS jumps)`. Direct strip measurement covers the removed prefix even
+  when the codec's corrected output timestamps leave no interior jump, including
+  after a seek. Original and recreated decoders agree on the splice offset.
+- FDK-AAC removes algorithmic delay from the head of its packet-sized buffer.
+  `SymphoniaCodec::decoded_pts` advances that packet's PTS by the removed prefix
+  on the live output-rate axis. A partial first packet therefore ends at its
+  original packet boundary; it does not fabricate a gap before the next packet.
+  Sample counts, PCM bytes and the observed decoder-strip query remain unchanged.
 
 ## Seek pre-roll and trim
 
