@@ -39,11 +39,14 @@ rayon = { workspace = true }
 [dev-dependencies]
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "probe", "tls-rustls"] }
 
-criterion = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true

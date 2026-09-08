@@ -28,9 +28,9 @@ fn make_resource(duration_secs: f64) -> Resource {
     ))
 }
 
-#[kithara::test]
-fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
-    let oracle = loaded_harness();
+#[kithara::test(tokio)]
+async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
+    let oracle = loaded_harness().await;
     assert_eq!(oracle.player().rate(), 1.0);
     oracle.player().pause();
     assert_eq!(
@@ -38,8 +38,8 @@ fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
         1.0,
         "the control thread must not publish pause before RT applies it"
     );
-    let _ = oracle.render(BLOCK_FRAMES);
-    let paused_rates = rate_events(oracle.tick_and_drain());
+    let _ = oracle.render(BLOCK_FRAMES).await;
+    let paused_rates = rate_events(oracle.tick_and_drain().await);
     assert_eq!(paused_rates, [0.0]);
     assert_eq!(oracle.player().rate(), 0.0);
 
@@ -51,15 +51,15 @@ fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
         0.0,
         "the control thread must not publish the requested rate before RT applies it"
     );
-    let _ = oracle.render(BLOCK_FRAMES);
-    let resumed_rates = rate_events(oracle.tick_and_drain());
+    let _ = oracle.render(BLOCK_FRAMES).await;
+    let resumed_rates = rate_events(oracle.tick_and_drain().await);
     assert_eq!(resumed_rates, [1.0]);
     assert_eq!(oracle.player().rate(), 1.0);
 
-    let baseline = blocks_until_silence(1.0);
-    let requested_fast = blocks_until_silence(FAST_RATE);
-    let baseline_advance = media_advance(1.0);
-    let requested_fast_advance = media_advance(FAST_RATE);
+    let baseline = blocks_until_silence(1.0).await;
+    let requested_fast = blocks_until_silence(FAST_RATE).await;
+    let baseline_advance = media_advance(1.0).await;
+    let requested_fast_advance = media_advance(FAST_RATE).await;
 
     assert!(
         baseline < MEASURE_BLOCKS,
@@ -75,8 +75,9 @@ fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
     assert!(
         (requested_fast_advance - baseline_advance).abs() < f64::EPSILON,
         "a reader without a Warp control must not report a media clock that \
-         its PCM cannot follow: {requested_fast_advance}s vs {baseline_advance}s"
+        its PCM cannot follow: {requested_fast_advance}s vs {baseline_advance}s"
     );
+    oracle.close().await;
 }
 
 fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
@@ -89,48 +90,54 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
         .collect()
 }
 
-fn loaded_harness() -> OfflinePlayerHarness {
+async fn loaded_harness() -> OfflinePlayerHarness {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
-    );
-    harness.with_player(|player| {
-        player.insert(make_resource(1.0), TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+    )
+    .await;
+    harness
+        .with_player(move |player| {
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
 
     for _ in 0..WARMUP_BLOCKS {
-        let _ = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let _ = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
     }
     harness
 }
 
-fn blocks_until_silence(rate: f32) -> usize {
-    let harness = loaded_harness();
+async fn blocks_until_silence(rate: f32) -> usize {
+    let harness = loaded_harness().await;
     harness.player().set_default_rate(rate);
 
     let mut blocks = 0usize;
     for _ in 0..MEASURE_BLOCKS {
-        let block = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let block = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
         blocks = blocks.saturating_add(1);
         if block.iter().all(|sample| sample.abs() == 0.0) {
             break;
         }
     }
+    harness.close().await;
     blocks
 }
 
-fn media_advance(rate: f32) -> f64 {
-    let harness = loaded_harness();
+async fn media_advance(rate: f32) -> f64 {
+    let harness = loaded_harness().await;
     let start = harness.player().position_seconds().unwrap_or(0.0);
     harness.player().set_default_rate(rate);
     for _ in 0..CLOCK_BLOCKS {
-        let _ = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let _ = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
     }
-    harness.player().position_seconds().unwrap_or(0.0) - start
+    let advance = harness.player().position_seconds().unwrap_or(0.0) - start;
+    harness.close().await;
+    advance
 }

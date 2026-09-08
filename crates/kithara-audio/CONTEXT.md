@@ -340,6 +340,9 @@ value would lose to the first host that disagrees. `kithara-play`'s
 
 ## Prepared producer seam
 
+`AudioReader` is `Send` on every target: a reader is handed to the thread that
+drives it, and both playback and analysis move one onto their own worker.
+
 `Audio::prepare` returns the reader plus a still-concrete decoded source and
 `PreparedAudioLane`. The lane carries exactly what its consumer needs to run the
 source; no scheduler, `run_loop`, service class, hang-watchdog policy,

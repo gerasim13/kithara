@@ -9,14 +9,14 @@ use kithara::{
     events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio},
+    platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -31,10 +31,27 @@ struct Session {
     downloader: Downloader,
     store: AssetStore<TestPools>,
     flush_hub: Arc<FlushHub>,
-    tick: tokio::task::JoinHandle<()>,
+    tick: QueueTicker,
 }
 
-fn build_session(cache_path: &Path) -> Session {
+impl Session {
+    async fn close(self) {
+        let Self {
+            queue,
+            downloader,
+            store,
+            flush_hub,
+            mut tick,
+        } = self;
+        tick.stop().await;
+        drop(downloader);
+        drop(store);
+        drop(flush_hub);
+        queue.close().await;
+    }
+}
+
+async fn build_session(cache_path: &Path) -> Session {
     // Own the flush hub so the test can drive a synchronous durable
     // checkpoint (`flush_now`) instead of guessing at the background
     // worker's debounce with a timer.
@@ -65,11 +82,9 @@ fn build_session(cache_path: &Path) -> Session {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
-    let tick = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -102,23 +117,27 @@ fn track_source(url: &Url, session: &Session) -> TrackSource<TestPools> {
 }
 
 async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, label: &str) {
-    let session = build_session(cache_path);
+    let mut session = build_session(cache_path).await;
     let id = session
         .queue
-        .append(track_source(url, &session))
+        .run({
+            let source = track_source(url, &session);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append replay track");
     wait_for_loader_done(&session.queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("[{label}] load: {e}"));
     session
         .queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .expect("select after load");
     wait_for_position_at_least(&session.queue, min_play_secs, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("[{label}] play: {e}"));
-    session.tick.abort();
-    let _ = session.tick.await;
+    session.tick.stop().await;
     // Durable checkpoint: returns only once the on-disk indexes
     // (availability / lru / pins) are committed, so the next warm-cache
     // session observes a fully-written cache. This is a state-completion
@@ -127,8 +146,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
         .flush_hub
         .flush_now()
         .unwrap_or_else(|e| panic!("[{label}] flush: {e}"));
-    drop(session.queue);
-    drop(session.downloader);
+    session.close().await;
 }
 
 /// Drives the player through the production restart sequence: download

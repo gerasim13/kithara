@@ -11,7 +11,7 @@ use kithara::{
     platform::{CancelToken, thread, tokio},
     play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
-    worker::{RayonConfig, Worker, WorkerConfig},
+    worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
 use kithara_app::{
     config::{AppBroadcastConfig, AppConfig, AppDrm},
@@ -118,7 +118,7 @@ fn main() -> AppResult {
         .with_cancel(shutdown.child())
         .with_runtime(runtime.handle().clone())
         .with_max_compute_tasks(compute_threads)
-        .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
+        .with_owned_pool(OwnedPoolConfig::new(compute_threads, "kithara-compute"));
     worker_config.apply(document.worker());
     let base_worker = Worker::new(worker_config);
     let mut play_worker_config = PlayWorkerConfig::builder(pools.clone())

@@ -8,7 +8,7 @@ use kithara::{
     platform::sync::Arc,
     play::{
         Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerImpl, Reply, SessionDispatcher, SessionDuckingMode, SlotId,
+        PlayerImpl, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode, SlotId,
     },
     warp::{BeatGrid, BeatGridId},
 };
@@ -41,7 +41,10 @@ fn make_engine() -> EngineImpl<TestPools> {
         EngineConfig::builder()
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-            .session(Arc::new(FixtureSession))
+            .session(SessionBinding::new(
+                Arc::new(FixtureSession),
+                Shared::NON_ZERO_SAMPLE_RATE,
+            ))
             .pools(pools())
             .response_budget_frames(response_budget())
             .build(),
@@ -87,7 +90,10 @@ fn engine_config_defaults() {
 fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(Arc::new(FixtureSession))
+        .session(SessionBinding::new(
+            Arc::new(FixtureSession),
+            Shared::NON_ZERO_SAMPLE_RATE,
+        ))
         .max_slots(8)
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .channels(1)
@@ -147,7 +153,10 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(Arc::new(FixtureSession))
+        .session(SessionBinding::new(
+            Arc::new(FixtureSession),
+            Shared::NON_ZERO_SAMPLE_RATE,
+        ))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())
         .response_budget_frames(response_budget())

@@ -16,11 +16,6 @@ pub(super) struct SampleContinuityReport {
     pub(super) repeated_block_boundaries: Vec<usize>,
 }
 
-pub(super) struct OracleReports {
-    pub(super) cochlea: Option<CochleaReport>,
-    pub(super) sample_continuity: Option<SampleContinuityReport>,
-}
-
 #[derive(Serialize)]
 pub(super) struct AudioLevelReport {
     pub(super) label: String,
@@ -67,7 +62,7 @@ pub(super) fn assess_audio(
     sample_rate: u32,
     capture: &[f32],
     failures: &mut Vec<String>,
-) -> OracleReports {
+) {
     let finite = capture.iter().all(|sample| sample.is_finite());
     let sample_continuity = finite.then(|| measure_sample_continuity(capture));
     if let Some(report) = &sample_continuity {
@@ -107,11 +102,6 @@ pub(super) fn assess_audio(
             "{}: final PCM contained non-finite samples, so Cochlea could not analyse it",
             label,
         ));
-    }
-
-    OracleReports {
-        cochlea,
-        sample_continuity,
     }
 }
 
@@ -476,7 +466,7 @@ mod tests {
     #[kithara::no_block(budget_ms = 1)]
     async fn watched_oracles(capture: &[f32]) {
         let mut failures = Vec::new();
-        let _ = assess_audio("no-block-guard", SOURCE_RATE, capture, &mut failures);
+        assess_audio("no-block-guard", SOURCE_RATE, capture, &mut failures);
         let _ = measure_audio_level("no-block-guard", AudioRole::FinalMix, SOURCE_RATE, capture);
     }
 
@@ -520,7 +510,7 @@ mod tests {
         let dropout_samples = BLOCK_FRAMES * channels;
         dropout[dropout_start..dropout_start + dropout_samples].fill(0.0);
         let mut dropout_failures = Vec::new();
-        let _ = assess_audio("dropout", 44_100, &dropout, &mut dropout_failures);
+        assess_audio("dropout", 44_100, &dropout, &mut dropout_failures);
         assert!(
             !dropout_failures.is_empty(),
             "matched oracle accepted a zeroed callback quantum"

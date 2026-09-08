@@ -342,19 +342,25 @@ async fn render_passthrough(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
+    )
+    .await;
     target.set_fade_duration(0.0);
-    target.load_and_fadein(resource_from_reader(target_audio));
-    let mut load = load_audio.take().map(|audio| {
+    target
+        .load_and_fadein(resource_from_reader(target_audio))
+        .await;
+    let mut load = if let Some(audio) = load_audio.take() {
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
                 .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
-        );
+        )
+        .await;
         player.set_fade_duration(0.0);
-        player.load_and_fadein(resource_from_reader(audio));
-        player
-    });
+        player.load_and_fadein(resource_from_reader(audio)).await;
+        Some(player)
+    } else {
+        None
+    };
     let block_period = Duration::from_secs_f64(
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block size fits u32"))
             / f64::from(SAMPLE_RATE),
@@ -364,9 +370,9 @@ async fn render_passthrough(
     for _ in 0..WARMUP_BLOCKS {
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
-            let _ = player.render(BLOCK_FRAMES);
+            let _ = player.render(BLOCK_FRAMES).await;
         }
-        let _ = target.render(BLOCK_FRAMES);
+        let _ = target.render(BLOCK_FRAMES).await;
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
     let metrics_before_capture = target.metrics();
@@ -381,15 +387,15 @@ async fn render_passthrough(
     for _ in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
-            let _ = player.render(BLOCK_FRAMES);
+            let _ = player.render(BLOCK_FRAMES).await;
         }
-        pcm.extend(target.render(BLOCK_FRAMES));
+        pcm.extend(target.render(BLOCK_FRAMES).await);
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
     let load_observed_during_capture = load_probe.finish_capture();
     let metrics_after_capture = target.metrics();
 
-    RealtimeCapture {
+    let capture = RealtimeCapture {
         pcm,
         warmup_decode_errors,
         warmup_underruns,
@@ -400,7 +406,12 @@ async fn render_passthrough(
             .underruns()
             .saturating_sub(metrics_before_capture.underruns()),
         load_observed_during_capture,
+    };
+    if let Some(player) = load {
+        player.close().await;
     }
+    target.close().await;
+    capture
 }
 
 async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
@@ -411,7 +422,8 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
             .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let worker = harness.worker().clone();
     let mut audio = worker
         .open(audio_config(source, stretch, Vec::new()))
@@ -420,15 +432,22 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     wait_for_preload(&audio).await;
     audio.preload().expect("queue audio preload");
 
-    let queue = harness.insert_control(Queue::new(
-        QueueConfig::builder()
-            .player(harness.take_player())
-            .should_autoplay(false)
-            .build(),
-    ));
-    let id = queue.insert_loaded_for_test(resource_from_reader(audio));
-    queue
-        .select(id, Transition::None)
+    let queue = harness
+        .insert_control(Queue::new(
+            QueueConfig::builder()
+                .player(harness.take_player())
+                .should_autoplay(false)
+                .build(),
+        ))
+        .await;
+    let id = harness
+        .run(&queue, move |q| {
+            q.insert_loaded_for_test(resource_from_reader(audio))
+        })
+        .await;
+    harness
+        .run(&queue, move |q| q.select(id, Transition::None))
+        .await
         .expect("select queue passthrough track");
 
     let block_period = Duration::from_secs_f64(
@@ -437,18 +456,26 @@ async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f
     );
     for _ in 0..WARMUP_BLOCKS {
         let started = Instant::now();
-        queue.tick().expect("tick queue during warmup");
-        let _ = harness.render(BLOCK_FRAMES);
+        harness
+            .run(&queue, |q| q.tick())
+            .await
+            .expect("tick queue during warmup");
+        let _ = harness.render(BLOCK_FRAMES).await;
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
 
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
-        queue.tick().expect("tick queue during capture");
-        pcm.extend(harness.render(BLOCK_FRAMES));
+        harness
+            .run(&queue, |q| q.tick())
+            .await
+            .expect("tick queue during capture");
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
+    drop(queue);
+    harness.close().await;
     pcm
 }
 

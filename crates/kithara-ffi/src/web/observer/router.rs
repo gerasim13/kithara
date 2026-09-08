@@ -1,8 +1,11 @@
-use js_sys::Reflect;
+use std::mem;
+
+use js_sys::{Function, Object, Reflect};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
 };
+use send_wrapper::SendWrapper;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use web_sys::{BroadcastChannel, MessageEvent, console};
 
@@ -11,71 +14,146 @@ use crate::{
     item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
-    web::observer::source::EVENT_CHANNEL,
+    web::{analysis::encode::ANALYSIS_SCOPE, observer::source::EVENT_CHANNEL},
 };
 
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 
-pub(crate) fn install(observer: Arc<dyn PlayerObserver>, queue_view: Arc<Mutex<QueueView>>) {
-    let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
-        console::warn_1(&JsValue::from_str(
-            "kithara: BroadcastChannel unavailable; player observer disabled",
-        ));
-        return;
-    };
-    let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
-        let data = ev.data();
-        if Reflect::get(&data, &JsValue::from_str("scope"))
-            .ok()
-            .and_then(|value| value.as_string())
-            .as_deref()
-            == Some("item")
-        {
-            route_item_message(&queue_view, &data);
+/// Main-thread fan-out of the worker event channel to the player, per-item and
+/// analysis sinks.
+#[derive(Clone)]
+pub(crate) struct Routes {
+    queue_view: Arc<Mutex<QueueView>>,
+    sinks: Arc<Mutex<Sinks>>,
+}
+
+#[derive(Default)]
+struct Sinks {
+    player: Option<Arc<dyn PlayerObserver>>,
+    analysis: Option<SendWrapper<Function>>,
+    installed: bool,
+}
+
+impl Routes {
+    pub(crate) fn new(queue_view: Arc<Mutex<QueueView>>) -> Self {
+        Self {
+            queue_view,
+            sinks: Arc::new(Mutex::default()),
+        }
+    }
+
+    pub(crate) fn set_analysis(&self, func: Function) {
+        self.sinks.lock().analysis = Some(SendWrapper::new(func));
+        self.arm();
+    }
+
+    pub(crate) fn set_player(&self, observer: Arc<dyn PlayerObserver>) {
+        self.sinks.lock().player = Some(observer);
+        self.arm();
+    }
+
+    fn arm(&self) {
+        if self.sinks.lock().installed {
             return;
         }
-        let Some(event) = decode(&data) else {
+        if self.install() {
+            self.sinks.lock().installed = true;
+        }
+    }
+
+    fn install(&self) -> bool {
+        let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+            console::warn_1(&JsValue::from_str(
+                "kithara: BroadcastChannel unavailable; observers disabled",
+            ));
+            return false;
+        };
+        let routes = self.clone();
+        let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
+            routes.dispatch(&ev.data());
+        }) as Box<dyn FnMut(MessageEvent)>);
+        channel.set_onmessage(Some(closure.as_ref().unchecked_ref()));
+        closure.forget();
+        mem::forget(channel);
+        true
+    }
+
+    fn dispatch(&self, data: &JsValue) {
+        match scope(data).as_deref() {
+            Some("item") => self.route_item_message(data),
+            Some(ANALYSIS_SCOPE) => self.route_analysis(data),
+            _ => self.route_player(data),
+        }
+    }
+
+    fn route_analysis(&self, data: &JsValue) {
+        let func = self
+            .sinks
+            .lock()
+            .analysis
+            .as_ref()
+            .map(|func| (*func).clone());
+        if let Some(func) = func {
+            if let Some(payload) = data.dyn_ref::<Object>() {
+                let _ = Reflect::delete_property(payload, &JsValue::from_str(SCOPE_KEY));
+            }
+            let _ = func.call1(&JsValue::UNDEFINED, data);
+        }
+    }
+
+    fn route_player(&self, data: &JsValue) {
+        let Some(event) = decode(data) else {
             return;
         };
-        route_to_item(&queue_view, &event);
-        observer.on_event(event);
-    }) as Box<dyn FnMut(MessageEvent)>);
-    channel.set_onmessage(Some(closure.as_ref().unchecked_ref()));
-    closure.forget();
-    std::mem::forget(channel);
-}
+        self.route_to_item(&event);
+        let observer = self.sinks.lock().player.clone();
+        if let Some(observer) = observer {
+            observer.on_event(event);
+        }
+    }
 
-fn route_to_item(queue_view: &Arc<Mutex<QueueView>>, event: &FfiPlayerEvent) {
-    let FfiPlayerEvent::TrackStatusChanged { item_id, status } = event else {
-        return;
-    };
-    let item = queue_view
-        .lock()
-        .iter()
-        .find(|(id, _)| id == item_id)
-        .map(|(_, item)| Arc::clone(item));
-    let Some(item) = item else { return };
-    update_item_state(&item, status);
-    if let Some(item_obs) = item.observer() {
-        dispatch_track_status_to_item(&item_obs, status);
+    fn item(&self, id: TrackId) -> Option<Arc<AudioPlayerItem>> {
+        self.queue_view
+            .lock()
+            .iter()
+            .find(|(existing, _)| *existing == id)
+            .map(|(_, item)| Arc::clone(item))
+    }
+
+    fn route_to_item(&self, event: &FfiPlayerEvent) {
+        let FfiPlayerEvent::TrackStatusChanged { item_id, status } = event else {
+            return;
+        };
+        let Some(item) = self.item(*item_id) else {
+            return;
+        };
+        update_item_state(&item, status);
+        if let Some(item_obs) = item.observer() {
+            dispatch_track_status_to_item(&item_obs, status);
+        }
+    }
+
+    fn route_item_message(&self, data: &JsValue) {
+        let track_id = get_id_req(data, "track_id");
+        let item_event = decode_item_event(data);
+        let (Some(track_id), Some(item_event)) = (track_id, item_event) else {
+            return;
+        };
+        let Some(item) = self.item(track_id) else {
+            return;
+        };
+        if let Some(obs) = item.observer() {
+            obs.on_event(item_event);
+        }
     }
 }
 
-fn route_item_message(queue_view: &Arc<Mutex<QueueView>>, data: &JsValue) {
-    let track_id = get_id_req(data, "track_id");
-    let item_event = decode_item_event(data);
-    let (Some(track_id), Some(item_event)) = (track_id, item_event) else {
-        return;
-    };
-    let item = queue_view
-        .lock()
-        .iter()
-        .find(|(id, _)| *id == track_id)
-        .map(|(_, item)| Arc::clone(item));
-    let Some(item) = item else { return };
-    if let Some(obs) = item.observer() {
-        obs.on_event(item_event);
-    }
+const SCOPE_KEY: &str = "scope";
+
+fn scope(data: &JsValue) -> Option<String> {
+    Reflect::get(data, &JsValue::from_str(SCOPE_KEY))
+        .ok()
+        .and_then(|value| value.as_string())
 }
 
 fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {

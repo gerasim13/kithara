@@ -26,8 +26,8 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, cochlea::CochleaReport,
-    fixture_protocol::PackagedSignal, memory_asset_store, offline::OfflineHostHarness,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::PackagedSignal,
+    memory_asset_store, offline::OfflineHostHarness,
 };
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::AudioRole;
@@ -143,8 +143,6 @@ struct CapturedAudio {
     label: String,
     pcm: Vec<f32>,
     requested_frames: usize,
-    tap_drops: u64,
-    tap_matches_output: bool,
     start_positions_secs: Vec<f64>,
 }
 
@@ -236,6 +234,7 @@ async fn run_case(case: &Case, hls: &Url) -> Vec<String> {
             .max_block_frames(max_block_frames)
             .build(),
     )
+    .await
     .unwrap_or_else(|error| panic!("{}: create product offline Host: {error}", case.label));
     let mut failures = Vec::new();
 
@@ -256,8 +255,8 @@ async fn run_case(case: &Case, hls: &Url) -> Vec<String> {
         );
     }
 
-    load_decks(case, &decks, &mut failures);
-    runtime::record_transport_state(&host, "before first render", &mut failures);
+    load_decks(case, &host, &decks, &mut failures).await;
+    runtime::record_transport_state(&host, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
         "startup",
@@ -293,8 +292,8 @@ async fn run_case(case: &Case, hls: &Url) -> Vec<String> {
         runtime::validate_deck(case, deck_index, deck, &mut failures);
         runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
-    runtime::record_transport_state(&host, "after capture", &mut failures);
-    let _ = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
+    runtime::record_transport_state(&host, "after capture", &mut failures).await;
+    oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
 
     let mut audio_levels = direct_references
         .iter()
@@ -332,6 +331,8 @@ async fn run_case(case: &Case, hls: &Url) -> Vec<String> {
     ));
     oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
 
+    drop(decks);
+    host.close().await;
     failures
 }
 
@@ -351,14 +352,13 @@ async fn capture_pass(
             label: label.to_owned(),
             pcm: Vec::new(),
             requested_frames,
-            tap_drops: 0,
-            tap_matches_output: false,
             start_positions_secs: Vec::new(),
         };
     }
 
     let mut tap = host
         .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
+        .await
         .unwrap_or_else(|error| panic!("{} {label}: enable mix tap: {error}", case.label));
     let positions_before = decks
         .iter()
@@ -391,7 +391,7 @@ async fn capture_pass(
 
     let tapped = tap.drain();
     let tap_drops = tap.drops();
-    let tap_matches_output = assess_capture(
+    assess_capture(
         case.label,
         label,
         &pcm,
@@ -401,7 +401,7 @@ async fn capture_pass(
         &zero_blocks,
         failures,
     );
-    disable_mix_tap(case.label, label, host, failures);
+    disable_mix_tap(case.label, label, host, failures).await;
     assess_position_advance(
         case,
         label,
@@ -415,8 +415,6 @@ async fn capture_pass(
         label: label.to_owned(),
         pcm,
         requested_frames,
-        tap_drops,
-        tap_matches_output,
         start_positions_secs: positions_before,
     }
 }
@@ -451,7 +449,10 @@ async fn reset_for_capture(
         failures,
     )
     .await;
-    if let Err(error) = host.apply_mix(decks.iter().map(|deck| deck.player.level(0.0))) {
+    if let Err(error) = host
+        .apply_mix(decks.iter().map(|deck| deck.player.level(0.0)))
+        .await
+    {
         failures.push(format!(
             "{} {label}: mute before seek failed: {error}",
             case.label,
@@ -518,9 +519,7 @@ async fn reset_for_capture(
         return false;
     }
 
-    for deck in &*decks {
-        deck.player.play();
-    }
+    play_decks(host, decks).await;
     let mut completed = false;
     let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
@@ -627,21 +626,22 @@ async fn reset_for_capture(
         ));
         return false;
     }
-    if let Err(error) = host.apply_mix(
-        decks
-            .iter()
-            .zip(levels.iter().copied())
-            .map(|(deck, level)| deck.player.level(level)),
-    ) {
+    if let Err(error) = host
+        .apply_mix(
+            decks
+                .iter()
+                .zip(levels.iter().copied())
+                .map(|(deck, level)| deck.player.level(level)),
+        )
+        .await
+    {
         failures.push(format!(
             "{} {label}: apply capture levels failed: {error}",
             case.label,
         ));
         return false;
     }
-    for deck in &*decks {
-        deck.player.play();
-    }
+    play_decks(host, decks).await;
     settle_controls(
         case,
         host,
@@ -675,13 +675,13 @@ async fn settle_controls(
     }
 }
 
-fn disable_mix_tap(
+async fn disable_mix_tap(
     case: &str,
     label: &str,
     host: &OfflineHostHarness<TestPools>,
     failures: &mut Vec<String>,
 ) {
-    if let Err(error) = host.disable_mix_tap() {
+    if let Err(error) = host.disable_mix_tap().await {
         failures.push(format!(
             "{case} {label}: disable mix tap dispatch failed: {error}",
         ));
@@ -697,7 +697,7 @@ fn assess_capture(
     requested_frames: usize,
     zero_blocks: &[usize],
     failures: &mut Vec<String>,
-) -> bool {
+) {
     let expected_samples = requested_frames * usize::from(CHANNELS);
     if capture.len() != expected_samples {
         failures.push(format!(
@@ -723,7 +723,6 @@ fn assess_capture(
             capture.len(),
         ));
     }
-    tap_matches
 }
 
 fn assess_position_advance(
@@ -753,21 +752,42 @@ fn assess_position_advance(
     }
 }
 
-fn load_decks(case: &Case, decks: &[Deck], failures: &mut Vec<String>) {
+async fn load_decks(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+    failures: &mut Vec<String>,
+) {
     for (deck_index, deck) in decks.iter().enumerate() {
         runtime::record_control_state(case, deck_index, deck, "before playback", failures);
-        deck.player
-            .select_item_with_crossfade(
+        let player = deck.player.control().clone();
+        host.run(move || {
+            player.select_item_with_crossfade(
                 0,
                 SelectTransition {
                     autoplay: false,
                     crossfade_seconds: 0.0,
                 },
             )
-            .unwrap_or_else(|error| {
-                panic!("{} deck {deck_index}: select resource: {error}", case.label)
-            });
+        })
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{} deck {deck_index}: select resource: {error}", case.label)
+        });
     }
+}
+
+async fn play_decks(host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {
+    let players: Vec<_> = decks
+        .iter()
+        .map(|deck| deck.player.control().clone())
+        .collect();
+    host.run(move || {
+        for player in &players {
+            player.play();
+        }
+    })
+    .await;
 }
 
 async fn prepare_deck(
@@ -841,7 +861,7 @@ async fn prepare_deck(
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
     player.insert(resource, TrackId::allocate(), None);
-    let player = host.insert(player).unwrap_or_else(|error| {
+    let player = host.insert(player).await.unwrap_or_else(|error| {
         panic!(
             "{} deck {deck_index}: insert player into product Host: {error}",
             case.label
@@ -908,7 +928,7 @@ async fn render_paced(
     for deck in decks {
         deck.player.process_notifications();
     }
-    let block = host.render(BLOCK_FRAMES);
+    let block = host.render(BLOCK_FRAMES).await;
     time::sleep(Duration::from_secs_f64(
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
             / f64::from(sample_rate),

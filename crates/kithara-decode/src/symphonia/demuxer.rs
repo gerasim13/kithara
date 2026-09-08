@@ -250,7 +250,11 @@ impl Demuxer for SymphoniaDemuxer {
                     if pending_reason(&error).is_some() {
                         return Ok(DemuxOutcome::Pending(reason));
                     }
-                    return Err(classify_seek_err(&error));
+                    let failure = classify_seek_err(&error);
+                    if resume_point_is_past_the_end(&failure) {
+                        return Ok(DemuxOutcome::Eof);
+                    }
+                    return Err(failure);
                 }
             }
         } else {
@@ -559,6 +563,20 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     }
 }
 
+/// Whether a failed resume re-seek means the source has nothing left to read.
+///
+/// `resume_ts` is the end of the last cleanly emitted packet, and a
+/// packet-quantised reader reports a full packet duration even for a
+/// truncated final packet — so once the last frame is out, the resume point
+/// can sit past the end of the source. A reader publishes a length only once
+/// every segment size is exact, so "past the published end" is a final
+/// answer rather than a not-ready boundary: there is no stranded packet to
+/// re-read and the stream ends, the way [`Demuxer::seek`] reports
+/// `PastEof` instead of failing.
+const fn resume_point_is_past_the_end(failure: &DecodeError) -> bool {
+    matches!(failure, DecodeError::SeekOutOfRange { .. })
+}
+
 fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
     let SymphoniaError::IoError(error) = error else {
         return None;
@@ -589,16 +607,25 @@ const fn mdct_packet_frames(codec: AudioCodec) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 
-    use kithara_stream::{NotReadyCause, PendingReason};
+    use kithara_stream::{NotReadyCause, PendingReason, StreamSeekPastEof};
+    use kithara_test_fixtures::assets::signal_wav_sine440_1s;
     use kithara_test_utils::kithara;
-    use symphonia::core::{
-        errors::Error as SymphoniaError,
-        units::{Duration as SymphoniaDuration, Timestamp},
+    use symphonia::{
+        core::{
+            errors::Error as SymphoniaError,
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+            units::{Duration as SymphoniaDuration, Timestamp},
+        },
+        default,
     };
 
-    use super::{Packet, packet_ends_at_or_before, pending_reason};
+    use super::{
+        DemuxOutcome, Demuxer, Packet, SymphoniaDemuxer, packet_ends_at_or_before, pending_reason,
+    };
 
     #[kithara::test(native, flash(false))]
     fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
@@ -613,9 +640,117 @@ mod tests {
         assert!(!packet_ends_at_or_before(&packet, 2_151));
     }
 
+    /// Tail withheld from the WAV fixture so the source publishes a length
+    /// shorter than the header's frame count, the way a variant publishes
+    /// only the segments whose sizes are already exact.
+    const WITHHELD_TAIL_BYTES: usize = 4 * 1024;
+
+    /// Source modelling a reader that publishes an exact length and refuses
+    /// any seek beyond it, the way the HLS session reader does once every
+    /// segment size is known.
+    struct PublishedEndSource {
+        bytes: Vec<u8>,
+        pos: u64,
+    }
+
+    impl PublishedEndSource {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self { bytes, pos: 0 }
+        }
+
+        fn len(&self) -> u64 {
+            u64::try_from(self.bytes.len()).unwrap_or(u64::MAX)
+        }
+    }
+
+    impl Read for PublishedEndSource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let start = usize::try_from(self.pos)
+                .unwrap_or(usize::MAX)
+                .min(self.bytes.len());
+            let end = start.saturating_add(buf.len()).min(self.bytes.len());
+            buf[..end - start].copy_from_slice(&self.bytes[start..end]);
+            self.pos = u64::try_from(end).unwrap_or(u64::MAX);
+            Ok(end - start)
+        }
+    }
+
+    impl Seek for PublishedEndSource {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            let len = self.len();
+            let target = match pos {
+                SeekFrom::Start(offset) => i128::from(offset),
+                SeekFrom::Current(delta) => i128::from(self.pos).saturating_add(i128::from(delta)),
+                SeekFrom::End(delta) => i128::from(len).saturating_add(i128::from(delta)),
+            };
+            let target = u64::try_from(target).unwrap_or(u64::MAX);
+            if target > len {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    StreamSeekPastEof::new(self.pos, len, target),
+                ));
+            }
+            self.pos = target;
+            Ok(target)
+        }
+    }
+
+    impl MediaSource for PublishedEndSource {
+        fn byte_len(&self) -> Option<u64> {
+            Some(self.len())
+        }
+
+        fn is_seekable(&self) -> bool {
+            true
+        }
+    }
+
+    fn wav_demuxer() -> SymphoniaDemuxer {
+        let mut bytes = signal_wav_sine440_1s().bytes().to_vec();
+        bytes.truncate(bytes.len() - WITHHELD_TAIL_BYTES);
+        let source = PublishedEndSource::new(bytes);
+        let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
+        let mut hint = Hint::new();
+        hint.with_extension("wav");
+        let format_reader = default::get_probe()
+            .probe(
+                &hint,
+                stream,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .expect("WAV fixture must probe");
+        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("WAV demuxer must build")
+    }
+
+    fn track_frames(demuxer: &SymphoniaDemuxer) -> i64 {
+        let info = demuxer.track_info();
+        let millis = i64::try_from(
+            info.duration
+                .expect("WAV fixture must publish a duration")
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
+        millis * i64::from(info.sample_rate) / 1000
+    }
+
+    #[kithara::test]
+    fn a_resume_point_past_the_published_end_ends_the_stream() {
+        let mut demuxer = wav_demuxer();
+        demuxer.resume_ts = track_frames(&demuxer).saturating_sub(1);
+        demuxer.resume_pending = Some(PendingReason::NotReady(NotReadyCause::SourcePending));
+
+        match demuxer.next_frame() {
+            Ok(DemuxOutcome::Eof) => {}
+            Ok(_) => panic!("a resume point past the published end must end the stream"),
+            Err(error) => panic!("a resume point past the published end must not fail: {error}"),
+        }
+    }
+
     #[kithara::test(native, flash(false))]
     fn would_block_uses_source_pending_reason() {
-        let error = SymphoniaError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
+        let error = SymphoniaError::IoError(io::Error::from(ErrorKind::WouldBlock));
 
         assert_eq!(
             pending_reason(&error),

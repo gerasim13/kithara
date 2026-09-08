@@ -21,17 +21,20 @@ struct Capture {
 async fn render_solo(case: SyncCase, provider: Provider, audible_deck: usize) -> Capture {
     let mut harness = ProductHarness::new(case, provider, audible_deck).await;
     let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
+    drop(harness.close().await);
     Capture { pcm }
 }
 
 async fn render_mix(case: SyncCase, provider: Provider) -> Capture {
     let mut harness = ProductHarness::new(case, provider, 0).await;
     for deck in &harness.decks {
-        deck.set_muted(false);
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
     }
     harness.request_sync(case).await;
 
     let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
+    drop(harness.close().await);
     Capture { pcm }
 }
 

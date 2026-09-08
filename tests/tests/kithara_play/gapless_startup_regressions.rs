@@ -6,7 +6,7 @@ use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
     platform::time::{Duration, Instant},
-    play::{Resource, ResourceConfig, ResourceSrc},
+    play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -48,22 +48,24 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
             .gapless_mode(gapless_mode)
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
-    let resource =
-        create_delayed_gapless_hls_resource(harness.player(), &server, temp_dir.path()).await;
+    )
+    .await;
+    let resource = create_delayed_gapless_hls_resource(&harness, &server, temp_dir.path()).await;
 
-    harness.with_player(|player| player.insert(resource, TrackId::allocate(), None));
+    harness
+        .with_player(move |player| player.insert(resource, TrackId::allocate(), None))
+        .await;
 
     let started_at = Instant::now();
-    harness.player().play();
-    let _ = harness.tick_and_drain();
+    harness.with_player(PlayerControl::play).await;
+    let _ = harness.tick_and_drain().await;
 
     let deadline = started_at + STARTUP_TIMEOUT;
     let mut rendered = Vec::new();
 
     loop {
-        let block = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let block = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
         rendered.extend_from_slice(&block);
 
         let position = harness.player().position_seconds().unwrap_or(0.0);
@@ -76,8 +78,9 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
             assert!(
                 elapsed < Duration::from_millis(DELAY_MS),
                 "gapless mode {gapless_mode:?} must start before delayed tail segments \
-                 could fully cache; elapsed={elapsed:?}, position={position:.3}s"
+                could fully cache; elapsed={elapsed:?}, position={position:.3}s"
             );
+            harness.close().await;
             return;
         }
 
@@ -92,7 +95,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &Path,
 ) -> Resource {
@@ -131,8 +134,9 @@ async fn create_delayed_gapless_hls_resource(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare delayed gapless HLS resource config");
 
     Resource::new(config)

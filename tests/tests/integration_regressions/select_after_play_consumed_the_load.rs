@@ -13,6 +13,7 @@
 //! rendezvous rather than a timing window.
 use std::{
     fs,
+    num::NonZeroU32,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -98,15 +99,8 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(20)).await;
-            if queue.tick().is_err() {
-                break;
-            }
-        }
-    })
+fn spawn_ticker(queue: &Queue<TestPools>) -> QueueTicker {
+    QueueTicker::spawn(QueueControl::clone(queue), Duration::from_millis(20))
 }
 
 /// A local fixture per track: the load has to run and land asynchronously,
@@ -148,7 +142,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
-            .session(session)
+            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
     let player_control = player.control();
@@ -158,14 +152,18 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             .store(store.clone())
             .build(),
     ));
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let mut ticker = spawn_ticker(&queue);
     let mut status_rx = queue.subscribe();
 
     let ids: Vec<_> = (0..TRACK_COUNT)
         .map(|index| {
-            queue.append(TrackSource::Config(Box::new(resource_config(
-                &temp_dir, &store, index,
-            ))))
+            queue
+                .run(move |q| {
+                    q.append(TrackSource::Config(Box::new(resource_config(
+                        &temp_dir, &store, index,
+                    ))))
+                })
+                .await
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("queue is open while fixtures are appended");
@@ -174,7 +172,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     // surface does, and parks inside the engine start.
     let playing = tokio::task::spawn_blocking({
         let queue = Arc::clone(&queue);
-        move || queue.play()
+        move || queue.run(move |q| q.play()).await
     });
     tokio::task::spawn_blocking(move || entered_rx.recv())
         .await
@@ -206,7 +204,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     );
 
     queue
-        .select(ids[1], Transition::None)
+        .run({
+            let arg0 = ids[1];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .expect("selecting the second track must be accepted");
     wait_for_event(
         &mut status_rx,
@@ -223,7 +225,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
     queue
-        .select(ids[0], Transition::None)
+        .run({
+            let arg0 = ids[0];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
         .unwrap_or_else(|error| {
             panic!(
                 "switching back to the track `play` consumed was rejected: {error} — the \
@@ -232,6 +238,5 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         });
 
     queue.clear();
-    ticker.abort();
-    let _ = ticker.await;
+    ticker.stop().await;
 }

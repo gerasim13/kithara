@@ -18,29 +18,33 @@ fn make_resource(duration_secs: f64) -> Resource {
     ))
 }
 
-#[kithara::test]
-fn offline_harness_smoke() {
+#[kithara::test(tokio)]
+async fn offline_harness_smoke() {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         Consts::SAMPLE_RATE,
-    );
-    harness.with_player(|player| {
-        player.insert(make_resource(0.1), TrackId::allocate(), None);
-        player.insert(make_resource(0.1), TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+    )
+    .await;
+    harness
+        .with_player(move |player| {
+            player.insert(make_resource(0.1), TrackId::allocate(), None);
+            player.insert(make_resource(0.1), TrackId::allocate(), None);
+            player
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
 
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;
     while rendered.len() < TARGET_SAMPLES && total_frames < MAX_RENDERED_FRAMES {
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         total_frames = total_frames.saturating_add(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let _ = harness.tick_and_drain().await;
     }
 
     assert!(!rendered.is_empty());
     assert!(rendered.iter().any(|sample| sample.abs() > 0.0));
+    harness.close().await;
 }

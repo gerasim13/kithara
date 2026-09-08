@@ -90,7 +90,7 @@ pub(crate) fn warm_up_audio<S>(
             "local web session state is unavailable".to_owned(),
         ));
     };
-    ensure_ctx(state, 0)
+    ensure_ctx(state, state.sample_rate_hint)
 }
 
 pub(super) fn start_stream_web_audio(

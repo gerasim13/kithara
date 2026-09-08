@@ -26,12 +26,15 @@ pub(crate) enum Ingest {
     ForeignRate,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
 {
     pub(super) fingerprint: AnalysisFingerprint,
     pub(super) token: AnalysisToken,
+    #[field(get, vis = "pub(crate)")]
     pub(super) coverage: Coverage,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) pools: PoolRegion<S>,
@@ -62,11 +65,6 @@ where
         } else {
             BeatState::Provisional
         }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn coverage(&self) -> &Coverage {
-        &self.coverage
     }
 
     pub(crate) fn covered_frames(&self) -> u64 {
@@ -200,7 +198,6 @@ where
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn settle(&mut self) {
         self.settled = true;
     }
@@ -236,7 +233,6 @@ where
     delegate::delegate! {
         to self.beat {
             pub(crate) fn apply_detection(&mut self, output: beat::DetectOutput);
-            #[cfg(not(target_arch = "wasm32"))]
             #[call(intake)]
             pub(crate) fn beat_intake(&self) -> Intake;
         }

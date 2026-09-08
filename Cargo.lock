@@ -4682,6 +4682,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "unimock",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5033,6 +5034,7 @@ dependencies = [
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
@@ -5711,6 +5713,7 @@ dependencies = [
  "serde_yaml_ng",
  "thiserror 2.0.18",
  "tracing",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

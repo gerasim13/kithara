@@ -116,10 +116,11 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let resource = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -128,7 +129,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     )
     .await;
 
-    let [single] = load_tagged_queue(&harness, [resource]);
+    let [single] = load_tagged_queue(&harness, [resource]).await;
 
     let (rendered, events) = render_until_item_end(&harness, single).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -157,6 +158,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
         "head RMS too low — leading priming likely not trimmed: head_rms={head_rms:.4}, \
          events={events:?}"
     );
+    harness.close().await;
 }
 
 #[kithara::test(
@@ -176,10 +178,11 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let first = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -188,7 +191,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     )
     .await;
     let second = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -197,7 +200,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     )
     .await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -245,6 +248,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
              item1_end={item1_end}, events={events:?}"
         );
     }
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -258,10 +262,11 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let first = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -270,7 +275,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     )
     .await;
     let second = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -279,7 +284,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     )
     .await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -306,6 +311,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
         ratio < ContinuityMetric::MAX_RATIO,
         "gapless stitch discontinuity {switch_peak:.6} is {ratio:.1}x the worst same-track control window {control_peak:.6}",
     );
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -375,9 +381,10 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
-    );
+    )
+    .await;
     let probe = create_apple_fused_resource(
-        probe_harness.player(),
+        probe_harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -391,6 +398,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
         "visible length must be the scaled ratio rounded either way: got {}, expected {floor_frames} or {ceil_frames}",
         probe.output_frames
     );
+    probe_harness.close().await;
 
     let pending_decision =
         render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
@@ -434,10 +442,11 @@ async fn render_apple_fused_deficit_seam(
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
-    );
+    )
+    .await;
 
     let first = create_apple_fused_resource(
-        harness.player(),
+        harness,
         server,
         cache_dir,
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -446,7 +455,7 @@ async fn render_apple_fused_deficit_seam(
     )
     .await;
     let second = create_apple_fused_resource(
-        harness.player(),
+        harness,
         server,
         cache_dir,
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -455,7 +464,7 @@ async fn render_apple_fused_deficit_seam(
     )
     .await;
 
-    let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]);
+    let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let control_post_roll_blocks =
         (ContinuityMetric::CONTROL_STRIDE_FRAMES / BLOCK_FRAMES) + POST_ROLL_BLOCKS;
@@ -485,13 +494,15 @@ async fn render_apple_fused_deficit_seam(
         "Apple fused seam metric needs at least {} same-track control windows, got {control_count}",
         ContinuityMetric::MIN_CONTROL_WINDOWS
     );
-    AppleFusedSeamRender {
+    let result = AppleFusedSeamRender {
         control_db,
         head_db: seam_step_db(&left, stitch_frame.saturating_add(1)),
         nearby_db: nearby_seam_step_db(&left, stitch_frame),
         seam_db,
         stitch_frame,
-    }
+    };
+    harness.close().await;
+    result
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -504,10 +515,11 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let resource = create_resource(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -516,7 +528,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     )
     .await;
 
-    let [only] = load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]).await;
 
     let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -538,6 +550,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
         "Disabled mode must pass through full decoded PCM (no leading/trailing trim)",
         &events,
     );
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -552,10 +565,11 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let resource = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -565,7 +579,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     )
     .await;
 
-    let [only] = load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]).await;
 
     let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -576,6 +590,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
         "head RMS too low — heuristic SilenceTrim did not strip leading silence: \
          head_rms={head_rms:.4}, events={events:?}"
     );
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -590,12 +605,13 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
 
     let first = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -605,7 +621,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     )
     .await;
     let second = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -615,7 +631,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     )
     .await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -669,6 +685,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
              events={events:?}"
         );
     }
+    harness.close().await;
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
@@ -681,10 +698,11 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
-    );
+    )
+    .await;
 
     let resource = create_resource_with_encoding(
-        harness.player(),
+        &harness,
         &server,
         temp_dir.path(),
         Some(AAC_GAPLESS_ENCODER_DELAY),
@@ -693,7 +711,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
         GaplessEncoding::None,
     )
     .await;
-    let [only] = load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]).await;
 
     let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -733,10 +751,11 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
          tail_peak={tail_peak:.4}, body_peak={body_peak:.4}, ratio={:.2}",
         tail_peak / body_peak.max(f32::MIN_POSITIVE),
     );
+    harness.close().await;
 }
 
 async fn create_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -744,7 +763,7 @@ async fn create_resource(
     start_frame: u64,
 ) -> Resource {
     create_resource_with_encoding(
-        player,
+        harness,
         server,
         cache_dir,
         encoder_delay,
@@ -760,7 +779,7 @@ async fn create_resource(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_resource_with_encoding(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -799,8 +818,9 @@ async fn create_resource_with_encoding(
     )
     .store(store)
     .build();
-    config = player
-        .prepare_config(config)
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare gapless e2e HLS resource config");
     let mut resource = Resource::new(config)
         .await
@@ -818,7 +838,7 @@ async fn create_resource_with_encoding(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_apple_fused_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -869,8 +889,9 @@ async fn create_apple_fused_resource(
             .build(),
     )
     .build();
-    let config = player
-        .prepare_config(config)
+    let config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare Apple fused HLS resource config");
     let mut resource = Resource::new(config)
         .await
@@ -902,7 +923,8 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
-    );
+    )
+    .await;
     harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
     let first_frame_count = first_frames.len();
@@ -918,7 +940,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
         Some(Arc::from("fused-deficit-2")),
     );
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -927,12 +949,14 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
         (peak - FUSED_FIXTURE_MASTER_LEVEL).abs() <= 1.0e-3,
         "fused seam fixture must preserve its explicit headroom; peak={peak}"
     );
-    SyntheticSeamRender {
+    let result = SyntheticSeamRender {
         left,
         events,
         first_frames: first_frame_count,
         first_id,
-    }
+    };
+    harness.close().await;
+    result
 }
 
 fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
@@ -1000,22 +1024,24 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
 
 /// Loads the queue and returns the identity the player will report back
 /// for each item, in the order they were given.
-fn load_tagged_queue<const N: usize>(
+async fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayerHarness,
     items: [Resource; N],
 ) -> [TrackId; N] {
     let ids = [(); N].map(|()| TrackId::allocate());
-    harness.with_player(|player| {
-        player.reserve_slots(items.len());
-        for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
+    harness
+        .with_player(move |player| {
+            player.reserve_slots(items.len());
+            for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
+                player
+                    .replace_item(index, resource, id)
+                    .expect("replace gapless fixture item");
+            }
             player
-                .replace_item(index, resource, id)
-                .expect("replace gapless fixture item");
-        }
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
     ids
 }
 
@@ -1230,12 +1256,13 @@ async fn render_until_item_end_with_post_roll(
     let mut events = Vec::new();
 
     loop {
-        let block = harness.render(BLOCK_FRAMES);
+        let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
         events.extend(
             harness
                 .tick_and_drain()
+                .await
                 .into_iter()
                 .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
         );
@@ -1247,12 +1274,13 @@ async fn render_until_item_end_with_post_roll(
             )
         }) {
             for _ in 0..post_roll_blocks {
-                let block = harness.render(BLOCK_FRAMES);
+                let block = harness.render(BLOCK_FRAMES).await;
                 rendered.extend_from_slice(&block);
                 rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
                 events.extend(
                     harness
                         .tick_and_drain()
+                        .await
                         .into_iter()
                         .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );

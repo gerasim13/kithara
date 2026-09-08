@@ -78,6 +78,26 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-ffi --test web-observer --no-default-features \
       --features wasm
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-worker --lib
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-analysis --lib --no-default-features \
+      --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-ffi --test web-analysis --no-default-features \
+      --features wasm
     if [[ "$suite" == "all" ]]; then
       # The integration browser tests live in `suite_heavy`. Building the whole
       # crate for wasm compiles every native suite too, and those reach for

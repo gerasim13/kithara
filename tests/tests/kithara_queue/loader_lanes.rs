@@ -14,7 +14,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -22,7 +21,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
@@ -78,14 +77,14 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
     handle.child_url("track.mp3")
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -111,11 +110,9 @@ fn build_queue_with_tick(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -174,14 +171,15 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
+    let (queue, downloader, store, mut tick_handle) =
+        build_queue_with_tick(&temp, Consts::BG_CAP).await;
 
     let hung_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &hung.url(),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&hung.url(), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
@@ -191,15 +189,17 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
 
     // Parked: the background lane is saturated by the hung load.
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url(&fast),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source =
+                TrackSource::Config(Box::new(mk_cfg(&fast_url(&fast), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
 
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;
@@ -218,7 +218,8 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
         "promotion must not spawn a second download session for the same track"
     );
 
-    tick_handle.abort();
+    tick_handle.stop().await;
+    queue.close().await;
 }
 
 /// A follow-up selection is not blocked by a superseded hung one, and
@@ -229,15 +230,16 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     let (hung, fast) = register_sources(&helper);
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
+    let (queue, downloader, store, mut tick_handle) =
+        build_queue_with_tick(&temp, Consts::BG_CAP).await;
     let mut events = queue.subscribe();
 
     let hung_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &hung.url(),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&hung.url(), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
@@ -246,19 +248,22 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url(&fast),
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source =
+                TrackSource::Config(Box::new(mk_cfg(&fast_url(&fast), &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
 
     // The user clicks the stuck track, then gives up and clicks another.
     queue
-        .select(hung_id, Transition::None)
+        .run(move |q| q.select(hung_id, Transition::None))
+        .await
         .expect("select hung");
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE)
@@ -284,7 +289,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
         status_of(&queue, hung_id)
     );
 
-    tick_handle.abort();
+    tick_handle.stop().await;
+    queue.close().await;
 }
 
 /// Setup invariant: the hung track must still be mid-load when the fast

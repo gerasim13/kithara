@@ -5,8 +5,6 @@ use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
-#[cfg(test)]
-use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{PlayerStatus, TrackId},
@@ -245,77 +243,5 @@ where
 
     pub(crate) fn start_playback(&self, item_id: TrackId) {
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::{
-        PlayWorker, PlayWorkerConfig,
-        player::PlayerConfig,
-        session::testing,
-        test_pools::{TestPools, pools},
-    };
-
-    fn player() -> PlayerImpl<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .session(testing::test_session())
-                .build(),
-        )
-    }
-
-    #[kithara::test]
-    fn seek_seconds_without_slot_returns_not_ready() {
-        let player = player();
-        let err = player.seek_seconds(1.0).expect_err("must error");
-        assert!(matches!(err, PlayError::NotReady));
-    }
-
-    #[kithara::test]
-    fn select_item_out_of_range_returns_typed_error() {
-        let player = player();
-        let err = player
-            .select_item_with_crossfade(
-                5,
-                SelectTransition {
-                    autoplay: false,
-                    crossfade_seconds: 0.0,
-                },
-            )
-            .expect_err("must error");
-        assert!(matches!(
-            err,
-            PlayError::IndexOutOfRange { index: 5, len: 0 }
-        ));
-    }
-
-    /// `enqueue_to_processor` takes the resource out of the slot, so a
-    /// select against an emptied (consumed) slot has nothing to load: it
-    /// must fail loudly instead of moving the playlist current index / announcing
-    /// `CurrentItemChanged` while the old audio keeps playing.
-    #[kithara::test]
-    fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-        let player = player();
-        player.reserve_slots(2);
-        let result = player.select_item_with_crossfade(
-            1,
-            SelectTransition {
-                autoplay: false,
-                crossfade_seconds: 0.0,
-            },
-        );
-        assert!(result.is_err(), "selecting an emptied slot must fail");
-        assert_eq!(
-            player.current_index(),
-            0,
-            "bookkeeping must not move on a failed select"
-        );
     }
 }

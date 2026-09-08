@@ -180,13 +180,21 @@ fn assert_continuous(label: &str, candidate: &[f32], solo: &[f32]) {
 /// reference a seam stream is judged against.
 async fn solo_render(provider: Provider, from_secs: f64, frames: usize, rate: f32) -> Vec<f32> {
     let mut harness = ProductHarness::new(Fixture::SOLO, provider, 0).await;
-    harness.decks[0].set_rate(rate);
+    let control = harness.decks[0].control().clone();
+    harness.host.run(move || control.set_rate(rate)).await;
     if from_secs > 0.0 {
-        harness.decks[0].seek(from_secs).expect("solo seek");
+        let control = harness.decks[0].control().clone();
+        harness
+            .host
+            .run(move || control.seek(from_secs))
+            .await
+            .expect("solo seek");
         harness.settle(Fixture::SOLO, 4).await;
     }
     let block = block_frames(&harness) as usize;
-    harness.capture_frames(Fixture::SOLO, frames, block).await
+    let pcm = harness.capture_frames(Fixture::SOLO, frames, block).await;
+    drop(harness.close().await);
+    pcm
 }
 
 /// Solo renders of the house and techno fixtures at `rates`, back to back.
@@ -218,7 +226,11 @@ async fn seam_rate_persists_into_next_track() {
     )
     .await;
     let block = block_frames(&harness);
-    harness.decks[0].set_rate(Fixture::RATE);
+    let control = harness.decks[0].control().clone();
+    harness
+        .host
+        .run(move || control.set_rate(Fixture::RATE))
+        .await;
     let _pcm = harness
         .capture_frames(
             Fixture::SEAM_RATE_PERSISTS,
@@ -245,6 +257,7 @@ async fn seam_rate_persists_into_next_track() {
             Fixture::RATE,
         );
     }
+    drop(harness.close().await);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
@@ -289,6 +302,7 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
             "track {index} `{name}` rendered {rendered} frames at rate 1.0, expected {len} ± {block}",
         );
     }
+    drop(harness.close().await);
 }
 
 #[ignore = "ignored-red: the seam is armed by the queue tick, not by the RT trigger (plan 1 Task 5), 2026-09-07"]
@@ -320,6 +334,7 @@ async fn seam_honours_the_configured_crossfade_length() {
         (overlap - fade).abs() <= block,
         "tracks overlapped for {overlap} frames, configured crossfade is {fade} ± {block}",
     );
+    drop(harness.close().await);
 }
 
 /// A synced deck that has played past the house lead-in, where the fixture
@@ -331,7 +346,7 @@ async fn synced_house_deck() -> ProductHarness {
         0,
     )
     .await;
-    harness.set_tempo(Fixture::TRACK_GRID, 124.0, true);
+    harness.set_tempo(Fixture::TRACK_GRID, 124.0, true).await;
     let lead_in = usize::try_from(bar_frames(124.0)).expect("lead-in fits usize");
     let _ = harness
         .capture_frames(Fixture::TRACK_GRID, lead_in, harness.block_frames)
@@ -351,11 +366,13 @@ async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
     let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
     let admission = harness
         .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+        .await
         .unwrap_or_else(|error| panic!("publish the house grid: {error}"));
     assert!(
         matches!(admission, SyncAdmission::Prepared { .. }),
         "the deck prepares a warp map for a complete track grid, got {admission:?}"
     );
+    drop(harness.close().await);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
@@ -365,6 +382,7 @@ async fn a_building_track_grid_defers_until_it_completes() {
     let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
     let building = harness
         .publish_track_grid(0, item, grid.clone(), BeatGridState::Building)
+        .await
         .unwrap_or_else(|error| panic!("publish the building grid: {error}"));
     assert!(
         matches!(building, SyncAdmission::Deferred { .. }),
@@ -372,9 +390,11 @@ async fn a_building_track_grid_defers_until_it_completes() {
     );
     let complete = harness
         .publish_track_grid(0, item, grid, BeatGridState::Complete)
+        .await
         .unwrap_or_else(|error| panic!("republish the complete grid: {error}"));
     assert!(
         matches!(complete, SyncAdmission::Prepared { .. }),
         "the completed revision replaces the building one and is prepared, got {complete:?}"
     );
+    drop(harness.close().await);
 }

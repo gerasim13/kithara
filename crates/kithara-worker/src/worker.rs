@@ -55,12 +55,10 @@ impl Drop for WorkerInner {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    #[cfg(not(target_arch = "wasm32"))]
     use std::num::NonZeroUsize;
 
-    #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::{
         CancelScope,
         sync::{Arc, ThreadGate, WaitGate, mpsc},
@@ -70,11 +68,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    #[cfg(not(target_arch = "wasm32"))]
-    use crate::{ComputeSubmitError, RayonConfig, compute::ComputePool};
-    use crate::{DispatcherConfig, TaskConfig};
+    use crate::{
+        ComputeSubmitError, DispatcherConfig, OwnedPoolConfig, TaskConfig, compute::ComputePool,
+    };
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn worker_keeps_supplied_pool_and_never_creates_one_when_absent() {
         let absent = Worker::new(WorkerConfig::new());
@@ -97,13 +94,12 @@ mod tests {
         assert!(Arc::ptr_eq(configured, &pool));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn owned_pool_is_lazy_and_executes_the_payload_once() {
-        let worker = Worker::new(
-            WorkerConfig::new()
-                .with_owned_pool(RayonConfig::new(NonZeroUsize::MIN, "owned-compute-test")),
-        );
+        let worker = Worker::new(WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
+            NonZeroUsize::MIN,
+            "owned-compute-test",
+        )));
         assert!(!worker.inner.compute.pool().owned_is_initialized());
         let dispatcher =
             worker.dispatcher(DispatcherConfig::builder().name("owned-pool-test").build());
@@ -142,7 +138,6 @@ mod tests {
         assert_eq!(built.current_num_threads(), 1);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn accepted_payload_executes_once_when_cancelled_before_the_pool_runs_it() {
         let pool = Arc::new(
@@ -191,7 +186,6 @@ mod tests {
         assert!(completed_rx.try_recv().is_err());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn disabled_compute_is_unavailable_and_budgets_saturate_without_queueing() {
         let disabled = Worker::new(WorkerConfig::new());
@@ -273,10 +267,9 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn cancelled_task_does_not_initialize_owned_pool() {
-        let worker = Worker::new(WorkerConfig::new().with_owned_pool(RayonConfig::new(
+        let worker = Worker::new(WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
             NonZeroUsize::MIN,
             "cancelled-compute-test",
         )));
@@ -300,7 +293,6 @@ mod tests {
         assert!(!worker.inner.compute.pool().owned_is_initialized());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn parent_cancel_reaches_worker_dispatcher_task_and_compute_job() {
         let parent = CancelScope::new(None);
@@ -308,7 +300,10 @@ mod tests {
         let worker = Worker::new(
             WorkerConfig::new()
                 .with_cancel(parent_token.clone())
-                .with_owned_pool(RayonConfig::new(NonZeroUsize::MIN, "cancel-compute-test")),
+                .with_owned_pool(OwnedPoolConfig::new(
+                    NonZeroUsize::MIN,
+                    "cancel-compute-test",
+                )),
         );
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
