@@ -5596,6 +5596,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
