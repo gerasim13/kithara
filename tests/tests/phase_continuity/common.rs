@@ -510,26 +510,16 @@ pub(crate) fn scan_rendered_pcm(
 #[cfg(test)]
 mod tests {
 
+    use kithara_test_fixtures::integration_fixtures::{
+        phase_noise, phase_sine_anchor, phase_sine_dropped, phase_sine_jitter, phase_sine_measured,
+    };
+
     use super::*;
 
-    fn synth(spec: SinePhaseSpec, start_frame: u64, frames: usize, amp: f32) -> Vec<f32> {
-        let chan = spec.channels as usize;
-        let mut out = vec![0.0_f32; frames * chan];
-        let d = spec.delta_rad_per_sample();
-        for f in 0..frames {
-            let phase = d * (start_frame + f as u64) as f64;
-            let v = amp * num_traits::cast::<f64, f32>(phase.sin()).unwrap_or(0.0);
-            for c in 0..chan {
-                out[f * chan + c] = v;
-            }
-        }
-        out
-    }
-
     #[kithara::test]
-    fn measure_matches_predicted_for_clean_sine() {
+    fn measure_matches_predicted_for_clean_sine(phase_sine_measured: Vec<f32>) {
         let spec = SinePhaseSpec::default_440();
-        let pcm = synth(spec, 12_345, READ_FRAMES_AFTER_SEEK, 0.8);
+        let pcm = phase_sine_measured;
         let chan = spec.channels as usize;
         let mono: Vec<f64> = (0..pcm.len() / chan)
             .map(|f| f64::from(pcm[f * chan]))
@@ -542,52 +532,25 @@ mod tests {
         assert!((amp - 0.8).abs() < 0.01, "amp {amp}");
     }
 
-    fn xorshift_unit(state: &mut u64) -> f64 {
-        let mut s = *state;
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        *state = s;
-        (s as f64 / u64::MAX as f64).mul_add(2.0, -1.0)
-    }
-
-    /// Returns Gaussian noise with the requested standard deviation,
-    /// via Box-Muller from two uniform draws.
-    fn gauss_noise(state: &mut u64, sigma: f64) -> f64 {
-        let u1 = (xorshift_unit(state) + 1.0) * 0.5;
-        let u2 = (xorshift_unit(state) + 1.0) * 0.5;
-        let u1 = u1.max(1e-12);
-        sigma * (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
-    }
-
     /// Verifies LS fit error matches theory `σ_s` ≈ √(`2/N)·(σ_n/A)/δ`
     /// for additive white Gaussian noise. If this passes, the LS fit is
     /// correct; any larger error from real AAC must come from non-white
     /// noise structure, not a bug in the estimator.
     #[kithara::test]
-    fn measure_error_matches_theory_for_white_noise() {
+    fn measure_error_matches_theory_for_white_noise(phase_noise: Vec<f64>) {
         let spec = SinePhaseSpec::default_440();
-        let chan = spec.channels as usize;
         let delta = spec.delta_rad_per_sample();
         let sigma_n = 0.05_f64;
         let amplitude = 1.0_f64;
         let n = READ_FRAMES_AFTER_SEEK;
         let theory_sigma_samples = (2.0_f64 / n as f64).sqrt() * (sigma_n / amplitude) / delta;
         let trials = 400;
-        let mut state: u64 = 0xC0FFEE_BADD_F00D_u64;
         let mut sum_sq = 0.0_f64;
         for trial in 0..trials {
             let start = 1000 + trial as u64 * 137;
-            let pcm = synth(
-                spec,
-                start,
-                n,
-                num_traits::cast::<f64, f32>(amplitude).unwrap_or(0.0),
-            );
-            let mono: Vec<f64> = (0..pcm.len() / chan)
-                .map(|f| f64::from(pcm[f * chan]) + gauss_noise(&mut state, sigma_n))
-                .collect();
-            let (measured, _amp) = measure_phase_rad_window(&mono, delta);
+            let offset = usize::try_from(trial).expect("trial fits usize") * n;
+            let mono = &phase_noise[offset..offset + n];
+            let (measured, _amp) = measure_phase_rad_window(mono, delta);
             let predicted = wrap_pi(delta * start as f64);
             let diff_samples = wrap_pi(measured - predicted) / delta;
             sum_sq += diff_samples * diff_samples;
@@ -601,10 +564,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn window_robust_to_amplitude_noise() {
+    fn window_robust_to_amplitude_noise(phase_sine_jitter: Vec<f32>) {
         let spec = SinePhaseSpec::default_440();
         let chan = spec.channels as usize;
-        let pcm = synth(spec, 50_000, READ_FRAMES_AFTER_SEEK, 1.0);
+        let pcm = phase_sine_jitter;
         let delta = spec.delta_rad_per_sample();
         let mono: Vec<f64> = (0..pcm.len() / chan)
             .map(|f| {
@@ -623,10 +586,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn anchor_detects_sample_drop_of_two() {
+    fn anchor_detects_sample_drop_of_two(
+        phase_sine_anchor: Vec<f32>,
+        phase_sine_dropped: Vec<f32>,
+    ) {
         let spec = SinePhaseSpec::default_440();
-        let pcm0 = synth(spec, 1000, READ_FRAMES_AFTER_SEEK, 0.8);
-        let pcm_dropped = synth(spec, 2000 + 2, READ_FRAMES_AFTER_SEEK, 0.8);
+        let pcm0 = phase_sine_anchor;
+        let pcm_dropped = phase_sine_dropped;
         let mut anchor: Option<(u64, f64)> = None;
         let chan = spec.channels as usize;
         assert!(check_against_previous(&mut anchor, 1000, &pcm0, chan, spec, "t").is_none());

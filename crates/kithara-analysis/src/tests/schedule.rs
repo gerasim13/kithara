@@ -13,6 +13,7 @@ use kithara_platform::{
 };
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
@@ -59,6 +60,7 @@ enum Call {
 type Log = Arc<Mutex<Vec<Call>>>;
 
 struct Source {
+    pcm: &'static [f32],
     bus: EventBus,
     log: Log,
     fails_after: Option<u64>,
@@ -77,8 +79,9 @@ struct Source {
 }
 
 impl Source {
-    fn new(frames: u64) -> Self {
+    fn new(pcm: &'static [f32], frames: u64) -> Self {
         Self {
+            pcm,
             frames,
             reports: Some(frames),
             chunk: Consts::CHUNK,
@@ -195,7 +198,7 @@ impl AudioRead for Source {
         self.chunks = self.chunks.saturating_add(1);
         self.push(Call::Chunk { at });
         let pools = self.pools.as_ref().expect("test pass installs pool region");
-        Ok(ChunkOutcome::Chunk(decoded(pools, at, frames)))
+        Ok(ChunkOutcome::Chunk(decoded(self.pcm, pools, at, frames)))
     }
 
     fn position(&self) -> Duration {
@@ -243,8 +246,17 @@ impl AudioControl for Source {
     }
 }
 
-fn decoded(pools: &kithara_bufpool::PoolRegion<TestPools>, at: u64, frames: u64) -> AudioChunk {
-    chunk(pools, &sine_from(at, frames.to_usize().unwrap_or(0)), at)
+fn decoded(
+    pcm: &[f32],
+    pools: &kithara_bufpool::PoolRegion<TestPools>,
+    at: u64,
+    frames: u64,
+) -> AudioChunk {
+    chunk(
+        pools,
+        &sine_from(pcm, at, frames.to_usize().unwrap_or(0)),
+        at,
+    )
 }
 
 fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
@@ -261,6 +273,7 @@ struct Pass<B, S>
 where
     B: ResamplerBackend,
 {
+    pcm: &'static [f32],
     producer: AnalysisProducer,
     log: Log,
     node: NodeHarness<B, S>,
@@ -306,13 +319,15 @@ where
     fn offer(&mut self, at: u64, frames: u64) {
         let frames = frames.to_usize().unwrap_or(0);
         assert_eq!(
-            self.producer.offer(&sine_from(at, frames), spec(), at),
+            self.producer
+                .offer(&sine_from(self.pcm, at, frames), spec(), at),
             Ok(()),
             "the transport takes a range on its own axis"
         );
     }
 
     fn open(mut source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
+        let pcm = source.pcm;
         let rate = spec().sample_rate;
         source.pools = Some(builder.pools().clone());
         let log = source.log();
@@ -332,6 +347,7 @@ where
         .expect("analysis node accepts the test job");
 
         Self {
+            pcm,
             log,
             results,
             _jobs: jobs,
@@ -393,9 +409,9 @@ fn run_lengths(calls: &[Call]) -> Vec<usize> {
 }
 
 #[kithara::test]
-async fn a_scheduled_pass_seeks_before_it_decodes_anything() {
+async fn a_scheduled_pass_seeks_before_it_decodes_anything(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT),
+        Source::new(analysis_pcm, Consts::EXTENT),
         scheduled(Consts::WINDOW_SECONDS),
     );
     pass.drive(2).await;
@@ -414,12 +430,12 @@ async fn a_scheduled_pass_seeks_before_it_decodes_anything() {
 }
 
 #[kithara::test]
-async fn a_growing_duration_replaces_the_one_the_schedule_had() {
+async fn a_growing_duration_replaces_the_one_the_schedule_had(analysis_pcm: &'static [f32]) {
     // The source holds twice what it first reports, the way a decode path
     // refines a duration upward as it learns more.
     let short = Consts::EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT)
+        Source::new(analysis_pcm, Consts::EXTENT)
             .reporting(Some(short))
             .refining(),
         scheduled(Consts::WINDOW_SECONDS),
@@ -439,10 +455,12 @@ async fn a_growing_duration_replaces_the_one_the_schedule_had() {
 }
 
 #[kithara::test]
-async fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk() {
+async fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk(
+    analysis_pcm: &'static [f32],
+) {
     const SNAP: u64 = 30_000;
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(SNAP),
+        Source::new(analysis_pcm, Consts::EXTENT).snapping(SNAP),
         scheduled(Consts::WINDOW_SECONDS),
     );
     pass.drive(8).await;
@@ -469,9 +487,9 @@ async fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk() 
 }
 
 #[kithara::test]
-async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into() {
+async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT),
+        Source::new(analysis_pcm, Consts::EXTENT),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS).await, "the pass ends");
@@ -492,9 +510,12 @@ async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into() {
 }
 
 #[kithara::test]
-async fn a_run_length_is_independent_of_the_detector_window() {
+async fn a_run_length_is_independent_of_the_detector_window(analysis_pcm: &'static [f32]) {
     let lengths = async |seconds: u32| {
-        let mut pass = Pass::open(Source::new(Consts::EXTENT), scheduled(seconds));
+        let mut pass = Pass::open(
+            Source::new(analysis_pcm, Consts::EXTENT),
+            scheduled(seconds),
+        );
         pass.drive(64).await;
         run_lengths(&pass.calls()).first().copied().unwrap_or(0)
     };
@@ -509,10 +530,10 @@ async fn a_run_length_is_independent_of_the_detector_window() {
 }
 
 #[kithara::test]
-async fn a_covered_opening_is_not_decoded_a_second_time() {
+async fn a_covered_opening_is_not_decoded_a_second_time(analysis_pcm: &'static [f32]) {
     let covered = Consts::EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT),
+        Source::new(analysis_pcm, Consts::EXTENT),
         scheduled(Consts::WINDOW_SECONDS),
     );
     pass.offer(0, covered);
@@ -534,9 +555,9 @@ async fn a_covered_opening_is_not_decoded_a_second_time() {
 }
 
 #[kithara::test]
-async fn a_source_with_no_length_is_decoded_in_order() {
+async fn a_source_with_no_length_is_decoded_in_order(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).reporting(None),
+        Source::new(analysis_pcm, Consts::EXTENT).reporting(None),
         scheduled(Consts::WINDOW_SECONDS),
     );
 
@@ -555,11 +576,11 @@ async fn a_source_with_no_length_is_decoded_in_order() {
 }
 
 #[kithara::test]
-async fn a_pass_ends_when_a_producer_covers_the_last_of_it() {
+async fn a_pass_ends_when_a_producer_covers_the_last_of_it(analysis_pcm: &'static [f32]) {
     // The reader never delivers, so everything covered came from the
     // producer and nothing can have reached end of stream.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).stalling(),
+        Source::new(analysis_pcm, Consts::EXTENT).stalling(),
         scheduled(Consts::WINDOW_SECONDS),
     );
     pass.offer(0, Consts::EXTENT / 2);
@@ -581,11 +602,11 @@ async fn a_pass_ends_when_a_producer_covers_the_last_of_it() {
 }
 
 #[kithara::test]
-async fn a_source_that_over_reports_its_length_still_ends() {
+async fn a_source_that_over_reports_its_length_still_ends(analysis_pcm: &'static [f32]) {
     // Reports four seconds, holds two.
     let held = Consts::EXTENT / 2;
     let mut pass = Pass::open(
-        Source::new(held).reporting(Some(Consts::EXTENT)),
+        Source::new(analysis_pcm, held).reporting(Some(Consts::EXTENT)),
         scheduled(Consts::WINDOW_SECONDS),
     );
 
@@ -605,9 +626,12 @@ async fn a_source_that_over_reports_its_length_still_ends() {
 }
 
 #[kithara::test]
-async fn a_snapshot_published_early_describes_the_whole_track() {
+async fn a_snapshot_published_early_describes_the_whole_track(analysis_pcm: &'static [f32]) {
     const EXTENT: u64 = 20 * 44_100;
-    let mut pass = Pass::open(Source::new(EXTENT), scheduled(Consts::WINDOW_SECONDS));
+    let mut pass = Pass::open(
+        Source::new(analysis_pcm, EXTENT),
+        scheduled(Consts::WINDOW_SECONDS),
+    );
     pass.drive(40).await;
     assert!(!pass.has_ended(), "the pass must still be decoding");
 
@@ -633,11 +657,11 @@ async fn a_snapshot_published_early_describes_the_whole_track() {
 }
 
 #[kithara::test]
-async fn a_snapping_source_has_its_gaps_closed_rather_than_halved() {
+async fn a_snapping_source_has_its_gaps_closed_rather_than_halved(analysis_pcm: &'static [f32]) {
     // Seeks land on whole 30 000 frames, so a run aimed at a gap's start
     // begins in covered audio and has to read through it to get there.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(30_000),
+        Source::new(analysis_pcm, Consts::EXTENT).snapping(30_000),
         scheduled(Consts::WINDOW_SECONDS),
     );
 
@@ -656,13 +680,13 @@ async fn a_snapping_source_has_its_gaps_closed_rather_than_halved() {
 }
 
 #[kithara::test]
-async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
+async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes(analysis_pcm: &'static [f32]) {
     // Seeks land on whole 88 200 frames, so the two gaps left between them
     // are further from a landing than a run is long: the run spends its
     // chunk on covered audio and never reaches them. Each such position
     // costs one run to find out and is then retired, which bounds this.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(88_200),
+        Source::new(analysis_pcm, Consts::EXTENT).snapping(88_200),
         scheduled(Consts::WINDOW_SECONDS),
     );
 
@@ -684,10 +708,10 @@ async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
 }
 
 #[kithara::test]
-async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk() {
+async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm: &'static [f32]) {
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).flooring(FLOOR),
+        Source::new(analysis_pcm, Consts::EXTENT).flooring(FLOOR),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS).await, "the pass ends");
@@ -706,10 +730,10 @@ async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk() {
 }
 
 #[kithara::test]
-async fn a_pass_with_nothing_left_to_reach_is_settled() {
+async fn a_pass_with_nothing_left_to_reach_is_settled(analysis_pcm: &'static [f32]) {
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).flooring(FLOOR),
+        Source::new(analysis_pcm, Consts::EXTENT).flooring(FLOOR),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS).await, "the pass ends");
@@ -726,9 +750,9 @@ async fn a_pass_with_nothing_left_to_reach_is_settled() {
 }
 
 #[kithara::test]
-async fn a_pass_its_reader_cut_short_is_not_settled() {
+async fn a_pass_its_reader_cut_short_is_not_settled(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).failing_after(3),
+        Source::new(analysis_pcm, Consts::EXTENT).failing_after(3),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(
@@ -743,11 +767,11 @@ async fn a_pass_its_reader_cut_short_is_not_settled() {
 }
 
 #[kithara::test]
-async fn a_pass_that_gave_up_still_reports_what_it_never_reached() {
+async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &'static [f32]) {
     // Seeks land on whole 88 200 frames, so the schedule retires positions
     // it cannot reach and ends with the track only partly covered.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(88_200),
+        Source::new(analysis_pcm, Consts::EXTENT).snapping(88_200),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS).await, "the pass ends");
@@ -777,12 +801,12 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached() {
 }
 
 #[kithara::test]
-fn a_producer_does_not_keep_an_unreachable_position_alive() {
+fn a_producer_does_not_keep_an_unreachable_position_alive(analysis_pcm: &'static [f32]) {
     // Seeks snap down to whole 88 200 frames, and the opening is already
     // covered, so the position chosen for the middle gap lands back inside
     // covered audio and its run can decode nothing new.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(88_200),
+        Source::new(analysis_pcm, Consts::EXTENT).snapping(88_200),
         scheduled(Consts::WINDOW_SECONDS),
     );
     pass.offer(0, 100_000);
@@ -817,9 +841,9 @@ fn a_producer_does_not_keep_an_unreachable_position_alive() {
 }
 
 #[kithara::test]
-async fn a_decode_error_still_publishes_what_the_pass_covered() {
+async fn a_decode_error_still_publishes_what_the_pass_covered(analysis_pcm: &'static [f32]) {
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).failing_after(3),
+        Source::new(analysis_pcm, Consts::EXTENT).failing_after(3),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(
@@ -839,12 +863,14 @@ async fn a_decode_error_still_publishes_what_the_pass_covered() {
 }
 
 #[kithara::test]
-async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
+async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked(analysis_pcm: &'static [f32]) {
     // The readers this runs against answer a seek with the position they
     // were asked for while the decoder resumes at a boundary of its own, so
     // a run sized against the seek's answer outlasts its chunk.
     let mut pass = Pass::open(
-        Source::new(Consts::EXTENT).snapping(30_000).echoing(),
+        Source::new(analysis_pcm, Consts::EXTENT)
+            .snapping(30_000)
+            .echoing(),
         scheduled(Consts::WINDOW_SECONDS),
     );
     assert!(pass.drive(Consts::TICKS).await, "the pass ends");
@@ -864,6 +890,7 @@ async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod artifacts {
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -930,17 +957,19 @@ mod artifacts {
     }
 
     #[kithara::test]
-    async fn a_scheduled_route_and_a_linear_one_produce_the_same_artifacts() {
+    async fn a_scheduled_route_and_a_linear_one_produce_the_same_artifacts(
+        analysis_pcm: &'static [f32],
+    ) {
         // The same source, once decoded in order because it reports no
         // length, and once scheduled because it does.
-        let linear = covered(Source::new(EXTENT).reporting(None), &[]).await;
+        let linear = covered(Source::new(analysis_pcm, EXTENT).reporting(None), &[]).await;
         assert!(
             !linear.artifacts.1.is_empty(),
             "the harness must find markers at all"
         );
         assert_eq!(linear.seeks, 0, "a source with no length is read in order");
 
-        let scheduled = covered(Source::new(EXTENT), &[]).await;
+        let scheduled = covered(Source::new(analysis_pcm, EXTENT), &[]).await;
         assert!(
             scheduled.seeks > 1,
             "the other route must really have been scheduled, not read in order"
@@ -968,14 +997,16 @@ mod artifacts {
     }
 
     #[kithara::test]
-    async fn a_track_half_covered_by_a_producer_agrees_with_one_covered_alone() {
-        let linear = covered(Source::new(EXTENT).reporting(None), &[]).await;
+    async fn a_track_half_covered_by_a_producer_agrees_with_one_covered_alone(
+        analysis_pcm: &'static [f32],
+    ) {
+        let linear = covered(Source::new(analysis_pcm, EXTENT).reporting(None), &[]).await;
 
         // Playback covered the first half in its own decode blocks; the
         // schedule has to take up the rest.
         let block = EXTENT / 16;
         let offered: Vec<(u64, u64)> = (0..8).map(|index| (index * block, block)).collect();
-        let mixed = covered(Source::new(EXTENT), &offered).await;
+        let mixed = covered(Source::new(analysis_pcm, EXTENT), &offered).await;
         assert!(mixed.seeks > 0, "the rest of the track had to be scheduled");
         assert_agrees(
             &linear.artifacts,

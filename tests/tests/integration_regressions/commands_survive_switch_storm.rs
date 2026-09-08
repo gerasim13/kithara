@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 const TRACK_COUNT: usize = 3;
 const STORM_ROUNDS: usize = 12;
@@ -88,13 +88,13 @@ fn drain_active_gets(rx: &mut kithara::events::EventReceiver, active: &mut HashS
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
+async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handles: Vec<_> = (0..TRACK_COUNT)
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+                    bytes: Arc::new(tone_mp3.to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 // Throttled so the storm lands while transfers are still in

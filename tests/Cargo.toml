@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 publish = false
 autotests = false
-build = "build.rs"
 
 [package.metadata.cargo-machete]
 ignored = ["serial_test"]
@@ -14,11 +13,6 @@ ignored = ["serial_test"]
 [[bin]]
 name = "test_server"
 path = "bin/test_server.rs"
-test = false
-
-[[bin]]
-name = "cold-fixture-cache"
-path = "bin/cold-fixture-cache.rs"
 test = false
 
 [[bin]]
@@ -262,12 +256,6 @@ web-sys = { workspace = true }
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
 kithara = { workspace = true, features = ["android", "client-wreq"] }
-
-[build-dependencies]
-# Reads the resolved encoder versions out of the workspace lockfile; see
-# `build.rs`. Hashing the whole lockfile invalidated the fixture cache on every
-# unrelated dependency bump.
-toml = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }

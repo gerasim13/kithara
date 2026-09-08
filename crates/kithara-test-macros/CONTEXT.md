@@ -11,6 +11,10 @@ A bare `#[kithara::test]` is a sync test emitted for native + wasm; flags combin
 `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Every path supports `#[case]` / `#[case::name]`
 parameterization and `#[kithara::fixture]` injection.
 
+`#[future]` injects an unpolled async fixture; `#[future(awt)]` awaits it in
+the test runtime before entering the test body. The returned value stays owned
+by the test until teardown, so prepared media can retain its server or directory.
+
 - `tokio` — async test on a manually built native runtime.
 - `wasm` / `native` — single-platform emission; mutually exclusive.
 - `browser` — browser wasm path; awaits `kithara_platform::tokio::ensure_thread_pool()` before the body so Web Workers exist.

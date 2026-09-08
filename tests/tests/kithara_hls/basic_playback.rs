@@ -19,7 +19,7 @@ use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_fixture::HlsStreamBuilder,
-    hls_server::TestServer,
+    hls_server::{TestServer, test_server},
     rt_cancel, temp_dir,
 };
 use tracing::info;
@@ -40,10 +40,11 @@ use url::Url;
     tracing("kithara_hls=info,kithara_stream=info,warn")
 )]
 async fn test_basic_hls_playback(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
+    let server = test_server;
     let test_stream_url = server.url("/master.m3u8");
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
@@ -109,11 +110,12 @@ enum StreamOptions {
 #[case::never_cancel(StreamOptions::NeverCancel)]
 #[case::limited_cache(StreamOptions::LimitedCache)]
 async fn hls_stream_options_open(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
     #[case] options: StreamOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
+    let server = test_server;
     let (builder, cancel) = match options {
         StreamOptions::Init => (HlsStreamBuilder::new().with_init(), rt_cancel),
         StreamOptions::NeverCancel => (HlsStreamBuilder::new(), CancelToken::never()),
@@ -168,10 +170,11 @@ async fn test_hls_invalid_url_handling(
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_init_segment_at_stream_start(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = TestServer::new().await;
+    let server = test_server;
     info!("Testing INIT segment at stream start");
 
     let mut stream = HlsStreamBuilder::new()

@@ -650,6 +650,9 @@ mod tests {
     };
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
+    use kithara_test_fixtures::play_fixtures::{
+        half, negative_half, negative_quarter, quarter, three_quarter,
+    };
     use kithara_test_utils::kithara;
     use kithara_warp::{StretchControls, StretchKind};
 
@@ -981,14 +984,19 @@ mod tests {
         }
     }
 
-    fn chunk(pools: &PoolRegion<TestPools>, spec: AudioSpec, frame_offset: u64) -> AudioChunk {
+    fn chunk(
+        pools: &PoolRegion<TestPools>,
+        spec: AudioSpec,
+        frame_offset: u64,
+        input: &[f32],
+    ) -> AudioChunk {
         const FRAMES: usize = 128;
         chunk_with_frames(
             pools,
             spec,
             frame_offset,
             u32::try_from(FRAMES).expect("fixture frames fit u32"),
-            0.25,
+            input,
         )
     }
 
@@ -997,7 +1005,7 @@ mod tests {
         spec: AudioSpec,
         frame_offset: u64,
         frames: u32,
-        sample: f32,
+        input: &[f32],
     ) -> AudioChunk {
         let samples = usize::try_from(frames)
             .expect("fixture frames fit usize")
@@ -1006,7 +1014,7 @@ mod tests {
         let mut buffer = pools
             .get_with_len::<f32>(samples)
             .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
-        buffer.fill(sample);
+        buffer.copy_from_slice(&input[..samples]);
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
@@ -1029,14 +1037,17 @@ mod tests {
     #[case::q32(32)]
     fn unity_source_chunks_bypass_staging_without_losing_terminal_input(
         #[case] quantum_frames: usize,
+        quarter: Vec<f32>,
+        negative_half: Vec<f32>,
+        three_quarter: Vec<f32>,
     ) {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let pools = pools();
         let input_frames = [20_usize, 20, 10];
         let chunks = [
-            chunk_with_frames(&pools, spec, 0, 20, 0.25),
-            chunk_with_frames(&pools, spec, 20, 20, -0.5),
-            chunk_with_frames(&pools, spec, 40, 10, 0.75),
+            chunk_with_frames(&pools, spec, 0, 20, &quarter),
+            chunk_with_frames(&pools, spec, 20, 20, &negative_half),
+            chunk_with_frames(&pools, spec, 40, 10, &three_quarter),
         ];
         let expected_samples = chunks
             .iter()
@@ -1074,14 +1085,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
+    fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers(quarter: Vec<f32>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
         let head = Arc::new(AtomicU64::new(0));
         let source = RawSource {
             chunks: VecDeque::from([
-                chunk(&pools, spec, 0),
-                chunk(&pools, spec, u64::from(128_u32)),
+                chunk(&pools, spec, 0, &quarter),
+                chunk(&pools, spec, u64::from(128_u32), &quarter),
             ]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
@@ -1203,20 +1214,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn unity_warp_preserves_samples_and_meta_across_discontinuity() {
+    fn unity_warp_preserves_samples_and_meta_across_discontinuity(
+        quarter: Vec<f32>,
+        negative_quarter: Vec<f32>,
+    ) {
         let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
         let pools = pools();
-        let first = chunk(&pools, initial, 256);
+        let first = chunk(&pools, initial, 256, &quarter);
         let first_meta = first.meta;
         let first_samples = first.samples.to_vec();
-        let mut second = chunk(&pools, changed, 512);
+        let mut second = chunk(&pools, changed, 512, &negative_quarter);
         second.meta.segment_index = Some(3);
         second.meta.variant_index = Some(2);
         second.meta.epoch = 9;
         second.meta.source_byte_offset = Some(4096);
         second.meta.source_bytes = 1024;
-        second.samples.fill(-0.25);
         let second_meta = second.meta;
         let second_samples = second.samples.to_vec();
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
@@ -1251,6 +1264,9 @@ mod tests {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
         #[case] backend: StretchKind,
+        half: Vec<f32>,
+        quarter: Vec<f32>,
+        three_quarter: Vec<f32>,
     ) {
         const ACTIVE_FRAMES: u32 = 4096;
         const UNITY_FRAMES: u32 = 4096;
@@ -1262,9 +1278,15 @@ mod tests {
         let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
         let sentinel_end = first_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
 
-        let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, 0.25);
-        let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, 0.5);
-        let sentinel = chunk_with_frames(&pools, spec, first_unity_end, SENTINEL_FRAMES, 0.75);
+        let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
+        let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
+        let sentinel = chunk_with_frames(
+            &pools,
+            spec,
+            first_unity_end,
+            SENTINEL_FRAMES,
+            &three_quarter,
+        );
         let sentinel_ptr = sentinel.samples.as_ptr();
         let sentinel_samples = sentinel.samples.to_vec();
 
@@ -1359,12 +1381,15 @@ mod tests {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn unavailable_warp_target_fails_before_pulling_source(#[case] backend: StretchKind) {
+    fn unavailable_warp_target_fails_before_pulling_source(
+        #[case] backend: StretchKind,
+        quarter: Vec<f32>,
+    ) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let source_pools = pools();
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
-            chunks: VecDeque::from([chunk(&source_pools, spec, 0)]),
+            chunks: VecDeque::from([chunk(&source_pools, spec, 0, &quarter)]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
@@ -1389,7 +1414,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_cancels_stale_tail_and_resets_effects_once() {
+    fn seek_cancels_stale_tail_and_resets_effects_once(quarter: Vec<f32>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
         let seek = Arc::new(SeekState::new());
@@ -1402,7 +1427,7 @@ mod tests {
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
-            tail: Some(chunk(&pools, spec, 128)),
+            tail: Some(chunk(&pools, spec, 128, &quarter)),
         })];
         let mut source = source_stage(&pools, source, effects, spec);
 
@@ -1425,7 +1450,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn every_effect_tail_precedes_the_single_eof() {
+    fn every_effect_tail_precedes_the_single_eof(quarter: Vec<f32>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
         let source = RawSource {
@@ -1436,11 +1461,11 @@ mod tests {
         let effects: Vec<Box<dyn AudioEffect>> = vec![
             Box::new(ResettingTail {
                 resets: Arc::new(AtomicU64::new(0)),
-                tail: Some(chunk(&pools, spec, 128)),
+                tail: Some(chunk(&pools, spec, 128, &quarter)),
             }),
             Box::new(ResettingTail {
                 resets: Arc::new(AtomicU64::new(0)),
-                tail: Some(chunk(&pools, spec, 256)),
+                tail: Some(chunk(&pools, spec, 256, &quarter)),
             }),
         ];
         let mut source = source_stage(&pools, source, effects, spec);

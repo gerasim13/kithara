@@ -2,6 +2,8 @@ use kithara_encode::{
     ContainerFinish, ContainerSession, ContainerWrite, EncodeConfig, EncodeError, EncoderSession,
 };
 use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_test_fixtures::unit_fixtures::encode_session;
+use kithara_test_utils::kithara;
 
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
@@ -52,10 +54,9 @@ fn encode(chunks: &[&[f32]]) -> Vec<u8> {
     finish(done, &mut output)
 }
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn wav_float32_is_portable_and_chunk_invariant() {
-    let samples = [0.0_f32, -0.0, 0.5, -0.5, 1.0, -1.0];
+#[kithara::test(flash(false))]
+fn wav_float32_is_portable_and_chunk_invariant(encode_session: Vec<f32>) {
+    let samples = encode_session;
 
     let whole = encode(&[&samples]);
     let ragged = encode(&[&samples[..2], &samples[2..]]);

@@ -25,6 +25,7 @@ use kithara_integration_tests::{
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
 };
 use kithara_test_utils::probe::capture as probe_capture;
+use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -122,15 +123,14 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
+async fn flac_swallow_fixture(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] flac_source: (TestServerHelper, Url),
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(build_fixture())
-        .await
-        .expect("create DRM FLAC HLS fixture");
+    let (_helper, master) = flac_source;
 
     let temp = TestTempDir::new();
     let downloader = Downloader::new(
@@ -143,20 +143,19 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     );
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
 
-    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader)
-    .discriminator("t0")
-    .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
-    .worker(worker)
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader)
+            .discriminator("t0")
+            .store(kithara_integration_tests::disk_asset_store(temp.path()))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
+            .worker(worker)
+            .build();
 
     let resource = Resource::new(cfg)
         .await
@@ -188,4 +187,14 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
     assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
     player.close().await;
+}
+
+#[kithara::fixture]
+async fn flac_source() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let created = helper
+        .create_hls(build_fixture())
+        .await
+        .expect("create DRM FLAC HLS fixture");
+    (helper, created.master_url())
 }

@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
+use url::Url;
 
 use crate::bufpool_ext::pools;
 
@@ -30,26 +31,14 @@ use crate::bufpool_ext::pools;
     case::apple(DecoderBackend::Apple)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
-async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
+async fn cold_seek_far_segment_hls_offline(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] cold_hls: (TestServerHelper, Url),
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(40)
-        .segment_duration_secs(4.0)
-        .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000])
-        .packaged_audio_aac_lc(44_100, 2)
-        .push_delay_rule(DelayRule {
-            delay_ms: 200,
-            ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
-        .await
-        .expect("create long HLS fixture");
-    let master = created.master_url();
+    let (_helper, master) = cold_hls;
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -160,4 +149,25 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     queue.close().await;
     drop(downloader);
     drop(temp);
+}
+
+#[kithara::fixture]
+async fn cold_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(3)
+        .segments_per_variant(40)
+        .segment_duration_secs(4.0)
+        .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000])
+        .packaged_audio_aac_lc(44_100, 2)
+        .push_delay_rule(DelayRule {
+            delay_ms: 200,
+            ..DelayRule::default()
+        });
+    let created = helper
+        .create_hls(builder)
+        .await
+        .expect("create long HLS fixture");
+    let master = created.master_url();
+    (helper, master)
 }

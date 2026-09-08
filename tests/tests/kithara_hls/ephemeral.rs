@@ -26,7 +26,8 @@ use kithara_integration_tests::bufpool_ext::TestPools;
 use kithara_integration_tests::bufpool_ext::pools;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
-use kithara_test_fixtures::signal::{self, Wave};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::hls_sized_wav_three;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;
@@ -101,26 +102,14 @@ fn count_files(dir: &Path) -> usize {
     count
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
-)]
-async fn ephemeral_pipeline_no_disk_writes() {
+#[kithara::fixture]
+async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
     /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
     /// `MemResources` which would make `wait_range()` block forever.
     const SEGMENT_COUNT: usize = 3;
     const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-    let wav_data = signal::wav_of_size(
-        SawWav::DEFAULT.sample_rate,
-        SawWav::DEFAULT.channels,
-        TOTAL_BYTES,
-        Wave::Sawtooth,
-    );
+    let wav_data = hls_sized_wav_three;
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
     let segment_duration = SawWav::DEFAULT.segment_size as f64
@@ -134,6 +123,19 @@ async fn ephemeral_pipeline_no_disk_writes() {
     })
     .await;
 
+    server
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+)]
+async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: HlsTestServer) {
+    let server = audio_server;
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();

@@ -16,9 +16,10 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
-    mixed_codec_ladder_url, temp_dir,
+    mixed_encrypted, mixed_plain, temp_dir,
 };
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 const fn is_known_box(tag: &[u8; 4]) -> bool {
     matches!(
@@ -207,27 +208,26 @@ fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
     timeout(Duration::from_secs(45)),
     hang_timeout_secs(3)
 )]
-#[case::hls_disk_v0("HLS-disk-v0", false, false, 0)]
-#[case::hls_disk_v3("HLS-disk-v3", false, false, 3)]
-#[case::hls_eph_v0("HLS-eph-v0", false, true, 0)]
-#[case::hls_eph_v3("HLS-eph-v3", false, true, 3)]
-#[case::drm_disk_v0("DRM-disk-v0", true, false, 0)]
-#[case::drm_disk_v3("DRM-disk-v3", true, false, 3)]
-#[case::drm_eph_v0("DRM-eph-v0", true, true, 0)]
-#[case::drm_eph_v3("DRM-eph-v3", true, true, 3)]
-#[case::hls_disk_auto("HLS-disk-auto", false, false, 99)]
-#[case::hls_eph_auto("HLS-eph-auto", false, true, 99)]
-#[case::drm_disk_auto("DRM-disk-auto", true, false, 99)]
-#[case::drm_eph_auto("DRM-eph-auto", true, true, 99)]
+#[case::hls_disk_v0("HLS-disk-v0", false, 0, mixed_plain().await)]
+#[case::hls_disk_v3("HLS-disk-v3", false, 3, mixed_plain().await)]
+#[case::hls_eph_v0("HLS-eph-v0", true, 0, mixed_plain().await)]
+#[case::hls_eph_v3("HLS-eph-v3", true, 3, mixed_plain().await)]
+#[case::drm_disk_v0("DRM-disk-v0", false, 0, mixed_encrypted().await)]
+#[case::drm_disk_v3("DRM-disk-v3", false, 3, mixed_encrypted().await)]
+#[case::drm_eph_v0("DRM-eph-v0", true, 0, mixed_encrypted().await)]
+#[case::drm_eph_v3("DRM-eph-v3", true, 3, mixed_encrypted().await)]
+#[case::hls_disk_auto("HLS-disk-auto", false, 99, mixed_plain().await)]
+#[case::hls_eph_auto("HLS-eph-auto", true, 99, mixed_plain().await)]
+#[case::drm_disk_auto("DRM-disk-auto", false, 99, mixed_encrypted().await)]
+#[case::drm_eph_auto("DRM-eph-auto", true, 99, mixed_encrypted().await)]
 async fn drm_stream_byte_integrity(
     temp_dir: TestTempDir,
     #[case] label: &str,
-    #[case] encrypted: bool,
     #[case] ephemeral: bool,
     #[case] abr_variant: usize,
+    #[case] prepared: (TestServerHelper, Url),
 ) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let (_server, url) = prepared;
     let cancel = CancelToken::never();
     let pools = pools();
 

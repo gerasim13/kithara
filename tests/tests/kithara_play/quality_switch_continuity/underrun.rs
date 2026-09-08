@@ -6,7 +6,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, fixture_protocol::DelayRule, offline::resource_from_reader,
+    CreatedHls, TestServerHelper, fixture_protocol::DelayRule, offline::resource_from_reader,
 };
 
 use super::*;
@@ -269,19 +269,19 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     DecoderBackend::Symphonia,
     TARGET_SEGMENT_DELAY_MS,
     "delayed target rebuild"
-)]
+, target_source().await)]
 #[case::slow_symphonia(
     DecoderBackend::Symphonia,
     SLOW_TARGET_SEGMENT_DELAY_MS,
     "manual AAC-to-FLAC switch"
-)]
+, slow_source().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::delayed_apple(
         DecoderBackend::Apple,
         TARGET_SEGMENT_DELAY_MS,
         "delayed target rebuild"
-    )
+    , target_source().await)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -289,18 +289,15 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
         DecoderBackend::Apple,
         SLOW_TARGET_SEGMENT_DELAY_MS,
         "manual AAC-to-FLAC switch"
-    )
+    , slow_source().await)
 )]
 async fn target_rebuild_keeps_player_output_continuous(
     #[case] backend: DecoderBackend,
     #[case] delay_ms: u64,
     #[case] label: &str,
+    #[case] source: (TestServerHelper, CreatedHls),
 ) {
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(target_rebuild_fixture(delay_ms))
-        .await
-        .unwrap_or_else(|error| panic!("create {label} fixture: {error}"));
+    let (_server, created) = source;
     let master_url = created.master_url();
 
     let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
@@ -337,19 +334,12 @@ async fn target_rebuild_keeps_player_output_continuous(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn cold_target_variant_switch_keeps_playback_uninterrupted(#[case] backend: DecoderBackend) {
+async fn cold_target_variant_switch_keeps_playback_uninterrupted(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
+) {
     let mut failures = Vec::new();
-    for transition in TRANSITIONS {
-        let server = TestServerHelper::new().await;
-        let created = server
-            .create_hls(cold_target_fixture(transition.to))
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "create cold-target fixture for {}: {error:?}",
-                    transition.label
-                )
-            });
+    for (transition, (_server, created)) in TRANSITIONS.into_iter().zip(cold_sources) {
         let master_url = created.master_url();
 
         let control = render_tiny_ring_control(&master_url, transition, backend).await;
@@ -382,4 +372,42 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(#[case] backend
         "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
         failures.join("; "),
     );
+}
+
+async fn rebuild_source(delay_ms: u64) -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(target_rebuild_fixture(delay_ms))
+        .await
+        .unwrap_or_else(|error| panic!("create target-rebuild fixture: {error}"));
+    (server, created)
+}
+
+#[kithara::fixture]
+async fn slow_source() -> (TestServerHelper, CreatedHls) {
+    rebuild_source(SLOW_TARGET_SEGMENT_DELAY_MS).await
+}
+
+#[kithara::fixture]
+async fn target_source() -> (TestServerHelper, CreatedHls) {
+    rebuild_source(TARGET_SEGMENT_DELAY_MS).await
+}
+
+#[kithara::fixture]
+async fn cold_sources() -> Vec<(TestServerHelper, CreatedHls)> {
+    let mut sources = Vec::new();
+    for transition in TRANSITIONS {
+        let server = TestServerHelper::new().await;
+        let created = server
+            .create_hls(cold_target_fixture(transition.to))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "create cold-target fixture for {}: {error:?}",
+                    transition.label
+                )
+            });
+        sources.push((server, created));
+    }
+    sources
 }

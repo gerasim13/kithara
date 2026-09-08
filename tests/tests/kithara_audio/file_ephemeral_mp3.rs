@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 use crate::common::test_defaults::Consts;
 
@@ -31,6 +31,7 @@ use crate::common::test_defaults::Consts;
     case::hw_no_ext(None, None, DecoderBackend::Apple)
 )]
 async fn audio_file_mp3_decodes_with_duration(
+    tone_mp3: &'static [u8],
     #[case] suffix: Option<&str>,
     #[case] hint: Option<&str>,
     #[case] backend: DecoderBackend,
@@ -41,7 +42,7 @@ async fn audio_file_mp3_decodes_with_duration(
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -138,7 +139,10 @@ async fn audio_file_mp3_decodes_with_duration(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn streamed_mp3_plays_to_the_length_it_was_built_to(#[case] backend: DecoderBackend) {
+async fn streamed_mp3_plays_to_the_length_it_was_built_to(
+    tone_mp3: &'static [u8],
+    #[case] backend: DecoderBackend,
+) {
     /// How far the reached position may sit from the built length: two orders
     /// below the seconds-scale truncation this is written to catch, and well
     /// above any encoder priming or tail padding.
@@ -153,7 +157,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(#[case] backend: Decod
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Throttle {
@@ -232,11 +236,11 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(#[case] backend: Decod
 #[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 #[case::throttled_no_hint(None)]
 #[case::throttled_with_hint(Some("mp3"))]
-async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
+async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hint: Option<&str>) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Throttle {
@@ -277,11 +281,11 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
 }
 
 #[kithara::test(tokio)]
-async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
+async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,

@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
+use kithara_test_fixtures::integration_fixtures::concurrent_wav;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -29,10 +30,6 @@ impl Consts {
     const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4;
-}
-
-fn generate_wav_data() -> Arc<Vec<u8>> {
-    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
 }
 
 /// Outcome of one instance.
@@ -167,8 +164,12 @@ async fn spawn_instance(
     })
 }
 
-async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
-    let wav_data = generate_wav_data();
+async fn run_failure_resilience(
+    concurrent_wav: &'static [u8],
+    healthy_count: usize,
+    cancelled_count: usize,
+) {
+    let wav_data = Arc::new(concurrent_wav.to_vec());
     let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
 
     for i in 0..healthy_count {
@@ -230,8 +231,9 @@ async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
 #[case::h2_c2(2, 2)]
 #[case::h4_c4(4, 4)]
 async fn healthy_instances_survive_cancelled_peers(
+    concurrent_wav: &'static [u8],
     #[case] healthy: usize,
     #[case] cancelled: usize,
 ) {
-    run_failure_resilience(healthy, cancelled).await;
+    run_failure_resilience(concurrent_wav, healthy, cancelled).await;
 }

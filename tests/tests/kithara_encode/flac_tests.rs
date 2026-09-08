@@ -4,30 +4,25 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::bufpool_ext::pools;
-use kithara_test_fixtures::signal::{Pcm, Wave};
+use kithara_test_fixtures::{
+    integration_fixtures::{encoder_saw_flac, flac_config},
+    signal::Pcm,
+};
 
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
 
 #[kithara::test]
-fn normalize_flac_codec_config_accepts_mp4_metadata_block() {
-    let data = [
-        0x80, 0x00, 0x00, 0x22, 0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41, 0x0A,
-        0xC4, 0x42, 0xF0, 0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3, 0xBC, 0x84,
-        0x8E, 0x7F, 0x60, 0x75, 0x8D, 0x3A, 0x77, 0x61,
-    ];
-    let normalized = normalize_flac_codec_config(&data)
+fn normalize_flac_codec_config_accepts_mp4_metadata_block(flac_config: &'static [u8]) {
+    let normalized = normalize_flac_codec_config(flac_config)
         .expect("BUG: hard-coded dfLa payload normalises successfully");
     assert_eq!(normalized.len(), 34);
     assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
 }
 
 #[kithara::test]
-fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
-    let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac)
-        .expect("BUG: Flac must be supported by the packaged encoder");
-    let total_frames = 4 * frame_samples;
-    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, total_frames, Wave::Sawtooth);
+fn encode_packaged_flac_happy_path_emits_monotonic_access_units(encoder_saw_flac: Pcm) {
+    let pcm = encoder_saw_flac;
     let media_info = MediaInfo::builder()
         .codec(AudioCodec::Flac)
         .container(ContainerFormat::Fmp4)

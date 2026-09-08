@@ -434,36 +434,24 @@ pub fn assert_oracle_load_bearing(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::integration_fixtures::{cochlea_control, cochlea_loudness};
     use kithara_test_utils::kithara;
 
     use super::*;
 
     #[kithara::test(native, flash(false))]
-    fn comparator_rejects_one_missing_quantum_and_one_clipped_frame() {
+    fn comparator_rejects_one_missing_quantum_and_one_clipped_frame(cochlea_control: Vec<f32>) {
         let sample_rate = 48_000;
         let channels = 2;
-        let frames = sample_rate as usize * 2;
-        let mut control = Vec::with_capacity(frames * usize::from(channels));
-        for frame in 0..frames {
-            let phase = std::f32::consts::TAU * 440.0 * frame as f32 / sample_rate as f32;
-            let sample = phase.sin() * 0.5;
-            control.extend(std::iter::repeat_n(sample, usize::from(channels)));
-        }
-
+        let control = cochlea_control;
         assert_oracle_load_bearing(&control, channels, sample_rate, 512);
     }
 
     #[kithara::test(native, flash(false))]
-    fn loudness_fields_match_the_cochlea_probe() {
+    fn loudness_fields_match_the_cochlea_probe(cochlea_loudness: Vec<f32>) {
         let sample_rate = 48_000;
         let channels = 2;
-        let frames = sample_rate as usize;
-        let mut samples = Vec::with_capacity(frames * usize::from(channels));
-        for frame in 0..frames {
-            let phase = std::f32::consts::TAU * 997.0 * frame as f32 / sample_rate as f32;
-            let sample = phase.sin() * 0.25;
-            samples.extend(std::iter::repeat_n(sample, usize::from(channels)));
-        }
+        let samples = cochlea_loudness;
         let actual = CochleaReport::measure(&samples, channels, sample_rate);
         let expected = probe(
             &Audio {

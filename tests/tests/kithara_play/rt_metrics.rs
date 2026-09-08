@@ -18,6 +18,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{Fault, MockReader, TestPcmReader};
+use kithara_test_fixtures::integration_fixtures::constant_half;
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -49,9 +50,9 @@ fn faulty_track(src: &str, fault: Fault) -> Box<PlayerResource> {
     )
 }
 
-fn healthy_track(src: &str) -> Box<PlayerResource> {
+fn healthy_track(constant_half: &'static [u8], src: &str) -> Box<PlayerResource> {
     boxed(
-        Resource::from_reader(TestPcmReader::new(spec(), 60.0), None),
+        Resource::from_reader(TestPcmReader::from_pcm(spec(), 60.0, constant_half), None),
         src,
     )
 }
@@ -134,8 +135,8 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 }
 
 #[kithara::test]
-fn a_healthy_track_reports_no_trouble() {
-    let processor = render_loaded(healthy_track("ok.mp3"));
+fn a_healthy_track_reports_no_trouble(constant_half: &'static [u8]) {
+    let processor = render_loaded(healthy_track(constant_half, "ok.mp3"));
 
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
 }
@@ -242,19 +243,19 @@ fn unloading_one_seek_binding_preserves_other_identity() {
 }
 
 #[kithara::test]
-fn evicting_an_audible_track_is_counted() {
+fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
 
     for idx in 0..PlayerNodeProcessor::MAX_TRACKS {
         let src = format!("track-{idx}.mp3");
-        let item_id = load(&mut control, healthy_track(&src));
+        let item_id = load(&mut control, healthy_track(constant_half, &src));
         processor.drain_commands();
         if let Some(track) = processor.track_mut(item_id) {
             track.play();
         }
     }
 
-    load(&mut control, healthy_track("newcomer.mp3"));
+    load(&mut control, healthy_track(constant_half, "newcomer.mp3"));
     processor.drain_commands();
 
     assert!(
@@ -264,9 +265,9 @@ fn evicting_an_audible_track_is_counted() {
 }
 
 #[kithara::test]
-fn a_block_larger_than_declared_is_clamped_not_grown() {
+fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, healthy_track("ok.mp3"));
+    let item_id = load(&mut control, healthy_track(constant_half, "ok.mp3"));
     processor.drain_commands();
     if let Some(track) = processor.track_mut(item_id) {
         track.play();

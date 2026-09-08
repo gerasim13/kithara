@@ -14,15 +14,15 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::{
     SignalAsset,
-    assets::signal_mp3_track_sine440_187s,
+    fixtures::tone_mp3,
     signal::{SignalDirection, detect_direction},
 };
 use reqwest::Client;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_test_server_helper_serves_audio_fixture_urls() {
-    let server = TestServerHelper::new().await;
-
+async fn test_test_server_helper_serves_audio_fixture_urls(
+    #[future(awt)] server: TestServerHelper,
+) {
     let wav_url = server.signal(SignalAsset::WAV_SAW_1S);
     let mp3_url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
 
@@ -41,8 +41,8 @@ async fn test_test_server_helper_serves_format(
     #[case] format: &str,
     #[case] content_type: &str,
     #[case] desc: &str,
+    #[future(awt)] server: TestServerHelper,
 ) {
-    let server = TestServerHelper::new().await;
     let client = Client::new();
 
     let url = match format {
@@ -85,8 +85,8 @@ async fn test_test_server_helper_serves_format(
 async fn test_signal_server_encoded_formats_are_decodable(
     #[case] asset: SignalAsset,
     #[case] content_type: &str,
+    #[future(awt)] server: TestServerHelper,
 ) {
-    let server = TestServerHelper::new().await;
     let client = Client::new();
     let ext = asset.ext();
 
@@ -124,8 +124,8 @@ async fn test_signal_server_encoded_formats_are_decodable(
 async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     #[case] asset: SignalAsset,
     #[case] content_type: &str,
+    #[future(awt)] server: TestServerHelper,
 ) {
-    let server = TestServerHelper::new().await;
     let client = Client::new();
     let ext = asset.ext();
     let name = asset.name();
@@ -187,8 +187,9 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_create_packaged_hls_returns_stable_typed_urls() {
-    let server = TestServerHelper::new().await;
+async fn test_create_packaged_hls_returns_stable_typed_urls(
+    #[future(awt)] server: TestServerHelper,
+) {
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -230,8 +231,10 @@ async fn test_create_packaged_hls_returns_stable_typed_urls() {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_packaged_test_server_serves_audio_mp4_resources() {
-    let server = PackagedTestServer::new().await;
+async fn test_packaged_test_server_serves_audio_mp4_resources(
+    #[future(awt)] packaged_server: PackagedTestServer,
+) {
+    let server = packaged_server;
     let client = Client::new();
 
     let master = client.get(server.url("/master.m3u8")).send().await.unwrap();
@@ -265,8 +268,8 @@ async fn test_packaged_test_server_serves_audio_mp4_resources() {
 async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
     #[case] label: &str,
     #[case] codec: AudioCodec,
+    #[future(awt)] server: TestServerHelper,
 ) {
-    let server = TestServerHelper::new().await;
     let builder = match codec {
         AudioCodec::AacLc => HlsFixtureBuilder::new()
             .variant_count(1)
@@ -373,30 +376,33 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia)]
-#[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia)]
-#[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia)]
+#[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await)]
+#[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await)]
+#[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia, flac_fragment().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_lc_apple("aac_lc_apple", AudioCodec::AacLc, DecoderBackend::Apple),
-    case::aac_he_v2_apple("aac_he_v2_apple", AudioCodec::AacHeV2, DecoderBackend::Apple),
-    case::flac_apple("flac_apple", AudioCodec::Flac, DecoderBackend::Apple)
+    case::aac_lc_apple("aac_lc_apple", AudioCodec::AacLc, DecoderBackend::Apple, aac_fragment().await),
+    case::aac_he_v2_apple("aac_he_v2_apple", AudioCodec::AacHeV2, DecoderBackend::Apple, he_fragment().await),
+    case::flac_apple("flac_apple", AudioCodec::Flac, DecoderBackend::Apple, flac_fragment().await)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::aac_lc_android("aac_lc_android", AudioCodec::AacLc, DecoderBackend::Android),
-    case::aac_he_v2_android("aac_he_v2_android", AudioCodec::AacHeV2, DecoderBackend::Android),
-    case::flac_android("flac_android", AudioCodec::Flac, DecoderBackend::Android)
+    case::aac_lc_android("aac_lc_android", AudioCodec::AacLc, DecoderBackend::Android, aac_fragment().await),
+    case::aac_he_v2_android("aac_he_v2_android", AudioCodec::AacHeV2, DecoderBackend::Android, he_fragment().await),
+    case::flac_android("flac_android", AudioCodec::Flac, DecoderBackend::Android, flac_fragment().await)
 )]
 async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     #[case] label: &str,
     #[case] codec: AudioCodec,
     #[case] backend: DecoderBackend,
+    #[case] input: (TestServerHelper, Vec<u8>),
 ) {
-    run_packaged_fmp4_decoder_check(label, codec, backend).await;
+    let (_server, bytes) = input;
+    run_packaged_fmp4_decoder_check(label, codec, backend, bytes);
 }
 
-async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend: DecoderBackend) {
+async fn fmp4_input(codec: AudioCodec) -> (TestServerHelper, Vec<u8>) {
+    let label = "decoder fixture";
     let server = TestServerHelper::new().await;
     let builder = match codec {
         AudioCodec::AacLc => HlsFixtureBuilder::new()
@@ -443,6 +449,15 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
     mp4_bytes.extend_from_slice(&init);
     mp4_bytes.extend_from_slice(&segment);
 
+    (server, mp4_bytes)
+}
+
+fn run_packaged_fmp4_decoder_check(
+    label: &str,
+    codec: AudioCodec,
+    backend: DecoderBackend,
+    mp4_bytes: Vec<u8>,
+) {
     let media_info = MediaInfo::builder()
         .codec(codec)
         .container(ContainerFormat::Fmp4)
@@ -509,8 +524,8 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
 }
 
 #[kithara::test]
-fn embedded_mp3_contains_data() {
-    assert!(!signal_mp3_track_sine440_187s().bytes().is_empty());
+fn embedded_mp3_contains_data(tone_mp3: &'static [u8]) {
+    assert!(!tone_mp3.is_empty());
 }
 
 fn assert_valid_pcm_samples(samples: &[f32], context: &str) {
@@ -616,4 +631,29 @@ fn scan_top_level_box_summaries(bytes: &[u8]) -> Vec<BoxSummary> {
         offset = offset.saturating_add(size);
     }
     summaries
+}
+
+#[kithara::fixture]
+async fn server() -> TestServerHelper {
+    TestServerHelper::new().await
+}
+
+#[kithara::fixture]
+async fn packaged_server() -> PackagedTestServer {
+    PackagedTestServer::new().await
+}
+
+#[kithara::fixture]
+async fn aac_fragment() -> (TestServerHelper, Vec<u8>) {
+    fmp4_input(AudioCodec::AacLc).await
+}
+
+#[kithara::fixture]
+async fn he_fragment() -> (TestServerHelper, Vec<u8>) {
+    fmp4_input(AudioCodec::AacHeV2).await
+}
+
+#[kithara::fixture]
+async fn flac_fragment() -> (TestServerHelper, Vec<u8>) {
+    fmp4_input(AudioCodec::Flac).await
 }

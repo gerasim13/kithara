@@ -19,7 +19,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
-    hls_server::TestServer,
+    hls_server::{TestServer, test_server},
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -134,9 +134,10 @@ async fn stable_live_thread_baseline(server: &TestServer) -> usize {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
-async fn red_small_cache_seek_stress_does_not_leak_threads()
--> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
+async fn red_small_cache_seek_stress_does_not_leak_threads(
+    #[future(awt)] test_server: TestServer,
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    let server = test_server;
 
     let threads_baseline = stable_live_thread_baseline(&server).await;
 

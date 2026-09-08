@@ -2,6 +2,9 @@ use std::{array, fmt};
 
 use cochlea_features::{Audio as ProbeAudio, ProbeOpts, SegmentOpts, probe, segment_timeline};
 use kithara_integration_tests::{TestServerHelper, cochlea::percentile_f32};
+use kithara_test_fixtures::integration_fixtures::{
+    quality_control_a, quality_control_b, quality_control_joined,
+};
 use num_traits::ToPrimitive;
 
 use super::*;
@@ -440,18 +443,14 @@ fn sine_omega() -> f32 {
 #[case::positive_rising(0.4, 17)]
 #[case::negative_falling(-0.4, 42)]
 fn quality_switch_oracle_rejects_an_injected_single_sample_click(
+    quality_control_a: Vec<f32>,
     #[case] click_delta: f32,
     #[case] phase_offset: usize,
 ) {
     let frames = usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
         .saturating_mul(2);
-    let mut control = Vec::with_capacity(frames * usize::from(CHANNELS));
-    for frame in 0..frames {
-        let phase = sine_omega() * frame.to_f32().expect("fixture frame index fits f32");
-        let sample = 0.25 * phase.sin();
-        control.extend_from_slice(&[sample, sample]);
-    }
+    let control = quality_control_a;
     let mut clicked = control.clone();
     let click_frame = frames / 2 + phase_offset;
     for channel in 0..usize::from(CHANNELS) {
@@ -471,27 +470,14 @@ fn quality_switch_oracle_rejects_an_injected_single_sample_click(
 
 /// A clean codec handoff may legitimately follow either rendering at each frame.
 #[kithara::test]
-fn the_two_baseline_oracle_accepts_a_clean_join() {
-    let frames = usize::try_from(SAMPLE_RATE)
-        .expect("fixture sample rate fits usize")
-        .saturating_mul(2);
-    let midpoint = frames / 2;
-    let mut control_a = Vec::with_capacity(frames * usize::from(CHANNELS));
-    let mut control_b = Vec::with_capacity(frames * usize::from(CHANNELS));
-    let mut switched = Vec::with_capacity(frames * usize::from(CHANNELS));
-    for frame in 0..frames {
-        let phase = sine_omega() * frame.to_f32().expect("fixture frame index fits f32");
-        let control_a_sample = 0.25 * phase.sin();
-        let control_b_sample = 0.24 * phase.sin();
-        control_a.extend_from_slice(&[control_a_sample, control_a_sample]);
-        control_b.extend_from_slice(&[control_b_sample, control_b_sample]);
-        let switched_sample = if frame < midpoint {
-            control_a_sample
-        } else {
-            control_b_sample
-        };
-        switched.extend_from_slice(&[switched_sample, switched_sample]);
-    }
+fn the_two_baseline_oracle_accepts_a_clean_join(
+    quality_control_a: Vec<f32>,
+    quality_control_b: Vec<f32>,
+    quality_control_joined: Vec<f32>,
+) {
+    let control_a = quality_control_a;
+    let control_b = quality_control_b;
+    let switched = quality_control_joined;
 
     let report = primary_continuity_report(&switched, &[&control_a, &control_b]);
     assert!(
@@ -503,27 +489,18 @@ fn the_two_baseline_oracle_accepts_a_clean_join() {
 
 /// Offering two baselines must not license a switch to resemble neither rendering.
 #[kithara::test]
-fn the_two_baseline_oracle_still_rejects_a_click_at_the_join() {
+fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
+    quality_control_a: Vec<f32>,
+    quality_control_b: Vec<f32>,
+    quality_control_joined: Vec<f32>,
+) {
     let frames = usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
         .saturating_mul(2);
     let midpoint = frames / 2;
-    let mut control_a = Vec::with_capacity(frames * usize::from(CHANNELS));
-    let mut control_b = Vec::with_capacity(frames * usize::from(CHANNELS));
-    let mut switched = Vec::with_capacity(frames * usize::from(CHANNELS));
-    for frame in 0..frames {
-        let phase = sine_omega() * frame.to_f32().expect("fixture frame index fits f32");
-        let control_a_sample = 0.25 * phase.sin();
-        let control_b_sample = 0.24 * phase.sin();
-        control_a.extend_from_slice(&[control_a_sample, control_a_sample]);
-        control_b.extend_from_slice(&[control_b_sample, control_b_sample]);
-        let switched_sample = if frame < midpoint {
-            control_a_sample
-        } else {
-            control_b_sample
-        };
-        switched.extend_from_slice(&[switched_sample, switched_sample]);
-    }
+    let control_a = quality_control_a;
+    let control_b = quality_control_b;
+    let mut switched = quality_control_joined;
     for channel in 0..usize::from(CHANNELS) {
         switched[midpoint * usize::from(CHANNELS) + channel] += 0.4;
     }

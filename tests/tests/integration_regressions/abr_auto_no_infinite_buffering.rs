@@ -29,20 +29,12 @@ const READ_DEADLINE: Duration = Duration::from_secs(30);
 /// segment is buffering must not wedge the stream; a subsequent read must
 /// still produce bytes.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel: CancelToken) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: VARIANT_COUNT,
-        segments_per_variant: SEGMENTS_PER_VARIANT,
-        variant_bandwidths: Some(BANDWIDTHS.to_vec()),
-        delay_rules: vec![DelayRule {
-            segment_eq: Some(0),
-            delay_ms: FIRST_SEGMENT_DELAY_MS,
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
-    .await;
-
+async fn abr_mode_storm_does_not_wedge_loading(
+    temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+    #[future(awt)] abr_source: HlsTestServer,
+) {
+    let server = abr_source;
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
@@ -108,4 +100,22 @@ async fn abr_mode_storm_does_not_wedge_loading(temp_dir: TestTempDir, rt_cancel:
         bytes > 0,
         "the stream reported end-of-input rather than audio after the ABR storm"
     );
+}
+
+#[kithara::fixture]
+async fn abr_source() -> HlsTestServer {
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: VARIANT_COUNT,
+        segments_per_variant: SEGMENTS_PER_VARIANT,
+        variant_bandwidths: Some(BANDWIDTHS.to_vec()),
+        delay_rules: vec![DelayRule {
+            segment_eq: Some(0),
+            delay_ms: FIRST_SEGMENT_DELAY_MS,
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .await;
+
+    server
 }

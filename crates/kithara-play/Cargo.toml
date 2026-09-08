@@ -141,6 +141,7 @@ hotpath = { workspace = true, optional = true }
 kithara-audio = { workspace = true, features = ["mock", "probe"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-play = { path = ".", default-features = false, features = ["mock", "probe"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 bytes = { workspace = true }

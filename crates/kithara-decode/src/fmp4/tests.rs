@@ -11,9 +11,10 @@ use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{AudioCodec, ByteMap, PendingReason, SegmentDescriptor};
+use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
 use kithara_test_utils::kithara;
 
-use super::test_layout::{FakeSegmented, TestLayoutCodec, build_test_layout, read_fixture};
+use super::test_layout::{FakeSegmented, aac_five, aac_one, aac_three, flac_three};
 use crate::{
     codec::{CodecPriming, FrameCodec, access_unit_frames},
     composed::{ComposedDecoder, DecoderRuntime},
@@ -88,8 +89,8 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
 }
 
 #[kithara::test]
-fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
+fn next_chunk_yields_pcm_from_init_plus_segment_zero(aac_one: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_one;
     let (mut decoder, _, _) = make_decoder(blob, segmented);
 
     let mut got_chunk = None;
@@ -166,8 +167,8 @@ impl ByteMap for PublishedButUndescribed {
 /// the transition was discarded with `abort_intent`, and the player never
 /// switched.
 #[kithara::test]
-fn an_undescribed_segment_is_not_the_end_of_the_stream() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 3);
+fn an_undescribed_segment_is_not_the_end_of_the_stream(aac_three: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_three;
     let init_range = 0..segmented.segments[0].byte_range.start;
     let total = segmented.segments[2].byte_range.end;
     let source: BoxedSource = Box::new(Cursor::new(blob));
@@ -195,8 +196,8 @@ fn an_undescribed_segment_is_not_the_end_of_the_stream() {
 /// is bounded (not 0) because the fdk-aac adapter strips ~1024 frames of
 /// algo delay, landing the first chunk at packet 1 (≈46 ms @ 44.1 kHz).
 #[kithara::test]
-fn red_open_always_starts_at_layout_seg_0() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 3);
+fn red_open_always_starts_at_layout_seg_0(aac_three: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_three;
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
@@ -237,8 +238,8 @@ fn red_cursor_byte_range_freezes_when_layout_size_grows() {
 /// must stay confined to the pre-roll segment plus the target segment —
 /// never a prefix walk from seg-0.
 #[kithara::test]
-fn seek_backs_up_one_segment_for_aac_preroll() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 5);
+fn seek_backs_up_one_segment_for_aac_preroll(aac_five: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_five;
     let (mut decoder, reads, record) = make_decoder(blob, segmented.clone());
 
     reads.lock().expect("BUG: clear").clear();
@@ -286,8 +287,8 @@ fn seek_backs_up_one_segment_for_aac_preroll() {
 }
 
 #[kithara::test]
-fn seek_emits_notneeded_for_symphonia_aac_segment_boundary() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 5);
+fn seek_emits_notneeded_for_symphonia_aac_segment_boundary(aac_five: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_five;
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let target = Duration::from_secs(18);
@@ -304,8 +305,8 @@ fn seek_emits_notneeded_for_symphonia_aac_segment_boundary() {
 }
 
 #[kithara::test]
-fn seek_emits_notneeded_for_symphonia_aac_first_segment() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 5);
+fn seek_emits_notneeded_for_symphonia_aac_first_segment(aac_five: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_five;
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let outcome = decoder.seek(Duration::ZERO).expect("BUG: seek to start");
@@ -321,8 +322,8 @@ fn seek_emits_notneeded_for_symphonia_aac_first_segment() {
 }
 
 #[kithara::test]
-fn seek_emits_notneeded_for_first_segment_flac() {
-    let (blob, segmented) = build_test_layout(TestLayoutCodec::Flac, 3);
+fn seek_emits_notneeded_for_first_segment_flac(flac_three: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = flac_three;
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let mut demuxer =
@@ -347,8 +348,8 @@ type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 /// access units in segment 0. Mirrors `Fmp4SegmentDemuxer::build_track_info`
 /// so the codec is opened with the same `TrackInfo` the real demuxer would
 /// produce, then returns the per-frame `(offset, size)` access-unit ranges.
-fn aac_codec_and_frames() -> AacFrameHarness {
-    let init_bytes = read_fixture("init-slq-a1.mp4");
+fn aac_codec_and_frames(aac_init: &[u8], aac_segment: &[u8]) -> AacFrameHarness {
+    let init_bytes = aac_init;
     let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
     let extra_data = init.config.as_ref().to_vec();
     let track = TrackInfo {
@@ -362,7 +363,7 @@ fn aac_codec_and_frames() -> AacFrameHarness {
     let codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
         .expect("BUG: open AAC codec");
 
-    let seg = read_fixture("segment-1-slq-a1.m4s");
+    let seg = aac_segment.to_vec();
     let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
     let ranges = frames.iter().map(|f| (f.offset, f.size)).collect();
     (codec, seg, ranges)
@@ -392,12 +393,12 @@ fn decode_all_aac(
 /// access units must yield byte-for-byte equal interleaved f32 PCM —
 /// pro-DJ zero tolerance for sample drift.
 #[kithara::test]
-fn symphonia_aac_decode_is_bit_identical_across_passes() {
+fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
-    let (mut codec_a, seg, ranges) = aac_codec_and_frames();
+    let (mut codec_a, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);
     let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pools);
 
-    let (mut codec_b, _, _) = aac_codec_and_frames();
+    let (mut codec_b, _, _) = aac_codec_and_frames(&aac_init, &aac_segment);
     let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pools);
 
     assert!(!pcm_a.is_empty(), "decode produced no PCM");
@@ -408,9 +409,9 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
 }
 
 #[kithara::test]
-fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
+fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
-    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    let (mut codec, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);
     assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
     for &(offset, size) in ranges.iter().take(8) {
@@ -447,9 +448,9 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
 /// `ComposedDecoder` is what lets its live timeline-gap query hand both the
 /// same figure.
 #[kithara::test]
-fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
+fn aac_head_strip_exceeds_the_bias_the_timeline_models(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
-    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    let (mut codec, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
     let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pools);
 

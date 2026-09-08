@@ -25,7 +25,7 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 /// `PlaybackView::buffered` is the surface a progress bar reads: once the whole
 /// body is cached it must say so, not report only what the decoder has produced
@@ -80,17 +80,17 @@ async fn wait_for_playing_settled_duration(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
+async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
     });
     let url = handle.child_url("progressive.mp3");
-    let body_len = signal_mp3_track_sine440_187s().bytes().len() as u64;
+    let body_len = tone_mp3.len() as u64;
 
     let pools = pools();
     let downloader = Downloader::new(

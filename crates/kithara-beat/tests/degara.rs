@@ -129,8 +129,7 @@ fn offender(windows: &[Window], golden: &[f32]) -> Option<(f64, f64, f64)> {
     found
 }
 
-fn parity(pcm: &str, name: &str, from_seconds: usize) {
-    let pcm = load_pcm_fixture(pcm);
+fn parity(pcm: &[f32], name: &str, from_seconds: usize) {
     let golden = load_golden(&fixture(name));
     assert!(
         golden.downbeats.is_empty(),
@@ -162,28 +161,26 @@ fn parity(pcm: &str, name: &str, from_seconds: usize) {
 }
 
 #[kithara::test(native, flash(false))]
-fn degara_parity() {
-    parity(
-        "beat_test_mono_22050.f32le",
-        "golden_degara_windowed.json",
-        0,
-    );
+fn degara_parity(beat_pcm: Vec<f32>) {
+    parity(&beat_pcm, "golden_degara_windowed.json", 0);
 }
 
 #[kithara::test(native, flash(false))]
-fn degara_parity_holds_the_metrical_level() {
-    parity(
-        "track_excerpt_mono_22050.f32le",
-        "golden_degara_track_windowed.json",
-        0,
-    );
+fn degara_parity_holds_the_metrical_level(track_pcm: Vec<f32>) {
+    parity(&track_pcm, "golden_degara_track_windowed.json", 0);
 }
 
 #[kithara::test(native, flash(false))]
-fn degara_parity_holds_at_another_alignment() {
-    parity(
-        "track_excerpt_mono_22050.f32le",
-        "golden_degara_track_windowed_from7.json",
-        7,
-    );
+fn degara_parity_holds_at_another_alignment(track_pcm: Vec<f32>) {
+    parity(&track_pcm, "golden_degara_track_windowed_from7.json", 7);
+}
+
+#[kithara::fixture]
+fn beat_pcm() -> Vec<f32> {
+    load_pcm_fixture("beat_test_mono_22050.f32le")
+}
+
+#[kithara::fixture]
+fn track_pcm() -> Vec<f32> {
+    load_pcm_fixture("track_excerpt_mono_22050.f32le")
 }

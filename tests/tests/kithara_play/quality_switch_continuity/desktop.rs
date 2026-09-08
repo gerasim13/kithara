@@ -10,7 +10,7 @@ use kithara::{
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper,
+    CreatedHls, TestServerHelper,
     cochlea::percentile_f32,
     fixture_protocol::DelayRule,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
@@ -455,12 +455,10 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(3)
 )]
-async fn kithara_app_manual_aac_to_flac_switch_is_gapless() {
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(desktop_fixture())
-        .await
-        .expect("create delayed Kithara App AAC-to-FLAC fixture");
+async fn kithara_app_manual_aac_to_flac_switch_is_gapless(
+    #[future(awt)] desktop_source: (TestServerHelper, CreatedHls),
+) {
+    let (_server, created) = desktop_source;
     let master_url = created.master_url();
 
     let control = render_desktop(&master_url, false).await;
@@ -482,4 +480,14 @@ async fn kithara_app_manual_aac_to_flac_switch_is_gapless() {
         "Cochlea found switch-only silence in the Kithara App path: switched={switched_buckets}, control={control_buckets}, target_delay_ms={TARGET_DELAY_MS}",
     );
     assert_no_desktop_click(&switched.samples, &control.samples);
+}
+
+#[kithara::fixture]
+async fn desktop_source() -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(desktop_fixture())
+        .await
+        .expect("create delayed Kithara App AAC-to-FLAC fixture");
+    (server, created)
 }

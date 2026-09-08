@@ -11,6 +11,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_fixtures::integration_fixtures::origin_tone;
 use url::Url;
 
 use super::origin::{Origin, SAMPLE_RATE, TONE_HZ, assert_carries_the_tone};
@@ -21,8 +22,8 @@ const READ_FRAMES: usize = 44_100;
 const READ_BUF_SAMPLES: usize = 4_096;
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn the_production_client_plays_the_stopped_broadcast() {
-    let origin = Origin::start();
+async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
     origin.advance_to(SEGMENTS).await;
     origin.handle.stop();
 

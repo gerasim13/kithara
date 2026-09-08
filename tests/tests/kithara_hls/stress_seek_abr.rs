@@ -15,9 +15,10 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
-    mixed_codec_ladder_url, temp_dir,
+    mixed_encrypted, mixed_plain, temp_dir,
 };
 use tracing::info;
+use url::Url;
 
 fn warmup_until_first_frame(
     audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
@@ -95,16 +96,15 @@ fn run_rapid_random_seeks(
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(3)
 )]
-#[case::hls(false, "HLS")]
-#[case::drm(true, "DRM")]
+#[case::hls("HLS", mixed_plain().await)]
+#[case::drm("DRM", mixed_encrypted().await)]
 async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
-    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
+    #[case] prepared: (TestServerHelper, Url),
 ) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let (_server, url) = prepared;
     info!(label, %url, "Opening generated stream");
 
     let pools = pools();
@@ -197,16 +197,15 @@ async fn stress_seek_during_abr_switch_real_decoder(
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(5)
 )]
-#[case::hls(false, "HLS")]
-#[case::drm(true, "DRM")]
+#[case::hls("HLS", mixed_plain().await)]
+#[case::drm("DRM", mixed_encrypted().await)]
 async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
-    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
+    #[case] prepared: (TestServerHelper, Url),
 ) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let (_server, url) = prepared;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)

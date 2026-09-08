@@ -15,10 +15,11 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::SignalAsset;
 use tracing::info;
+use url::Url;
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(
-    url: url::Url,
+    url: Url,
     cache_dir: &Path,
 ) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
     let pools = pools();
@@ -57,18 +58,14 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
     }
 }
 
-async fn run_concurrent_file(n: usize) {
-    let server = TestServerHelper::new().await;
+async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
+    let (_server, url) = source;
 
     let mut handles = Vec::new();
     let mut temps = Vec::new();
     for i in 0..n {
         let temp = TestTempDir::new();
-        let audio = create_file_audio(
-            server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
-            temp.path(),
-        )
-        .await;
+        let audio = create_file_audio(url.clone(), temp.path()).await;
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;
@@ -106,6 +103,16 @@ async fn run_concurrent_file(n: usize) {
 #[case::n2(2)]
 #[case::n4(4)]
 #[case::n8(8)]
-async fn concurrent_file_instances(#[case] instances: usize) {
-    run_concurrent_file(instances).await;
+async fn concurrent_file_instances(
+    #[case] instances: usize,
+    #[future(awt)] file_source: (TestServerHelper, Url),
+) {
+    run_concurrent_file(instances, file_source).await;
+}
+
+#[kithara::fixture]
+async fn file_source() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
+    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
+    (server, url)
 }

@@ -26,6 +26,7 @@ use kithara_resampler::ResamplerBackend;
 use kithara_resampler::rubato::RubatoBackend;
 #[cfg(feature = "analysis-waveform")]
 use kithara_signal::AudioSpec;
+use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -234,7 +235,7 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn pending_reader_yields_one_scheduler_tick() {
+fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
     let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
@@ -246,7 +247,7 @@ fn pending_reader_yields_one_scheduler_tick() {
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked_with_pending(
             builder.pools(),
-            &sine(1024),
+            &sine(analysis_pcm, 1024),
             1,
         )),
         cancel: CancelToken::root(),
@@ -261,7 +262,7 @@ fn pending_reader_yields_one_scheduler_tick() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
+fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm: &'static [f32]) {
     let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
@@ -272,7 +273,11 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
-        reader: Box::new(FakeReader::chunked(builder.pools(), &sine(1024), 1)),
+        reader: Box::new(FakeReader::chunked(
+            builder.pools(),
+            &sine(analysis_pcm, 1024),
+            1,
+        )),
         cancel: cancel.clone(),
         resume: None,
     })
@@ -289,7 +294,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
 }
 
 #[cfg(feature = "analysis-waveform")]
-fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
+fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
@@ -310,7 +315,7 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
 
     for (at, frames) in ranges {
         assert_eq!(
-            producer.offer(&sine(*frames), super::fixtures::spec(), *at),
+            producer.offer(&sine(analysis_pcm, *frames), super::fixtures::spec(), *at),
             Ok(()),
             "the transport takes a range on its own axis"
         );
@@ -326,8 +331,8 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn offered_ranges_land_where_they_were_offered() {
-    let analysis = offered(&[(0, 1024), (4096, 1024)]).expect("the pass publishes");
+fn offered_ranges_land_where_they_were_offered(analysis_pcm: &'static [f32]) {
+    let analysis = offered(analysis_pcm, &[(0, 1024), (4096, 1024)]).expect("the pass publishes");
 
     assert_eq!(
         analysis.coverage().runs(),
@@ -342,7 +347,7 @@ fn offered_ranges_land_where_they_were_offered() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn an_offer_reaches_only_the_pass_its_handle_names() {
+fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let open = |token: &str| {
         let (jobs, receiver) = mpsc::channel();
@@ -371,7 +376,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
     let (_idle_jobs, mut idle_node, idle_results, _idle_producer) = open("track-b");
 
     assert_eq!(
-        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
         Ok(())
     );
     for _ in 0..64 {
@@ -394,7 +399,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn an_offer_on_another_axis_leaves_the_coverage_alone() {
+fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let foreign = AudioSpec {
         channels: CH,
@@ -418,11 +423,11 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
     let mut node = NodeHarness::new(waveform_only(), receiver);
 
     assert_eq!(
-        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
         Ok(())
     );
     assert_eq!(
-        producer.offer(&sine(1024), foreign, 4096),
+        producer.offer(&sine(analysis_pcm, 1024), foreign, 4096),
         Err(AudioObserveError::UnsupportedSampleRate {
             expected: rate,
             actual: foreign.sample_rate,
@@ -443,7 +448,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
+fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
     const BLOCK: u64 = 8192;
     const BLOCKS: u64 = 90;
     const STALLS: usize = 400;
@@ -465,7 +470,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
-    let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
+    let pcm = sine(analysis_pcm, usize::try_from(BLOCK).unwrap_or(0));
 
     let mut published = Vec::new();
     let collect = |results: &mut watch::Receiver<Option<AnalysisProgress>>,
@@ -542,7 +547,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
 }
 
 #[cfg(feature = "analysis-waveform")]
-fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
+fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     const BLOCK: u64 = 8192;
     const PAST: u64 = 40;
     const STALLS: usize = 200;
@@ -564,7 +569,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
-    let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
+    let pcm = sine(analysis_pcm, usize::try_from(BLOCK).unwrap_or(0));
 
     let mut at = 0;
     let refused = loop {
@@ -609,8 +614,8 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn a_range_the_transport_refused_is_reported_missing() {
-    let (analysis, refused, reached) = refusal_run(false);
+fn a_range_the_transport_refused_is_reported_missing(analysis_pcm: &'static [f32]) {
+    let (analysis, refused, reached) = refusal_run(analysis_pcm, false);
 
     assert!(
         analysis.missing().contains(&refused),
@@ -633,8 +638,8 @@ fn a_range_the_transport_refused_is_reported_missing() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn a_refused_range_offered_again_leaves_the_missing_set() {
-    let (analysis, refused, reached) = refusal_run(true);
+fn a_refused_range_offered_again_leaves_the_missing_set(analysis_pcm: &'static [f32]) {
+    let (analysis, refused, reached) = refusal_run(analysis_pcm, true);
 
     assert!(
         analysis.missing().is_empty(),
@@ -654,7 +659,7 @@ fn a_refused_range_offered_again_leaves_the_missing_set() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
+fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'static [f32]) {
     const BLOCK: u64 = 8192;
     const BLOCKS: u64 = 90;
     const STALLS: usize = 400;
@@ -679,7 +684,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
-    let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
+    let pcm = sine(analysis_pcm, usize::try_from(BLOCK).unwrap_or(0));
 
     let mut published: Vec<TrackAnalysis> = Vec::new();
     for block in &order {
@@ -738,9 +743,9 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn offers_out_of_order_cover_their_union() {
-    let ascending = offered(&[(0, 1024), (1024, 1024), (2048, 1024)]);
-    let shuffled = offered(&[(2048, 1024), (0, 1024), (1024, 1024)]);
+fn offers_out_of_order_cover_their_union(analysis_pcm: &'static [f32]) {
+    let ascending = offered(analysis_pcm, &[(0, 1024), (1024, 1024), (2048, 1024)]);
+    let shuffled = offered(analysis_pcm, &[(2048, 1024), (0, 1024), (1024, 1024)]);
 
     let ascending = ascending.expect("the ascending pass publishes");
     let shuffled = shuffled.expect("the shuffled pass publishes");
@@ -816,8 +821,8 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-async fn matches_direct_waveform_analyzer_over_chunked_stream() {
-    let samples = sine(usize::try_from(SR).unwrap());
+async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'static [f32]) {
+    let samples = sine(analysis_pcm, usize::try_from(SR).unwrap());
     let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
     let builder = waveform_only();
     let pools = builder.pools().clone();
@@ -851,11 +856,15 @@ async fn matches_direct_waveform_analyzer_over_chunked_stream() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-async fn cancelled_token_yields_none() {
+async fn cancelled_token_yields_none(analysis_pcm: &'static [f32]) {
     let builder = waveform_only();
     let cancel = CancelToken::root();
     cancel.cancel();
-    let reader = Box::new(FakeReader::chunked(builder.pools(), &sine(4096), 2));
+    let reader = Box::new(FakeReader::chunked(
+        builder.pools(),
+        &sine(analysis_pcm, 4096),
+        2,
+    ));
     assert!(stages(reader, builder, &cancel).await.is_empty());
 }
 
@@ -877,7 +886,7 @@ async fn empty_stream_yields_none() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
+fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static [f32]) {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_detector = Arc::clone(&calls);
     let (started, started_rx) = mpsc::channel();
@@ -904,7 +913,11 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
     let mut results = enqueue(
         &jobs,
         "same-track",
-        Box::new(FakeReader::chunked(builder.pools(), &sine(3 * frames), 3)),
+        Box::new(FakeReader::chunked(
+            builder.pools(),
+            &sine(analysis_pcm, 3 * frames),
+            3,
+        )),
         CancelToken::root(),
         ingest,
     );
@@ -927,7 +940,11 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
 
     let offered_at = 2 * u64::from(SR);
     assert_eq!(
-        producer.offer(&sine(frames), super::fixtures::spec(), offered_at),
+        producer.offer(
+            &sine(analysis_pcm, frames),
+            super::fixtures::spec(),
+            offered_at
+        ),
         Ok(())
     );
     assert_eq!(
@@ -960,7 +977,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-fn saturation_retries_the_exact_detection_payload_once() {
+fn saturation_retries_the_exact_detection_payload_once(analysis_pcm: &'static [f32]) {
     let (detected, detected_rx) = mpsc::channel();
     let detector = Box::new(shareable(Unimock::new(
         BeatDetectorMock
@@ -972,7 +989,7 @@ fn saturation_retries_the_exact_detection_payload_once() {
     )));
     let builder = beat_waveform(detector, 1, 1);
     let frames = usize::try_from(SR).expect("test rate fits usize");
-    let pcm = sine(frames);
+    let pcm = sine(analysis_pcm, frames);
     let expected: Vec<f32> = pcm
         .chunks_exact(usize::from(CH))
         .map(|frame| frame.iter().sum::<f32>() / f32::from(CH))
@@ -1038,7 +1055,7 @@ fn saturation_retries_the_exact_detection_payload_once() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
+fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pcm: &'static [f32]) {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_detector = Arc::clone(&calls);
     let (called, called_rx) = mpsc::channel();
@@ -1066,14 +1083,22 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
     let mut results_a = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
+        Box::new(FakeReader::chunked(
+            builder.pools(),
+            &sine(analysis_pcm, frames),
+            1,
+        )),
         cancel_a.clone(),
         super::fixtures::idle_ingest(),
     );
     let mut results_b = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
+        Box::new(FakeReader::chunked(
+            builder.pools(),
+            &sine(analysis_pcm, frames),
+            1,
+        )),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1133,7 +1158,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-fn final_publication_waits_for_trailing_detection() {
+fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) {
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
@@ -1152,7 +1177,11 @@ fn final_publication_waits_for_trailing_detection() {
     let mut results = enqueue(
         &jobs,
         "trailing-track",
-        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
+        Box::new(FakeReader::chunked(
+            builder.pools(),
+            &sine(analysis_pcm, frames),
+            1,
+        )),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1200,7 +1229,7 @@ fn final_publication_waits_for_trailing_detection() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test(native, flash(false))]
-fn producer_drain_limit_bounds_one_tick() {
+fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let frames = usize::try_from(SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
@@ -1220,7 +1249,7 @@ fn producer_drain_limit_bounds_one_tick() {
         NonZeroUsize::MIN,
         NonZeroU32::MIN,
     );
-    let pcm = sine(frames);
+    let pcm = sine(analysis_pcm, frames);
     for block in 0..3u64 {
         assert_eq!(
             producer.offer(&pcm, super::fixtures::spec(), block * u64::from(SR)),
@@ -1244,7 +1273,7 @@ fn producer_drain_limit_bounds_one_tick() {
 
 #[cfg(feature = "analysis-beat")]
 #[kithara::test]
-async fn beat_slot_fills_the_beat_grid() {
+async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     let raw = RawBeats {
         beats: Vec::new(),
         downbeats: (0..9u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
@@ -1260,7 +1289,7 @@ async fn beat_slot_fills_the_beat_grid() {
 
     let reader = Box::new(FakeReader::chunked(
         builder.pools(),
-        &sine(17 * usize::try_from(SR).unwrap()),
+        &sine(analysis_pcm, 17 * usize::try_from(SR).unwrap()),
         3,
     ));
     let out = stages(reader, builder, &CancelToken::root()).await;
@@ -1347,9 +1376,9 @@ async fn beat_slot_fills_the_beat_grid() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-async fn pending_is_tolerated_mid_stream() {
+async fn pending_is_tolerated_mid_stream(analysis_pcm: &'static [f32]) {
     let builder = waveform_only();
-    let samples = sine(8192);
+    let samples = sine(analysis_pcm, 8192);
     let reader = Box::new(FakeReader::chunked_with_pending(
         builder.pools(),
         &samples,
@@ -1368,7 +1397,7 @@ async fn pending_is_tolerated_mid_stream() {
     not(feature = "beat-backend")
 ))]
 #[kithara::test]
-fn a_pass_with_no_detector_publishes_the_rest() {
+fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
@@ -1388,7 +1417,7 @@ fn a_pass_with_no_detector_publishes_the_rest() {
     let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
 
     assert_eq!(
-        producer.offer(&sine(1024), super::fixtures::spec(), 0),
+        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
         Ok(())
     );
     for _ in 0..128 {

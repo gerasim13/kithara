@@ -70,11 +70,11 @@ impl Drop for NetworkRestore<'_> {
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
-    // A private server: this test takes the network down, and the switch covers
-    // every data route on whichever server it runs against.
-    let server = PrivateTestServer::start().await;
-    let url = server.helper().asset("hls/master.m3u8").to_string();
+async fn playback_resumes_after_network_returns(
+    temp_dir: TestTempDir,
+    #[future(awt)] offline_source: (PrivateTestServer, String),
+) {
+    let (server, url) = offline_source;
     resumes_after_outage(temp_dir, &server, url, LOOK_AHEAD_BYTES).await;
 }
 
@@ -89,9 +89,11 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
 /// the iOS lane, where every one of them was written off permanently and
 /// playback stopped at the first of the gaps they left.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn playback_resumes_after_network_returns_with_paced_segments(temp_dir: TestTempDir) {
-    let server = PrivateTestServer::start().await;
-    let url = paced_master(&server);
+async fn playback_resumes_after_network_returns_with_paced_segments(
+    temp_dir: TestTempDir,
+    #[future(awt)] paced_source: (PrivateTestServer, String),
+) {
+    let (server, url) = paced_source;
     resumes_after_outage(temp_dir, &server, url, PACED_LOOK_AHEAD_BYTES).await;
 }
 
@@ -304,4 +306,18 @@ async fn resumes_after_outage(
     queue.clear();
     ticker.stop().await;
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn offline_source() -> (PrivateTestServer, String) {
+    let server = PrivateTestServer::start().await;
+    let url = server.helper().asset("hls/master.m3u8").to_string();
+    (server, url)
+}
+
+#[kithara::fixture]
+async fn paced_source() -> (PrivateTestServer, String) {
+    let server = PrivateTestServer::start().await;
+    let url = paced_master(&server);
+    (server, url)
 }

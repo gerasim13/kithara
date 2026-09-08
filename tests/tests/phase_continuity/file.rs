@@ -1,4 +1,4 @@
-use std::{io::Write, num::NonZeroUsize};
+use std::{num::NonZeroUsize, path::PathBuf};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -13,8 +13,11 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{
+    SignalAsset, assets::by_name, integration_fixtures::listening_reference,
+};
 use tracing::info;
+use url::Url;
 
 #[cfg(all(
     feature = "apple-fused-src",
@@ -33,6 +36,26 @@ use super::common::{
 ))]
 const APPLE_FUSED_HOST_RATE: u32 = 48_000;
 
+type ServedSignal = (SignalAsset, TestServerHelper, Url);
+
+async fn served_signal(asset: SignalAsset) -> ServedSignal {
+    let helper = TestServerHelper::new().await;
+    let url = helper.signal(asset);
+    (asset, helper, url)
+}
+
+fn local_signal(asset: SignalAsset) -> (SignalAsset, TestTempDir, PathBuf) {
+    let temp_dir = TestTempDir::new();
+    let path = temp_dir
+        .path()
+        .join(format!("sine_fixture.{}", asset.ext()));
+    let bytes = by_name(asset.name())
+        .expect("registered sine fixture")
+        .bytes();
+    std::fs::write(&path, bytes).expect("write sine fixture");
+    (asset, temp_dir, path)
+}
+
 async fn open_audio(
     config: AudioConfig<File<TestPools>>,
     pools: &Pools,
@@ -41,12 +64,16 @@ async fn open_audio(
     worker.open(config).await
 }
 
-async fn run_case(asset: SignalAsset, backend: DecoderBackend, ephemeral: bool, seek_count: usize) {
+async fn run_case(
+    source: ServedSignal,
+    backend: DecoderBackend,
+    ephemeral: bool,
+    seek_count: usize,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(asset);
+    let (asset, _helper, url) = source;
 
     let temp_dir = TestTempDir::new();
     let pools = pools();
@@ -130,43 +157,17 @@ async fn run_case(asset: SignalAsset, backend: DecoderBackend, ephemeral: bool, 
     );
 }
 
-/// Fetch the build-time sine fixture over the loopback test server and persist
-/// its bytes to a file inside `temp_dir`. This HTTP fetch is pure fixture-build
-/// setup on the real tokio runtime; the bytes then live on disk and the
-/// playback path under test (`FileSrc::Local`) never touches a socket.
-async fn write_sine_fixture_to_disk(
-    asset: SignalAsset,
-    temp_dir: &TestTempDir,
-) -> std::path::PathBuf {
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(asset);
-    let bytes = reqwest::get(url)
-        .await
-        .expect("fetch encoded sine fixture")
-        .bytes()
-        .await
-        .expect("read fixture body");
-    let path = temp_dir
-        .path()
-        .join(format!("sine_fixture.{}", asset.ext()));
-    let mut file = std::fs::File::create(&path).expect("create fixture file");
-    file.write_all(&bytes).expect("write fixture bytes");
-    file.sync_all().expect("flush fixture file");
-    path
-}
-
 /// Socket-free twin of [`run_case`]: the fixture bytes are read from a local
 /// file via `FileSrc::Local` (which builds its own private `AssetStore` and
 /// never registers a `Downloader` / issues an HTTP request), so the entire
 /// playback pipeline — storage waits, decode, resample — runs without any
 /// loopback transport. This is the path the `flash` quiescence engine can
 /// virtualize end to end. Asserts the identical phase-continuity contract.
-async fn local_run_case(asset: SignalAsset, backend: DecoderBackend) {
+async fn local_run_case(source: (SignalAsset, TestTempDir, PathBuf), backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let temp_dir = TestTempDir::new();
-    let fixture_path = write_sine_fixture_to_disk(asset, &temp_dir).await;
+    let (asset, temp_dir, fixture_path) = source;
     let pools = pools();
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
@@ -235,12 +236,10 @@ async fn local_run_case(asset: SignalAsset, backend: DecoderBackend) {
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-async fn local_apple_fused_run_case() {
+async fn local_apple_fused_run_case(source: (SignalAsset, TestTempDir, PathBuf)) {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
-    let temp_dir = TestTempDir::new();
-    let fixture_path =
-        write_sine_fixture_to_disk(SignalAsset::M4A_SINE440_60S_320K, &temp_dir).await;
+    let (_asset, temp_dir, fixture_path) = source;
     let pools = pools();
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
@@ -339,13 +338,13 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::mp3_symphonia(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Symphonia)]
+#[case::mp3_symphonia(local_mp3_sine440_60_s_320_k(), DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Apple)
+    case::mp3_apple(local_mp3_sine440_60_s_320_k(), DecoderBackend::Apple)
 )]
 async fn phase_continuity_file_local_socket_free(
-    #[case] asset: SignalAsset,
+    #[case] asset: (SignalAsset, TestTempDir, PathBuf),
     #[case] backend: DecoderBackend,
 ) {
     local_run_case(asset, backend).await;
@@ -363,16 +362,17 @@ async fn phase_continuity_file_local_socket_free(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-async fn phase_continuity_file_apple_fused_src_44k_to_host_48k() {
-    local_apple_fused_run_case().await;
+async fn phase_continuity_file_apple_fused_src_44k_to_host_48k(
+    local_m4a: (SignalAsset, TestTempDir, PathBuf),
+) {
+    local_apple_fused_run_case(local_m4a).await;
 }
 
-async fn decode_pcm_seconds(asset: SignalAsset, backend: DecoderBackend, secs: f64) -> Vec<f32> {
+async fn decode_pcm_seconds(source: ServedSignal, backend: DecoderBackend, secs: f64) -> Vec<f32> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(asset);
+    let (asset, _helper, url) = source;
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
@@ -549,29 +549,38 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[ignore = "diagnostic: writes /tmp/aac_dump/fixture_raw.{aac,m4a}; run with --run-ignored"]
-async fn dump_fixture_raw_bytes() {
-    use std::path::PathBuf;
-    let helper = TestServerHelper::new().await;
+async fn dump_fixture_raw_bytes(raw_signals: [(SignalAsset, &'static [u8]); 2]) {
     let dump = PathBuf::from("/tmp/aac_dump");
     std::fs::create_dir_all(&dump).expect("mkdir");
-    for (asset, name) in [
-        (SignalAsset::AAC_SINE440_60S, "fixture_raw.aac"),
-        (SignalAsset::M4A_SINE440_60S, "fixture_raw.m4a"),
-    ] {
-        let url = helper.signal(asset);
-        let bytes = reqwest::get(url)
-            .await
-            .expect("fetch")
-            .bytes()
-            .await
-            .expect("body");
-        std::fs::write(dump.join(name), &bytes).expect("write");
+    for (asset, bytes) in raw_signals {
+        let name = format!("fixture_raw.{}", asset.ext());
+        std::fs::write(dump.join(&name), bytes).expect("write");
         println!(
             "{name}: {} bytes, first 16: {:02x?}",
             bytes.len(),
             &bytes[..16.min(bytes.len())]
         );
     }
+}
+
+#[kithara::fixture]
+fn raw_signals() -> [(SignalAsset, &'static [u8]); 2] {
+    [SignalAsset::AAC_SINE440_60S, SignalAsset::M4A_SINE440_60S].map(|asset| {
+        (
+            asset,
+            by_name(asset.name()).expect("registered fixture").bytes(),
+        )
+    })
+}
+
+#[kithara::fixture]
+async fn listening_sources() -> [ServedSignal; 4] {
+    [
+        served_signal(SignalAsset::M4A_SINE440_60S).await,
+        served_signal(SignalAsset::AAC_SINE440_60S).await,
+        served_signal(SignalAsset::MP3_SINE440_60S).await,
+        served_signal(SignalAsset::FLAC_SINE440_60S).await,
+    ]
 }
 
 #[kithara::test(
@@ -583,8 +592,10 @@ async fn dump_fixture_raw_bytes() {
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[ignore = "diagnostic: writes /tmp/aac_dump/*.wav for offline listening; run with --run-ignored"]
-async fn dump_aac_for_listening() {
-    use std::path::PathBuf;
+async fn dump_aac_for_listening(
+    listening_reference: Vec<f32>,
+    #[future(awt)] listening_sources: [ServedSignal; 4],
+) {
     let dump_dir = PathBuf::from("/tmp/aac_dump");
     std::fs::create_dir_all(&dump_dir).expect("mkdir");
 
@@ -594,21 +605,19 @@ async fn dump_aac_for_listening() {
     let sine = SinePhaseSpec::default_440();
     let delta = sine.delta_rad_per_sample();
 
-    let ref_mono: Vec<f32> = (0..total)
-        .map(|k| num_traits::cast::<f64, f32>((delta * k as f64).sin()).unwrap_or(0.0) * 0.95)
-        .collect();
+    let ref_mono = listening_reference;
     write_wav_mono_f32(
         &dump_dir.join("01_reference_440hz.wav"),
         &ref_mono,
         SAMPLE_RATE,
     );
 
-    for (asset, name) in [
-        (SignalAsset::M4A_SINE440_60S, "02_decoded_m4a.wav"),
-        (SignalAsset::AAC_SINE440_60S, "03_decoded_aac_raw.wav"),
-        (SignalAsset::MP3_SINE440_60S, "04_decoded_mp3.wav"),
-        (SignalAsset::FLAC_SINE440_60S, "05_decoded_flac.wav"),
-    ] {
+    for (asset, name) in listening_sources.into_iter().zip([
+        "02_decoded_m4a.wav",
+        "03_decoded_aac_raw.wav",
+        "04_decoded_mp3.wav",
+        "05_decoded_flac.wav",
+    ]) {
         let pcm = decode_pcm_seconds(asset, DecoderBackend::Symphonia, secs).await;
         let mono: Vec<f32> = (0..pcm.len() / chan).map(|f| pcm[f * chan]).collect();
         write_wav_mono_f32(
@@ -652,21 +661,20 @@ async fn dump_aac_for_listening() {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::aac_128k(SignalAsset::AAC_SINE440_60S_128K)]
-#[case::aac_192k(SignalAsset::AAC_SINE440_60S_192K)]
-#[case::aac_256k(SignalAsset::AAC_SINE440_60S_256K)]
-#[case::aac_320k(SignalAsset::AAC_SINE440_60S_320K)]
-#[case::m4a_128k(SignalAsset::M4A_SINE440_60S_128K)]
-#[case::m4a_192k(SignalAsset::M4A_SINE440_60S_192K)]
-#[case::m4a_256k(SignalAsset::M4A_SINE440_60S_256K)]
-#[case::m4a_320k(SignalAsset::M4A_SINE440_60S_320K)]
-#[case::mp3_128k(SignalAsset::MP3_SINE440_60S_128K)]
-#[case::mp3_192k(SignalAsset::MP3_SINE440_60S_192K)]
-#[case::mp3_256k(SignalAsset::MP3_SINE440_60S_256K)]
-#[case::mp3_320k(SignalAsset::MP3_SINE440_60S_320K)]
-async fn bit_rate_e2e_does_not_hang(#[case] asset: SignalAsset) {
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(asset);
+#[case::aac_128k(signal_aac_sine440_60_s_128_k().await)]
+#[case::aac_192k(signal_aac_sine440_60_s_192_k().await)]
+#[case::aac_256k(signal_aac_sine440_60_s_256_k().await)]
+#[case::aac_320k(signal_aac_sine440_60_s_320_k().await)]
+#[case::m4a_128k(signal_m4_a_sine440_60_s_128_k().await)]
+#[case::m4a_192k(signal_m4_a_sine440_60_s_192_k().await)]
+#[case::m4a_256k(signal_m4_a_sine440_60_s_256_k().await)]
+#[case::m4a_320k(signal_m4_a_sine440_60_s_320_k().await)]
+#[case::mp3_128k(signal_mp3_sine440_60_s_128_k().await)]
+#[case::mp3_192k(signal_mp3_sine440_60_s_192_k().await)]
+#[case::mp3_256k(signal_mp3_sine440_60_s_256_k().await)]
+#[case::mp3_320k(signal_mp3_sine440_60_s_320_k().await)]
+async fn bit_rate_e2e_does_not_hang(#[case] source: ServedSignal) {
+    let (asset, _helper, url) = source;
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -709,13 +717,13 @@ fn codec_label(asset: SignalAsset) -> String {
     format!("{} ({kind})", asset.name())
 }
 
-async fn run_codec_compare(asset_a: SignalAsset, asset_b: SignalAsset, backend: DecoderBackend) {
+async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend: DecoderBackend) {
     const READ_SECS: f64 = 2.0;
+    let label_a = codec_label(asset_a.0);
+    let label_b = codec_label(asset_b.0);
     let pcm_a = decode_pcm_seconds(asset_a, backend, READ_SECS).await;
     let pcm_b = decode_pcm_seconds(asset_b, backend, READ_SECS).await;
     let chan = CHANNELS as usize;
-    let label_a = codec_label(asset_a);
-    let label_b = codec_label(asset_b);
     println!("\n===== {backend:?} =====");
     for &(w, s) in &[
         (128usize, 1024usize),
@@ -741,131 +749,131 @@ async fn run_codec_compare(asset_a: SignalAsset, asset_b: SignalAsset, backend: 
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[case::mp3_vs_wav_symphonia(
-    SignalAsset::MP3_SINE440_60S,
-    SignalAsset::WAV_SINE440_60S,
+    signal_mp3_sine440_60_s().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::aac_vs_wav_symphonia(
-    SignalAsset::AAC_SINE440_60S,
-    SignalAsset::WAV_SINE440_60S,
+    signal_aac_sine440_60_s().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::m4a_vs_wav_symphonia(
-    SignalAsset::M4A_SINE440_60S,
-    SignalAsset::WAV_SINE440_60S,
+    signal_m4_a_sine440_60_s().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::flac_vs_wav_symphonia(
-    SignalAsset::FLAC_SINE440_60S,
-    SignalAsset::WAV_SINE440_60S,
+    signal_flac_sine440_60_s().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::aac_320k_vs_wav_symphonia(
-    SignalAsset::AAC_SINE440_60S_320K,
-    SignalAsset::WAV_SINE440_60S,
+    signal_aac_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::m4a_320k_vs_wav_symphonia(
-    SignalAsset::M4A_SINE440_60S_320K,
-    SignalAsset::WAV_SINE440_60S,
+    signal_m4_a_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[case::mp3_320k_vs_wav_symphonia(
-    SignalAsset::MP3_SINE440_60S_320K,
-    SignalAsset::WAV_SINE440_60S,
+    signal_mp3_sine440_60_s_320_k().await,
+    signal_wav_sine440_60_s().await,
     DecoderBackend::Symphonia
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_vs_wav_apple(
-        SignalAsset::MP3_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_mp3_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_vs_wav_apple(
-        SignalAsset::AAC_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_aac_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::m4a_vs_wav_apple(
-        SignalAsset::M4A_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_m4_a_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::flac_vs_wav_apple(
-        SignalAsset::FLAC_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_flac_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_320k_vs_wav_apple(
-        SignalAsset::AAC_SINE440_60S_320K,
-        SignalAsset::WAV_SINE440_60S,
+        signal_aac_sine440_60_s_320_k().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::m4a_320k_vs_wav_apple(
-        SignalAsset::M4A_SINE440_60S_320K,
-        SignalAsset::WAV_SINE440_60S,
+        signal_m4_a_sine440_60_s_320_k().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_320k_vs_wav_apple(
-        SignalAsset::MP3_SINE440_60S_320K,
-        SignalAsset::WAV_SINE440_60S,
+        signal_mp3_sine440_60_s_320_k().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     target_os = "android",
     case::mp3_vs_wav_android(
-        SignalAsset::MP3_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_mp3_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Android
     )
 )]
 #[cfg_attr(
     target_os = "android",
     case::aac_vs_wav_android(
-        SignalAsset::AAC_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_aac_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Android
     )
 )]
 #[cfg_attr(
     target_os = "android",
     case::m4a_vs_wav_android(
-        SignalAsset::M4A_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_m4_a_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Android
     )
 )]
 #[cfg_attr(
     target_os = "android",
     case::flac_vs_wav_android(
-        SignalAsset::FLAC_SINE440_60S,
-        SignalAsset::WAV_SINE440_60S,
+        signal_flac_sine440_60_s().await,
+        signal_wav_sine440_60_s().await,
         DecoderBackend::Android
     )
 )]
 async fn codec_distortion_profile(
-    #[case] codec: SignalAsset,
-    #[case] reference: SignalAsset,
+    #[case] codec: ServedSignal,
+    #[case] reference: ServedSignal,
     #[case] backend: DecoderBackend,
 ) {
     run_codec_compare(codec, reference, backend).await;
@@ -882,7 +890,7 @@ async fn codec_distortion_profile(
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::sentinel_mp3_apple_eph_e2e(
-        SignalAsset::MP3_SINE440_60S_320K,
+        signal_mp3_sine440_60_s_320_k().await,
         DecoderBackend::Apple,
         true,
         0
@@ -890,63 +898,63 @@ async fn codec_distortion_profile(
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple_eph_10seek(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Apple, true, 10)
+    case::mp3_apple_eph_10seek(signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
 )]
 #[case::mp3_symphonia_eph_e2e(
-    SignalAsset::MP3_SINE440_60S_320K,
+    signal_mp3_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
 )]
 #[case::mp3_symphonia_eph_10seek(
-    SignalAsset::MP3_SINE440_60S_320K,
+    signal_mp3_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     10
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_e2e(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Apple, true, 0)
+    case::m4a_apple_eph_e2e(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_10seek(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Apple, true, 10)
+    case::m4a_apple_eph_10seek(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
 )]
 #[case::m4a_symphonia_eph_e2e(
-    SignalAsset::M4A_SINE440_60S_320K,
+    signal_m4_a_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Apple, true, 0)
+    case::flac_apple_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Apple, true, 0)
 )]
-#[case::flac_symphonia_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Symphonia, true, 0)]
+#[case::flac_symphonia_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Symphonia, true, 0)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_apple_eph_e2e(SignalAsset::AAC_SINE440_60S_320K, DecoderBackend::Apple, true, 0)
+    case::aac_apple_eph_e2e(signal_aac_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
 )]
 #[case::aac_symphonia_eph_e2e(
-    SignalAsset::AAC_SINE440_60S_320K,
+    signal_aac_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
 )]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_android_eph_e2e(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Android, true, 0)
+    case::mp3_android_eph_e2e(signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Android, true, 0)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::m4a_android_eph_e2e(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Android, true, 0)
+    case::m4a_android_eph_e2e(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Android, true, 0)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::flac_android_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Android, true, 0)
+    case::flac_android_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Android, true, 0)
 )]
 async fn phase_continuity_file(
-    #[case] asset: SignalAsset,
+    #[case] asset: ServedSignal,
     #[case] backend: DecoderBackend,
     #[case] ephemeral: bool,
     #[case] seek_count: usize,
@@ -958,23 +966,16 @@ async fn phase_continuity_file(
 /// deterministic seek-to-0 warm-up repro below.
 async fn build_aac_sine_audio(
     backend: DecoderBackend,
+    url: Url,
 ) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(SignalAsset::AAC_SINE440_60S_320K);
-    let temp_dir = TestTempDir::new();
-    // Keep the temp dir alive for the lifetime of the returned Audio by
-    // leaking it: the source reads from `url` (an HTTP path) and only uses
-    // the store as an ephemeral cache, so the leaked guard is harmless in
-    // this short-lived test and avoids threading a guard through the caller.
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
         .build();
-    std::mem::forget(temp_dir);
     let file_config = FileConfig::for_src(url.into())
         .store(store)
         .pools(pools.clone())
@@ -1066,12 +1067,16 @@ fn first_signal_window_phase(
     any(target_os = "macos", target_os = "ios"),
     case::aac_apple(DecoderBackend::Apple)
 )]
-async fn seek_to_zero_decoder_warmup_is_deterministic(#[case] backend: DecoderBackend) {
+async fn seek_to_zero_decoder_warmup_is_deterministic(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] served_aac: ServedSignal,
+) {
     let delta = SinePhaseSpec::default_440().delta_rad_per_sample();
     let chan = CHANNELS as usize;
 
-    let mut cold = build_aac_sine_audio(backend).await;
-    let mut seeked = build_aac_sine_audio(backend).await;
+    let (_asset, _server, url) = served_aac;
+    let mut cold = build_aac_sine_audio(backend, url.clone()).await;
+    let mut seeked = build_aac_sine_audio(backend, url).await;
 
     let (cold_phase, seek_phase) = spawn_blocking(move || {
         // Ground truth: cold-start first signal window phase at frame 0.
@@ -1123,4 +1128,108 @@ async fn seek_to_zero_decoder_warmup_is_deterministic(#[case] backend: DecoderBa
          cold_phase={cold_phase:.4}rad seek_phase={seek_phase:.4}rad \
          jump={jump_samples:.4} samples (> {TOLERANCE_SAMPLES} tolerance)",
     );
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::fixture]
+fn local_m4a() -> (SignalAsset, TestTempDir, PathBuf) {
+    local_signal(SignalAsset::M4A_SINE440_60S_320K)
+}
+
+#[kithara::fixture]
+async fn served_aac() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S_320K).await
+}
+
+#[kithara::fixture]
+fn local_mp3_sine440_60_s_320_k() -> (SignalAsset, TestTempDir, PathBuf) {
+    local_signal(SignalAsset::MP3_SINE440_60S_320K)
+}
+
+#[kithara::fixture]
+async fn signal_aac_sine440_60_s_128_k() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S_128K).await
+}
+
+#[kithara::fixture]
+async fn signal_aac_sine440_60_s_192_k() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S_192K).await
+}
+
+#[kithara::fixture]
+async fn signal_aac_sine440_60_s_256_k() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S_256K).await
+}
+
+#[kithara::fixture]
+async fn signal_aac_sine440_60_s_320_k() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S_320K).await
+}
+
+#[kithara::fixture]
+async fn signal_m4_a_sine440_60_s_128_k() -> ServedSignal {
+    served_signal(SignalAsset::M4A_SINE440_60S_128K).await
+}
+
+#[kithara::fixture]
+async fn signal_m4_a_sine440_60_s_192_k() -> ServedSignal {
+    served_signal(SignalAsset::M4A_SINE440_60S_192K).await
+}
+
+#[kithara::fixture]
+async fn signal_m4_a_sine440_60_s_256_k() -> ServedSignal {
+    served_signal(SignalAsset::M4A_SINE440_60S_256K).await
+}
+
+#[kithara::fixture]
+async fn signal_m4_a_sine440_60_s_320_k() -> ServedSignal {
+    served_signal(SignalAsset::M4A_SINE440_60S_320K).await
+}
+
+#[kithara::fixture]
+async fn signal_mp3_sine440_60_s_128_k() -> ServedSignal {
+    served_signal(SignalAsset::MP3_SINE440_60S_128K).await
+}
+
+#[kithara::fixture]
+async fn signal_mp3_sine440_60_s_192_k() -> ServedSignal {
+    served_signal(SignalAsset::MP3_SINE440_60S_192K).await
+}
+
+#[kithara::fixture]
+async fn signal_mp3_sine440_60_s_256_k() -> ServedSignal {
+    served_signal(SignalAsset::MP3_SINE440_60S_256K).await
+}
+
+#[kithara::fixture]
+async fn signal_mp3_sine440_60_s_320_k() -> ServedSignal {
+    served_signal(SignalAsset::MP3_SINE440_60S_320K).await
+}
+
+#[kithara::fixture]
+async fn signal_mp3_sine440_60_s() -> ServedSignal {
+    served_signal(SignalAsset::MP3_SINE440_60S).await
+}
+
+#[kithara::fixture]
+async fn signal_wav_sine440_60_s() -> ServedSignal {
+    served_signal(SignalAsset::WAV_SINE440_60S).await
+}
+
+#[kithara::fixture]
+async fn signal_aac_sine440_60_s() -> ServedSignal {
+    served_signal(SignalAsset::AAC_SINE440_60S).await
+}
+
+#[kithara::fixture]
+async fn signal_m4_a_sine440_60_s() -> ServedSignal {
+    served_signal(SignalAsset::M4A_SINE440_60S).await
+}
+
+#[kithara::fixture]
+async fn signal_flac_sine440_60_s() -> ServedSignal {
+    served_signal(SignalAsset::FLAC_SINE440_60S).await
 }

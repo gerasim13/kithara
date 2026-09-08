@@ -41,13 +41,9 @@ use tracing::info;
 )]
 async fn test_abr_variant_switch_no_byte_glitches(
     temp_dir: TestTempDir,
+    #[future(awt)] slow_abr: AbrTestServer,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_secs(2),
-    )
-    .await;
+    let server = slow_abr;
 
     let url = server.url("/master.m3u8");
     info!("Test server started at: {}", url);
@@ -162,13 +158,9 @@ async fn test_abr_variant_switch_no_byte_glitches(
 )]
 async fn test_basic_multi_segment_reading(
     temp_dir: TestTempDir,
+    #[future(awt)] fast_abr: AbrTestServer,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(1),
-    )
-    .await;
+    let server = fast_abr;
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancelToken::never();
@@ -236,13 +228,9 @@ async fn test_basic_multi_segment_reading(
 )]
 async fn test_abr_variant_switch_with_seek_backward(
     temp_dir: TestTempDir,
+    #[future(awt)] backward_abr: AbrTestServer,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        true,
-        Duration::from_secs(2),
-    )
-    .await;
+    let server = backward_abr;
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancelToken::never();
@@ -313,4 +301,34 @@ async fn test_abr_variant_switch_with_seek_backward(
     println!("Test passed - seek backward after ABR variant switch works correctly");
 
     Ok(())
+}
+
+#[kithara::fixture]
+async fn slow_abr() -> AbrTestServer {
+    AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_secs(2),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn fast_abr() -> AbrTestServer {
+    AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_millis(1),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn backward_abr() -> AbrTestServer {
+    AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        true,
+        Duration::from_secs(2),
+    )
+    .await
 }

@@ -1,5 +1,5 @@
 use kithara::{decode::DecoderBackend, platform::time::Duration, stream::AudioCodec};
-use kithara_integration_tests::{TestServerHelper, fixture_protocol::PackagedSignal};
+use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
 
 use super::{
@@ -140,15 +140,9 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
 )]
 async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     #[case] backend: DecoderBackend,
+    #[future(awt)] sweep_source: (TestServerHelper, CreatedHls),
 ) {
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(fixture_with_signal(PackagedSignal::Sweep {
-            start_hz: SWEEP_START_HZ,
-            end_hz: SWEEP_END_HZ,
-        }))
-        .await
-        .expect("create nonperiodic quality-switch fixture");
+    let (_server, created) = sweep_source;
     let master_url = created.master_url();
 
     let controls = [
@@ -249,4 +243,17 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
         "decoder recreation changed sweep provenance for backend {backend:?}:\n{}",
         failures.join("\n"),
     );
+}
+
+#[kithara::fixture]
+async fn sweep_source() -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(fixture_with_signal(PackagedSignal::Sweep {
+            start_hz: SWEEP_START_HZ,
+            end_hz: SWEEP_END_HZ,
+        }))
+        .await
+        .expect("create nonperiodic quality-switch fixture");
+    (server, created)
 }

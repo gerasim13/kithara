@@ -2,6 +2,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_fixtures::analysis_beat_fixtures::archive_tone;
 use kithara_test_utils::kithara;
 
 use super::{AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate};
@@ -46,14 +47,11 @@ fn chunk_frames() -> NonZeroU64 {
     NonZeroU64::new(CHUNK_FRAMES).expect("fixture chunk is non-zero")
 }
 
-fn decoded(pools: &Pools, at: u64) -> AudioChunk {
-    let mut samples =
-        Vec::with_capacity(usize::try_from(CHUNK_FRAMES).unwrap_or(0) * usize::from(CHANNELS));
-    for frame in at..at + CHUNK_FRAMES {
-        let phase = std::f64::consts::TAU * frame as f64 / 17.0;
-        let sample = (phase.sin() * 0.5) as f32;
-        samples.extend([sample, sample]);
-    }
+fn decoded(pools: &Pools, at: u64, pcm: &[f32]) -> AudioChunk {
+    let start = usize::try_from(at).expect("fixture frame fits usize") * usize::from(CHANNELS);
+    let count =
+        usize::try_from(CHUNK_FRAMES).expect("fixture length fits usize") * usize::from(CHANNELS);
+    let samples = &pcm[start..start + count];
     AudioChunk::new(
         AudioChunkInfo {
             spec: AudioSpec {
@@ -64,7 +62,7 @@ fn decoded(pools: &Pools, at: u64) -> AudioChunk {
             frame_offset: at,
             ..Default::default()
         },
-        sample_buffer(pools, &samples),
+        sample_buffer(pools, samples),
     )
 }
 
@@ -73,9 +71,14 @@ fn fold(
     analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
     detector: &mut Detector,
     at: u64,
+    pcm: &[f32],
 ) {
     assert_eq!(
-        analyzers.push(&decoded(pools, at), &mut Extent::default(), Some(detector)),
+        analyzers.push(
+            &decoded(pools, at, pcm),
+            &mut Extent::default(),
+            Some(detector)
+        ),
         Ingest::Accepted,
         "a missing fixed chunk is folded once"
     );
@@ -120,7 +123,7 @@ fn finish(
 }
 
 #[kithara::test(native, flash(false))]
-fn archived_partial_resumes_without_decoding_completed_chunks() {
+fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<f32>) {
     let pools = pools();
     let seed = [0, 2 * CHUNK_FRAMES];
     let (builder, mut detector) = configured(pools.clone());
@@ -128,7 +131,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
         .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
     for at in seed {
-        fold(&pools, &mut partial, &mut detector, at);
+        fold(&pools, &mut partial, &mut detector, at, &archive_tone);
     }
     let progress = partial.progress(Some(&mut detector), false, chunk_frames(), Some(EXTENT));
     let partial_revision = progress.analysis().revision();
@@ -164,7 +167,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
         "completed fixed chunks are never requested again"
     );
     for at in &requested {
-        fold(&pools, &mut resumed, &mut detector, *at);
+        fold(&pools, &mut resumed, &mut detector, *at, &archive_tone);
     }
     let resumed = finish(&mut resumed, &mut detector);
 
@@ -173,7 +176,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
         .build(rate(), "resume-track".into(), 0)
         .expect("analysis buffers fit the test region");
     for at in seed.into_iter().chain(requested) {
-        fold(&pools, &mut uninterrupted, &mut detector, at);
+        fold(&pools, &mut uninterrupted, &mut detector, at, &archive_tone);
     }
     let uninterrupted = finish(&mut uninterrupted, &mut detector);
 

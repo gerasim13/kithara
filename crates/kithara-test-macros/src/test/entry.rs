@@ -55,7 +55,7 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
 
     let cases = extract_cases(&func.attrs)?;
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
-    let params = extract_params(&func);
+    let params = extract_params(&func)?;
 
     // Flash containment (default `true`). Under `flash(true)` lexically retarget
     // the BODY's direct time-primitive calls onto the unconditional

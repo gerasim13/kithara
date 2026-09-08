@@ -8,6 +8,7 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
 };
+use kithara_test_fixtures::integration_fixtures::constant_half;
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
@@ -18,7 +19,7 @@ const PAUSE_FRAMES: usize = SAMPLE_RATE as usize * 3 / 50;
 const SEGMENT_WINDOW_MS: f64 = 20.0;
 const SAMPLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
 
-async fn render_no_switch_control() -> Vec<f32> {
+async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
@@ -33,7 +34,7 @@ async fn render_no_switch_control() -> Vec<f32> {
     harness
         .with_player(move |player| {
             player.insert(
-                resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
+                resource_from_reader(TestPcmReader::from_pcm(spec, 3.0, constant_half)),
                 TrackId::allocate(),
                 None,
             );
@@ -108,8 +109,10 @@ fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize
 }
 
 #[kithara::test(tokio)]
-async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control() {
-    let control = render_no_switch_control().await;
+async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control(
+    constant_half: &'static [u8],
+) {
+    let control = render_no_switch_control(constant_half).await;
     let pause_end = SEAM_FRAME + PAUSE_FRAMES;
     let channels = usize::from(CHANNELS);
 

@@ -4,7 +4,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
-    TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
+    TestTempDir,
+    hls_fixture::HlsStreamBuilder,
+    hls_server::{TestServer, test_server},
+    rt_cancel, temp_dir,
 };
 use tracing::info;
 
@@ -37,11 +40,12 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 #[case(1)]
 #[case(2)]
 async fn manual_variant_returns_correct_data(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
     #[case] variant: usize,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(variant)
         .build(&server, temp_dir.path(), rt_cancel)
@@ -74,10 +78,11 @@ async fn manual_variant_returns_correct_data(
 /// come from the same variant (no unexpected switches).
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn sequential_read_across_segments_maintains_variant(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
         .build(&server, temp_dir.path(), rt_cancel)
@@ -134,10 +139,11 @@ async fn sequential_read_across_segments_maintains_variant(
 /// continue from that variant.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn after_seek_sequential_reads_maintain_variant(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(2)
         .build(&server, temp_dir.path(), rt_cancel)
@@ -177,8 +183,12 @@ async fn after_seek_sequential_reads_maintain_variant(
 /// Rapidly seeking back and forth should maintain correct variant tracking.
 /// Note: We first read all data to ensure segments are fetched, then seek.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
-async fn multiple_seeks_maintain_correct_variant(temp_dir: TestTempDir, rt_cancel: CancelToken) {
-    let server = TestServer::new().await;
+async fn multiple_seeks_maintain_correct_variant(
+    #[future(awt)] test_server: TestServer,
+    temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+) {
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
         .await;
@@ -253,11 +263,12 @@ async fn multiple_seeks_maintain_correct_variant(temp_dir: TestTempDir, rt_cance
 #[case(200_000)]
 #[cfg_attr(not(target_arch = "wasm32"), case(400_000))]
 async fn seek_to_segment_boundary_reads_correct_segment(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
     #[case] position: u64,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
         .build(&server, temp_dir.path(), rt_cancel)

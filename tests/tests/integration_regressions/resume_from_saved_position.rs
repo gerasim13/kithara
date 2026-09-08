@@ -19,11 +19,11 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
     offline::{OfflineQueue, QueueTicker},
-    temp_dir,
+    served_short_mp3, temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
-use kithara_test_fixtures::SignalAsset;
+use url::Url;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 
@@ -74,9 +74,11 @@ fn append_track(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(90)))]
-async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(SignalAsset::MP3_SINE880_30S);
+async fn playback_starts_from_the_seeked_position(
+    #[future(awt)] served_short_mp3: (TestServerHelper, Url),
+    temp_dir: TestTempDir,
+) {
+    let (_helper, url) = served_short_mp3;
 
     let first_pools = pools();
     let first_store = AssetStore::builder(first_pools.clone())

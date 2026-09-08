@@ -1,4 +1,5 @@
 use kithara_integration_tests::packed_audio::{PackedSegment, TIMESTAMP_BITS};
+use kithara_test_fixtures::integration_fixtures::origin_tone;
 
 use super::origin::{Origin, Playlist, SAMPLE_RATE, WINDOW};
 
@@ -10,8 +11,8 @@ const SAMPLES_PER_AU: f64 = 1_024.0;
 const TIMESTAMP_SLACK: u64 = 1;
 
 #[kithara::test(tokio)]
-async fn the_live_playlist_obeys_the_reload_rules() {
-    let origin = Origin::start();
+async fn the_live_playlist_obeys_the_reload_rules(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
     let listed = u64::try_from(WINDOW).expect("the window fits");
 
     let mut polls = Vec::with_capacity(POLLS);
@@ -74,8 +75,8 @@ async fn the_live_playlist_obeys_the_reload_rules() {
 }
 
 #[kithara::test(tokio)]
-async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise() {
-    let origin = Origin::start();
+async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
     let listed = u64::try_from(WINDOW).expect("the window fits");
     origin.advance_to(2).await;
     let before = Playlist::parse(origin.media_playlist().await);
@@ -116,8 +117,8 @@ async fn an_intake_gap_is_signalled_for_a_client_to_resynchronise() {
 }
 
 #[kithara::test(tokio)]
-async fn every_segment_is_a_packed_audio_segment() {
-    let origin = Origin::start();
+async fn every_segment_is_a_packed_audio_segment(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
     origin
         .advance_to(u64::try_from(WINDOW).expect("fits"))
         .await;
@@ -181,8 +182,8 @@ async fn every_segment_is_a_packed_audio_segment() {
 }
 
 #[kithara::test(tokio)]
-async fn a_stopped_playlist_is_frozen() {
-    let origin = Origin::start();
+async fn a_stopped_playlist_is_frozen(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
     origin.handle.stop();
 
@@ -194,8 +195,8 @@ async fn a_stopped_playlist_is_frozen() {
 }
 
 #[kithara::test(tokio)]
-async fn the_master_playlist_declares_the_stream() {
-    let origin = Origin::start();
+async fn the_master_playlist_declares_the_stream(origin_tone: Vec<f32>) {
+    let origin = Origin::start(origin_tone);
 
     let master = origin.get("master.m3u8").await.expect("a master playlist");
     let master = String::from_utf8(master.to_vec()).expect("the master playlist is text");

@@ -12,6 +12,9 @@ use kithara::{
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
+use kithara_test_fixtures::integration_fixtures::{
+    allocation_planar, allocation_ramp, allocation_sequence,
+};
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -42,23 +45,22 @@ fn warp_renderer(
     Warp::new((), &config).renderer(spec, pools)
 }
 
-fn make_chunk(pools: &Pools, frames: usize, channels: u16) -> AudioChunk {
-    make_chunk_at(pools, frames, channels, 44100)
+fn make_chunk(pools: &Pools, frames: usize, channels: u16, input: &[f32]) -> AudioChunk {
+    make_chunk_at(pools, frames, channels, 44100, input)
 }
 
-fn make_chunk_at(pools: &Pools, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
+fn make_chunk_at(
+    pools: &Pools,
+    frames: usize,
+    channels: u16,
+    sample_rate: u32,
+    input: &[f32],
+) -> AudioChunk {
     let samples = frames * channels as usize;
     let mut pcm = pools
         .get_with_len::<f32>(samples)
         .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
-    for (i, s) in pcm.iter_mut().enumerate() {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "test data, precision irrelevant"
-        )]
-        let val = (i as f32) * 0.001;
-        *s = val;
-    }
+    pcm.copy_from_slice(&input[..samples]);
     let meta = AudioChunkInfo {
         spec: AudioSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
         ..Default::default()
@@ -84,10 +86,10 @@ fn test_pool_get_put_allocation_free() {
 }
 
 #[kithara::test]
-fn test_pcm_chunk_access_allocation_free() {
+fn test_pcm_chunk_access_allocation_free(allocation_ramp: Vec<f32>) {
     let pools = eager_pools(16, 4_096);
 
-    let chunk = permit_alloc(|| make_chunk(&pools, 1024, 2));
+    let chunk = permit_alloc(|| make_chunk(&pools, 1024, 2, &allocation_ramp));
 
     assert_no_alloc(|| {
         let _samples: &[f32] = &chunk.samples;
@@ -131,17 +133,10 @@ fn stereo_block(pools: &Pools, frames: usize) -> [SampleBuffer; 2] {
     })
 }
 
-fn planar_block(pools: &Pools, frames: usize) -> [SampleBuffer; 2] {
+fn planar_block(pools: &Pools, frames: usize, input: &[f32]) -> [SampleBuffer; 2] {
     let [mut left, mut right] = stereo_block(pools, frames);
-    for frame in 0..frames {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "test data, precision irrelevant"
-        )]
-        let phase = frame as f32 * 0.001;
-        left[frame] = phase.sin();
-        right[frame] = phase.cos();
-    }
+    left.copy_from_slice(&input[..frames]);
+    right.copy_from_slice(&input[4_096..4_096 + frames]);
     [left, right]
 }
 
@@ -164,6 +159,7 @@ fn process_planar(
 #[case::active_steady_state(48_000, 16, 64, 16_384)]
 #[case::passthrough(44_100, 1, 32, 8_192)]
 fn resampler_process_is_allocation_free(
+    allocation_planar: Vec<f32>,
     #[case] source_rate: u32,
     #[case] warmup_chunks: usize,
     #[case] initial_buffers: usize,
@@ -174,11 +170,11 @@ fn resampler_process_is_allocation_free(
     let (mut resampler, input, mut output) = permit_alloc(|| {
         let mut resampler = build_resampler(&pools, source_rate, 44_100);
         for _ in 0..warmup_chunks {
-            let warm = planar_block(&pools, 4_096);
+            let warm = planar_block(&pools, 4_096, &allocation_planar);
             let mut warm_output = stereo_block(&pools, resampler.output_frames_next());
             let _ = process_planar(&mut resampler, &warm, &mut warm_output);
         }
-        let input = planar_block(&pools, 4_096);
+        let input = planar_block(&pools, 4_096, &allocation_planar);
         let output = stereo_block(&pools, resampler.output_frames_next());
         (resampler, input, output)
     });
@@ -190,22 +186,18 @@ fn resampler_process_is_allocation_free(
 }
 
 #[kithara::test]
-fn resampler_presize_keeps_output_bit_exact() {
+fn resampler_presize_keeps_output_bit_exact(
+    allocation_planar: Vec<f32>,
+    allocation_sequence: Vec<f32>,
+) {
     let pools = eager_pools(64, 16_384);
 
     let render = || -> Vec<f32> {
         let mut resampler = build_resampler(&pools, 48_000, 44_100);
         let mut out = Vec::new();
         for n in 0..12 {
-            let mut input = planar_block(&pools, 4_096);
-            for (i, s) in input[0].iter_mut().enumerate() {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "test waveform, precision irrelevant"
-                )]
-                let v = ((n * 4096 + i) as f32 * 0.0007).sin();
-                *s = v;
-            }
+            let mut input = planar_block(&pools, 4_096, &allocation_planar);
+            input[0].copy_from_slice(&allocation_sequence[n * 4096..(n + 1) * 4096]);
             let mut output = stereo_block(&pools, resampler.output_frames_next());
             let frames = process_planar(&mut resampler, &input, &mut output);
             out.extend_from_slice(&output[0][..frames]);
@@ -226,7 +218,10 @@ fn resampler_presize_keeps_output_bit_exact() {
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
-fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
+fn timestretch_active_process_and_terminal_flush_are_allocation_free(
+    allocation_ramp: Vec<f32>,
+    #[case] kind: StretchKind,
+) {
     const FRAMES: usize = 8_192;
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -236,8 +231,8 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
         controls.set_backend(kind);
         let mut effect = warp_renderer(controls, spec, pools.clone());
         effect.prepare(spec);
-        let first = make_chunk(&pools, FRAMES, 2);
-        let second = make_chunk(&pools, FRAMES, 2);
+        let first = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
+        let second = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
         (effect, first, second)
     });
 
@@ -274,7 +269,10 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
-fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
+fn timestretch_pending_and_maximum_output_are_allocation_free(
+    allocation_ramp: Vec<f32>,
+    #[case] kind: StretchKind,
+) {
     const FRAMES: usize = 8_192;
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -284,7 +282,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         controls.set_backend(kind);
         let mut maximum = warp_renderer(controls, spec, pools.clone());
         maximum.prepare(spec);
-        let input = make_chunk(&pools, FRAMES, 2);
+        let input = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
         (maximum, input)
     });
     let maximum_output = assert_no_alloc(|| {
@@ -304,7 +302,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         controls.set_backend(kind);
         let mut pending = warp_renderer(controls, spec, pools.clone());
         pending.prepare(spec);
-        let input = make_chunk(&pools, 1, 2);
+        let input = make_chunk(&pools, 1, 2, &allocation_ramp);
         (pending, input)
     });
     assert_no_alloc(|| {

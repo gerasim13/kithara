@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     waits::wait_until,
 };
-use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
+use kithara_test_fixtures::signal::goertzel_magnitude;
 use url::Url;
 
 pub(super) const CHANNELS: u16 = 2;
@@ -209,7 +209,7 @@ impl Origin {
         self.scope.cancel();
     }
 
-    pub(super) fn start() -> Self {
+    pub(super) fn start(samples: Vec<f32>) -> Self {
         let scope = CancelScope::new(None);
         let worker = Worker::new(WorkerConfig::new());
         let pools = pools();
@@ -231,6 +231,7 @@ impl Origin {
             output: Mutex::new(SignalOutput {
                 output,
                 produced: 0,
+                samples,
             }),
             _worker: worker,
             scope,
@@ -249,6 +250,7 @@ impl Drop for Origin {
 struct SignalOutput {
     output: BroadcastOutput,
     produced: u64,
+    samples: Vec<f32>,
 }
 
 impl SignalOutput {
@@ -259,19 +261,15 @@ impl SignalOutput {
     }
 
     fn write_until(&mut self, target: u64) {
-        let tone = Wave::sine(TONE_HZ);
         while self.produced < target {
             let remaining = target - self.produced;
             let chunk_frames = u64::try_from(CHUNK_FRAMES).expect("test chunk fits u64");
             let frames = usize::try_from(remaining.min(chunk_frames))
                 .expect("test chunk fits one address space");
             let frames_u64 = u64::try_from(frames).expect("test chunk fits u64");
-            let mut left = Vec::with_capacity(frames);
-            for frame in self.produced..self.produced + frames_u64 {
-                let frame = usize::try_from(frame).expect("test signal fits one address space");
-                left.push(f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0);
-            }
-            self.output.write_stereo(frames, &left, &left);
+            let start = usize::try_from(self.produced).expect("test position fits usize");
+            let left = &self.samples[start..start + frames];
+            self.output.write_stereo(frames, left, left);
             self.produced += frames_u64;
         }
     }

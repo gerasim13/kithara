@@ -43,14 +43,15 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    SegmentGateHandle, TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::{
+    hls_fixtures::{hls_pcm_boundary, hls_stream_header},
+    signal,
+};
 use tracing::info;
-
-use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -73,20 +74,13 @@ fn segment_first_frame(segment: usize) -> u64 {
     (segment * SEGMENT_SIZE / bytes_per_frame()) as u64
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(30)),
-    tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
-)]
-async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() {
-    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(Vec::from(Pcm::new(
-        SAMPLE_RATE,
-        CHANNELS,
-        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        Wave::Sawtooth,
-    )));
+#[kithara::fixture]
+async fn gated_audio(
+    hls_stream_header: Vec<u8>,
+    hls_pcm_boundary: Vec<u8>,
+) -> (HlsTestServer, SegmentGateHandle) {
+    let init_segment = Arc::new(hls_stream_header);
+    let pcm = Arc::new(hls_pcm_boundary);
 
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
@@ -104,7 +98,19 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
     // Withhold the BODY of segment GATED_SEGMENT; its HEAD (size) stays
     // unblocked so up-front size estimation still learns the layout.
-    let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
+    HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(30)),
+    tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+)]
+async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
+    #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
+) {
+    let (server, gate) = gated_audio;
 
     let url = server.url("/master.m3u8");
     info!(%url, gated_segment = GATED_SEGMENT, "WAV-over-HLS fixture with one withheld segment body");

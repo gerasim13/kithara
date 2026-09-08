@@ -15,7 +15,11 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
-use kithara_test_fixtures::signal::{SweepMode, Wave};
+use kithara_test_fixtures::integration_fixtures::{
+    dsp_silence, dsp_sweep, dsp_tone_a220, dsp_tone_a440, dsp_tone_ceiling, dsp_tone_ceiling_low,
+    dsp_tone_ceiling_unity, dsp_tone_round_low, dsp_tone_round_mid, dsp_tone_round_poison,
+    dsp_tone_unity,
+};
 
 const HOST_RATE: u16 = 48_000;
 const INTERMEDIATE_RATE: u16 = 44_100;
@@ -33,7 +37,6 @@ const SETTLE_FRAMES: usize = 9_600;
 
 const RESAMPLE_CHUNK: usize = 1_024;
 const ROUND_TRIP_FRAMES: usize = 12_288;
-const ROUND_TRIP_PAD: usize = 2_048;
 const ROUND_TRIP_EDGE: usize = 512;
 const LAG_TOLERANCE: usize = 1;
 const LAG_SEARCH: usize = 8;
@@ -62,12 +65,6 @@ fn pcm_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
     AudioChunk::new(meta, pooled)
 }
 
-fn render(wave: Wave, sample_rate: u16, frames: usize) -> Vec<f32> {
-    (0..frames)
-        .map(|frame| f32::from(wave.sample(frame, u32::from(sample_rate))) / 32_768.0)
-        .collect()
-}
-
 fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize, channels: u16) -> EqEffect {
     let bands = generate_log_spaced_bands(band_count);
     let config = EqConfig::builder(pools.clone()).build();
@@ -79,8 +76,8 @@ fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize, channels: u16
     eq
 }
 
-fn settle(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec) {
-    let samples = vec![0.0f32; SETTLE_FRAMES * usize::from(spec.channels)];
+fn settle(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, silence: &[f32]) {
+    let samples = silence[..SETTLE_FRAMES * usize::from(spec.channels)].to_vec();
     let _ = eq.process(pcm_chunk(pools, spec, samples));
 }
 
@@ -138,12 +135,12 @@ fn non_finite_report(label: &str, samples: &[f32]) -> Vec<String> {
 #[case::flat(GainDb::DEFAULT)]
 #[case::boosted(GainDb::MAX)]
 #[case::killed(GainDb::MIN)]
-fn eq_maps_silence_to_exact_silence(#[case] gain_db: GainDb) {
+fn eq_maps_silence_to_exact_silence(dsp_silence: Vec<f32>, #[case] gain_db: GainDb) {
     let pools = test_pools();
     let spec = host_spec(2);
     let mut eq = eq_with_gain(&pools, gain_db, 5, spec.channels);
 
-    let output = process_eq(&mut eq, &pools, spec, vec![0.0f32; 4_096]);
+    let output = process_eq(&mut eq, &pools, spec, dsp_silence[..4_096].to_vec());
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(
@@ -154,10 +151,10 @@ fn eq_maps_silence_to_exact_silence(#[case] gain_db: GainDb) {
 }
 
 #[kithara::test]
-fn limiter_maps_silence_to_exact_silence() {
+fn limiter_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let output = limit_stereo(&mut limiter, &[0.0f32; 4_096]);
+    let output = limit_stereo(&mut limiter, &dsp_silence[..4_096]);
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(*sample, 0.0, "sample {index} = {sample}");
@@ -165,12 +162,12 @@ fn limiter_maps_silence_to_exact_silence() {
 }
 
 #[kithara::test]
-fn master_chain_maps_silence_to_exact_silence() {
+fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let pools = test_pools();
     let mut eq = eq_with_gain(&pools, GainDb::MAX, 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let output = master_chain(&mut eq, &mut limiter, &pools, vec![0.0f32; 4_096]);
+    let output = master_chain(&mut eq, &mut limiter, &pools, dsp_silence[..4_096].to_vec());
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(*sample, 0.0, "sample {index} = {sample}");
@@ -181,11 +178,15 @@ fn master_chain_maps_silence_to_exact_silence() {
 #[case::mono_three_band(1, 3)]
 #[case::stereo_five_band(2, 5)]
 #[case::stereo_ten_band(2, 10)]
-fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count: usize) {
+fn eq_at_zero_db_is_bit_exact_identity(
+    dsp_tone_a440: Vec<f32>,
+    #[case] channels: u16,
+    #[case] band_count: usize,
+) {
     let pools = test_pools();
     let spec = host_spec(channels);
     let mut eq = eq_with_gain(&pools, GainDb::default(), band_count, channels);
-    let input = render(Wave::sine(440.0), HOST_RATE, 8_192 * usize::from(channels));
+    let input = dsp_tone_a440[..8_192 * usize::from(channels)].to_vec();
 
     let output = process_eq(&mut eq, &pools, spec, input.clone());
 
@@ -196,18 +197,21 @@ fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count
 }
 
 #[kithara::test]
-fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
+fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip(
+    dsp_tone_a440: Vec<f32>,
+    dsp_silence: Vec<f32>,
+) {
     let pools = test_pools();
     let spec = host_spec(2);
     let mut eq = eq_with_gain(&pools, GainDb::default(), 3, spec.channels);
 
     eq.set_gain(0, GainDb::MAX);
-    settle(&mut eq, &pools, spec);
+    settle(&mut eq, &pools, spec, &dsp_silence);
     eq.set_gain(0, GainDb::default());
-    settle(&mut eq, &pools, spec);
-    settle(&mut eq, &pools, spec);
+    settle(&mut eq, &pools, spec, &dsp_silence);
+    settle(&mut eq, &pools, spec, &dsp_silence);
 
-    let input = render(Wave::sine(440.0), HOST_RATE, 8_192);
+    let input = dsp_tone_a440[..8_192].to_vec();
     let output = process_eq(&mut eq, &pools, spec, input.clone());
 
     assert_eq!(
@@ -217,14 +221,11 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
 }
 
 #[kithara::test]
-#[case::default_ceiling(LIMITER_CEILING)]
-#[case::unity_ceiling(1.0)]
-#[case::low_ceiling(0.5)]
-fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32) {
+#[case::default_ceiling(LIMITER_CEILING, dsp_tone_ceiling())]
+#[case::unity_ceiling(1.0, dsp_tone_ceiling_unity())]
+#[case::low_ceiling(0.5, dsp_tone_ceiling_low())]
+fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32, #[case] input: Vec<f32>) {
     let mut limiter = limiter_with_ceiling(ceiling);
-
-    let sine = render(Wave::sine(220.0), HOST_RATE, 8_192);
-    let input: Vec<f32> = sine.iter().map(|sample| sample * ceiling * 0.9).collect();
 
     let mut output = Vec::new();
     for block in input.chunks(1_024) {
@@ -238,13 +239,12 @@ fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32) {
 }
 
 #[kithara::test]
-fn master_chain_at_unity_is_bit_exact_identity() {
+fn master_chain_at_unity_is_bit_exact_identity(dsp_tone_unity: Vec<f32>) {
     let pools = test_pools();
     let mut eq = eq_with_gain(&pools, GainDb::default(), 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let sine = render(Wave::sine(440.0), HOST_RATE, 8_192);
-    let input: Vec<f32> = sine.iter().map(|sample| sample * 0.5).collect();
+    let input = dsp_tone_unity;
 
     let output = master_chain(&mut eq, &mut limiter, &pools, input.clone());
 
@@ -261,21 +261,25 @@ fn master_chain_at_unity_is_bit_exact_identity() {
 #[case::nan(f32::NAN)]
 #[case::infinity(f32::INFINITY)]
 #[case::neg_infinity(f32::NEG_INFINITY)]
-fn eq_output_stays_finite_on_pathological_input(#[case] poison: f32) {
+fn eq_output_stays_finite_on_pathological_input(
+    dsp_tone_a440: Vec<f32>,
+    dsp_silence: Vec<f32>,
+    #[case] poison: f32,
+) {
     let pools = test_pools();
     let spec = host_spec(1);
     let mut violations = Vec::new();
 
     for (path, gain_db) in EQ_GAIN_PATHS {
         let mut eq = eq_with_gain(&pools, gain_db, 3, spec.channels);
-        settle(&mut eq, &pools, spec);
+        settle(&mut eq, &pools, spec, &dsp_silence);
 
-        let mut input = render(Wave::sine(440.0), HOST_RATE, 1_024);
+        let mut input = dsp_tone_a440[..1_024].to_vec();
         input[512] = poison;
         let output = process_eq(&mut eq, &pools, spec, input);
         violations.extend(non_finite_report(path, &output));
 
-        let clean = render(Wave::sine(440.0), HOST_RATE, 1_024);
+        let clean = dsp_tone_a440[..1_024].to_vec();
         let recovered = process_eq(&mut eq, &pools, spec, clean);
         violations.extend(non_finite_report(&format!("{path}/recovered"), &recovered));
     }
@@ -292,14 +296,14 @@ fn eq_output_stays_finite_on_pathological_input(#[case] poison: f32) {
 #[case::nan(f32::NAN)]
 #[case::infinity(f32::INFINITY)]
 #[case::neg_infinity(f32::NEG_INFINITY)]
-fn limiter_output_stays_finite_on_pathological_input(#[case] poison: f32) {
+fn limiter_output_stays_finite_on_pathological_input(dsp_tone_a220: Vec<f32>, #[case] poison: f32) {
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let mut input = render(Wave::sine(220.0), HOST_RATE, 1_024);
+    let mut input = dsp_tone_a220[..1_024].to_vec();
     input[512] = poison;
     let output = limit_stereo(&mut limiter, &input);
 
-    let clean = render(Wave::sine(220.0), HOST_RATE, 1_024);
+    let clean = dsp_tone_a220[..1_024].to_vec();
     let recovered = limit_stereo(&mut limiter, &clean);
 
     let mut violations = non_finite_report("limited", &output);
@@ -392,12 +396,10 @@ fn shape_tolerance(freq_hz: f32) -> f32 {
 }
 
 #[kithara::test]
-#[case::low(200.0)]
-#[case::mid(1_000.0)]
-fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32) {
+#[case::low(200.0, dsp_tone_round_low())]
+#[case::mid(1_000.0, dsp_tone_round_mid())]
+fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32, #[case] input: Vec<f32>) {
     let pools = test_pools();
-    let mut input = render(Wave::sine(f64::from(freq_hz)), HOST_RATE, ROUND_TRIP_FRAMES);
-    input.resize(ROUND_TRIP_FRAMES + ROUND_TRIP_PAD, 0.0);
 
     let (output, predicted) = round_trip(&pools, &input);
 
@@ -429,12 +431,11 @@ fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32) {
 }
 
 #[kithara::test]
-fn resample_round_trip_keeps_sweep_band_energy() {
+fn resample_round_trip_keeps_sweep_band_energy(dsp_sweep: Vec<f32>) {
     const TOLERANCE: f32 = 0.03;
 
     let pools = test_pools();
-    let sweep = Wave::sweep(100.0, 15_000.0, ROUND_TRIP_FRAMES, SweepMode::Log);
-    let input = render(sweep, HOST_RATE, ROUND_TRIP_FRAMES + ROUND_TRIP_PAD);
+    let input = dsp_sweep;
 
     let (output, predicted) = round_trip(&pools, &input);
 
@@ -461,14 +462,15 @@ fn resample_round_trip_keeps_sweep_band_energy() {
 #[kithara::test]
 #[case::tiny(1e-30)]
 #[case::huge(1e30)]
-fn resample_round_trip_stays_finite_on_pathological_input(#[case] poison: f32) {
-    assert_round_trip_stays_finite(poison);
+fn resample_round_trip_stays_finite_on_pathological_input(
+    dsp_tone_round_poison: Vec<f32>,
+    #[case] poison: f32,
+) {
+    assert_round_trip_stays_finite(poison, dsp_tone_round_poison);
 }
 
-fn assert_round_trip_stays_finite(poison: f32) {
+fn assert_round_trip_stays_finite(poison: f32, mut input: Vec<f32>) {
     let pools = test_pools();
-    let mut input = render(Wave::sine(440.0), HOST_RATE, ROUND_TRIP_FRAMES);
-    input.resize(ROUND_TRIP_FRAMES + ROUND_TRIP_PAD, 0.0);
     input[4_096] = poison;
 
     let (output, _) = round_trip(&pools, &input);

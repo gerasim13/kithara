@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     bufpool_ext::{Pools, pools},
 };
+use kithara_test_fixtures::integration_fixtures::benchmark_half;
 use ringbuf::traits::Producer;
 
 struct Consts;
@@ -97,7 +98,7 @@ fn load_tracks(
 
     for (item_id, src) in &tracks {
         let resource = Resource::from_reader(
-            TestPcmReader::new(spec(), Consts::TRACK_SECONDS),
+            TestPcmReader::from_pcm(spec(), Consts::TRACK_SECONDS, benchmark_half()),
             Some(Arc::clone(src)),
         );
         send(

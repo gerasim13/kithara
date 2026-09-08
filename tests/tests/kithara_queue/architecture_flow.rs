@@ -16,12 +16,12 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
+    served_mp3, temp_dir,
     waits::wait_for_loader_done_event,
 };
-use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
+use url::Url;
 
 use crate::bufpool_ext::TestPools;
 
@@ -32,11 +32,10 @@ const RENDER_BLOCK_BUDGET: usize = 512;
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[ignore = "run through just arch viz --scenario queue-playback"]
 #[serial]
-async fn queue_playback_architecture() {
+async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelper, Url)) {
     let trace_path = env::var_os("ARCHITECTURE_TRACE_PATH").expect("architecture trace path");
     let probes = probe_capture::install();
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
+    let (_helper, url) = served_mp3;
     let temp = temp_dir();
     let store = disk_asset_store(temp.path());
     let harness = OfflinePlayerHarness::with_sample_rate(

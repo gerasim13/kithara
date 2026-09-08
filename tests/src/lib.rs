@@ -35,8 +35,6 @@ pub mod decode_mock;
 pub mod e2e;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]

@@ -34,6 +34,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false, features = ["test-utils"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 

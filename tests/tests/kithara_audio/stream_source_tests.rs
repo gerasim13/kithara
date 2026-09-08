@@ -20,11 +20,12 @@ use kithara_integration_tests::{
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     reads::{blocking_audio, read_to_eof, read_until_samples},
 };
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::integration_fixtures::{
+    audio_wav_8000, audio_wav_44100, audio_wav_132300, audio_wav_176400, audio_wav_264600,
+};
 
-fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
-    let wav = signal::wav(44_100, 2, samples, signal::TONE);
-    let source = MemorySource::new(wav);
+fn wav_stream(wav: &[u8]) -> AudioConfig<MemStream> {
+    let source = MemorySource::new(wav.to_vec());
     let stream = MemStreamConfig {
         source: Some(source),
         event_bus: None,
@@ -67,10 +68,10 @@ async fn pump_once(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn basic_decode_to_eof() {
+async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let config = wav_stream(8_000);
+    let config = wav_stream(audio_wav_8000);
     let audio = worker.open(config).await.expect("audio construction");
 
     let (_audio, frames) = blocking_audio(audio, read_to_eof).await;
@@ -92,7 +93,10 @@ async fn basic_decode_to_eof() {
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
-async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: StretchKind) {
+async fn non_unity_route_change_resumes_ahead_of_the_consumer(
+    audio_wav_264600: &'static [u8],
+    #[case] backend: StretchKind,
+) {
     const PRELOAD_CHUNKS: usize = 32;
     const RING_CHUNKS: usize = 48;
     const SOURCE_RATE: u32 = 44_100;
@@ -100,8 +104,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
 
     let source_rate = NonZeroU32::new(SOURCE_RATE).expect("source rate is non-zero");
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("target rate is non-zero");
-    let source_frames = usize::try_from(SOURCE_RATE).expect("source rate fits usize") * 6;
-    let wav = signal::wav(SOURCE_RATE, 2, source_frames, signal::TONE);
+    let wav = audio_wav_264600.to_vec();
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(wav)),
         event_bus: None,
@@ -208,10 +211,10 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     timeout(Duration::from_secs(10)),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-async fn seek_during_active_decode_completes_without_hang() {
+async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let config = wav_stream(44_100 * 3);
+    let config = wav_stream(audio_wav_132300);
     let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
@@ -273,12 +276,12 @@ async fn seek_during_active_decode_completes_without_hang() {
     timeout(Duration::from_secs(15)),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-async fn rapid_seeks_via_timeline_all_complete() {
+async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) {
     const SEEK_COUNT: usize = 6;
 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let config = wav_stream(44_100 * 4);
+    let config = wav_stream(audio_wav_176400);
     let mut audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
@@ -414,10 +417,10 @@ async fn rapid_seeks_via_timeline_all_complete() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn truncated_wav_surfaces_decode_error_or_eof() {
+async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let mut wav = signal::wav(44_100, 2, 44_100, signal::TONE);
+    let mut wav = audio_wav_44100.to_vec();
     wav.truncate(wav.len() / 4);
     let source = MemorySource::new(wav);
     let config = AudioConfig::<MemStream>::for_stream(MemStreamConfig {

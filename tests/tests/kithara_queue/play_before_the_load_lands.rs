@@ -12,10 +12,10 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, kithara,
     offline::{OfflineQueue, QueueTicker},
-    temp_dir,
+    served_mp3, temp_dir,
     waits::wait_for_position_event,
 };
-use kithara_test_fixtures::SignalAsset;
+use url::Url;
 
 use crate::bufpool_ext::pools;
 
@@ -34,9 +34,10 @@ use crate::bufpool_ext::pools;
 /// the very first `start_stream` blocks `play()` long enough for the load
 /// to win the race.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-async fn play_issued_before_the_load_lands_still_starts_the_track() {
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
+async fn play_issued_before_the_load_lands_still_starts_the_track(
+    #[future(awt)] served_mp3: (TestServerHelper, Url),
+) {
+    let (_helper, url) = served_mp3;
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());

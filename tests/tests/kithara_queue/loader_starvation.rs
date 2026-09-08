@@ -161,12 +161,10 @@ async fn wait_until_loading(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-async fn hung_loads_must_not_starve_user_selected_track() {
-    let helper = TestServerHelper::new().await;
-    let hung_urls: Vec<Url> = (0..Consts::HUNG_TRACKS)
-        .map(|_| register_hung(&helper))
-        .collect();
-    let fast_url = build_fast_hls(&helper).await;
+async fn hung_loads_must_not_starve_user_selected_track(
+    #[future(awt)] lane_sources: (TestServerHelper, Vec<Url>, Url),
+) {
+    let (_server, hung_urls, fast_url) = lane_sources;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) =
@@ -243,4 +241,15 @@ async fn hung_loads_must_not_starve_user_selected_track() {
         )
     });
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn lane_sources() -> (TestServerHelper, Vec<Url>, Url) {
+    let helper = TestServerHelper::new().await;
+    let hung_urls: Vec<Url> = (0..Consts::HUNG_TRACKS)
+        .map(|_| register_hung(&helper))
+        .collect();
+    let fast_url = build_fast_hls(&helper).await;
+
+    (helper, hung_urls, fast_url)
 }

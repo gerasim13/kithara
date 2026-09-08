@@ -9,7 +9,8 @@ use kithara::{
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::{
     fmp4::{GaplessEncoding, mux_audio_track},
-    signal::{Wave, goertzel_magnitude},
+    integration_fixtures::stream_sine,
+    signal::goertzel_magnitude,
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -19,18 +20,6 @@ const FRAMES: usize = 48_000;
 const PUSH_FRAMES: usize = 1_500;
 const BIT_RATE: u64 = 128_000;
 const PRIMING_SKIP_FRAMES: usize = 4_800;
-
-fn sine(frames: usize) -> Vec<f32> {
-    let tone = Wave::sine(TONE_HZ);
-    let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
-    for frame in 0..frames {
-        let value = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;
-        for _ in 0..CHANNELS {
-            samples.push(value);
-        }
-    }
-    samples
-}
 
 fn encode_stream(samples: &[f32]) -> EncodedTrack {
     let mut encoder = StreamEncoder::builder()
@@ -87,8 +76,8 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
 }
 
 #[kithara::test]
-fn pushed_f32_sine_survives_encode_mux_and_decode() {
-    let track = encode_stream(&sine(FRAMES));
+fn pushed_f32_sine_survives_encode_mux_and_decode(stream_sine: Vec<f32>) {
+    let track = encode_stream(&stream_sine);
     assert!(
         track.access_units.len() >= FRAMES / StreamEncoder::FRAME_SAMPLES,
         "streamed track is short: {} access units",

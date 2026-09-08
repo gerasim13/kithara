@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -20,31 +18,6 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::signal;
 use tracing::{info, warn};
 use url::Url;
-
-mod test_statics {
-    use super::*;
-    pub(super) static FIXTURE_URL: OnceLock<String> = OnceLock::new();
-    pub(super) static FIXTURE_JITTER_URL: OnceLock<String> = OnceLock::new();
-}
-
-/// Whether the fixtures this module reads are already published.
-fn fixtures_ready() -> bool {
-    test_statics::FIXTURE_URL.get().is_some() && test_statics::FIXTURE_JITTER_URL.get().is_some()
-}
-
-fn fixture_url() -> Url {
-    let url_str = test_statics::FIXTURE_URL
-        .get()
-        .expect("fixture URL must be initialized in init()");
-    url_str.parse().unwrap()
-}
-
-fn fixture_jitter_url() -> Url {
-    let url_str = test_statics::FIXTURE_JITTER_URL
-        .get()
-        .expect("jitter fixture URL must be initialized in init()");
-    url_str.parse().unwrap()
-}
 
 /// Minimal xorshift64 PRNG for deterministic seek positions.
 struct Xorshift64(u64);
@@ -70,20 +43,8 @@ impl Xorshift64 {
     }
 }
 
-/// One-time initialization: panic hook + tracing.
-///
-/// Idempotent — safe to call from every test. All tests share one page in
-/// `wasm_bindgen_test`, so this returns as soon as the fixtures are
-/// published. Keying on the fixtures rather than on a flag raised at entry
-/// lets a run that stopped short be retried by the next test, instead of
-/// being reported eight times over as a missing fixture URL.
-async fn init() {
-    if fixtures_ready() {
-        return;
-    }
+async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
     console_error_panic_hook::set_once();
-    // Whichever test the page runs first installs a dispatcher, and the one
-    // this module wants is not worth a panic when it is already there.
     let _ = tracing_wasm::try_set_as_global_default();
     let helper = TestServerHelper::new().await;
     let bytes_per_second = 44_100.0 * 2.0 * 2.0;
@@ -101,26 +62,19 @@ async fn init() {
             sample_rate: 44_100,
             channels: 2,
         });
+    let builder = if jitter {
+        base_builder
+            .segment_size(180_000)
+            .segment_duration_secs(180_000.0 / bytes_per_second)
+    } else {
+        base_builder
+    };
     let fixture = helper
-        .create_hls(base_builder.clone())
+        .create_hls(builder)
         .await
-        .expect("create WASM stress HLS fixture");
-    let jitter_fixture = helper
-        .create_hls(
-            base_builder
-                .segment_size(180_000)
-                .segment_duration_secs(180_000.0 / bytes_per_second),
-        )
-        .await
-        .expect("create WASM jitter HLS fixture");
-    let _ = test_statics::FIXTURE_URL.set(fixture.master_url().to_string());
-    let _ = test_statics::FIXTURE_JITTER_URL.set(jitter_fixture.master_url().to_string());
-    info!("WASM test environment initialized");
-}
-
-/// Create a registered HLS audio pipeline in ephemeral mode.
-async fn create_pipeline() -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
-    create_pipeline_with_url(fixture_url()).await
+        .expect("create WASM stress fixture");
+    let url = fixture.master_url();
+    (helper, url)
 }
 
 async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
@@ -302,11 +256,11 @@ async fn yield_ms(ms: u32) {
 }
 
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_read_samples_integrity() {
-    init().await;
+async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServerHelper, Url)) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_read_samples_integrity");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
     let spec = audio.spec();
 
     assert!(spec.channels > 0, "channels must be > 0");
@@ -419,11 +373,11 @@ async fn stress_read_samples_integrity() {
 }
 
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_seek_and_read() {
-    init().await;
+async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, Url)) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_seek_and_read");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
 
     let mut buf = vec![0.0f32; 4096];
     let mut warmup = 0;
@@ -546,11 +500,11 @@ async fn stress_seek_and_read() {
 /// - All samples must be finite and in [-1.0, 1.0]
 /// - Tolerate at most 1% dead seeks (pipeline restart race)
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_rapid_seeks_must_not_stall() {
-    init().await;
+async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
     let spec = audio.spec();
     info!(
         channels = spec.channels,
@@ -694,11 +648,11 @@ async fn stress_rapid_seeks_must_not_stall() {
 /// - Verify: read at least 50 chunks from the beginning, all valid
 /// - Position must be near 0 after seeking, then advance monotonically
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_seek_to_zero_after_pressure() {
-    init().await;
+async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestServerHelper, Url)) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_seek_to_zero_after_pressure");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
     let mut buf = vec![0.0f32; 4096];
 
     let mut warmup = 0usize;
@@ -845,11 +799,13 @@ async fn stress_seek_to_zero_after_pressure() {
 /// Regression: after long playback from the middle, seek near start (but not 0)
 /// must land inside segment 0, not at segment 1 boundary.
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segment() {
-    init().await;
+async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segment(
+    #[future(awt)] stress_source: (TestServerHelper, Url),
+) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_seek_near_start_after_mid_playback_must_land_inside_first_segment");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -955,11 +911,13 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
 /// one seek command should produce one seek-complete, and playback progress
 /// after that seek should advance without extra backward resets.
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_seek_events_single_reset_and_monotonic_progress() {
-    init().await;
+async fn stress_seek_events_single_reset_and_monotonic_progress(
+    #[future(awt)] stress_source: (TestServerHelper, Url),
+) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
-    let mut audio = create_pipeline().await;
+    let mut audio = create_pipeline_with_url(url).await;
     let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     let channels = spec.channels as usize;
@@ -1105,17 +1063,30 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
 /// For the deterministic saw-tooth fixture, this early window must be strictly
 /// contiguous frame-by-frame (no tiny backward jumps / repeated fragments).
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment() {
-    init().await;
+async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment(
+    #[future(awt)] stress_source: (TestServerHelper, Url),
+) {
+    let (_helper, url) = stress_source;
     info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment");
 
-    run_seek_pcm_window_check(create_pipeline().await).await;
+    run_seek_pcm_window_check(create_pipeline_with_url(url).await).await;
 }
 
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(90)), hang_timeout_secs(1))]
-async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter() {
-    init().await;
+async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter(
+    #[future(awt)] jitter_source: (TestServerHelper, Url),
+) {
+    let (_helper, url) = jitter_source;
     info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter");
 
-    run_seek_pcm_window_check(create_pipeline_with_url(fixture_jitter_url()).await).await;
+    run_seek_pcm_window_check(create_pipeline_with_url(url).await).await;
+}
+
+#[kithara::fixture]
+async fn stress_source() -> (TestServerHelper, Url) {
+    create_stress_source(false).await
+}
+#[kithara::fixture]
+async fn jitter_source() -> (TestServerHelper, Url) {
+    create_stress_source(true).await
 }

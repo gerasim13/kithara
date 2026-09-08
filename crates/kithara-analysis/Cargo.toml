@@ -65,6 +65,7 @@ kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, features = ["symphonia"] }
 kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 

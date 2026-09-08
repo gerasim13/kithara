@@ -17,6 +17,7 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use url::Url;
 
 use crate::{
     bufpool_ext::TestPools,
@@ -39,10 +40,11 @@ const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 #[case(GaplessMode::CodecPriming)]
 #[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]
 async fn gapless_modes_do_not_block_network_startup_until_full_cache(
+    #[future(awt)] startup_source: (TestServerHelper, Url),
     #[case] gapless_mode: GaplessMode,
     temp_dir: TestTempDir,
 ) {
-    let server = TestServerHelper::new().await;
+    let (_server, master) = startup_source;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .gapless_mode(gapless_mode)
@@ -50,7 +52,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
         GAPLESS_SAMPLE_RATE,
     )
     .await;
-    let resource = create_delayed_gapless_hls_resource(&harness, &server, temp_dir.path()).await;
+    let resource = create_delayed_gapless_hls_resource(&harness, &master, temp_dir.path()).await;
 
     harness
         .with_player(move |player| player.insert(resource, TrackId::allocate(), None))
@@ -96,9 +98,28 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 
 async fn create_delayed_gapless_hls_resource(
     harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
+    master: &Url,
     cache_dir: &Path,
 ) -> Resource {
+    let store = kithara_integration_tests::disk_asset_store(cache_dir);
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
+    )
+    .store(store)
+    .build();
+    config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
+        .expect("prepare delayed gapless HLS resource config");
+
+    Resource::new(config)
+        .await
+        .expect("open delayed gapless HLS resource")
+}
+
+#[kithara::fixture]
+async fn startup_source() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -128,18 +149,5 @@ async fn create_delayed_gapless_hls_resource(
         .await
         .expect("create delayed gapless HLS fixture");
 
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
-    )
-    .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare delayed gapless HLS resource config");
-
-    Resource::new(config)
-        .await
-        .expect("open delayed gapless HLS resource")
+    (server, created.master_url())
 }

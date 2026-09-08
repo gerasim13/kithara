@@ -19,16 +19,19 @@ encoded inside a test's wall-clock deadline.
 ## Usage
 
 ```rust
-use kithara_test_fixtures::store;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
-let root = store::root_from_env();
-let namespace = store::namespace(&root, "0123456789abcdef");
-let id = store::asset_id("sine_wav", "a440_6s");
-
-if let Some(bytes) = store::read_entry(&namespace, &id, "wav") {
-    // serve the entry
+#[kithara::test]
+fn decode_prepared_audio(tone_mp3: &'static [u8]) {
+    // Pass the prepared bytes to the decoder under test.
+    assert!(!tone_mp3.is_empty());
 }
 ```
+
+Fixture providers read already-built assets. Signal generation, including tiny
+PCM inputs, belongs in `src/defs/` and runs through `build.rs`. Async providers
+may own local servers and return them with the prepared input; test parameters
+use `#[future(awt)]` to receive those resources after preparation.
 
 ## Key Types
 
@@ -48,10 +51,9 @@ if let Some(bytes) = store::read_entry(&namespace, &id, "wav") {
 - `src/defs/` — generator bodies, one function per asset, each carrying its
   cases. These compile into the build script only, never into the library.
 - `src/signal/` — waveforms, PCM buffers, and the RIFF writer. The workspace's
-  one way to make a signal, at build time or at run time.
+  one waveform implementation for build-time inputs and signal assertions.
 - `src/fmp4/` — the fMP4 mux: an `EncodedTrack` in, init and media segments out.
-  Shared the same way, because the build script packages the bodies it embeds
-  and the integration suite packages its HLS variants while it runs.
+  The build script packages both embedded bodies and registered HLS variants.
 - `build.rs` — resolves every declared case against the store, produces what is
   missing, and writes the accessor module.
 - `src/store.rs` — the store itself: identity, namespace, atomic writes, and the
@@ -62,5 +64,4 @@ An asset declared `#[kithara::asset(..., embed)]` is baked into the binary with
 generated once, into the store, like every other asset.
 
 See [CONTEXT.md](CONTEXT.md) for the store layout, the invalidation contract,
-and why the generators stay out of the library while the signal primitives do
-not.
+and the boundary between build-time preparation and injected fixture providers.

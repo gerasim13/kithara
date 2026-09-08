@@ -53,6 +53,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
 };
+use url::Url;
 
 struct Consts;
 impl Consts {
@@ -78,26 +79,11 @@ impl Consts {
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
-    let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(Consts::VARIANT_COUNT)
-        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
-        .variant_bandwidths(Consts::BANDWIDTHS.to_vec())
-        .packaged_audio_aac_lc(44_100, 2)
-        .push_delay_rule(DelayRule {
-            variant: Some(0),
-            segment_eq: Some(0),
-            delay_ms: Consts::STALL_MS,
-            ..Default::default()
-        });
-    let url = helper
-        .create_hls(builder)
-        .await
-        .expect("create HLS fixture")
-        .master_url();
-
+async fn abr_escapes_stalled_initial_variant(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] stalled_hls: (TestServerHelper, Url),
+) {
+    let (_helper, url) = stalled_hls;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let store = AssetStore::builder(pools.clone())
@@ -170,4 +156,28 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
          deliverable variant via the EscapeStalled switch, not from reading past \
          the withheld segment on variant 0. backend={backend:?}.",
     );
+}
+
+#[kithara::fixture]
+async fn stalled_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(Consts::VARIANT_COUNT)
+        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
+        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
+        .variant_bandwidths(Consts::BANDWIDTHS.to_vec())
+        .packaged_audio_aac_lc(44_100, 2)
+        .push_delay_rule(DelayRule {
+            variant: Some(0),
+            segment_eq: Some(0),
+            delay_ms: Consts::STALL_MS,
+            ..Default::default()
+        });
+    let url = helper
+        .create_hls(builder)
+        .await
+        .expect("create HLS fixture")
+        .master_url();
+
+    (helper, url)
 }

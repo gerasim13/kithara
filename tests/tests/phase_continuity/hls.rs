@@ -13,7 +13,7 @@ use kithara::{
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
 use kithara_integration_tests::auto;
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
@@ -126,15 +126,29 @@ fn build_fixture(fixture: Fixture, bit_rate: Option<u64>, drm: bool) -> HlsFixtu
     }
 }
 
+async fn phase_server(
+    fixture: Fixture,
+    bit_rate: Option<u64>,
+    drm: bool,
+) -> (TestServerHelper, CreatedHls) {
+    let helper = TestServerHelper::new().await;
+    let created = helper
+        .create_hls(build_fixture(fixture, bit_rate, drm))
+        .await
+        .expect("create sine HLS fixture");
+
+    (helper, created)
+}
+
 async fn run_case(
     fixture: Fixture,
     backend: DecoderBackend,
     ephemeral: bool,
     drm: bool,
     scenario: Vec<(AbrMode, f64)>,
-    bit_rate: Option<u64>,
+    server: (TestServerHelper, CreatedHls),
 ) {
-    run_case_paced(fixture, backend, ephemeral, drm, scenario, bit_rate, None).await;
+    run_case_paced(fixture, backend, ephemeral, drm, scenario, server, None).await;
 }
 
 /// `run_case` with an optional consumer pace: a real sleep after every
@@ -148,17 +162,13 @@ async fn run_case_paced(
     ephemeral: bool,
     drm: bool,
     scenario: Vec<(AbrMode, f64)>,
-    bit_rate: Option<u64>,
+    server: (TestServerHelper, CreatedHls),
     pace: Option<Duration>,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(build_fixture(fixture, bit_rate, drm))
-        .await
-        .expect("create sine HLS fixture");
+    let (_helper, created) = server;
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -275,6 +285,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -286,6 +297,7 @@ async fn run_case_paced(
         false,
         e2e(AbrMode::manual(0)),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -297,6 +309,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         Some(320_000),
+        aac_high_source().await,
     )
 )]
 #[cfg_attr(
@@ -308,6 +321,7 @@ async fn run_case_paced(
         false,
         e2e(AbrMode::manual(0)),
         Some(320_000),
+        aac_high_source().await,
     )
 )]
 #[cfg_attr(
@@ -319,6 +333,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         None,
+        flac_source().await,
     )
 )]
 #[cfg_attr(
@@ -330,6 +345,7 @@ async fn run_case_paced(
         false,
         e2e(AbrMode::manual(0)),
         None,
+        flac_source().await,
     )
 )]
 #[case::aac_he_v2_symphonia_eph_manual_multi(
@@ -338,32 +354,36 @@ async fn run_case_paced(
     true,
     false,
     multi_switch(),
-    None
-)]
+    None,
+        he_source().await,
+    )]
 #[case::aac_he_v2_symphonia_eph_manual_e2e(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     true,
     false,
     e2e(AbrMode::manual(0)),
-    None
-)]
+    None,
+        he_source().await,
+    )]
 #[case::aac_lc_symphonia_eph_manual_multi(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
     false,
     multi_switch(),
-    Some(320_000)
-)]
+    Some(320_000),
+        aac_high_source().await,
+    )]
 #[case::aac_lc_symphonia_eph_manual_e2e(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
     false,
     e2e(AbrMode::manual(0)),
-    Some(320_000)
-)]
+    Some(320_000),
+        aac_high_source().await,
+    )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_he_v2_apple_eph_auto_multi(
@@ -373,6 +393,7 @@ async fn run_case_paced(
         false,
         seeks_no_switch(auto(1)),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -384,6 +405,7 @@ async fn run_case_paced(
         false,
         e2e(AbrMode::manual(1)),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -395,6 +417,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         None,
+        he_source().await,
     )
 )]
 #[case::prod_flac_top_sustained_symphonia(
@@ -403,16 +426,18 @@ async fn run_case_paced(
     true,
     false,
     e2e(AbrMode::manual(TOP_VARIANT)),
-    None
-)]
+    None,
+        mixed_source().await,
+    )]
 #[case::flac_only_top_sustained_symphonia(
     Fixture::Single(Codec::Flac),
     DecoderBackend::Symphonia,
     true,
     false,
     e2e(AbrMode::manual(TOP_VARIANT)),
-    None
-)]
+    None,
+        flac_source().await,
+    )]
 #[cfg_attr(
     target_os = "android",
     case::aac_he_v2_android_eph_manual_multi(
@@ -422,6 +447,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -433,6 +459,7 @@ async fn run_case_paced(
         false,
         e2e(AbrMode::manual(0)),
         None,
+        he_source().await,
     )
 )]
 #[cfg_attr(
@@ -444,6 +471,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         Some(320_000),
+        aac_high_source().await,
     )
 )]
 #[cfg_attr(
@@ -455,6 +483,7 @@ async fn run_case_paced(
         false,
         multi_switch(),
         None,
+        flac_source().await,
     )
 )]
 #[cfg_attr(
@@ -466,6 +495,7 @@ async fn run_case_paced(
         false,
         seeks_no_switch(auto(1)),
         None,
+        he_source().await,
     )
 )]
 async fn phase_continuity_hls(
@@ -474,9 +504,10 @@ async fn phase_continuity_hls(
     #[case] ephemeral: bool,
     #[case] drm: bool,
     #[case] scenario: Vec<(AbrMode, f64)>,
-    #[case] bit_rate: Option<u64>,
+    #[case] _bit_rate: Option<u64>,
+    #[case] server: (TestServerHelper, CreatedHls),
 ) {
-    run_case(fixture, backend, ephemeral, drm, scenario, bit_rate).await;
+    run_case(fixture, backend, ephemeral, drm, scenario, server).await;
 }
 
 /// Late-track switch script for the paced pin below: the load-gated
@@ -505,19 +536,22 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     Some(320_000),
-    1
-)]
+    1,
+        aac_high_source().await,
+    )]
 #[case::aac_he_v2_symphonia_pace1ms(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     None,
-    1
-)]
+    1,
+        he_source().await,
+    )]
 async fn phase_continuity_hls_diag_paced(
     #[case] fixture: Fixture,
     #[case] backend: DecoderBackend,
-    #[case] bit_rate: Option<u64>,
+    #[case] _bit_rate: Option<u64>,
     #[case] pace_ms: u64,
+    #[case] server: (TestServerHelper, CreatedHls),
 ) {
     run_case_paced(
         fixture,
@@ -525,7 +559,7 @@ async fn phase_continuity_hls_diag_paced(
         true,
         false,
         late_switches(),
-        bit_rate,
+        server,
         Some(Duration::from_millis(pace_ms)),
     )
     .await;
@@ -575,6 +609,7 @@ async fn phase_continuity_hls_diag_paced(
         DecoderBackend::Apple,
         true,
         switch_to_top_mid(),
+        mixed_encrypted_source().await,
     )
 )]
 #[cfg_attr(
@@ -584,20 +619,23 @@ async fn phase_continuity_hls_diag_paced(
         DecoderBackend::Apple,
         false,
         switch_to_top_mid(),
+        mixed_high_source().await,
     )
 )]
 #[case::cross_codec_switch_symphonia_drm(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
     true,
-    switch_to_top_mid()
-)]
+    switch_to_top_mid(),
+        mixed_encrypted_source().await,
+    )]
 #[case::cross_codec_switch_symphonia_plain(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
     false,
-    switch_to_top_mid()
-)]
+    switch_to_top_mid(),
+        mixed_high_source().await,
+    )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::he_v2_in_variant_seek_apple(
@@ -605,6 +643,7 @@ async fn phase_continuity_hls_diag_paced(
         DecoderBackend::Apple,
         false,
         one_seek(),
+        he_source().await,
     )
 )]
 async fn phase_continuity_hls_known_warmup_drift(
@@ -612,7 +651,37 @@ async fn phase_continuity_hls_known_warmup_drift(
     #[case] backend: DecoderBackend,
     #[case] drm: bool,
     #[case] scenario: Vec<(AbrMode, f64)>,
+    #[case] server: (TestServerHelper, CreatedHls),
 ) {
-    let bit_rate = matches!(fixture, Fixture::AacWithFlacTop).then_some(320_000);
-    run_case(fixture, backend, true, drm, scenario, bit_rate).await;
+    run_case(fixture, backend, true, drm, scenario, server).await;
+}
+
+#[kithara::fixture]
+async fn he_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::Single(Codec::AacHeV2), None, false).await
+}
+
+#[kithara::fixture]
+async fn mixed_high_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::AacWithFlacTop, Some(320_000), false).await
+}
+
+#[kithara::fixture]
+async fn mixed_encrypted_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::AacWithFlacTop, Some(320_000), true).await
+}
+
+#[kithara::fixture]
+async fn aac_high_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::Single(Codec::AacLc), Some(320_000), false).await
+}
+
+#[kithara::fixture]
+async fn flac_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::Single(Codec::Flac), None, false).await
+}
+
+#[kithara::fixture]
+async fn mixed_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::AacWithFlacTop, None, false).await
 }

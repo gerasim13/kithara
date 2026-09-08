@@ -15,7 +15,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
@@ -171,28 +171,11 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
 /// any regression in `track_replay_after_switch.rs`-adjacent code paths
 /// when the cold-replay fix lands.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-#[case::mp3_with_extension(WarmReplayKind::Mp3WithExtension)]
-#[case::mp3_no_extension(WarmReplayKind::Mp3NoExtension)]
-#[case::hls(WarmReplayKind::Hls)]
-async fn file_replay_from_warm_cache(#[case] kind: WarmReplayKind) {
-    let helper = TestServerHelper::new().await;
-    let url = match kind {
-        WarmReplayKind::Mp3WithExtension => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
-        WarmReplayKind::Mp3NoExtension => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
-        WarmReplayKind::Hls => {
-            use kithara_integration_tests::HlsFixtureBuilder;
-            let builder = HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(8)
-                .segment_duration_secs(2.0)
-                .packaged_audio_aac_lc(44_100, 2);
-            helper
-                .create_hls(builder)
-                .await
-                .expect("create local HLS fixture")
-                .master_url()
-        }
-    };
+#[case::mp3_with_extension(mp3_with_extension().await)]
+#[case::mp3_no_extension(mp3_no_extension().await)]
+#[case::hls(hls().await)]
+async fn file_replay_from_warm_cache(#[case] source: (TestServerHelper, Url)) {
+    let (_helper, url) = source;
 
     let temp: TestTempDir = temp_dir();
     let cache_path = temp.path().to_path_buf();
@@ -210,4 +193,40 @@ enum WarmReplayKind {
     Mp3WithExtension,
     Mp3NoExtension,
     Hls,
+}
+
+async fn replay_source(kind: WarmReplayKind) -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = match kind {
+        WarmReplayKind::Mp3WithExtension => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        WarmReplayKind::Mp3NoExtension => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
+        WarmReplayKind::Hls => {
+            let builder = HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(8)
+                .segment_duration_secs(2.0)
+                .packaged_audio_aac_lc(44_100, 2);
+            helper
+                .create_hls(builder)
+                .await
+                .expect("create local HLS fixture")
+                .master_url()
+        }
+    };
+    (helper, url)
+}
+
+#[kithara::fixture]
+async fn mp3_with_extension() -> (TestServerHelper, Url) {
+    replay_source(WarmReplayKind::Mp3WithExtension).await
+}
+
+#[kithara::fixture]
+async fn mp3_no_extension() -> (TestServerHelper, Url) {
+    replay_source(WarmReplayKind::Mp3NoExtension).await
+}
+
+#[kithara::fixture]
+async fn hls() -> (TestServerHelper, Url) {
+    replay_source(WarmReplayKind::Hls).await
 }

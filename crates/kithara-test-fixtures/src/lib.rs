@@ -3,10 +3,9 @@
 //! Build-time generated audio test assets.
 //!
 //! Asset declarations live in `src/defs/`, compile only into this crate's build
-//! script, and never enter the library. The signal primitives they render with
-//! do enter it: `signal` is the workspace's one way to make a waveform, a PCM
-//! buffer, or a RIFF body, whether at build time or at run time. See
-//! `CONTEXT.md` for the store layout and the invalidation contract.
+//! script, and never enter the library. Fixture providers read prepared inputs
+//! for test parameters; signal primitives also support assertions and their own
+//! tests. See `CONTEXT.md` for preparation and invalidation contracts.
 
 /// Every accessor that reads the store carries its own `cfg`, because the store
 /// is a host filesystem the browser cannot reach; an `embed` accessor carries
@@ -14,12 +13,12 @@
 /// the wasm lane reaches the rest through `SignalAsset` over HTTP.
 pub mod asset;
 pub mod assets;
+pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hls::manifest as hls_manifest;
-/// Read by this crate's build script through `#[path]`, and still by the
-/// integration suite's; declared here so its own tests keep running.
+/// Shared build support is declared here for its unit tests.
 #[cfg(test)]
 mod context;
 #[cfg(test)]
@@ -35,3 +34,14 @@ pub mod signal_asset;
 pub mod store;
 
 pub use signal_asset::SignalAsset;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod variant_input;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use fixtures::hls as hls_fixtures;
+pub use fixtures::{
+    analysis as analysis_fixtures, beat as analysis_beat_fixtures,
+    integration as integration_fixtures, mock as mock_fixtures, play as play_fixtures,
+    stretch as stretch_fixtures, unit as unit_fixtures,
+};

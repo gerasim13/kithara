@@ -27,6 +27,11 @@ impl Consts {
     const WINDOW_FRAMES: usize = 2_048;
 }
 
+#[kithara::fixture]
+async fn server() -> TestServerHelper {
+    TestServerHelper::new().await
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -38,8 +43,10 @@ impl Consts {
 )]
 #[case::plain("/assets/hls-gapless/master.m3u8")]
 #[case::drm("/assets/drm-gapless/master.m3u8")]
-async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(#[case] path: &str) {
-    let server = TestServerHelper::new().await;
+async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
+    #[case] path: &str,
+    #[future(awt)] server: TestServerHelper,
+) {
     let pools = pools();
     let hls = HlsConfig::for_url(server.url(path))
         .store(memory_asset_store())

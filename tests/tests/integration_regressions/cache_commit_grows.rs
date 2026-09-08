@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     temp_dir,
     test_defaults::Consts as Shared,
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 #[derive(Default)]
 struct Transfer {
@@ -116,13 +116,13 @@ async fn load_and_observe(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
-async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
+async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handles: Vec<_> = (0..2)
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+                    bytes: Arc::new(tone_mp3.to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 delivery: Delivery::Throttle {

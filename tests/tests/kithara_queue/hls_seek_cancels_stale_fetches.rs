@@ -177,14 +177,16 @@ struct PostSeekObservation {
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
+async fn hls_seek_near_end_skips_prefix(
+    #[future(awt)] prepared_hls: (TestServerHelper, Url),
+    #[case] backend: DecoderBackend,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let probe_recorder = probe_capture::install();
 
-    let helper = TestServerHelper::new().await;
-    let url = build_hls_with_delay(&helper).await;
+    let (_server, url) = prepared_hls;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
@@ -538,4 +540,11 @@ async fn observe_post_seek(
     .await;
 
     obs
+}
+
+#[kithara::fixture]
+async fn prepared_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_hls_with_delay(&helper).await;
+    (helper, url)
 }

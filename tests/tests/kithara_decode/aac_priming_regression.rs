@@ -12,8 +12,8 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
+#[kithara::fixture]
+async fn aac() -> (TestServerHelper, Vec<u8>) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
     let response = client
@@ -22,10 +22,18 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
         .await
         .expect("fetch /signal aac fixture");
     assert_eq!(response.status(), 200);
-    let bytes = response.bytes().await.expect("aac body");
+    let bytes = response.bytes().await.expect("aac body").to_vec();
 
+    (server, bytes)
+}
+
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
+    #[future(awt)] aac: (TestServerHelper, Vec<u8>),
+) {
+    let (_server, bytes) = aac;
     let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(bytes.to_vec()),
+        Cursor::new(bytes),
         Some("aac"),
         DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
             .pools(pools())

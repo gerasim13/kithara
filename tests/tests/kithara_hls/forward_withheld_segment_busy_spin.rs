@@ -54,14 +54,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
+    SegmentGateHandle,
     bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::hls_fixtures::{hls_pcm_boundary, hls_stream_header};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
-
-use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -92,21 +91,13 @@ fn count_decode_steps(recorder: &Recorder) -> usize {
         .count()
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    tracing("kithara_audio=info,kithara_hls=info")
-)]
-async fn forward_into_withheld_segment_parks_without_busy_spin() {
-    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(Vec::from(Pcm::new(
-        SAMPLE_RATE,
-        CHANNELS,
-        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        Wave::Sawtooth,
-    )));
+#[kithara::fixture]
+async fn gated_audio(
+    hls_stream_header: Vec<u8>,
+    hls_pcm_boundary: Vec<u8>,
+) -> (HlsTestServer, SegmentGateHandle) {
+    let init_segment = Arc::new(hls_stream_header);
+    let pcm = Arc::new(hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     let config = HlsTestServerConfig {
@@ -122,7 +113,20 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
 
     // Withhold the BODY of GATED_SEGMENT; its HEAD (size) stays open so the
     // up-front layout is complete and the worker reaches the boundary.
-    let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
+    HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    tracing("kithara_audio=info,kithara_hls=info")
+)]
+async fn forward_into_withheld_segment_parks_without_busy_spin(
+    #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
+) {
+    let (server, gate) = gated_audio;
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(

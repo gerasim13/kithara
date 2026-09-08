@@ -14,6 +14,8 @@ mod defs;
 mod encoders;
 #[path = "src/registry.rs"]
 mod registry;
+#[path = "src/variant_input.rs"]
+pub mod variant_input;
 // `fmp4`, `signal`, and `store` keep the visibility they have in the library:
 // the same source files, reached from two roots.
 #[path = "src/fmp4/mod.rs"]
@@ -55,10 +57,11 @@ const HASHED_TREES: [&str; 5] = [
     "../kithara-encode/src",
 ];
 /// Individual sources outside those trees that decide the same.
-const HASHED_FILES: [&str; 4] = [
+const HASHED_FILES: [&str; 5] = [
     "build.rs",
     "src/encoders.rs",
     "src/registry.rs",
+    "src/variant_input.rs",
     "src/store.rs",
 ];
 

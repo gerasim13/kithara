@@ -27,6 +27,7 @@ use kithara_integration_tests::{
     audio_mock::{MockReader, TestPcmReader},
     test_defaults::Consts,
 };
+use kithara_test_fixtures::integration_fixtures::constant_half;
 use ringbuf::traits::{Consumer, Producer};
 
 use crate::bufpool_ext::pools;
@@ -54,12 +55,16 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     (processor, control)
 }
 
-fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
-    create_mock_player_resource_with_duration(src, 60.0)
+fn create_mock_player_resource(constant_half: &'static [u8], src: &str) -> Box<PlayerResource> {
+    create_mock_player_resource_with_duration(constant_half, src, 60.0)
 }
 
-fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
-    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs);
+fn create_mock_player_resource_with_duration(
+    constant_half: &'static [u8],
+    src: &str,
+    duration_secs: f64,
+) -> Box<PlayerResource> {
+    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -330,6 +335,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
 #[case(TrackCommandScenario::DuplicateLoad, 1, true)]
 #[case(TrackCommandScenario::LoadThenUnload, 0, false)]
 async fn processor_track_command_scenarios(
+    constant_half: &'static [u8],
     #[case] scenario: TrackCommandScenario,
     #[case] expected_tracks: usize,
     #[case] should_contain_track: bool,
@@ -340,7 +346,7 @@ async fn processor_track_command_scenarios(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("track1.mp3"),
+            resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
         .ok();
@@ -351,7 +357,7 @@ async fn processor_track_command_scenarios(
             control
                 .cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
-                    resource: create_mock_player_resource("track1.mp3"),
+                    resource: create_mock_player_resource(constant_half, "track1.mp3"),
                     item_id,
                 })
                 .ok();
@@ -385,14 +391,14 @@ async fn processor_track_command_scenarios(
 }
 
 #[kithara::test(tokio)]
-async fn processor_fade_in_restarts_track_from_zero() {
+async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let item_id = TrackId::allocate();
 
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("track1.mp3"),
+            resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
         .ok();
@@ -419,10 +425,10 @@ async fn processor_fade_in_restarts_track_from_zero() {
 }
 
 #[kithara::test(tokio)]
-async fn processor_cleanup_finished_tracks() {
+async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
 
-    let resource = create_mock_player_resource("track1.mp3");
+    let resource = create_mock_player_resource(constant_half, "track1.mp3");
     let item_id = TrackId::allocate();
     control
         .cmd_tx
@@ -439,7 +445,7 @@ async fn processor_cleanup_finished_tracks() {
 }
 
 #[kithara::test(tokio)]
-async fn render_audio_handover_fills_tail_from_next_playing_track() {
+async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let short_id = TrackId::allocate();
     let long_id = TrackId::allocate();
@@ -448,14 +454,14 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("long.mp3"),
+            resource: create_mock_player_resource(constant_half, "long.mp3"),
             item_id: long_id,
         })
         .ok();
@@ -494,7 +500,9 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
 }
 
 #[kithara::test(tokio)]
-async fn render_audio_handover_promotes_preloading_track_without_silence() {
+async fn render_audio_handover_promotes_preloading_track_without_silence(
+    constant_half: &'static [u8],
+) {
     let (mut processor, mut control) = make_processor();
     let short_id = TrackId::allocate();
     let preload_id = TrackId::allocate();
@@ -503,14 +511,14 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("preload.mp3"),
+            resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })
         .ok();
@@ -552,7 +560,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
 }
 
 #[kithara::test(tokio)]
-async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
+async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
     let short_id = TrackId::allocate();
     let fading_id = TrackId::allocate();
@@ -562,21 +570,21 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
+            resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("fading.mp3"),
+            resource: create_mock_player_resource(constant_half, "fading.mp3"),
             item_id: fading_id,
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            resource: create_mock_player_resource("preload.mp3"),
+            resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })
         .ok();

@@ -17,6 +17,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::peak};
+use kithara_test_fixtures::integration_fixtures::deadline_tracks;
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -73,6 +74,7 @@ fn load_tracks(
     processor: &mut PlayerNodeProcessor,
     control: &mut SlotControl,
     count: usize,
+    deadline_tracks: [&'static [u8]; 4],
 ) -> f32 {
     let pools = pools();
     let tracks: Vec<(Arc<str>, TrackId)> = (0..count)
@@ -89,7 +91,7 @@ fn load_tracks(
         let value = f32::from(u16::try_from(idx + 1).expect("track index fits u16")) * 0.02;
         expected_sample += value;
         let resource = Resource::from_reader(
-            TestPcmReader::with_value(spec(), Consts::TRACK_SECONDS, value),
+            TestPcmReader::from_pcm(spec(), Consts::TRACK_SECONDS, deadline_tracks[idx]),
             Some(Arc::clone(src)),
         );
         send(
@@ -161,9 +163,9 @@ fn percentile(sorted: &[Duration], pct: usize) -> Duration {
     sorted[idx]
 }
 
-fn measure(block_frames: u32, tracks: usize) -> CellTiming {
+fn measure(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) -> CellTiming {
     let (mut processor, mut control) = processor(block_frames);
-    let expected_sample = load_tracks(&mut processor, &mut control, tracks);
+    let expected_sample = load_tracks(&mut processor, &mut control, tracks, deadline_tracks);
     assert_eq!(
         processor.track_count(),
         tracks,
@@ -244,12 +246,12 @@ fn period_share(duration: Duration, period: Duration) -> f64 {
 }
 
 #[kithara::test(native, serial, flash(false))]
-fn no_sync_player_render_hot_path_p99_stays_below_half_period() {
+fn no_sync_player_render_hot_path_p99_stays_below_half_period(deadline_tracks: [&'static [u8]; 4]) {
     let mut timings = Vec::with_capacity(Consts::BLOCK_FRAMES.len() * Consts::TRACK_COUNTS.len());
 
     for block_frames in Consts::BLOCK_FRAMES {
         for tracks in Consts::TRACK_COUNTS {
-            timings.push(measure(block_frames, tracks));
+            timings.push(measure(block_frames, tracks, deadline_tracks));
         }
     }
 

@@ -391,6 +391,7 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::PlayheadState;
+    use kithara_test_fixtures::mock_fixtures::ring_pcm;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -487,14 +488,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_reports_whether_it_popped_any_item() {
+    fn seek_drain_reports_whether_it_popped_any_item(ring_pcm: Vec<f32>) {
         let mut drained = RingFixture::new(true);
-        let first = drained.chunk(&[0.1]);
+        let first = drained.chunk(&ring_pcm[..1]);
         drained
             .data_tx
             .try_push(Fetch::data(first, 0))
             .expect("first stale chunk reaches ring");
-        let second = drained.chunk(&[0.2]);
+        let second = drained.chunk(&ring_pcm[1..2]);
         drained
             .data_tx
             .try_push(Fetch::data(second, 0))
@@ -553,9 +554,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn consumer_phase_transitions_to_playing_on_first_chunk() {
+    fn consumer_phase_transitions_to_playing_on_first_chunk(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let chunk = fixture.chunk(&[0.1, 0.2]);
+        let chunk = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(chunk, 0))
@@ -575,10 +576,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn consumer_phase_seek_pending_to_playing_on_chunk() {
+    fn consumer_phase_seek_pending_to_playing_on_chunk(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
-        let chunk = fixture.chunk(&[0.1, 0.2]);
+        let chunk = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(chunk, 1))
@@ -588,14 +589,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
+    fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let stale = fixture.chunk(&[0.1, 0.2]);
+        let stale = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(stale, 0))
             .expect("stale chunk reaches ring");
-        let fresh = fixture.chunk(&[0.7, 0.8]);
+        let fresh = fixture.chunk(&ring_pcm[2..]);
         fixture
             .data_tx
             .try_push(Fetch::data(fresh, 1))
@@ -620,9 +621,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_preserves_new_epoch_eof_after_stale_chunks() {
+    fn seek_drain_preserves_new_epoch_eof_after_stale_chunks(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let stale = fixture.chunk(&[0.1, 0.2]);
+        let stale = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(stale, 0))

@@ -22,6 +22,7 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use tracing::{info, warn};
+use url::Url;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -113,18 +114,13 @@ async fn render_into(
 async fn run_case(
     scenario: Scenario,
     backend: DecoderBackend,
-    delay_ms: Option<u64>,
+    source: (TestServerHelper, Url, Option<u64>),
     out_rate: u32,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(build_fixture(delay_ms))
-        .await
-        .expect("create sine HLS fixture");
-    let master = created.master_url();
+    let (_helper, master, delay_ms) = source;
 
     let temp = TestTempDir::new();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -261,12 +257,12 @@ async fn run_case(
 /// Run with `--run-ignored`.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[ignore = "load-dependent flake, not yet deterministic — paced offline render starves decode under host load and trips the player underrun path; needs a forced-underrun trigger to become a reliable RED for the production forward-skip"]
-#[case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, None, 44_100)]
-#[case::switch_to_flac_symphonia(Scenario::SwitchToFlac, DecoderBackend::Symphonia, None, 44_100)]
+#[case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, flac_source().await, 44_100)]
+#[case::switch_to_flac_symphonia(Scenario::SwitchToFlac, DecoderBackend::Symphonia, flac_source().await, 44_100)]
 #[case::switch_to_flac_symphonia_delay(
     Scenario::SwitchToFlac,
     DecoderBackend::Symphonia,
-    Some(150),
+    delayed_flac_source().await,
     44_100
 )]
 // Host output rate 48 kHz ≠ content 44.1 kHz: activates the playback-pipeline
@@ -275,24 +271,45 @@ async fn run_case(
 #[case::sustained_flac_symphonia_resamp(
     Scenario::SustainedFlac,
     DecoderBackend::Symphonia,
-    None,
+    flac_source().await,
     48_000
 )]
 #[case::switch_to_flac_symphonia_resamp(
     Scenario::SwitchToFlac,
     DecoderBackend::Symphonia,
-    None,
+    flac_source().await,
     48_000
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::switch_to_flac_apple_resamp(Scenario::SwitchToFlac, DecoderBackend::Apple, None, 48_000)
+    case::switch_to_flac_apple_resamp(Scenario::SwitchToFlac, DecoderBackend::Apple, flac_source().await, 48_000)
 )]
 async fn flac_realtime_player_continuity(
     #[case] scenario: Scenario,
     #[case] backend: DecoderBackend,
-    #[case] delay_ms: Option<u64>,
+    #[case] source: (TestServerHelper, Url, Option<u64>),
     #[case] out_rate: u32,
 ) {
-    run_case(scenario, backend, delay_ms, out_rate).await;
+    run_case(scenario, backend, source, out_rate).await;
+}
+
+async fn prepare_flac_source(delay_ms: Option<u64>) -> (TestServerHelper, Url, Option<u64>) {
+    let helper = TestServerHelper::new().await;
+    let created = helper
+        .create_hls(build_fixture(delay_ms))
+        .await
+        .expect("create sine HLS fixture");
+    let master = created.master_url();
+
+    (helper, master, delay_ms)
+}
+
+#[kithara::fixture]
+async fn flac_source() -> (TestServerHelper, Url, Option<u64>) {
+    prepare_flac_source(None).await
+}
+
+#[kithara::fixture]
+async fn delayed_flac_source() -> (TestServerHelper, Url, Option<u64>) {
+    prepare_flac_source(Some(150)).await
 }

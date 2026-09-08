@@ -1,7 +1,6 @@
 use std::{
     convert::Infallible,
     num::{NonZeroU32, NonZeroUsize},
-    path::Path,
 };
 
 use kithara::{
@@ -30,7 +29,6 @@ use kithara::{
 };
 use kithara_test_fixtures::{asset::Asset, assets};
 use kithara_test_utils::off_thread::OffThread;
-use num_traits::cast::AsPrimitive;
 use url::Url;
 
 use super::{Entry, Request};
@@ -213,7 +211,7 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
     .expect("persistence fixture starts")
 }
 
-pub(crate) fn asset_url(asset: Asset) -> String {
+fn asset_url(asset: Asset) -> String {
     let path = asset.path().expect("fixture is stored on disk");
     assert!(path.is_file(), "fixture file exists: {}", path.display());
     Url::from_file_path(path)
@@ -221,45 +219,29 @@ pub(crate) fn asset_url(asset: Asset) -> String {
         .into()
 }
 
-pub(crate) fn mp3_track(directory: &Path) -> String {
-    let path = directory.join("track.mp3");
-    std::fs::write(&path, assets::sine_mp3_a440_2s().bytes()).expect("fixture track is written");
-    format!("file://{}", path.display())
+#[kithara::fixture]
+pub(crate) fn tone_mp3() -> String {
+    asset_url(assets::sine_mp3_a440_2s())
 }
 
-pub(crate) fn mp3_track_48k(directory: &Path) -> String {
-    let path = directory.join("track-48k.mp3");
-    std::fs::write(&path, assets::rhythm_mp3_deck_a_120bpm_48k().bytes())
-        .expect("fixture track is written");
-    format!("file://{}", path.display())
+#[kithara::fixture]
+pub(crate) fn rhythm_a_mp3() -> String {
+    asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())
 }
 
-pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {
-    let path = directory.join("track.wav");
-    let rate = axis().get();
-    let frames = rate * seconds;
-    let data_len = frames * 4;
-    let mut bytes = Vec::with_capacity(44 + data_len as usize);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&2u16.to_le_bytes());
-    bytes.extend_from_slice(&rate.to_le_bytes());
-    bytes.extend_from_slice(&(rate * 4).to_le_bytes());
-    bytes.extend_from_slice(&4u16.to_le_bytes());
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    let step = std::f64::consts::TAU * 440.0 / f64::from(rate);
-    for frame in 0..frames {
-        let sample: i16 = ((f64::from(frame) * step).sin() * 16_000.0).as_();
-        bytes.extend_from_slice(&sample.to_le_bytes());
-        bytes.extend_from_slice(&sample.to_le_bytes());
-    }
-    std::fs::write(&path, bytes).expect("fixture track is written");
-    format!("file://{}", path.display())
+#[kithara::fixture]
+pub(crate) fn rhythm_b_mp3() -> String {
+    asset_url(assets::rhythm_mp3_deck_b_120bpm_48k())
+}
+
+#[kithara::fixture]
+pub(crate) fn short_wav() -> String {
+    asset_url(assets::sine_wav_a440_2s())
+}
+
+#[kithara::fixture]
+pub(crate) fn long_wav() -> String {
+    asset_url(assets::sine_wav_a440_12s())
 }
 
 pub(crate) async fn next_subscribe(

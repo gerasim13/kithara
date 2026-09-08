@@ -22,6 +22,7 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
+use kithara_test_fixtures::integration_fixtures::constant_half;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -38,18 +39,22 @@ enum RemoveAtScenario {
     ShiftCurrentIndex,
 }
 
-fn make_resource(duration_secs: f64) -> Resource {
+fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
+        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("test-resource-{duration_secs}"))),
     )
 }
 
 /// A resource whose src carries `label`, so concurrent items in one test
 /// stay distinguishable in failure output.
-fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
+fn make_tagged_resource(
+    constant_half: &'static [u8],
+    label: &'static str,
+    duration_secs: f64,
+) -> Resource {
     Resource::from_reader(
-        TestPcmReader::new(Consts::AUDIO_SPEC, duration_secs),
+        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("memory://{label}"))),
     )
 }
@@ -119,13 +124,18 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
 }
 
 fn prepared_player<const N: usize>(
+    constant_half: &'static [u8],
     crossfade_duration: f32,
     labels: [&'static str; N],
 ) -> PlayerImpl<TestPools> {
     let (player, _session) = make_fixture_player(crossfade_duration);
     player.set_auto_advance_enabled(false);
     for label in labels {
-        player.insert(make_tagged_resource(label, 0.05), TrackId::allocate(), None);
+        player.insert(
+            make_tagged_resource(constant_half, label, 0.05),
+            TrackId::allocate(),
+            None,
+        );
     }
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
@@ -161,12 +171,20 @@ fn drain_player_events(player: &PlayerImpl<TestPools>, rx: &mut EventReceiver) -
 #[kithara::test(tokio)]
 #[case(InsertScenario::AppendTwice, 2)]
 #[case(InsertScenario::InsertAtPosition, 3)]
-async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
+async fn player_insert_scenarios(
+    constant_half: &'static [u8],
+    #[case] scenario: InsertScenario,
+    #[case] expected_count: usize,
+) {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), TrackId::allocate(), None);
-    player.insert(make_resource(2.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
-        player.insert(make_resource(3.0), TrackId::allocate(), Some(0));
+        player.insert(
+            make_resource(constant_half, 3.0),
+            TrackId::allocate(),
+            Some(0),
+        );
     }
     assert_eq!(player.item_count(), expected_count);
 }
@@ -175,25 +193,28 @@ async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expec
 #[case(RemoveAtScenario::ExistingItem)]
 #[case(RemoveAtScenario::OutOfBounds)]
 #[case(RemoveAtScenario::ShiftCurrentIndex)]
-async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
+async fn player_remove_at_scenarios(
+    constant_half: &'static [u8],
+    #[case] scenario: RemoveAtScenario,
+) {
     let player = PlayerImpl::new(default_player_config());
     match scenario {
         RemoveAtScenario::ExistingItem => {
-            player.insert(make_resource(1.0), TrackId::allocate(), None);
-            player.insert(make_resource(2.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
             let removed = player.remove_at(0);
             assert!(removed.is_some());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::OutOfBounds => {
-            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
             assert!(player.remove_at(5).is_none());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::ShiftCurrentIndex => {
-            player.insert(make_resource(1.0), TrackId::allocate(), None);
-            player.insert(make_resource(2.0), TrackId::allocate(), None);
-            player.insert(make_resource(3.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 3.0), TrackId::allocate(), None);
             player.advance_to_next_item();
             player.advance_to_next_item();
             assert_eq!(player.current_index(), 2);
@@ -207,12 +228,15 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 #[kithara::test(tokio)]
 #[case(false)]
 #[case(true)]
-async fn player_remove_all_resets_state(#[case] with_resources: bool) {
+async fn player_remove_all_resets_state(
+    constant_half: &'static [u8],
+    #[case] with_resources: bool,
+) {
     let player = PlayerImpl::new(default_player_config());
     if with_resources {
-        player.insert(make_resource(1.0), TrackId::allocate(), None);
-        player.insert(make_resource(2.0), TrackId::allocate(), None);
-        player.insert(make_resource(3.0), TrackId::allocate(), None);
+        player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+        player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
+        player.insert(make_resource(constant_half, 3.0), TrackId::allocate(), None);
         assert_eq!(player.item_count(), 3);
     }
     player.remove_all_items();
@@ -222,11 +246,11 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 }
 
 #[kithara::test(tokio)]
-async fn player_advance_through_queue() {
+async fn player_advance_through_queue(constant_half: &'static [u8]) {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), TrackId::allocate(), None);
-    player.insert(make_resource(2.0), TrackId::allocate(), None);
-    player.insert(make_resource(3.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 3.0), TrackId::allocate(), None);
     assert_eq!(player.current_index(), 0);
     player.advance_to_next_item();
     assert_eq!(player.current_index(), 1);
@@ -237,10 +261,10 @@ async fn player_advance_through_queue() {
 }
 
 #[kithara::test(tokio)]
-async fn player_advance_emits_event() {
+async fn player_advance_emits_event(constant_half: &'static [u8]) {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), TrackId::allocate(), None);
-    player.insert(make_resource(2.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
+    player.insert(make_resource(constant_half, 2.0), TrackId::allocate(), None);
     let mut rx = player.subscribe();
     player.advance_to_next_item();
     let event = rx.try_recv().map(|env| env.event);
@@ -251,9 +275,9 @@ async fn player_advance_emits_event() {
 }
 
 #[kithara::test]
-fn replay_same_item_does_not_re_emit_current_item_changed() {
+fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'static [u8]) {
     let (player, _session) = make_fixture_player(0.0);
-    let item = make_tagged_resource("item-1", 0.05);
+    let item = make_tagged_resource(constant_half, "item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
@@ -281,11 +305,11 @@ fn replay_same_item_does_not_re_emit_current_item_changed() {
 }
 
 #[kithara::test]
-fn re_selecting_the_current_item_does_not_re_announce() {
+fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u8]) {
     // Centralization delta: re-selecting the already-current index (e.g. while
     // paused) must not re-announce — announce gates on identity, not on calls.
     let (player, _session) = make_fixture_player(0.0);
-    let item = make_tagged_resource("item-1", 0.05);
+    let item = make_tagged_resource(constant_half, "item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
@@ -307,18 +331,18 @@ fn re_selecting_the_current_item_does_not_re_announce() {
 }
 
 #[kithara::test]
-fn replacing_current_item_re_announces_on_next_play() {
+fn replacing_current_item_re_announces_on_next_play(constant_half: &'static [u8]) {
     // Dual of suppression: replacing the audio under the current index must
     // re-announce on the next play — index equality must not mask a change.
     let (player, _session) = make_fixture_player(0.0);
-    let item = make_tagged_resource("item-1", 0.05);
+    let item = make_tagged_resource(constant_half, "item-1", 0.05);
     player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
 
-    let replacement = make_tagged_resource("item-2", 0.05);
+    let replacement = make_tagged_resource(constant_half, "item-2", 0.05);
     player.replace_item(0, replacement, TrackId::allocate());
     player.play();
     let after = drain_player_events(&player, &mut rx);
@@ -333,8 +357,8 @@ fn replacing_current_item_re_announces_on_next_play() {
 }
 
 #[kithara::test]
-fn arm_next_loads_item_and_returns_src() {
-    let player = prepared_player(0.0, ["item-1", "item-2"]);
+fn arm_next_loads_item_and_returns_src(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
     let src = player
         .arm_next(1)
@@ -357,11 +381,11 @@ fn seek_seconds_updates_position_optimistically() {
 }
 
 #[kithara::test]
-fn arm_next_returns_none_for_empty_slot() {
+fn arm_next_returns_none_for_empty_slot(constant_half: &'static [u8]) {
     let (player, _session) = make_fixture_player(0.0);
     player.set_auto_advance_enabled(false);
     player.reserve_slots(2);
-    let first = make_tagged_resource("item-1", 0.05);
+    let first = make_tagged_resource(constant_half, "item-1", 0.05);
     player.replace_item(0, first, TrackId::allocate());
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
@@ -372,8 +396,8 @@ fn arm_next_returns_none_for_empty_slot() {
 }
 
 #[kithara::test]
-fn arm_next_idempotent_for_same_index() {
-    let player = prepared_player(0.0, ["item-1", "item-2"]);
+fn arm_next_idempotent_for_same_index(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
     let first_src = player
         .arm_next(1)
@@ -388,8 +412,8 @@ fn arm_next_idempotent_for_same_index() {
 }
 
 #[kithara::test]
-fn arm_next_replaces_previously_armed_slot() {
-    let player = prepared_player(0.0, ["a", "b", "c"]);
+fn arm_next_replaces_previously_armed_slot(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 0.0, ["a", "b", "c"]);
 
     let first = player
         .arm_next(1)
@@ -404,8 +428,8 @@ fn arm_next_replaces_previously_armed_slot() {
 }
 
 #[kithara::test]
-fn commit_next_index_mismatch_returns_typed_error() {
-    let player = prepared_player(1.0, ["a", "b"]);
+fn commit_next_index_mismatch_returns_typed_error(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -422,8 +446,8 @@ fn commit_next_index_mismatch_returns_typed_error() {
 }
 
 #[kithara::test]
-fn commit_next_advances_index_and_publishes_event() {
-    let player = prepared_player(1.0, ["a", "b"]);
+fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -446,8 +470,8 @@ fn commit_next_advances_index_and_publishes_event() {
 }
 
 #[kithara::test]
-fn commit_next_idempotent_when_already_activated() {
-    let player = prepared_player(1.0, ["a", "b"]);
+fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -459,8 +483,8 @@ fn commit_next_idempotent_when_already_activated() {
 }
 
 #[kithara::test]
-fn unarm_next_clears_when_not_activated_and_unloads() {
-    let player = prepared_player(0.0, ["a", "b"]);
+fn unarm_next_clears_when_not_activated_and_unloads(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 0.0, ["a", "b"]);
     let src = player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -472,8 +496,8 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
 }
 
 #[kithara::test]
-fn unarm_next_preserves_activated_current() {
-    let player = prepared_player(1.0, ["a", "b"]);
+fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -485,8 +509,8 @@ fn unarm_next_preserves_activated_current() {
 }
 
 #[kithara::test]
-fn select_item_clears_pending_next_and_unloads_preloaded_track() {
-    let player = prepared_player(1.0, ["item-1", "item-2", "item-3"]);
+fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["item-1", "item-2", "item-3"]);
     let src = player
         .arm_next(1)
         .expect("arm_next succeeds")
@@ -505,8 +529,8 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 /// switch silently no-ops because `items[index]` was emptied by
 /// `arm_next`'s `take()` and `enqueue_to_processor` returns `None`.
 #[kithara::test]
-fn select_item_on_armed_index_promotes_armed_slot() {
-    let player = prepared_player(1.0, ["item-1", "item-2"]);
+fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["item-1", "item-2"]);
     player.select_item(0, true).unwrap();
     let armed_src = player
         .arm_next(1)

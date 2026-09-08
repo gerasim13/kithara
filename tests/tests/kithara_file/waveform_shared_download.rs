@@ -27,7 +27,7 @@ use kithara_app::{
     waveform::TrackAnalysisRunner,
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
@@ -62,9 +62,9 @@ fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) ->
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
-async fn waveform_and_player_share_one_get() {
+async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // 1s stereo WAV.
-    let wav = Arc::new(signal::wav(44_100, 2, 44_100, signal::TONE));
+    let wav = Arc::new(audio_wav_44100.to_vec());
     let gets = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
         .route("/audio.wav", get(serve_wav))

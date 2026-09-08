@@ -23,7 +23,6 @@ use kithara::{
     platform::time::Duration,
     signal::AudioSpec,
 };
-use kithara_test_fixtures::signal::Wave;
 
 /// A stateful fixed-rate `AudioReader` for testing playback facades.
 pub struct TestPcmReader {
@@ -36,32 +35,34 @@ pub struct TestPcmReader {
 }
 
 enum Source {
-    Constant(f32),
-    Signal(Wave),
+    Samples(Vec<f32>),
+    Bytes(&'static [u8]),
 }
 
-/// Default sample value emitted by [`TestPcmReader::new`].
+/// Expected amplitude of the default prepared PCM fixture.
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
-    /// Create a new test reader with the given spec and duration.
-    /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
-    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
-        Self::with_value(spec, duration_secs, TEST_PCM_DEFAULT_VALUE)
-    }
-
-    /// Create a test reader emitting the given constant `value` for every
-    /// sample. Distinguishable per-track values let integration tests
-    /// verify which track a rendered PCM window belongs to.
-    #[must_use]
-    pub fn with_value(spec: AudioSpec, duration_secs: f64, value: f32) -> Self {
-        Self::with_source(spec, duration_secs, Source::Constant(value))
+    pub fn from_samples(spec: AudioSpec, samples: Vec<f32>) -> Self {
+        let total_frames = samples.len() as u64;
+        let mut reader = Self::with_source(spec, 0.0, Source::Samples(samples));
+        reader.total_frames = total_frames;
+        reader
     }
 
     #[must_use]
-    pub fn with_signal(spec: AudioSpec, duration_secs: f64, wave: Wave) -> Self {
-        Self::with_source(spec, duration_secs, Source::Signal(wave))
+    pub fn from_pcm(spec: AudioSpec, duration_secs: f64, bytes: &'static [u8]) -> Self {
+        assert!(
+            bytes.len().is_multiple_of(size_of::<f32>()),
+            "prepared PCM must contain whole samples"
+        );
+        let reader = Self::with_source(spec, duration_secs, Source::Bytes(bytes));
+        assert!(
+            reader.total_frames <= (bytes.len() / size_of::<f32>()) as u64,
+            "prepared PCM is shorter than the requested track"
+        );
+        reader
     }
 
     fn with_source(spec: AudioSpec, duration_secs: f64, source: Source) -> Self {
@@ -80,13 +81,9 @@ impl TestPcmReader {
     }
 
     fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
-        match self.source {
-            Source::Constant(value) => value,
-            Source::Signal(wave) => {
-                let frame = start.saturating_add(output_frame);
-                f32::from(wave.sample(frame as usize, self.spec.sample_rate.get()))
-                    / f32::from(i16::MAX)
-            }
+        match &self.source {
+            Source::Samples(samples) => samples[(start + output_frame) as usize],
+            Source::Bytes(bytes) => prepared_sample(bytes, (start + output_frame) as usize),
         }
     }
 
@@ -260,6 +257,7 @@ enum MockBehavior {
     MisreportedDuration {
         position_frames: usize,
         remaining_frames: usize,
+        samples: &'static [u8],
     },
     LiveFrontier {
         frontier_ns: Arc<AtomicU64>,
@@ -308,12 +306,17 @@ impl MockReader {
     }
 
     #[must_use]
-    pub fn misreported_duration(spec: AudioSpec, actual_frames: usize) -> Self {
+    pub fn misreported_duration(
+        spec: AudioSpec,
+        actual_frames: usize,
+        samples: &'static [u8],
+    ) -> Self {
         Self::with_behavior(
             spec,
             MockBehavior::MisreportedDuration {
                 position_frames: 0,
                 remaining_frames: actual_frames,
+                samples,
             },
         )
     }
@@ -403,6 +406,7 @@ impl AudioRead for MockReader {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
+            samples,
         } = &mut self.behavior
         else {
             return self.fixed_outcome();
@@ -414,7 +418,12 @@ impl AudioRead for MockReader {
                 position: Self::position_for(self.spec, *position_frames),
             });
         }
-        buf[..frames.saturating_mul(channels)].fill(0.5);
+        for (index, sample) in buf[..frames.saturating_mul(channels)]
+            .iter_mut()
+            .enumerate()
+        {
+            *sample = prepared_sample(samples, *position_frames + index / channels);
+        }
         *remaining_frames -= frames;
         *position_frames += frames;
         Ok(ReadOutcome::Frames {
@@ -431,6 +440,7 @@ impl AudioRead for MockReader {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
+            samples,
         } = &mut self.behavior
         else {
             return self.fixed_outcome();
@@ -447,7 +457,9 @@ impl AudioRead for MockReader {
             });
         }
         for channel in output {
-            channel[..frames].fill(0.5);
+            for (frame, sample) in channel[..frames].iter_mut().enumerate() {
+                *sample = prepared_sample(samples, *position_frames + frame);
+            }
         }
         *remaining_frames -= frames;
         *position_frames += frames;
@@ -560,4 +572,13 @@ impl SeekBegin for SeekSpy {
             landed_at: position,
         }
     }
+}
+
+fn prepared_sample(bytes: &[u8], frame: usize) -> f32 {
+    let index = frame * size_of::<f32>();
+    f32::from_le_bytes(
+        bytes[index..index + size_of::<f32>()]
+            .try_into()
+            .expect("prepared PCM sample"),
+    )
 }

@@ -25,7 +25,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -52,7 +52,10 @@ impl Consts {
 
 /// Register the hung background source and reachable foreground MP3 used by
 /// every lane scenario.
-fn register_sources(helper: &TestServerHelper) -> (BehaviorHandle, BehaviorHandle) {
+fn register_sources(
+    helper: &TestServerHelper,
+    tone_mp3: &'static [u8],
+) -> (BehaviorHandle, BehaviorHandle) {
     let hung = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(vec![0u8; Consts::HUNG_BODY_LEN]),
@@ -65,7 +68,7 @@ fn register_sources(helper: &TestServerHelper) -> (BehaviorHandle, BehaviorHandl
     });
     let fast = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -166,9 +169,9 @@ async fn wait_for_status_matching(
 /// promoted by `select` and play, without a duplicate download session
 /// from the abandoned parked attempt.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-async fn select_pending_track_parked_behind_hung_load_promotes() {
+async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
-    let (hung, fast) = register_sources(&helper);
+    let (hung, fast) = register_sources(&helper, tone_mp3);
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) =
@@ -225,9 +228,9 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
 /// A follow-up selection is not blocked by a superseded hung one, and
 /// the superseded track ends `Cancelled`.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-async fn superseded_hung_selection_frees_lane_for_next_select() {
+async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
-    let (hung, fast) = register_sources(&helper);
+    let (hung, fast) = register_sources(&helper, tone_mp3);
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) =

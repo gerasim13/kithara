@@ -101,14 +101,15 @@ fn sample_config() -> crate::PoolConfig {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::trim_ramp;
     use kithara_test_utils::kithara;
 
     use super::{byte_buffer, pools, sample_buffer};
 
     #[kithara::test]
-    fn buffers_use_the_supplied_region() {
+    fn buffers_use_the_supplied_region(trim_ramp: Vec<f32>) {
         let pools = pools();
-        let samples = sample_buffer(&pools, &[1.0, 2.0]);
+        let samples = sample_buffer(&pools, &trim_ramp[1..3]);
         let bytes = byte_buffer(&pools);
 
         assert_eq!(&*samples, &[1.0, 2.0]);

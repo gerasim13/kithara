@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
+use kithara_test_fixtures::integration_fixtures::concurrent_wav;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -81,13 +82,14 @@ async fn create_hls_audio(
         .expect("create Audio<Stream<Hls>>")
 }
 
-fn generate_wav_data() -> Arc<Vec<u8>> {
-    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
-}
-
 /// Spawn `n` concurrent HLS readers and assert each reads non-zero samples.
-async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
-    let wav_data = generate_wav_data();
+async fn run_concurrent_hls(
+    concurrent_wav: &'static [u8],
+    n: usize,
+    abr: AbrMode,
+    variants: usize,
+) {
+    let wav_data = Arc::new(concurrent_wav.to_vec());
 
     let mut handles = Vec::new();
     for i in 0..n {
@@ -128,9 +130,10 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
 #[case::n8_manual(8, AbrMode::manual(0), 1)]
 #[case::n4_auto_abr(4, auto(0), 2)]
 async fn concurrent_hls_instances(
+    concurrent_wav: &'static [u8],
     #[case] instances: usize,
     #[case] abr: AbrMode,
     #[case] variants: usize,
 ) {
-    run_concurrent_hls(instances, abr, variants).await;
+    run_concurrent_hls(concurrent_wav, instances, abr, variants).await;
 }

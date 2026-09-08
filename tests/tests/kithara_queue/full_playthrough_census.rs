@@ -298,13 +298,7 @@ impl Census {
     }
 }
 
-async fn build_queue(
-    origins: &[Origin],
-    server: Option<&TestServerHelper>,
-    temp_dir: &TestTempDir,
-    seam: Seam,
-    patterns: &[PcmPattern],
-) -> Census {
+async fn build_queue(sources: Vec<ResourceSrc>, temp_dir: &TestTempDir, seam: Seam) -> Census {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
@@ -318,9 +312,8 @@ async fn build_queue(
     config.should_autoplay = false;
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
-    let mut tracks = Vec::with_capacity(patterns.len());
-    for (index, (origin, pattern)) in origins.iter().zip(patterns).enumerate() {
-        let src = track_src(*origin, server, *pattern).await;
+    let mut tracks = Vec::with_capacity(sources.len());
+    for (index, src) in sources.into_iter().enumerate() {
         let resource = open_resource(
             &harness,
             src,
@@ -537,19 +530,14 @@ struct Take {
     ordered: Vec<(u64, Active)>,
 }
 
-async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) -> Take {
+async fn census_provenance(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir) -> Take {
     let recorder = probe_capture::install();
-    let server = if origins.iter().copied().any(Origin::needs_server) {
-        Some(TestServerHelper::new().await)
-    } else {
-        None
-    };
-    let patterns = [
-        PcmPattern::Ascending,
-        PcmPattern::Descending,
-        PcmPattern::Ascending,
-    ];
-    let census = build_queue(origins, server.as_ref(), temp_dir, seam, &patterns).await;
+    let PreparedTracks {
+        server: _server,
+        origins,
+        sources,
+    } = prepared;
+    let census = build_queue(sources, temp_dir, seam).await;
     let (rendered, log) = play_to_the_end(&census).await;
 
     assert!(
@@ -716,8 +704,8 @@ fn census_acoustics(take: &Take) {
     );
 }
 
-async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
-    let take = census_provenance(origins, seam, temp_dir).await;
+async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir) {
+    let take = census_provenance(prepared, seam, temp_dir).await;
     census_acoustics(&take);
 }
 
@@ -729,8 +717,11 @@ async fn run_census(origins: &[Origin], seam: Seam, temp_dir: &TestTempDir) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&HLS_QUEUE, Seam::Gapless, &temp_dir).await;
+async fn gapless_hls_queue_plays_every_track_end_to_end(
+    #[future(awt)] hls_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(hls_tracks, Seam::Gapless, &temp_dir).await;
 }
 
 /// Crossfade: the overlap must be exactly the configured one, at the boundary
@@ -741,8 +732,11 @@ async fn gapless_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&HLS_QUEUE, Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_hls_queue_plays_every_track_end_to_end(
+    #[future(awt)] hls_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(hls_tracks, Seam::Crossfade, &temp_dir).await;
 }
 
 /// The same gapless census over local files: a track that arrives whole rather
@@ -753,8 +747,11 @@ async fn crossfaded_hls_queue_plays_every_track_end_to_end(temp_dir: TestTempDir
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&LOCAL_QUEUE, Seam::Gapless, &temp_dir).await;
+async fn gapless_local_queue_plays_every_track_end_to_end(
+    #[future(awt)] local_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(local_tracks, Seam::Gapless, &temp_dir).await;
 }
 
 /// The same crossfade census over local files.
@@ -764,8 +761,11 @@ async fn gapless_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir)
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_local_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&LOCAL_QUEUE, Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_local_queue_plays_every_track_end_to_end(
+    #[future(awt)] local_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(local_tracks, Seam::Crossfade, &temp_dir).await;
 }
 
 /// The seam a playlist crosses when it leaves a segmented stream for a whole
@@ -778,8 +778,11 @@ async fn crossfaded_local_queue_plays_every_track_end_to_end(temp_dir: TestTempD
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_network_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&NETWORK_QUEUE, Seam::Gapless, &temp_dir).await;
+async fn gapless_network_queue_plays_every_track_end_to_end(
+    #[future(awt)] network_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(network_tracks, Seam::Gapless, &temp_dir).await;
 }
 
 /// The same seam with a crossfade: the overlap must be exactly the configured
@@ -790,8 +793,11 @@ async fn gapless_network_queue_plays_every_track_end_to_end(temp_dir: TestTempDi
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_network_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&NETWORK_QUEUE, Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_network_queue_plays_every_track_end_to_end(
+    #[future(awt)] network_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(network_tracks, Seam::Crossfade, &temp_dir).await;
 }
 
 /// A queue whose neighbours never share a reader: each seam hands over from a
@@ -802,8 +808,11 @@ async fn crossfaded_network_queue_plays_every_track_end_to_end(temp_dir: TestTem
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&MIXED_QUEUE, Seam::Gapless, &temp_dir).await;
+async fn gapless_mixed_queue_plays_every_track_end_to_end(
+    #[future(awt)] mixed_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(mixed_tracks, Seam::Gapless, &temp_dir).await;
 }
 
 /// The same mixed queue with the crossfade: the overlap is the configured one
@@ -814,8 +823,11 @@ async fn gapless_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir)
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempDir) {
-    run_census(&MIXED_QUEUE, Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_mixed_queue_plays_every_track_end_to_end(
+    #[future(awt)] mixed_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    run_census(mixed_tracks, Seam::Crossfade, &temp_dir).await;
 }
 
 /// The reported premature switch was seen where an HLS stream hands over to a
@@ -829,8 +841,11 @@ async fn crossfaded_mixed_queue_plays_every_track_end_to_end(temp_dir: TestTempD
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_mpeg_queue_serves_every_track_whole(temp_dir: TestTempDir) {
-    let _ = census_provenance(&MPEG_QUEUE, Seam::Gapless, &temp_dir).await;
+async fn gapless_mpeg_queue_serves_every_track_whole(
+    #[future(awt)] mpeg_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    let _ = census_provenance(mpeg_tracks, Seam::Gapless, &temp_dir).await;
 }
 
 /// The same seam with the crossfade the reported defect was heard as: the
@@ -842,6 +857,62 @@ async fn gapless_mpeg_queue_serves_every_track_whole(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn crossfaded_mpeg_queue_serves_every_track_whole(temp_dir: TestTempDir) {
-    let _ = census_provenance(&MPEG_QUEUE, Seam::Crossfade, &temp_dir).await;
+async fn crossfaded_mpeg_queue_serves_every_track_whole(
+    #[future(awt)] mpeg_tracks: PreparedTracks,
+    temp_dir: TestTempDir,
+) {
+    let _ = census_provenance(mpeg_tracks, Seam::Crossfade, &temp_dir).await;
+}
+
+struct PreparedTracks {
+    server: Option<TestServerHelper>,
+    origins: [Origin; 3],
+    sources: Vec<ResourceSrc>,
+}
+
+async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
+    let server = if origins.iter().copied().any(Origin::needs_server) {
+        Some(TestServerHelper::new().await)
+    } else {
+        None
+    };
+    let patterns = [
+        PcmPattern::Ascending,
+        PcmPattern::Descending,
+        PcmPattern::Ascending,
+    ];
+    let mut sources = Vec::with_capacity(origins.len());
+    for (origin, pattern) in origins.iter().zip(patterns) {
+        sources.push(track_src(*origin, server.as_ref(), pattern).await);
+    }
+    PreparedTracks {
+        server,
+        origins,
+        sources,
+    }
+}
+
+#[kithara::fixture]
+async fn hls_tracks() -> PreparedTracks {
+    prepare_tracks(HLS_QUEUE).await
+}
+
+#[kithara::fixture]
+async fn local_tracks() -> PreparedTracks {
+    prepare_tracks(LOCAL_QUEUE).await
+}
+
+#[kithara::fixture]
+async fn network_tracks() -> PreparedTracks {
+    prepare_tracks(NETWORK_QUEUE).await
+}
+
+#[kithara::fixture]
+async fn mixed_tracks() -> PreparedTracks {
+    prepare_tracks(MIXED_QUEUE).await
+}
+
+#[kithara::fixture]
+async fn mpeg_tracks() -> PreparedTracks {
+    prepare_tracks(MPEG_QUEUE).await
 }

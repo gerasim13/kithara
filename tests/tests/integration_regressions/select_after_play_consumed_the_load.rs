@@ -14,7 +14,7 @@
 use std::{
     fs,
     num::NonZeroU32,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -41,7 +41,7 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::wait_for_event,
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 const TRACK_COUNT: usize = 2;
 
@@ -106,27 +106,31 @@ fn spawn_ticker(queue: &Queue<TestPools>) -> QueueTicker {
 /// A local fixture per track: the load has to run and land asynchronously,
 /// but nothing about this test depends on how long it takes — the gate owns
 /// the ordering — so it stays off the shared test server.
-fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
-    let path = temp_dir.path().join(format!("gated-{index}.mp3"));
-    fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("fixture must be writable");
-    path
+#[kithara::fixture]
+fn gated_paths(temp_dir: TestTempDir, tone_mp3: &'static [u8]) -> (TestTempDir, Vec<PathBuf>) {
+    let paths = (0..TRACK_COUNT)
+        .map(|index| {
+            let path = temp_dir.path().join(format!("gated-{index}.mp3"));
+            fs::write(&path, tone_mp3).expect("fixture must be writable");
+            path
+        })
+        .collect();
+    (temp_dir, paths)
 }
 
-fn resource_config(
-    temp_dir: &TestTempDir,
-    store: &AssetStore<TestPools>,
-    index: usize,
-) -> ResourceConfig<TestPools> {
+fn resource_config(path: &Path, store: &AssetStore<TestPools>) -> ResourceConfig<TestPools> {
     ResourceConfig::for_src(
-        ResourceSrc::parse(fixture_path(temp_dir, index).to_string_lossy())
-            .expect("absolute fixture path"),
+        ResourceSrc::parse(path.to_string_lossy()).expect("absolute fixture path"),
     )
     .store(store.clone())
     .build()
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTempDir) {
+async fn a_track_play_consumed_mid_load_can_be_selected_again(
+    gated_paths: (TestTempDir, Vec<PathBuf>),
+) {
+    let (temp_dir, paths) = gated_paths;
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let session = Arc::new(StartGatedSession::new(entered_tx, release_rx));
@@ -160,7 +164,8 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
             queue
                 .run(move |q| {
                     q.append(TrackSource::Config(Box::new(resource_config(
-                        &temp_dir, &store, index,
+                        &paths[index],
+                        &store,
                     ))))
                 })
                 .await

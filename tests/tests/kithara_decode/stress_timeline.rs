@@ -8,18 +8,16 @@ use kithara_integration_tests::{
     Xorshift64,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::fixtures::stress_wav;
 
 use crate::common::test_defaults::SawWav;
 
 #[kithara::test(timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-fn stress_seeks_preserve_timeline_integrity() {
-    const DURATION_SECS: u32 = 10;
-    const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS as usize;
+fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
     const SEEK_ITERATIONS: usize = 200;
     const CHUNKS_PER_BURST: usize = 5;
 
-    let wav_data = signal::wav(SawWav::DEFAULT.sample_rate, 2, SAMPLE_COUNT, signal::TONE);
+    let wav_data = stress_wav;
     let cursor = Cursor::new(wav_data);
 
     let mut decoder = DecoderFactory::create_with_probe(

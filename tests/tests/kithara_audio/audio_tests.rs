@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     kithara,
     reads::blocking_audio,
 };
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::{asset::Asset, assets};
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,
@@ -69,19 +69,9 @@ async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) 
 /// app cache at `env::temp_dir()/kithara` stays untouched, and the
 /// directory is auto-deleted when the test returns.
 fn test_wav_config(
-    sample_count: usize,
+    tmp: &NamedTempFile,
     worker: &PlayWorker<TestPools>,
-) -> (
-    TestTempDir,
-    NamedTempFile,
-    AudioConfig<kithara::file::File<TestPools>>,
-) {
-    let wav_data = signal::wav(44100, 2, sample_count, signal::TONE);
-    let tmp = NamedTempFile::new().unwrap();
-    File::create(tmp.path())
-        .unwrap()
-        .write_all(&wav_data)
-        .unwrap();
+) -> (TestTempDir, AudioConfig<kithara::file::File<TestPools>>) {
     let cache = TestTempDir::new();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
         .store(
@@ -96,24 +86,24 @@ fn test_wav_config(
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())
         .build();
-    (cache, tmp, config)
+    (cache, config)
 }
 
 #[kithara::test(tokio)]
-#[case::short(16)]
-#[case::regular(1000)]
-async fn test_audio_new(#[case] sample_count: usize) {
+#[case::short(wav_16())]
+#[case::regular(wav_1000())]
+async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(sample_count, &worker);
+    let (_cache, config) = test_wav_config(&wav_input, &worker);
     let _audio = worker.open(config).await.unwrap();
 }
 
 #[kithara::test(tokio)]
-async fn test_audio_new_publishes_initial_decoder_changed() {
+async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(1000, &worker);
+    let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(config.stream().clone())
@@ -198,10 +188,10 @@ fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
 }
 
 #[kithara::test(tokio)]
-async fn test_audio_spec() {
+async fn test_audio_spec(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(1000, &worker);
+    let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let spec = audio.spec();
@@ -210,10 +200,10 @@ async fn test_audio_spec() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(20)))]
-async fn test_audio_read() {
+async fn test_audio_read(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(1000, &worker);
+    let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let (_audio, (total_read, saw_eof)) = blocking_audio(audio, |audio| {
@@ -235,12 +225,12 @@ async fn test_audio_read() {
 }
 
 #[kithara::test(tokio)]
-#[case::tiny(100, 4)]
-#[case::wide(1000, 64)]
-async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_len: usize) {
+#[case::tiny(wav_100(), 4)]
+#[case::wide(wav_1000(), 64)]
+async fn test_audio_read_small_buffer(#[case] wav_input: NamedTempFile, #[case] buf_len: usize) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(sample_count, &worker);
+    let (_cache, config) = test_wav_config(&wav_input, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let (_audio, outcome) = blocking_audio(audio, move |audio| {
@@ -257,10 +247,10 @@ async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_l
 }
 
 #[kithara::test(tokio)]
-async fn test_audio_seek() {
+async fn test_audio_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(44100, &worker);
+    let (_cache, config) = test_wav_config(&wav_44100, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let (audio, initial_read) = blocking_audio(audio, |audio| {
@@ -282,10 +272,10 @@ async fn test_audio_seek() {
 }
 
 #[kithara::test(tokio)]
-async fn test_audio_playback_progress_uses_output_commit() {
+async fn test_audio_playback_progress_uses_output_commit(wav_1024: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(1024, &worker);
+    let (_cache, config) = test_wav_config(&wav_1024, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let mut events = audio.event_bus().subscribe();
@@ -317,10 +307,10 @@ async fn test_audio_playback_progress_uses_output_commit() {
 }
 
 #[kithara::test(tokio)]
-async fn test_seek_emits_matching_playback_progress() {
+async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(44_100 * 4, &worker);
+    let (_cache, config) = test_wav_config(&wav_176400, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let mut events = audio.event_bus().subscribe();
@@ -350,10 +340,10 @@ async fn test_seek_emits_matching_playback_progress() {
 }
 
 #[kithara::test(tokio)]
-async fn test_seek_complete_emitted_only_after_output_commit() {
+async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(44_100 * 4, &worker);
+    let (_cache, config) = test_wav_config(&wav_176400, &worker);
     let audio = worker.open(config).await.unwrap();
 
     let mut events = audio.event_bus().subscribe();
@@ -422,10 +412,10 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 #[case::single(false)]
 #[case::idempotent(true)]
-async fn test_audio_preload(#[case] second_preload: bool) {
+async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: bool) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(1000, &worker);
+    let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let mut audio = worker.open(config).await.unwrap();
 
     assert!(
@@ -445,10 +435,10 @@ async fn test_audio_preload(#[case] second_preload: bool) {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-async fn test_audio_preload_rearms_after_seek() {
+async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(44_100, &worker);
+    let (_cache, config) = test_wav_config(&wav_44100, &worker);
     let mut audio = worker.open(config).await.unwrap();
 
     audio.preload().expect("preload must succeed");
@@ -469,10 +459,10 @@ async fn test_audio_preload_rearms_after_seek() {
 /// survive seeks.  If seek resets it, the audio callback switches to
 /// blocking recv — parking the thread on every empty ringbuf poll.
 #[kithara::test(tokio)]
-async fn preloaded_survives_seek() {
+async fn preloaded_survives_seek(wav_88200: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let (_cache, _tmp, config) = test_wav_config(44100 * 2, &worker);
+    let (_cache, config) = test_wav_config(&wav_88200, &worker);
     let mut audio = worker.open(config).await.expect("create audio");
 
     audio.preload().expect("preload must succeed");
@@ -485,4 +475,48 @@ async fn preloaded_survives_seek() {
 
     let after_seek = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
     assert!(after_seek > 0, "must read samples after seek");
+}
+
+fn prepared_wav(asset: Asset) -> NamedTempFile {
+    let tmp = NamedTempFile::new().expect("temporary audio file");
+    File::create(tmp.path())
+        .expect("open temporary audio file")
+        .write_all(asset.bytes())
+        .expect("copy prepared audio");
+    tmp
+}
+
+#[kithara::fixture]
+fn wav_16() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_16())
+}
+
+#[kithara::fixture]
+fn wav_100() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_100())
+}
+
+#[kithara::fixture]
+fn wav_1000() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_1000())
+}
+
+#[kithara::fixture]
+fn wav_1024() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_1024())
+}
+
+#[kithara::fixture]
+fn wav_44100() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_44100())
+}
+
+#[kithara::fixture]
+fn wav_88200() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_88200())
+}
+
+#[kithara::fixture]
+fn wav_176400() -> NamedTempFile {
+    prepared_wav(assets::audio_wav_frames_176400())
 }

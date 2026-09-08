@@ -9,8 +9,8 @@ use kithara_integration_tests::{
 };
 
 use super::sync_product_matrix::{
-    BLOCK_FRAMES, CHANNELS, HlsProtection, ONE_DECK, ProductHarness, Provider, SHARED_DEADLINE,
-    SHARED_DEADLINE_CONTROL, SyncCase,
+    BLOCK_FRAMES, CHANNELS, ONE_DECK, PreparedSources, ProductHarness, SHARED_DEADLINE,
+    SHARED_DEADLINE_CONTROL, SyncCase, mixed_sources, sweep_sources, synthetic_sources,
 };
 
 const TWENTY_MS_FRAMES: usize = 960;
@@ -27,9 +27,13 @@ struct AlignedRun {
     control: Vec<f32>,
 }
 
-async fn tempo_retarget_run(block_frames: usize, warm_blocks: usize, retarget: bool) -> CommandRun {
-    let mut harness =
-        ProductHarness::new_for_block(ONE_DECK, Provider::Sweep, 0, block_frames).await;
+async fn tempo_retarget_run(
+    block_frames: usize,
+    warm_blocks: usize,
+    retarget: bool,
+    prepared: &PreparedSources,
+) -> CommandRun {
+    let mut harness = ProductHarness::new_for_block(ONE_DECK, prepared, 0, block_frames).await;
     harness.request_sync(ONE_DECK).await;
     let warm_frames = warm_blocks * BLOCK_FRAMES;
     for _ in 0..warm_frames.div_ceil(block_frames) {
@@ -54,9 +58,12 @@ async fn tempo_retarget_run(block_frames: usize, warm_blocks: usize, retarget: b
     }
 }
 
-async fn running_sync_run(block_frames: usize, issue_sync: bool) -> CommandRun {
-    let mut harness =
-        ProductHarness::new_for_block(ONE_DECK, Provider::Synthetic, 0, block_frames).await;
+async fn running_sync_run(
+    block_frames: usize,
+    issue_sync: bool,
+    prepared: &PreparedSources,
+) -> CommandRun {
+    let mut harness = ProductHarness::new_for_block(ONE_DECK, prepared, 0, block_frames).await;
     let pre_frames = ONE_DECK.sample_rate as usize;
     let settled_frames = BLOCK_FRAMES * 96;
     let command_at_seconds = 8.0;
@@ -206,11 +213,15 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "ignored-red: bound Warp tempo retarget is not implemented"]
-async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
+async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
+    #[future(awt)] sweep_sources: PreparedSources,
+) {
     for (phase, warm_blocks) in [("early", 47), ("middle", 94), ("late", 140)] {
         for block_frames in [128, 256, 512] {
-            let control = tempo_retarget_run(block_frames, warm_blocks, false).await;
-            let candidate = tempo_retarget_run(block_frames, warm_blocks, true).await;
+            let control =
+                tempo_retarget_run(block_frames, warm_blocks, false, &sweep_sources).await;
+            let candidate =
+                tempo_retarget_run(block_frames, warm_blocks, true, &sweep_sources).await;
             let aligned = align_runs(&candidate, &control);
             let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
             let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
@@ -258,10 +269,12 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "ignored-red: running Warp alignment is not implemented"]
-async fn running_sync_command_changes_audible_pcm_within_one_block() {
+async fn running_sync_command_changes_audible_pcm_within_one_block(
+    #[future(awt)] synthetic_sources: PreparedSources,
+) {
     for block_frames in [128, 256, 512] {
-        let control = running_sync_run(block_frames, false).await;
-        let candidate = running_sync_run(block_frames, true).await;
+        let control = running_sync_run(block_frames, false, &synthetic_sources).await;
+        let candidate = running_sync_run(block_frames, true, &synthetic_sources).await;
         let aligned = align_runs(&candidate, &control);
         let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
         let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
@@ -295,8 +308,8 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
     }
 }
 
-async fn capture_intent_sequence(intents: &[SyncIntent]) -> CommandRun {
-    let mut harness = ProductHarness::new(ONE_DECK, Provider::Synthetic, 0).await;
+async fn capture_intent_sequence(intents: &[SyncIntent], prepared: &PreparedSources) -> CommandRun {
+    let mut harness = ProductHarness::new(ONE_DECK, prepared, 0).await;
     harness.decks[0]
         .seek(5.25)
         .unwrap_or_else(|error| panic!("latest-target fixture seek failed: {error}"));
@@ -323,15 +336,18 @@ async fn capture_intent_sequence(intents: &[SyncIntent]) -> CommandRun {
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "ignored-red: latest Warp target replacement is not implemented"]
-async fn latest_sync_target_wins_in_pcm() {
-    let first = capture_intent_sequence(&[SyncIntent::Enable]).await;
-    let second = capture_intent_sequence(&[SyncIntent::Disable]).await;
-    let latest = capture_intent_sequence(&[SyncIntent::AlignNow]).await;
-    let candidate = capture_intent_sequence(&[
-        SyncIntent::Enable,
-        SyncIntent::Disable,
-        SyncIntent::AlignNow,
-    ])
+async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: PreparedSources) {
+    let first = capture_intent_sequence(&[SyncIntent::Enable], &synthetic_sources).await;
+    let second = capture_intent_sequence(&[SyncIntent::Disable], &synthetic_sources).await;
+    let latest = capture_intent_sequence(&[SyncIntent::AlignNow], &synthetic_sources).await;
+    let candidate = capture_intent_sequence(
+        &[
+            SyncIntent::Enable,
+            SyncIntent::Disable,
+            SyncIntent::AlignNow,
+        ],
+        &synthetic_sources,
+    )
     .await;
     let latest_report = CochleaReport::measure(&latest.samples, CHANNELS, 48_000);
     let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
@@ -382,9 +398,9 @@ async fn latest_sync_target_wins_in_pcm() {
     timeout(Duration::from_secs(180))
 )]
 #[ignore = "ignored-red: bound Warp render is not implemented"]
-async fn bound_sync_render_is_rtsan_clean() {
-    let control = tempo_retarget_run(BLOCK_FRAMES, 16, false).await;
-    let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true).await;
+async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: PreparedSources) {
+    let control = tempo_retarget_run(BLOCK_FRAMES, 16, false, &sweep_sources).await;
+    let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true, &sweep_sources).await;
     let aligned = align_runs(&candidate, &control);
     let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
     let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
@@ -399,8 +415,8 @@ async fn bound_sync_render_is_rtsan_clean() {
     );
 }
 
-async fn shared_worker_capture(case: SyncCase) -> CommandRun {
-    let mut harness = ProductHarness::new(case, Provider::HlsMp3(HlsProtection::Plain), 0).await;
+async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> CommandRun {
+    let mut harness = ProductHarness::new(case, prepared, 0).await;
     harness.run_operations(case).await;
     harness.ride_tempo(case).await;
     if harness
@@ -430,9 +446,11 @@ async fn shared_worker_capture(case: SyncCase) -> CommandRun {
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "ignored-red: bound Warp shared-worker path is not implemented"]
-async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load() {
-    let control = shared_worker_capture(SHARED_DEADLINE_CONTROL).await;
-    let candidate = shared_worker_capture(SHARED_DEADLINE).await;
+async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
+    #[future(awt)] mixed_sources: PreparedSources,
+) {
+    let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources).await;
+    let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources).await;
     let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
     let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
     let mut failures = time_stretch_failures(

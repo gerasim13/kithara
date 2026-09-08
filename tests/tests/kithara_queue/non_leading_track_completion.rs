@@ -22,6 +22,7 @@ use kithara_integration_tests::{
         OfflinePlayerHarness, mean_abs, offline_queue_fixture, resource_from_reader_with_src,
     },
 };
+use kithara_test_fixtures::integration_fixtures::{constant_loud, constant_quiet};
 
 use crate::bufpool_ext::TestPools;
 
@@ -31,8 +32,6 @@ const BLOCK_FRAMES: usize = 512;
 /// ≈ 0.74 s of rendered audio — far short of `TRACK_SECS`.
 const WARMUP_BLOCKS: usize = 64;
 const TRACK_SECS: f64 = 30.0;
-const LOUD: f32 = 0.80;
-const QUIET: f32 = 0.10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Completion {
@@ -51,7 +50,7 @@ enum NonLeadingRole {
 async fn loaded_track(
     harness: &OfflinePlayerHarness,
     queue: &QueueControl<TestPools>,
-    value: f32,
+    samples: &'static [u8],
 ) -> (TrackId, Arc<str>) {
     let id = queue.register_for_test();
     let src: Arc<str> = Arc::from(format!("test://memory/{}", id.as_u64()));
@@ -65,7 +64,7 @@ async fn loaded_track(
             q.complete_load_for_test(
                 id,
                 resource_from_reader_with_src(
-                    TestPcmReader::with_value(spec, TRACK_SECS, value),
+                    TestPcmReader::from_pcm(spec, TRACK_SECS, samples),
                     player_src,
                 ),
             )
@@ -88,16 +87,19 @@ async fn render_loop(
 }
 
 /// Three loaded tracks with the first standing in for a non-leading slot.
-async fn non_leading_fixture() -> (
+async fn non_leading_fixture(
+    constant_quiet: &'static [u8],
+    constant_loud: &'static [u8],
+) -> (
     OfflinePlayerHarness,
     QueueControl<TestPools>,
     TrackRef,
     TrackId,
 ) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let (stale, stale_src) = loaded_track(&harness, &queue, QUIET).await;
-    let (current, _) = loaded_track(&harness, &queue, LOUD).await;
-    let (_next, _) = loaded_track(&harness, &queue, QUIET).await;
+    let (stale, stale_src) = loaded_track(&harness, &queue, constant_quiet).await;
+    let (current, _) = loaded_track(&harness, &queue, constant_loud).await;
+    let (_next, _) = loaded_track(&harness, &queue, constant_quiet).await;
     (
         harness,
         queue,
@@ -133,9 +135,11 @@ fn publish_completion(
 #[case::background_failure(Completion::Failure, NonLeadingRole::Background)]
 async fn non_leading_completion_does_not_advance_the_queue(
     #[case] completion: Completion,
+    constant_quiet: &'static [u8],
+    constant_loud: &'static [u8],
     #[case] role: NonLeadingRole,
 ) {
-    let (harness, queue, stale, current) = non_leading_fixture().await;
+    let (harness, queue, stale, current) = non_leading_fixture(constant_quiet, constant_loud).await;
     let stale_id = stale.id;
 
     harness
@@ -176,8 +180,10 @@ async fn non_leading_completion_does_not_advance_the_queue(
 #[case::failure(Completion::Failure)]
 async fn background_completion_does_not_cut_the_current_track_audio(
     #[case] completion: Completion,
+    constant_quiet: &'static [u8],
+    constant_loud: &'static [u8],
 ) {
-    let (harness, queue, stale, current) = non_leading_fixture().await;
+    let (harness, queue, stale, current) = non_leading_fixture(constant_quiet, constant_loud).await;
 
     harness
         .run(&queue, move |q| q.select(current, Transition::None))

@@ -25,7 +25,8 @@ use kithara_integration_tests::{
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
+use url::Url;
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
     let mut patch = HlsConfigPatch::default();
@@ -59,30 +60,11 @@ impl Drop for NetworkRestore<'_> {
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
-    // A private server: the blip below takes every data route down, so sharing
-    // one with parallel siblings would fail them instead.
-    let server = PrivateTestServer::start().await;
-    let helper = server.helper();
-    let target = helper
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(VARIANT_SEGMENTS)
-                .segment_duration_secs(SEGMENT_SECS)
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create the ladder the blip lands on");
-    let target_url = target.master_url();
-    let fallback_fixture = helper.register_behavior(FixtureBehavior {
-        content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
-            content_type: Some("audio/mpeg"),
-        },
-        delivery: Delivery::Range,
-    });
-    let fallback_url = fallback_fixture.child_url("fallback.mp3");
+async fn transient_failure_does_not_kill_the_track(
+    temp_dir: TestTempDir,
+    #[future(awt)] transient_sources: (PrivateTestServer, Url, Url),
+) {
+    let (server, target_url, fallback_url) = transient_sources;
 
     let pools = pools();
     let net = NetOptions::builder()
@@ -247,4 +229,33 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     queue.clear();
     ticker.stop().await;
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn transient_sources(tone_mp3: &'static [u8]) -> (PrivateTestServer, Url, Url) {
+    // A private server: the blip below takes every data route down, so sharing
+    // one with parallel siblings would fail them instead.
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
+    let target = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(VARIANT_SEGMENTS)
+                .segment_duration_secs(SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the blip lands on");
+    let target_url = target.master_url();
+    let fallback_fixture = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(tone_mp3.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let fallback_url = fallback_fixture.child_url("fallback.mp3");
+
+    (server, target_url, fallback_url)
 }

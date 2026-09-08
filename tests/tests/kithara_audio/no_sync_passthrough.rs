@@ -32,6 +32,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::{
     assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s},
+    integration_fixtures::shifted_pitch,
     signal::goertzel_magnitude,
 };
 use num_traits::ToPrimitive;
@@ -72,6 +73,7 @@ fn source_frames() -> usize {
 }
 
 /// The plain tone this test measures, with the fixture bound to its budget.
+#[kithara::fixture]
 fn source_pcm() -> &'static [u8] {
     let bytes = sine_wav_a440_6s().bytes();
     assert_eq!(
@@ -83,9 +85,10 @@ fn source_pcm() -> &'static [u8] {
 }
 
 /// The same tone carrying the source-time markers `marker_timing` looks for.
-fn marked_source_pcm() -> &'static [u8] {
+#[kithara::fixture]
+fn marked_source_pcm(source_pcm: &'static [u8]) -> &'static [u8] {
     let bytes = marked_sine_wav_a440_6s().bytes();
-    assert_eq!(bytes.len(), source_pcm().len());
+    assert_eq!(bytes.len(), source_pcm.len());
     for start in RATE_MARKER_START_FRAMES {
         assert!(
             peak_amplitude(bytes, start, RATE_MARKER_FRAMES) <= RATE_MARKER_PEAK,
@@ -569,19 +572,6 @@ fn tone_dominates(samples: &[f32], tone_hz: f64, competing_hz: f64) -> bool {
     tone > competing * TONE_DOMINANCE_RATIO
 }
 
-fn tone_fixture(frequency_hz: f64, frames: usize) -> Vec<f32> {
-    let phase_step = std::f64::consts::TAU * frequency_hz / f64::from(SAMPLE_RATE);
-    (0..frames)
-        .map(|frame| {
-            (phase_step * frame.to_f64().expect("fixture frame fits f64"))
-                .sin()
-                .to_f32()
-                .expect("unit sine sample fits f32")
-                * 0.5
-        })
-        .collect()
-}
-
 fn expected_marker_interval(speed: f32) -> usize {
     let source_interval = RATE_MARKER_START_FRAMES[1]
         .checked_sub(RATE_MARKER_START_FRAMES[0])
@@ -809,9 +799,10 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     case(StretchKind::Bungee)
 )]
 async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
+    source_pcm: &'static [u8],
     #[case] backend: StretchKind,
 ) {
-    run_no_sync_passthrough(backend, false).await;
+    run_no_sync_passthrough(source_pcm, backend, false).await;
 }
 
 #[kithara::test(
@@ -826,8 +817,13 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
-async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backend: StretchKind) {
-    run_active_stretch(backend, false).await;
+async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(
+    source_pcm: &'static [u8],
+    marked_source_pcm: &'static [u8],
+    shifted_pitch: Vec<f32>,
+    #[case] backend: StretchKind,
+) {
+    run_active_stretch(source_pcm, marked_source_pcm, shifted_pitch, backend, false).await;
 }
 
 #[kithara::test(
@@ -843,8 +839,11 @@ async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backen
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
-    run_no_sync_passthrough(backend, true).await;
+async fn record_no_sync_unity_playback_artifacts(
+    source_pcm: &'static [u8],
+    #[case] backend: StretchKind,
+) {
+    run_no_sync_passthrough(source_pcm, backend, true).await;
 }
 
 #[kithara::test(
@@ -860,13 +859,21 @@ async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
     case(StretchKind::Bungee)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_active_keylock_artifacts(#[case] backend: StretchKind) {
-    run_active_stretch(backend, true).await;
+async fn record_no_sync_active_keylock_artifacts(
+    source_pcm: &'static [u8],
+    marked_source_pcm: &'static [u8],
+    shifted_pitch: Vec<f32>,
+    #[case] backend: StretchKind,
+) {
+    run_active_stretch(source_pcm, marked_source_pcm, shifted_pitch, backend, true).await;
 }
 
-async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
+async fn run_no_sync_passthrough(
+    source: &'static [u8],
+    backend: StretchKind,
+    record_artifacts: bool,
+) {
     let channels = usize::from(CHANNELS);
-    let source = source_pcm();
     let baseline = render_passthrough(source, None, false).await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
@@ -1003,9 +1010,13 @@ async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
     );
 }
 
-async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
-    let source = source_pcm();
-    let marker_source = marked_source_pcm();
+async fn run_active_stretch(
+    source: &'static [u8],
+    marker_source: &'static [u8],
+    shifted_pitch: Vec<f32>,
+    backend: StretchKind,
+    record_artifacts: bool,
+) {
     let control = render_passthrough(source, None, false).await;
     let candidate = render_passthrough(source, Some((backend, ACTIVE_SPEED)), false).await;
     let rate_control = render_passthrough(marker_source, None, false).await;
@@ -1081,13 +1092,13 @@ async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
             "active keylock did not preserve {TONE_HZ} Hz over the pitch-shifted {PITCH_SHIFTED_TONE_HZ} Hz control",
         ));
     }
-    let wrong_pitch = tone_fixture(PITCH_SHIFTED_TONE_HZ, candidate_mono.len());
+    let wrong_pitch = &shifted_pitch[..candidate_mono.len()];
     assert!(
-        tone_dominates(&wrong_pitch, PITCH_SHIFTED_TONE_HZ, TONE_HZ),
+        tone_dominates(wrong_pitch, PITCH_SHIFTED_TONE_HZ, TONE_HZ),
         "wrong-pitch negative control does not contain its declared frequency"
     );
     assert!(
-        !tone_dominates(&wrong_pitch, TONE_HZ, PITCH_SHIFTED_TONE_HZ),
+        !tone_dominates(wrong_pitch, TONE_HZ, PITCH_SHIFTED_TONE_HZ),
         "pitch oracle accepted a deliberately wrong 352 Hz fixture as 440 Hz"
     );
 

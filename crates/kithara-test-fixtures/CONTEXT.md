@@ -113,12 +113,12 @@ served by a test.
 `src/defs/` is reached only through `#[path]` from `build.rs`. Two consequences,
 both load-bearing:
 
-- Encoding is a **build-dependency**. `kithara-encode` enters the target build
-  for its `PcmSource` trait alone, with FFmpeg's encoder features off the
-  library's own default path; nothing in a target build calls an encoder.
-- Generation happens exactly once per fingerprint, in the build script. Nothing
-  in the library can synthesize an asset, which is the whole point: a test's
-  deadline never contains an encode.
+- Asset synthesis and encoding run in `build.rs`. Runtime fixture providers read
+  the resulting bytes, own temporary paths or servers, and pass ready inputs to
+  `#[kithara::test]` parameters. This includes tiny PCM arrays.
+- Signal and mux primitives remain available for tests of those primitives.
+  Encoding or mutation that is the operation under test stays in the test;
+  constructing audio for another component belongs in a build-time definition.
 
 ## One Way To Make A Signal
 
@@ -126,11 +126,10 @@ both load-bearing:
 build script reaches it through `#[path]` exactly as it reaches `src/store.rs`.
 The same source file, two roots, one visibility.
 
-It exists because a waveform is needed on both sides of the build line. `defs/`
-renders assets from it before the tests start; the integration suite renders
-the bodies its HTTP fixtures serve from it while they run. Two implementations
-of a sine would drift, and a test that asserts on decoded samples cannot tell
-which one it is asserting against.
+`defs/` renders assets before tests start. The integration suite reads those
+assets and uses the same waveform vocabulary and phase measurements to assert
+on decoded output. HTTP servers serve prepared bytes; they do not render
+waveforms or encode media.
 
 - `Wave` — the waveform vocabulary. One enum, one `sample(frame, sample_rate)`.
   `TONE` names the 440 Hz full-scale sine that a fixture carries unless it says
@@ -175,9 +174,8 @@ asserting against.
 
 ## One Way To Package fMP4
 
-`src/fmp4/` is shared exactly as `src/signal/` is, and for the same reason: the
-build script packages the HE-AAC bodies it embeds, and the integration suite's
-HLS server packages its variants while the tests run. `mux_audio_track` turns an
+`src/fmp4/` is shared with the build script, which packages embedded bodies and
+the HLS variants declared in `defs/hls_variants.rs`. `mux_audio_track` turns an
 `EncodedTrack` into an `Fmp4Package`: one init segment plus one media segment
 per `packets_per_segment` access units. `mux_audio_track_at` accepts explicit
 access-unit end boundaries for non-uniform HLS and can package a prefix of one
@@ -214,7 +212,24 @@ caller is what the `dead_exports` ratchet is for.
   is meant to accept, and threading a `Result` through every box builder would
   trade a loud impossible failure for noise on every call site.
 
-## What A Build Costs
+## Prepared HLS Variants
+
+`VariantInput` identifies all bytes-producing inputs of an HLS variant: codec,
+PCM shape and waveform, source offset, packet boundaries, bitrate, timescale,
+padding, and gapless metadata. Its versioned key uses explicit enum tokens and
+floating-point bits. The build source and runtime request use the same key
+implementation, and the build fingerprint includes its source.
+
+The build-time catalog contains the concrete profiles used by the suites. Mixed
+codec ladders align segment frames to the least common multiple of their codec
+frame sizes before encoding; padding retains the former encoder-frame alignment.
+The catalog manifest is committed after every init and media child is stored.
+`hls_fixtures::load_variant` reads only the selected variant and returns an error
+for an unregistered input. There is no runtime encoding fallback and no eager
+allocation of the complete catalog. Request delays, response faults, routing,
+and encryption exercised by server tests remain server responsibilities.
+
+## Historical Build Baseline
 
 Measured with `cargo build -p kithara-test-fixtures` on an already-compiled tree,
 three assets in the matrix (two six-second WAVs, one two-second MP3):
@@ -234,8 +249,8 @@ dominates both columns and amortizes like any build dependency. And the run
 that regenerates pays once for the whole workspace, where before every test
 binary that wanted an asset paid inside its own deadline.
 
-These numbers are the baseline the next migration stages are measured
-against: the cold column grows with the matrix, the warm column must not.
+These measurements predate the complete PCM and HLS catalog. They do not
+represent the current cold-build cost.
 
 ## Where The Analyzers Cannot Follow
 
@@ -253,8 +268,7 @@ source scanner sees neither.
   boundary into the store; there is no pool in a build script to lease from, and
   the rule itself exempts that shape.
 
-## Transitional Coupling
-
-`tests/src/fixture_cache.rs` is the disk cache this store replaces. It is frozen
-for the duration of the migration and dies once its last consumer moves over.
-Nothing new should be built on it.
+Cold generation is a build-time check: set `KITHARA_FIXTURE_CACHE` to an empty
+isolated directory before building. The former nextest `cold` setup ran after
+compilation and cannot change paths already recorded in the asset manifest.
+Runtime tests always consume the manifest produced by their build.

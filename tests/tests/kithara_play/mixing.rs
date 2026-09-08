@@ -13,6 +13,9 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflineHostHarness, peak, resource_from_reader},
 };
+use kithara_test_fixtures::integration_fixtures::{
+    constant_four, constant_quiet, constant_three, constant_two, constant_unity,
+};
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -60,7 +63,7 @@ impl MixHarness {
         Self { host, players }
     }
 
-    async fn play(&self, values: &[f32]) {
+    async fn play(&self, values: &[&'static [u8]]) {
         let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
         let players: Vec<_> = self
             .players
@@ -75,9 +78,7 @@ impl MixHarness {
                     player
                         .replace_item(
                             0,
-                            resource_from_reader(TestPcmReader::with_value(
-                                spec, TRACK_SECS, value,
-                            )),
+                            resource_from_reader(TestPcmReader::from_pcm(spec, TRACK_SECS, value)),
                             TrackId::allocate(),
                         )
                         .expect("replace player item");
@@ -148,20 +149,22 @@ fn assert_near(actual: f32, expected: f32, what: &str) {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-#[case::two(&[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
+#[case::two(vec![constant_four(), constant_two()], &[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
 #[case::four(
+    vec![constant_four(), constant_three(), constant_two(), constant_quiet()],
     &[0.4, 0.3, 0.2, 0.1],
     &[0.5, 0.5, 0.25, 0.25],
     "four-player sum"
 )]
 async fn players_render_exact_weighted_sum(
+    #[case] sources: Vec<&'static [u8]>,
     #[case] values: &[f32],
     #[case] levels: &[f32],
     #[case] label: &str,
 ) {
     let harness = MixHarness::new(values.len()).await;
     harness.apply(levels).await.expect("apply mix");
-    harness.play(values).await;
+    harness.play(&sources).await;
 
     let expected = values.iter().zip(levels).map(|(v, l)| v * l).sum();
     assert_near(harness.steady_peak().await, expected, label);
@@ -169,8 +172,13 @@ async fn players_render_exact_weighted_sum(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn zeroed_players_are_silent_and_gains_are_independent() {
-    let values = [0.4, 0.3, 0.2, 0.1];
+async fn zeroed_players_are_silent_and_gains_are_independent(
+    constant_four: &'static [u8],
+    constant_three: &'static [u8],
+    constant_two: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
+    let values = [constant_four, constant_three, constant_two, constant_quiet];
     let levels = [1.0, 0.0, 0.0, 0.0];
 
     let harness = MixHarness::new(values.len()).await;
@@ -182,8 +190,8 @@ async fn zeroed_players_are_silent_and_gains_are_independent() {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
-    let values = [1.0_f32; 4];
+async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity: &'static [u8]) {
+    let values = [constant_unity; 4];
     let levels = [1.0_f32; 4];
 
     let raw = values.len() as f32;
@@ -208,10 +216,10 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn sub_threshold_mix_passes_through_untouched() {
+async fn sub_threshold_mix_passes_through_untouched(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
     harness.apply(&[1.0]).await.expect("apply mix");
-    harness.play(&[0.4]).await;
+    harness.play(&[constant_four]).await;
 
     let rendered = harness.steady().await;
     let expected = 0.4;
@@ -229,9 +237,9 @@ async fn sub_threshold_mix_passes_through_untouched() {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn single_player_without_a_mix_is_unchanged() {
+async fn single_player_without_a_mix_is_unchanged(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
-    harness.play(&[0.4]).await;
+    harness.play(&[constant_four]).await;
     assert_near(
         harness.steady_peak().await,
         0.4,
@@ -241,8 +249,11 @@ async fn single_player_without_a_mix_is_unchanged() {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn rejected_mix_changes_no_rendered_gain() {
-    let values = [0.4, 0.2];
+async fn rejected_mix_changes_no_rendered_gain(
+    constant_four: &'static [u8],
+    constant_two: &'static [u8],
+) {
+    let values = [constant_four, constant_two];
     let harness = MixHarness::new(values.len()).await;
     harness.apply(&[0.5, 0.25]).await.expect("apply mix");
     harness.play(&values).await;
@@ -264,9 +275,9 @@ async fn rejected_mix_changes_no_rendered_gain() {
 }
 
 #[kithara::test(tokio)]
-async fn session_mix_does_not_mirror_player_content_volume() {
+async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'static [u8]) {
     let harness = MixHarness::new(1).await;
-    harness.play(&[0.4]).await;
+    harness.play(&[constant_four]).await;
     harness.apply(&[0.5]).await.expect("apply mix");
 
     assert_eq!(

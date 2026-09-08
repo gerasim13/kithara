@@ -11,7 +11,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineQueue,
@@ -74,17 +74,12 @@ fn known_duration(view: PlaybackView, phase: &str) -> f64 {
         .unwrap_or_else(|| panic!("duration became unknown {phase}"))
 }
 
-async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind: Target) {
-    let fixture = helper
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(SEGMENT_COUNT)
-                .segment_duration_secs(SEGMENT_DURATION_SECS)
-                .packaged_audio_aac_lc(SAMPLE_RATE, 2),
-        )
-        .await
-        .expect("create HLS fixture");
+async fn run_case(
+    helper: &TestServerHelper,
+    fixture: CreatedHls,
+    temp_dir: &TestTempDir,
+    target_kind: Target,
+) {
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
     let pools = pools();
     let downloader = Downloader::new(
@@ -246,8 +241,33 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn seek_to_duration_keeps_time_and_duration_consistent(temp_dir: TestTempDir) {
+async fn seek_to_duration_keeps_time_and_duration_consistent(
+    temp_dir: TestTempDir,
+    #[future(awt)] end_sources: (TestServerHelper, [CreatedHls; 2]),
+) {
+    let (helper, [near_end, end]) = end_sources;
+    run_case(&helper, near_end, &temp_dir, Target::NearEnd).await;
+    run_case(&helper, end, &temp_dir, Target::End).await;
+}
+
+#[kithara::fixture]
+async fn end_sources() -> (TestServerHelper, [CreatedHls; 2]) {
     let helper = TestServerHelper::new().await;
-    run_case(&helper, &temp_dir, Target::NearEnd).await;
-    run_case(&helper, &temp_dir, Target::End).await;
+    let first = end_source(&helper).await;
+    let second = end_source(&helper).await;
+    (helper, [first, second])
+}
+
+async fn end_source(helper: &TestServerHelper) -> CreatedHls {
+    let fixture = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(SEGMENT_COUNT)
+                .segment_duration_secs(SEGMENT_DURATION_SECS)
+                .packaged_audio_aac_lc(SAMPLE_RATE, 2),
+        )
+        .await
+        .expect("create HLS fixture");
+    fixture
 }

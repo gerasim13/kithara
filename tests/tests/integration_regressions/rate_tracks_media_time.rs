@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
-use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
+use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::drain_tone};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -22,7 +22,6 @@ const BLOCK_FRAMES: usize = 512;
 const SETTLE_BLOCKS: usize = 400;
 const MEASURE_BLOCKS: usize = 400;
 const FAST_RATE: f32 = 2.0;
-const DRAIN_FIXTURE_SECS: usize = 4;
 const DRAIN_BLOCK_BUDGET: usize = 4_000;
 /// The accelerated run must reach EOF within this share of the rate-1.0
 /// output. Deliberately far above the ~0.53 the pipeline actually delivers:
@@ -65,7 +64,7 @@ async fn media_advance(harness: &OfflinePlayerHarness, blocks: usize) -> f64 {
     harness.player().position_seconds().unwrap_or(0.0) - start
 }
 
-async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
+async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rate: f32) -> usize {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -75,9 +74,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     .await;
     let tag = format!("rate-{rate}");
     let path = temp_dir.path().join(format!("{tag}.wav"));
-    let frames = DRAIN_FIXTURE_SECS * SAMPLE_RATE as usize;
-    std::fs::write(&path, signal::wav(SAMPLE_RATE, 2, frames, signal::TONE))
-        .expect("write wav fixture");
+    std::fs::write(&path, drain_tone).expect("write wav fixture");
     let resource = file_resource(
         &harness,
         &path,
@@ -118,7 +115,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
+async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -127,7 +124,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     )
     .await;
     let path = temp_dir.path().join("rate.mp3");
-    std::fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("write mp3 fixture");
+    std::fs::write(&path, tone_mp3).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
     harness
         .with_player(move |player| {
@@ -162,9 +159,12 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
 /// backed by the source actually draining faster. Without this, scaling the
 /// clock alone would satisfy the trap above while the audio kept its speed.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn a_faster_rate_drains_the_real_source_sooner(temp_dir: TestTempDir) {
-    let baseline = blocks_until_end(&temp_dir, 1.0).await;
-    let accelerated = blocks_until_end(&temp_dir, FAST_RATE).await;
+async fn a_faster_rate_drains_the_real_source_sooner(
+    drain_tone: &'static [u8],
+    temp_dir: TestTempDir,
+) {
+    let baseline = blocks_until_end(drain_tone, &temp_dir, 1.0).await;
+    let accelerated = blocks_until_end(drain_tone, &temp_dir, FAST_RATE).await;
 
     assert!(
         accelerated * DRAIN_SHARE_DEN <= baseline * DRAIN_SHARE_NUM,

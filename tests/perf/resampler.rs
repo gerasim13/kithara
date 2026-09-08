@@ -11,17 +11,16 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::bufpool_ext::pools;
+use kithara_test_fixtures::integration_fixtures::{perf_interleaved, perf_planar};
 
 /// Create a test PCM chunk with specified sample count.
-fn create_test_chunk(frames: usize, spec: AudioSpec) -> AudioChunk {
+fn create_test_chunk(frames: usize, spec: AudioSpec, input: &[f32]) -> AudioChunk {
     let samples = frames * spec.channels as usize;
     let pools = pools();
     let mut pcm = pools
         .get_with_len::<f32>(samples)
         .expect("perf sample buffer");
-    for (index, sample) in pcm.iter_mut().enumerate() {
-        *sample = (index as f32 * 0.01).sin() * 0.5;
-    }
+    pcm.copy_from_slice(&input[..samples]);
 
     AudioChunk::new(
         AudioChunkInfo {
@@ -32,13 +31,8 @@ fn create_test_chunk(frames: usize, spec: AudioSpec) -> AudioChunk {
     )
 }
 
-fn create_planar(frames: usize) -> [Vec<f32>; 2] {
-    [
-        (0..frames).map(|i| (i as f32 * 0.01).sin() * 0.5).collect(),
-        (0..frames)
-            .map(|i| (i as f32 * 0.017).cos() * 0.5)
-            .collect(),
-    ]
+fn create_planar(frames: usize, source: &[Vec<f32>; 2]) -> [Vec<f32>; 2] {
+    [source[0][..frames].to_vec(), source[1][..frames].to_vec()]
 }
 
 fn create_output(resampler: &dyn Resampler) -> [Vec<f32>; 2] {
@@ -131,7 +125,12 @@ enum PerfScenario {
 #[case("resampler_passthrough", PerfScenario::PassthroughDetection)]
 #[case("resampler_deinterleave", PerfScenario::DeinterleaveOverhead)]
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
-fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
+fn perf_resampler_scenarios(
+    perf_interleaved: Vec<f32>,
+    perf_planar: [Vec<f32>; 2],
+    #[case] label: &'static str,
+    #[case] scenario: PerfScenario,
+) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::QualityComparison => {
@@ -152,7 +151,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                     quality,
                     test_frames,
                 );
-                let input = create_planar(test_frames);
+                let input = create_planar(test_frames, &perf_planar);
                 let mut output = create_output(&*resampler);
 
                 for _ in 0..10 {
@@ -176,7 +175,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                 ResamplerQuality::Good,
                 2048,
             );
-            let input = create_planar(2048);
+            let input = create_planar(2048, &perf_planar);
             let mut output = create_output(&*resampler);
 
             for _ in 0..10 {
@@ -193,7 +192,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
         }
         PerfScenario::DeinterleaveOverhead => {
             let input_spec = AudioSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
-            let chunk = create_test_chunk(2048, input_spec);
+            let chunk = create_test_chunk(2048, input_spec, &perf_interleaved);
 
             for _ in 0..1000 {
                 hotpath::measure_block!("deinterleave", {
@@ -235,7 +234,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                     ResamplerQuality::High,
                     size,
                 );
-                let input = create_planar(size);
+                let input = create_planar(size, &perf_planar);
                 let mut output = create_output(&*resampler);
                 for _ in 0..10 {
                     let _ = process_stereo(&mut *resampler, &input, &mut output);

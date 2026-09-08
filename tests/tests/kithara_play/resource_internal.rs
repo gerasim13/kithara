@@ -15,13 +15,19 @@ use kithara::{
     play::Resource,
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
+use kithara_test_fixtures::integration_fixtures::default_pcm;
 
-fn make_resource() -> Resource {
-    Resource::from_reader(TestPcmReader::new(Consts::AUDIO_SPEC, 1.0), None)
+#[kithara::fixture]
+fn make_resource(default_pcm: Vec<f32>) -> Resource {
+    Resource::from_reader(
+        TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm),
+        None,
+    )
 }
 
-fn make_resource_with_bus() -> (Resource, EventBus) {
-    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 1.0);
+#[kithara::fixture]
+fn make_resource_with_bus(default_pcm: Vec<f32>) -> (Resource, EventBus) {
+    let reader = TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm);
     let bus = reader.event_bus().clone();
     let resource = Resource::from_reader(reader, None);
     (resource, bus)
@@ -36,8 +42,8 @@ enum ReadMode {
 #[kithara::test(tokio)]
 #[case(ReadMode::Interleaved)]
 #[case(ReadMode::Planar)]
-async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
-    let mut resource = make_resource();
+async fn test_resource_from_reader_read_variants(make_resource: Resource, #[case] mode: ReadMode) {
+    let mut resource = make_resource;
     match mode {
         ReadMode::Interleaved => {
             let mut buf = [0.0f32; 64];
@@ -70,24 +76,24 @@ async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_from_reader_spec() {
-    let resource = make_resource();
+async fn test_resource_from_reader_spec(make_resource: Resource) {
+    let resource = make_resource;
     let spec = resource.spec();
     assert_eq!(spec.sample_rate.get(), 44100);
     assert_eq!(spec.channels, 2);
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_from_reader_position_and_duration() {
-    let resource = make_resource();
+async fn test_resource_from_reader_position_and_duration(make_resource: Resource) {
+    let resource = make_resource;
     assert_eq!(resource.position(), Duration::ZERO);
     let dur = resource.duration().unwrap();
     assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_from_reader_seek() {
-    let mut resource = make_resource();
+async fn test_resource_from_reader_seek(make_resource: Resource) {
+    let mut resource = make_resource;
     assert_eq!(resource.position(), Duration::ZERO);
 
     let outcome = resource
@@ -102,8 +108,8 @@ async fn test_resource_from_reader_seek() {
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_from_reader_reads_until_eof() {
-    let mut resource = make_resource();
+async fn test_resource_from_reader_reads_until_eof(make_resource: Resource) {
+    let mut resource = make_resource;
 
     let mut buf = [0.0f32; 4096];
     let saw_eof = loop {
@@ -120,8 +126,8 @@ async fn test_resource_from_reader_reads_until_eof() {
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_subscribe_receives_events() {
-    let (resource, bus) = make_resource_with_bus();
+async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resource, EventBus)) {
+    let (resource, bus) = make_resource_with_bus;
     let mut rx = resource.subscribe();
 
     let spec = Consts::AUDIO_SPEC;
@@ -137,8 +143,8 @@ async fn test_resource_subscribe_receives_events() {
 }
 
 #[kithara::test(tokio)]
-async fn test_resource_metadata() {
-    let resource = make_resource();
+async fn test_resource_metadata(make_resource: Resource) {
+    let resource = make_resource;
     let meta = resource.metadata();
     assert_eq!(meta.title.as_deref(), Some("Mock"));
     assert!(meta.artwork.is_none());

@@ -222,31 +222,31 @@ async fn build_queue_with_tick(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::mp3_symphonia(LocalSource::Mp3, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(LocalSource::Mp3, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+    case::mp3_apple(local_mp3().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
 )]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_android(LocalSource::Mp3, 42, DecoderBackend::Android, AbrMode::Auto(None))
+    case::mp3_android(local_mp3().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
 )]
 #[case::hls_aac_symphonia(
-    LocalSource::HlsAac,
+    local_hls().await,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_aac_apple(LocalSource::HlsAac, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+    case::hls_aac_apple(local_hls().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
 )]
 #[cfg_attr(
     target_os = "android",
-    case::hls_aac_android(LocalSource::HlsAac, 42, DecoderBackend::Android, AbrMode::Auto(None))
+    case::hls_aac_android(local_hls().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
 )]
 #[case::hls_aes_symphonia(
-    LocalSource::HlsAacAes128,
+    local_encrypted_hls().await,
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
@@ -254,7 +254,7 @@ async fn build_queue_with_tick(
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::hls_aes_apple(
-        LocalSource::HlsAacAes128,
+        local_encrypted_hls().await,
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
@@ -263,14 +263,14 @@ async fn build_queue_with_tick(
 #[cfg_attr(
     target_os = "android",
     case::hls_aes_android(
-        LocalSource::HlsAacAes128,
+        local_encrypted_hls().await,
         42,
         DecoderBackend::Android,
         AbrMode::Auto(None)
     )
 )]
 async fn local_track_plays_end_to_end(
-    #[case] kind: LocalSource,
+    #[case] source: (LocalSource, TestServerHelper, Url),
     #[case] rng_seed: u64,
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
@@ -278,8 +278,7 @@ async fn local_track_plays_end_to_end(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let url = build_fixture_url(kind, &helper).await;
+    let (kind, _server, url) = source;
     let label = format!("{kind:?}/{backend:?}");
 
     let temp = temp_dir();
@@ -483,22 +482,14 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
     case::apple(DecoderBackend::Apple)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
-async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
+async fn local_queue_playlist_behavior(
+    #[future(awt)] local_playlist: (TestServerHelper, Vec<Url>),
+    #[case] backend: DecoderBackend,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let kinds = [
-        LocalSource::Mp3,
-        LocalSource::HlsAac,
-        LocalSource::HlsAacAes128,
-        LocalSource::HlsAac,
-        LocalSource::Mp3,
-    ];
-    let mut urls: Vec<Url> = Vec::with_capacity(kinds.len());
-    for &k in &kinds {
-        urls.push(build_fixture_url(k, &helper).await);
-    }
+    let (_server, urls) = local_playlist;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
@@ -689,4 +680,43 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     tick_handle.stop().await;
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn local_mp3() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::Mp3, &helper).await;
+    (LocalSource::Mp3, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_encrypted_hls() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::HlsAacAes128, &helper).await;
+    (LocalSource::HlsAacAes128, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_hls() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::HlsAac, &helper).await;
+    (LocalSource::HlsAac, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_playlist() -> (TestServerHelper, Vec<Url>) {
+    let helper = TestServerHelper::new().await;
+    let kinds = [
+        LocalSource::Mp3,
+        LocalSource::HlsAac,
+        LocalSource::HlsAacAes128,
+        LocalSource::HlsAac,
+        LocalSource::Mp3,
+    ];
+    let mut urls: Vec<Url> = Vec::with_capacity(kinds.len());
+    for &k in &kinds {
+        urls.push(build_fixture_url(k, &helper).await);
+    }
+
+    (helper, urls)
 }

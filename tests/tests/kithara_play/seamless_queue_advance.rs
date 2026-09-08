@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
+use url::Url;
 
 use crate::{
     bufpool_ext::TestPools,
@@ -56,8 +57,11 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
+    #[future(awt)] gapless_sources: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, [first_url, second_url]) = gapless_sources;
     let expected_visible_frames = crate::gapless_common::generated_aac_elst_visible_frames();
     let gapless_params = SilenceTrimParams {
         trim_trailing: true,
@@ -68,26 +72,8 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(
-        harness.player(),
-        &server,
-        temp_dir.path(),
-        PackagedSignal::Sine {
-            freq_hz: GAPLESS_LEADING_TONE_HZ,
-        },
-        0,
-    )
-    .await;
-    let second = create_gapless_hls_resource(
-        harness.player(),
-        &server,
-        temp_dir.path(),
-        PackagedSignal::Sine {
-            freq_hz: GAPLESS_TRAILING_TONE_HZ,
-        },
-        u64::try_from(expected_visible_frames).expect("visible frame count fits u64"),
-    )
-    .await;
+    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
+    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
 
     load_queue(&harness, [first, second]).await;
 
@@ -146,8 +132,11 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
+    #[future(awt)] crossfade_sources: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, [first_url, second_url]) = crossfade_sources;
     let gapless_params = SilenceTrimParams {
         trim_trailing: true,
         ..SilenceTrimParams::default()
@@ -157,22 +146,8 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(
-        harness.player(),
-        &server,
-        temp_dir.path(),
-        PackagedSignal::Sine { freq_hz: 440.0 },
-        0,
-    )
-    .await;
-    let second = create_gapless_hls_resource(
-        harness.player(),
-        &server,
-        temp_dir.path(),
-        PackagedSignal::Sine { freq_hz: 880.0 },
-        0,
-    )
-    .await;
+    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
+    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
 
     load_queue(&harness, [first, second]).await;
 
@@ -267,40 +242,12 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
 
 async fn create_gapless_hls_resource(
     player: &kithara::play::player::PlayerControl<TestPools>,
-    server: &TestServerHelper,
+    master: &Url,
     cache_dir: &std::path::Path,
-    signal: PackagedSignal,
-    start_frame: u64,
 ) -> Resource {
-    let source = PackagedAudioSource::Signal(signal);
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(AAC_GAPLESS_SEGMENTS)
-                .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
-                .packaged_audio(PackagedAudioRequest {
-                    codec: kithara::stream::AudioCodec::AacLc,
-                    sample_rate: GAPLESS_SAMPLE_RATE,
-                    channels: GAPLESS_CHANNELS,
-                    start_frame: NonZeroU32::new(
-                        u32::try_from(start_frame).expect("start_frame fits u32"),
-                    ),
-                    timescale: Some(GAPLESS_SAMPLE_RATE),
-                    bit_rate: Some(128_000),
-                    encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),
-                    trailing_delay: NonZeroU32::new(AAC_GAPLESS_TRAILING_DELAY),
-                    source,
-                    gapless_encoding: Default::default(),
-                    variant_overrides: Vec::new(),
-                }),
-        )
-        .await
-        .expect("create seamless queue HLS fixture");
-
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
+        ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -526,4 +473,65 @@ fn max_windowed_goertzel_magnitude(
         offset = offset.saturating_add(window_frames);
     }
     best
+}
+
+async fn source_url(server: &TestServerHelper, signal: PackagedSignal, start_frame: u64) -> Url {
+    let source = PackagedAudioSource::Signal(signal);
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(AAC_GAPLESS_SEGMENTS)
+                .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: kithara::stream::AudioCodec::AacLc,
+                    sample_rate: GAPLESS_SAMPLE_RATE,
+                    channels: GAPLESS_CHANNELS,
+                    start_frame: NonZeroU32::new(
+                        u32::try_from(start_frame).expect("start_frame fits u32"),
+                    ),
+                    timescale: Some(GAPLESS_SAMPLE_RATE),
+                    bit_rate: Some(128_000),
+                    encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),
+                    trailing_delay: NonZeroU32::new(AAC_GAPLESS_TRAILING_DELAY),
+                    source,
+                    gapless_encoding: Default::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create seamless queue HLS fixture");
+
+    created.master_url()
+}
+
+#[kithara::fixture]
+async fn gapless_sources() -> (TestServerHelper, [Url; 2]) {
+    let server = TestServerHelper::new().await;
+    let first = source_url(
+        &server,
+        PackagedSignal::Sine {
+            freq_hz: GAPLESS_LEADING_TONE_HZ,
+        },
+        0,
+    )
+    .await;
+    let frames = crate::gapless_common::generated_aac_elst_visible_frames();
+    let second = source_url(
+        &server,
+        PackagedSignal::Sine {
+            freq_hz: GAPLESS_TRAILING_TONE_HZ,
+        },
+        u64::try_from(frames).expect("visible frame count fits u64"),
+    )
+    .await;
+    (server, [first, second])
+}
+
+#[kithara::fixture]
+async fn crossfade_sources() -> (TestServerHelper, [Url; 2]) {
+    let server = TestServerHelper::new().await;
+    let first = source_url(&server, PackagedSignal::Sine { freq_hz: 440.0 }, 0).await;
+    let second = source_url(&server, PackagedSignal::Sine { freq_hz: 880.0 }, 0).await;
+    (server, [first, second])
 }

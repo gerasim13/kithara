@@ -1,7 +1,6 @@
 use super::Wave;
 
-/// Interleaved 16-bit PCM held in memory: every channel of a frame carries the
-/// same sample.
+/// Interleaved 16-bit PCM held in memory.
 pub struct Pcm {
     bytes: Vec<u8>,
     channels: u16,
@@ -54,6 +53,25 @@ impl Pcm {
     }
 }
 
+/// Validates and loads prepared interleaved PCM without synthesizing samples.
+impl From<(u32, u16, Vec<u8>)> for Pcm {
+    /// Panics for zero sample rate, zero channels, or an incomplete frame.
+    fn from((sample_rate, channels, bytes): (u32, u16, Vec<u8>)) -> Self {
+        assert!(sample_rate > 0, "PCM sample rate must be nonzero");
+        assert!(channels > 0, "PCM channels must be nonzero");
+        let frame_bytes = usize::from(channels) * size_of::<i16>();
+        assert!(
+            bytes.len().is_multiple_of(frame_bytes),
+            "PCM must contain whole frames"
+        );
+        Self {
+            bytes,
+            channels,
+            sample_rate,
+        }
+    }
+}
+
 impl From<Pcm> for Vec<u8> {
     fn from(pcm: Pcm) -> Self {
         pcm.bytes
@@ -90,6 +108,20 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::integration_fixtures::encoder_saw_aac;
+
+    #[kithara::test(native, flash(false))]
+    fn prepared_bytes_preserve_pcm_and_reject_incomplete_frames(encoder_saw_aac: Pcm) {
+        let bytes = Vec::from(encoder_saw_aac);
+        let pcm = Pcm::from((48_000, 2, bytes.clone()));
+        assert_eq!(pcm.sample_rate(), 48_000);
+        assert_eq!(pcm.channels(), 2);
+        assert_eq!(Vec::from(pcm), bytes);
+        for (rate, channels, trim) in [(0, 2, 0), (48_000, 0, 0), (48_000, 2, 1)] {
+            let invalid = bytes[..bytes.len() - trim].to_vec();
+            assert!(std::panic::catch_unwind(|| Pcm::from((rate, channels, invalid))).is_err());
+        }
+    }
 
     #[kithara::test(native, flash(false))]
     fn byte_len_counts_every_channel_of_every_frame() {

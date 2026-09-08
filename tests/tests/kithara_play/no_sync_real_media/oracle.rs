@@ -455,6 +455,7 @@ fn rms(samples: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use kithara::platform::no_block::force_panic_mode;
+    use kithara_test_fixtures::integration_fixtures::{oracle_stem_a, oracle_stem_b};
 
     use super::{super::SOURCE_RATE, *};
 
@@ -462,12 +463,9 @@ mod tests {
     /// measured against the poll budget of whatever async test calls them,
     /// which is what failed the matrix on a loaded CI host.
     #[kithara::test(flash(false))]
-    async fn cochlea_oracles_are_sanctioned_offline_work() {
+    async fn cochlea_oracles_are_sanctioned_offline_work(oracle_stem_a: Vec<f32>) {
         let _mode = force_panic_mode();
-        let frames = usize::try_from(SOURCE_RATE).expect("source rate fits usize") / 2;
-        let capture = (0..frames * usize::from(CHANNELS))
-            .map(|index| (index as f32 * 0.017).sin() * 0.4)
-            .collect::<Vec<_>>();
+        let capture = oracle_stem_a;
         watched_oracles(&capture).await;
     }
 
@@ -481,14 +479,12 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn matched_mix_rejects_global_attenuation_and_each_missing_deck() {
-        let samples = 8_192;
-        let stem_a = (0..samples)
-            .map(|index| (index as f32 * 0.017).sin() * 0.4)
-            .collect::<Vec<_>>();
-        let stem_b = (0..samples)
-            .map(|index| (index as f32 * 0.031).cos() * 0.3)
-            .collect::<Vec<_>>();
+    fn matched_mix_rejects_global_attenuation_and_each_missing_deck(
+        oracle_stem_a: Vec<f32>,
+        oracle_stem_b: Vec<f32>,
+    ) {
+        let stem_a = oracle_stem_a[..8_192].to_vec();
+        let stem_b = oracle_stem_b;
         let stems = [stem_a.as_slice(), stem_b.as_slice()];
         let scale = MIX_HEADROOM / 2.0;
         let reference = stem_a

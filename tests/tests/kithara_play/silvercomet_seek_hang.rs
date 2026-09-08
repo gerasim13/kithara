@@ -334,19 +334,19 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
 #[cfg(test)]
 mod unit_tests {
+    use kithara_test_fixtures::integration_fixtures::{rms_silence, rms_unit};
+
     use super::*;
 
     #[kithara::test(native, flash(false))]
-    fn rms_of_silence_is_zero() {
-        let silence = vec![0.0_f32; 1024];
+    fn rms_of_silence_is_zero(rms_silence: Vec<f32>) {
+        let silence = rms_silence;
         assert!(rms(&silence).abs() < f32::EPSILON);
     }
 
     #[kithara::test(native, flash(false))]
-    fn rms_of_unit_signal_is_one() {
-        let signal: Vec<f32> = (0..1024)
-            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
-            .collect();
+    fn rms_of_unit_signal_is_one(rms_unit: Vec<f32>) {
+        let signal = rms_unit;
         assert!((rms(&signal) - 1.0).abs() < 1e-4);
     }
 

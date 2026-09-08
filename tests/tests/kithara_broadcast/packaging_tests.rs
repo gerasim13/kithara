@@ -10,7 +10,7 @@ use kithara::{
     worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
-use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
+use kithara_test_fixtures::{integration_fixtures::packaging_tone, signal::goertzel_magnitude};
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
@@ -22,18 +22,6 @@ const TARGET: Duration = Duration::from_millis(500);
 const PRIMING_SKIP_FRAMES: usize = 4_800;
 const SEGMENT_PRIMING_SKIP_FRAMES: usize = 2_048;
 const TONE_MARGIN: f64 = 50.0;
-
-fn sine(frames: usize) -> Vec<f32> {
-    let tone = Wave::sine(TONE_HZ);
-    let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
-    for frame in 0..frames {
-        let value = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;
-        for _ in 0..CHANNELS {
-            samples.push(value);
-        }
-    }
-    samples
-}
 
 fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
     let config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
@@ -106,8 +94,8 @@ fn assert_carries_the_tone(pcm: &[f32], label: &str) {
 }
 
 #[kithara::test]
-fn the_packaged_segments_decode_back_to_the_source_tone() {
-    let snapshot = broadcast(&sine(FRAMES));
+fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>) {
+    let snapshot = broadcast(&packaging_tone);
 
     assert!(
         snapshot.segments.len() >= 3,
@@ -134,8 +122,8 @@ fn the_packaged_segments_decode_back_to_the_source_tone() {
 }
 
 #[kithara::test]
-fn a_late_joiner_decodes_one_segment_on_its_own() {
-    let snapshot = broadcast(&sine(FRAMES));
+fn a_late_joiner_decodes_one_segment_on_its_own(packaging_tone: Vec<f32>) {
+    let snapshot = broadcast(&packaging_tone);
 
     let joined = snapshot
         .segments

@@ -25,7 +25,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
-    hls_server::TestServer,
+    hls_server::{TestServer, test_server},
     temp_dir,
 };
 
@@ -149,11 +149,12 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// grow proportionally.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)), hang_timeout_secs(10))]
 async fn red_hls_source_drop_leaks_peer(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     const ITERATIONS: usize = 10;
 
-    let server = TestServer::new().await;
+    let server = test_server;
     let url = server.url("/master.m3u8");
     let pools = pools();
 

@@ -1,7 +1,5 @@
 use std::io::Cursor;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara::encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara::{
     self,
     decode::{Decoder, DecoderConfig, DecoderFactory},
@@ -14,11 +12,8 @@ use kithara_integration_tests::{
     decode_ext::DecoderChunkOutcomeTestExt,
 };
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_test_fixtures::{
-    assets::alac_silence_1s,
-    signal::{Pcm, Wave},
-};
-use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
+use kithara_test_fixtures::assets::{alac_silence_1s, flac_unknown_length_saw_1s};
+use kithara_test_fixtures::{assets::sine_wav_a440_full_scale_2s, fixtures::tone_mp3};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
@@ -49,26 +44,20 @@ impl Backend {
             .unwrap_or_else(|e| panic!("{self:?} decoder should create: {e}"))
     }
 
-    fn make_mp3(self) -> Box<dyn Decoder> {
+    fn make_mp3(self, tone_mp3: &[u8]) -> Box<dyn Decoder> {
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Mp3))
             .maybe_container(Some(ContainerFormat::MpegAudio))
             .build();
-        self.make_decoder(signal_mp3_track_sine440_187s().bytes().to_vec(), &info)
+        self.make_decoder(tone_mp3.to_vec(), &info)
     }
 
-    fn make_wav(self) -> Box<dyn Decoder> {
-        let bytes = signal::wav(
-            Consts::WAV_SAMPLE_RATE,
-            Consts::WAV_CHANNELS,
-            Consts::WAV_FRAMES,
-            signal::TONE,
-        );
+    fn make_wav(self, bytes: &[u8]) -> Box<dyn Decoder> {
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
             .maybe_container(Some(ContainerFormat::Wav))
             .build();
-        self.make_decoder(bytes, &info)
+        self.make_decoder(bytes.to_vec(), &info)
     }
 
     fn to_choice(self) -> kithara::decode::DecoderBackend {
@@ -118,10 +107,10 @@ fn l2_norm(samples: &[f32]) -> f64 {
 }
 
 #[kithara::test]
-fn spec_after_create_is_consistent_across_backends() {
+fn spec_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
     let specs: Vec<_> = available_backends()
         .into_iter()
-        .map(|b| (b, b.make_mp3().spec()))
+        .map(|b| (b, b.make_mp3(tone_mp3).spec()))
         .collect();
 
     let first = specs[0].1;
@@ -135,10 +124,10 @@ fn spec_after_create_is_consistent_across_backends() {
 }
 
 #[kithara::test]
-fn duration_after_create_is_consistent_across_backends() {
+fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
     let durations: Vec<_> = available_backends()
         .into_iter()
-        .map(|b| (b, b.make_mp3().duration()))
+        .map(|b| (b, b.make_mp3(tone_mp3).duration()))
         .collect();
 
     for (backend, duration) in &durations {
@@ -169,11 +158,11 @@ fn duration_after_create_is_consistent_across_backends() {
 }
 
 #[kithara::test]
-fn total_frames_are_consistent_across_backends() {
+fn total_frames_are_consistent_across_backends(tone_mp3: &'static [u8]) {
     let frame_counts: Vec<_> = available_backends()
         .into_iter()
         .map(|b| {
-            let mut dec = b.make_mp3();
+            let mut dec = b.make_mp3(tone_mp3);
             let samples = drain_all(&mut *dec);
             let channels = dec.spec().channels.max(1) as usize;
             let frames = samples.len() / channels;
@@ -199,12 +188,12 @@ fn total_frames_are_consistent_across_backends() {
 }
 
 #[kithara::test]
-fn seek_then_first_chunk_timestamp_is_after_target() {
+fn seek_then_first_chunk_timestamp_is_after_target(tone_mp3: &'static [u8]) {
     const TARGET: Duration = Duration::from_millis(500);
     let tol = Duration::from_millis(200);
 
     for backend in available_backends() {
-        let mut dec = backend.make_mp3();
+        let mut dec = backend.make_mp3(tone_mp3);
         dec.seek(TARGET).expect("seek should succeed");
         let outcome = dec.next_chunk().expect("next_chunk after seek");
         let chunk = AudioChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
@@ -222,9 +211,9 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
 }
 
 #[kithara::test]
-fn end_of_stream_returns_none_repeatedly() {
+fn end_of_stream_returns_none_repeatedly(tone_mp3: &'static [u8]) {
     for backend in available_backends() {
-        let mut dec = backend.make_mp3();
+        let mut dec = backend.make_mp3(tone_mp3);
         while dec
             .next_chunk()
             .expect("decode before EOF should succeed")
@@ -242,9 +231,9 @@ fn end_of_stream_returns_none_repeatedly() {
 }
 
 #[kithara::test]
-fn wav_pcm_round_trip_matches_signal_across_backends() {
+fn wav_pcm_round_trip_matches_signal_across_backends(protocol_wav: &'static [u8]) {
     for backend in available_backends() {
-        let mut dec = backend.make_wav();
+        let mut dec = backend.make_wav(protocol_wav);
 
         let spec = dec.spec();
         assert_eq!(
@@ -290,17 +279,17 @@ enum StandaloneCase {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 impl StandaloneCase {
-    fn fixture(self) -> (Vec<u8>, MediaInfo) {
+    fn fixture(self, standalone_audio: [&'static [u8]; 2]) -> (Vec<u8>, MediaInfo) {
         match self {
             Self::AlacM4a => (
-                alac_silence_1s().bytes().to_vec(),
+                standalone_audio[0].to_vec(),
                 MediaInfo::builder()
                     .maybe_codec(Some(AudioCodec::Alac))
                     .maybe_container(Some(ContainerFormat::Mp4))
                     .build(),
             ),
             Self::NativeFlac => (
-                synth_native_flac_1s(),
+                standalone_audio[1].to_vec(),
                 MediaInfo::builder()
                     .maybe_codec(Some(AudioCodec::Flac))
                     .maybe_container(Some(ContainerFormat::Flac))
@@ -308,32 +297,6 @@ impl StandaloneCase {
             ),
         }
     }
-}
-
-/// Encode 1 second of stereo 44.1 kHz sawtooth PCM into a native `fLaC`
-/// bitstream via `kithara-encode`. Mirrors the raw FLAC body the zvuk
-/// `streamfl` endpoint serves (Content-Type `audio/flac`, magic `fLaC`)
-/// that the device misdecodes — the pinned contract for that regression.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn synth_native_flac_1s() -> Vec<u8> {
-    let pcm = Pcm::new(
-        Consts::WAV_SAMPLE_RATE,
-        Consts::WAV_CHANNELS,
-        Consts::WAV_FRAMES / 2,
-        Wave::Sawtooth,
-    );
-    let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
-        pcm: &pcm,
-        target: BytesEncodeTarget::Flac,
-        bit_rate: None,
-    })
-    .expect("encode synthetic native FLAC bytes");
-    assert_eq!(
-        &encoded.bytes[..4],
-        b"fLaC",
-        "kithara-encode must emit a native FLAC bitstream"
-    );
-    encoded.bytes
 }
 
 /// Apple's standalone `AudioFileServices` path decodes every non-fMP4
@@ -345,8 +308,8 @@ fn synth_native_flac_1s() -> Vec<u8> {
 #[kithara::test]
 #[case::alac(StandaloneCase::AlacM4a)]
 #[case::native_flac(StandaloneCase::NativeFlac)]
-fn apple_decodes_standalone(#[case] case: StandaloneCase) {
-    let (bytes, info) = case.fixture();
+fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'static [u8]; 2]) {
+    let (bytes, info) = case.fixture(standalone_audio);
     let mut decoder = Backend::Apple.make_decoder(bytes, &info);
 
     let spec = decoder.spec();
@@ -376,11 +339,11 @@ fn apple_decodes_standalone(#[case] case: StandaloneCase) {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::test]
-fn full_decode_l2_norm_matches_within_tolerance() {
+fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     const TOL_REL: f64 = 0.02;
 
-    let mut sym = Backend::Symphonia.make_mp3();
-    let mut apl = Backend::Apple.make_mp3();
+    let mut sym = Backend::Symphonia.make_mp3(tone_mp3);
+    let mut apl = Backend::Apple.make_mp3(tone_mp3);
 
     let sym_samples = drain_all(&mut *sym);
     let apl_samples = drain_all(&mut *apl);
@@ -400,4 +363,17 @@ fn full_decode_l2_norm_matches_within_tolerance() {
         rel,
         TOL_REL
     );
+}
+
+#[kithara::fixture]
+fn protocol_wav() -> &'static [u8] {
+    sine_wav_a440_full_scale_2s().bytes()
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[kithara::fixture]
+fn standalone_audio() -> [&'static [u8]; 2] {
+    let flac = flac_unknown_length_saw_1s().bytes();
+    assert_eq!(&flac[..4], b"fLaC", "fixture must be native FLAC");
+    [alac_silence_1s().bytes(), flac]
 }

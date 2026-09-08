@@ -126,33 +126,8 @@ async fn run_drm_seek_resume_cycle(
     drop(audio);
 }
 
-/// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared `PlayWorker`, the count of kithara-named threads must
-/// be bounded. Each iteration leaks at most a constant number of threads;
-/// iteration-over-iteration growth indicates a real thread/task leak tied
-/// to the DRM seek path.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    hang_timeout_secs(10)
-)]
-async fn red_leak_native_drm_seek_resume_thread_budget()
--> Result<(), Box<dyn StdError + Send + Sync>> {
-    // A seek past the end still reports success, so nothing downstream
-    // would notice the cycle exercising the past-EOF path instead of the
-    // seek path it exists to stress. Against the captured 220 s tree the
-    // targets were inside by a wide margin; on a fixture sized here, that
-    // has to be checked.
-    assert!(
-        Consts::SEEK_TARGETS_SECS
-            .iter()
-            .all(|&target| target < Consts::media_secs()),
-        "seek targets {:?} must land inside the {} s ladder",
-        Consts::SEEK_TARGETS_SECS,
-        Consts::media_secs(),
-    );
-
+#[kithara::fixture]
+async fn encrypted_ladder() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server
         .create_hls(
@@ -169,6 +144,38 @@ async fn red_leak_native_drm_seek_resume_thread_budget()
         .await
         .expect("create the encrypted ladder");
     let url = created.master_url();
+    (server, url)
+}
+
+/// RED test: after N DRM+seek+resume cycles against a shared Downloader
+/// and shared `PlayWorker`, the count of kithara-named threads must
+/// be bounded. Each iteration leaks at most a constant number of threads;
+/// iteration-over-iteration growth indicates a real thread/task leak tied
+/// to the DRM seek path.
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(10)
+)]
+async fn red_leak_native_drm_seek_resume_thread_budget(
+    #[future(awt)] encrypted_ladder: (TestServerHelper, Url),
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    // A seek past the end still reports success, so nothing downstream
+    // would notice the cycle exercising the past-EOF path instead of the
+    // seek path it exists to stress. Against the captured 220 s tree the
+    // targets were inside by a wide margin; on a fixture sized here, that
+    // has to be checked.
+    assert!(
+        Consts::SEEK_TARGETS_SECS
+            .iter()
+            .all(|&target| target < Consts::media_secs()),
+        "seek targets {:?} must land inside the {} s ladder",
+        Consts::SEEK_TARGETS_SECS,
+        Consts::media_secs(),
+    );
+
+    let (_server, url) = encrypted_ladder;
     let cancel = CancelToken::never();
     let pools = pools();
     let shared_worker = PlayWorker::new(

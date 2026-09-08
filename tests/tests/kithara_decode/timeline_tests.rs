@@ -10,10 +10,10 @@ use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
-use kithara_test_fixtures::assets::signal_wav_sine440_1s;
+use kithara_test_fixtures::fixtures::tone_wav;
 #[kithara::test]
-fn test_progressive_file_timeline_monotonic() {
-    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
+fn test_progressive_file_timeline_monotonic(tone_wav: &'static [u8]) {
+    let reader = Cursor::new(tone_wav);
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
@@ -59,8 +59,8 @@ fn test_progressive_file_timeline_monotonic() {
 }
 
 #[kithara::test]
-fn test_progressive_file_seek_resets_frame_offset() {
-    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
+fn test_progressive_file_seek_resets_frame_offset(tone_wav: &'static [u8]) {
+    let reader = Cursor::new(tone_wav);
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
@@ -102,9 +102,28 @@ mod hls_timeline {
         bufpool_ext::{TestPools, pools},
         hls_server::{HlsTestServer, HlsTestServerConfig},
     };
-    use kithara_test_fixtures::signal::{self, Wave};
+    use kithara_test_fixtures::assets::sized_wav_timeline_saw_2mb;
 
     use crate::common::test_defaults::SawWav;
+
+    #[kithara::fixture]
+    async fn timeline_server() -> HlsTestServer {
+        const SEGMENT_COUNT: usize = 10;
+        let segment_duration = SawWav::DEFAULT.segment_size as f64
+            / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
+
+        let wav = tokio::task::spawn_blocking(|| sized_wav_timeline_saw_2mb().bytes().to_vec())
+            .await
+            .expect("read prepared timeline WAV");
+        HlsTestServer::new(HlsTestServerConfig {
+            segments_per_variant: SEGMENT_COUNT,
+            segment_size: SawWav::DEFAULT.segment_size,
+            segment_duration_secs: segment_duration,
+            custom_data: Some(Arc::new(wav)),
+            ..Default::default()
+        })
+        .await
+    }
 
     #[kithara::test(
         tokio,
@@ -112,29 +131,8 @@ mod hls_timeline {
         hang_timeout_secs(1),
         tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
     )]
-    async fn test_hls_timeline_segment_tracking() {
-        const SEGMENT_COUNT: usize = 10;
-        const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
-
-        let wav_data = signal::wav_of_size(
-            SawWav::DEFAULT.sample_rate,
-            SawWav::DEFAULT.channels,
-            TOTAL_BYTES,
-            Wave::Sawtooth,
-        );
-
-        let segment_duration = SawWav::DEFAULT.segment_size as f64
-            / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
-
-        let server = HlsTestServer::new(HlsTestServerConfig {
-            segments_per_variant: SEGMENT_COUNT,
-            segment_size: SawWav::DEFAULT.segment_size,
-            segment_duration_secs: segment_duration,
-            custom_data: Some(Arc::new(wav_data)),
-            ..Default::default()
-        })
-        .await;
-
+    async fn test_hls_timeline_segment_tracking(#[future(awt)] timeline_server: HlsTestServer) {
+        let server = timeline_server;
         let url = server.url("/master.m3u8");
         let temp_dir = TestTempDir::new();
         let cancel = CancelToken::never();

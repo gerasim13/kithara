@@ -1,6 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    path::Path,
+};
 
 use kithara::{
     host::HostOwned,
@@ -17,6 +20,13 @@ use kithara_integration_tests::{
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
+
+#[kithara::fixture]
+fn response_source() -> &'static Path {
+    signal_mp3_sine880_30s()
+        .path()
+        .expect("generated sine fixture is stored on disk")
+}
 use kithara_test_utils::probe::capture::{self as probe_capture, ProbeEvent, Recorder};
 
 use crate::bufpool_ext::TestPools;
@@ -223,6 +233,7 @@ async fn playing_queue(
     backend: StretchKind,
     backends: ElasticBackendConfig,
     case: ResponseCase,
+    response_source: &'static Path,
 ) -> (OfflinePlayerHarness, HostOwned<Queue<TestPools>>) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
@@ -265,9 +276,7 @@ async fn playing_queue(
     );
     let queue = harness.insert(queue).await;
     queue.set_default_rate(case.initial_rate);
-    let path = signal_mp3_sine880_30s()
-        .path()
-        .expect("generated sine fixture is stored on disk");
+    let path = response_source;
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("fixture path is a valid resource source"),
@@ -462,8 +471,9 @@ async fn run_case(
     backend: StretchKind,
     backends: ElasticBackendConfig,
     case: ResponseCase,
+    response_source: &'static Path,
 ) {
-    let (harness, queue) = playing_queue(temp_dir, backend, backends, case).await;
+    let (harness, queue) = playing_queue(temp_dir, backend, backends, case, response_source).await;
     let recorder = probe_capture::install();
     let mut samples =
         capture_command_boundary(&harness, &recorder, case.initial_tone, case.callback_frames)
@@ -540,9 +550,10 @@ async fn run_case(
 )]
 async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     temp_dir: TestTempDir,
+    response_source: &'static Path,
     #[case] backend: StretchKind,
     #[case] backends: ElasticBackendConfig,
     #[case] case: ResponseCase,
 ) {
-    run_case(&temp_dir, backend, backends, case).await;
+    run_case(&temp_dir, backend, backends, case, response_source).await;
 }

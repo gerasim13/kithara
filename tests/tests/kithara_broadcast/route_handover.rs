@@ -31,7 +31,7 @@ use kithara_integration_tests::{
     memory_asset_store,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
 };
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::integration_fixtures::broadcast_tone;
 use url::Url;
 
 use super::origin::Playlist;
@@ -41,7 +41,6 @@ const OLD_RATE: u32 = 44_100;
 const NEW_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 512;
 const BLOCKS_PER_RATE: usize = 64;
-const TONE_HZ: f64 = 440.0;
 
 struct RouteRecording;
 
@@ -68,21 +67,21 @@ impl PartSinkFactory for AssetFactory {
     }
 }
 
-fn tone_resource() -> Resource {
+fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(OLD_RATE).expect("test rate is non-zero"),
     );
-    resource_from_reader(TestPcmReader::with_signal(spec, 6.0, Wave::sine(TONE_HZ)))
+    resource_from_reader(TestPcmReader::from_samples(spec, broadcast_tone))
 }
 
-async fn playing_harness() -> OfflinePlayerHarness {
+async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayerHarness {
     let harness =
         OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE)
             .await;
     harness
         .with_player(move |player| {
-            player.insert(tone_resource(), TrackId::allocate(), None);
+            player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
             player.select_item(0, true).expect("select tone");
         })
         .await;
@@ -124,8 +123,8 @@ fn wav_rate(store: &AssetStore<TestPools>, key: &ResourceKey) -> u32 {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn route_change_continues_recording_and_broadcast_in_new_segments() {
-    let harness = playing_harness().await;
+async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcast_tone: Vec<f32>) {
+    let harness = playing_harness(broadcast_tone).await;
     let pools = pools();
     let worker = Worker::new(WorkerConfig::new());
     let store = memory_asset_store();

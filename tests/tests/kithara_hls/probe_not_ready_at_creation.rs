@@ -65,24 +65,18 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::hls_fixtures::{hls_pcm_boundary, hls_stream_header};
 use tracing::info;
-
-use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 
-fn fixture_config() -> HlsTestServerConfig {
-    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(Vec::from(Pcm::new(
-        SAMPLE_RATE,
-        CHANNELS,
-        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        Wave::Sawtooth,
-    )));
+#[kithara::fixture]
+fn fixture_config(hls_stream_header: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsTestServerConfig {
+    let init_segment = Arc::new(hls_stream_header);
+    let pcm = Arc::new(hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     HlsTestServerConfig {
@@ -160,13 +154,15 @@ fn audio_config(
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-async fn audio_new_bounded_failure_when_first_segment_withheld() {
+async fn audio_new_bounded_failure_when_first_segment_withheld(
+    fixture_config: HlsTestServerConfig,
+) {
     // Withhold segment 0's BODY for the lifetime of the test; HEAD stays open
     // so size estimation completes at construction. The WAV init (a separate
     // resource) is reachable, so the `Hls::create` init prefetch commits; the
     // decoder probe's read window then spills past the init into the withheld
     // body, which the blocking read waits the full budget for and then fails.
-    let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
+    let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -223,8 +219,10 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-async fn audio_new_succeeds_when_first_segment_released_during_probe() {
-    let (server, gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
+async fn audio_new_succeeds_when_first_segment_released_during_probe(
+    fixture_config: HlsTestServerConfig,
+) {
+    let (server, gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(

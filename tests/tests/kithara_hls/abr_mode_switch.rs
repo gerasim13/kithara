@@ -22,43 +22,132 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::SegmentGateHandle;
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    mixed_codec_ladder_url,
+    mixed_plain,
     reads::{read_to_eof, read_until_samples},
     waits::{wait_for_event, wait_until},
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::{
+    hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_20, hls_saw_30,
+};
 use tracing::info;
+use url::Url;
 
-use crate::common::test_defaults::{SawWav, frames_in_segments};
+use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 
-fn create_wav_init_segment(data_size: usize) -> Vec<u8> {
-    // Declare the concrete PCM size, not a streaming (`0xFFFFFFFF`) size:
-    // these are finite VOD tracks, so the WAV `data` chunk length is known
-    // up front. A streaming header leaves the decoder without an end marker,
-    // so it relies solely on the byte source EOF — and at a variant switch
-    // that races into the decoder emitting one padded packet past the true
-    // tail (`position > duration`). A concrete size pins the exact end.
-    signal::header(D.sample_rate, D.channels, Some(data_size))
-}
-
-fn create_pcm_segments(segment_count: usize) -> Vec<u8> {
-    Vec::from(Pcm::new(
-        D.sample_rate,
-        D.channels,
-        frames_in_segments(segment_count, D.segment_size, D.channels),
-        Wave::Sawtooth,
-    ))
-}
-
 fn segment_duration_secs() -> f64 {
     D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn wav_config(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsTestServerConfig {
+    let (init, pcm) = data;
+    let variant_count = bandwidths.len();
+    HlsTestServerConfig {
+        variant_count,
+        segments_per_variant: pcm.len() / D.segment_size,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::new(pcm); variant_count]),
+        init_data_per_variant: Some(vec![Arc::new(init); variant_count]),
+        variant_bandwidths: Some(bandwidths),
+        ..Default::default()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    let mut config = wav_config(data, vec![5_000_000, 1_000_000]);
+    config.codecs = Some("wav".to_string());
+    config.delay_rules = vec![DelayRule {
+        variant: Some(0),
+        segment_gte: Some(5),
+        delay_ms: 500,
+        ..Default::default()
+    }];
+    HlsTestServer::new(config).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn delayed_thirty(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    delayed_server(hls_saw_30).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    delayed_server(hls_saw_20).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn stalled_boundary(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, SegmentGateHandle) {
+    let mut config = wav_config(hls_saw_30, vec![1_000_000, 5_000_000]);
+    config.codecs = Some("wav".to_string());
+    HlsTestServer::with_segment_gate(config, 0, 5).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, HlsTestServer) {
+    let (init, pcm) = hls_saw_15;
+    let segments = pcm.len() / D.segment_size;
+    let init = Arc::new(init);
+    let pcm = Arc::new(pcm);
+    let make_server = || {
+        HlsTestServer::new(HlsTestServerConfig {
+            variant_count: 2,
+            segments_per_variant: segments,
+            segment_size: D.segment_size,
+            segment_duration_secs: segment_duration_secs(),
+            custom_data_per_variant: Some(vec![Arc::clone(&pcm); 2]),
+            init_data_per_variant: Some(vec![Arc::clone(&init); 2]),
+            variant_bandwidths: Some(vec![1_000_000, 3_000_000]),
+            ..Default::default()
+        })
+    };
+    (make_server().await, make_server().await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    HlsTestServer::new(wav_config(
+        hls_saw_30,
+        vec![5_000_000, 1_000_000, 2_000_000],
+    ))
+    .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn manual_six(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    HlsTestServer::new(wav_config(hls_saw_6, vec![5_000_000, 1_000_000])).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn manual_eight(hls_saw_8: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    HlsTestServer::new(wav_config(hls_saw_8, vec![5_000_000, 1_000_000])).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn first_boundary(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+    // This case needs six-second playlist durations to cross the default ABR buffer gate.
+    let mut config = wav_config(hls_saw_6, vec![256_000, 512_000, 1_024_000]);
+    config.segment_duration_secs = 6.0;
+    HlsTestServer::new(config).await
 }
 
 /// Record of a segment-level event.
@@ -533,29 +622,9 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn vod_manual_switch_affects_future_segments() {
+async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty: HlsTestServer) {
     let segment_count = 30;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        codecs: Some("wav".to_string()),
-        delay_rules: vec![DelayRule {
-            variant: Some(0),
-            segment_gte: Some(5),
-            delay_ms: 500,
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
-    .await;
+    let server = delayed_thirty;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -686,35 +755,15 @@ async fn vod_manual_switch_affects_future_segments() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
+async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
+    #[future(awt)] stalled_boundary: (HlsTestServer, SegmentGateHandle),
+) {
     const STALLED_VARIANT: usize = 0;
     const RESCUE_VARIANT: usize = 1;
     const STALLED_SEGMENT: usize = 5;
-    const ESCAPE_BANDWIDTHS: [u64; 2] = [1_000_000, 5_000_000];
 
     let segment_count = 30;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    // The body gate leaves HEAD/size available, so the layout is known before
-    // the reader parks. The downloader's own soft-timeout is the production
-    // trigger; the test does not manufacture a controller tick.
-    let (server, gate) = HlsTestServer::with_segment_gate(
-        HlsTestServerConfig {
-            variant_count: 2,
-            segments_per_variant: segment_count,
-            segment_size: D.segment_size,
-            segment_duration_secs: segment_duration_secs(),
-            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-            variant_bandwidths: Some(ESCAPE_BANDWIDTHS.to_vec()),
-            codecs: Some("wav".to_string()),
-            ..Default::default()
-        },
-        STALLED_VARIANT,
-        STALLED_SEGMENT,
-    )
-    .await;
+    let (server, gate) = stalled_boundary;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -867,33 +916,10 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn multi_track_shared_abr_with_cache() {
-    let segment_count = 15;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-    let seg_dur = segment_duration_secs();
-
-    let make_server = |bw: Vec<u64>| {
-        let pcm = Arc::clone(&pcm_data);
-        let init = Arc::clone(&init_segment);
-        let variant_count = bw.len();
-        async move {
-            HlsTestServer::new(HlsTestServerConfig {
-                variant_count,
-                segments_per_variant: segment_count,
-                segment_size: D.segment_size,
-                segment_duration_secs: seg_dur,
-                custom_data_per_variant: Some(vec![Arc::clone(&pcm); variant_count]),
-                init_data_per_variant: Some(vec![Arc::clone(&init); variant_count]),
-                variant_bandwidths: Some(bw),
-                ..Default::default()
-            })
-            .await
-        }
-    };
-
-    let server1 = make_server(vec![1_000_000, 3_000_000]).await;
-    let server2 = make_server(vec![1_000_000, 3_000_000]).await;
+async fn multi_track_shared_abr_with_cache(
+    #[future(awt)] shared_tracks: (HlsTestServer, HlsTestServer),
+) {
+    let (server1, server2) = shared_tracks;
 
     let url1 = server1.url("/master.m3u8");
     let url2 = server2.url("/master.m3u8");
@@ -1053,29 +1079,11 @@ async fn multi_track_shared_abr_with_cache() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn abr_switch_must_not_redownload_covered_segments() {
+async fn abr_switch_must_not_redownload_covered_segments(
+    #[future(awt)] delayed_twenty: HlsTestServer,
+) {
     let segment_count = 20;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        codecs: Some("wav".to_string()),
-        delay_rules: vec![DelayRule {
-            variant: Some(0),
-            segment_gte: Some(5),
-            delay_ms: 500,
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
-    .await;
+    let server = delayed_twenty;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -1159,30 +1167,10 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         "kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug,suite_stress=info"
     )
 )]
-async fn runtime_manual_switch_via_handle_changes_playing_variant() {
-    let segment_count = 30;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 3,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![
-            Arc::clone(&pcm_data),
-            Arc::clone(&pcm_data),
-            Arc::clone(&pcm_data),
-        ]),
-        init_data_per_variant: Some(vec![
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-        ]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000, 2_000_000]),
-        ..Default::default()
-    })
-    .await;
+async fn runtime_manual_switch_via_handle_changes_playing_variant(
+    #[future(awt)] manual_ladder: HlsTestServer,
+) {
+    let server = manual_ladder;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -1316,9 +1304,10 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_cross_codec_manual_switch_no_hang() {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+async fn runtime_cross_codec_manual_switch_no_hang(
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
+    let (_server, url) = mixed_plain;
     // The mixed-codec ladder: variants 0..2 are AAC (mp4a.40.2), variant 3
     // is FLAC. Manual(3) forces the cross-codec path.
 
@@ -1434,22 +1423,11 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_manual_switch_works_when_all_segments_cached() {
+async fn runtime_manual_switch_works_when_all_segments_cached(
+    #[future(awt)] manual_six: HlsTestServer,
+) {
     let segment_count: usize = 6;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        ..Default::default()
-    })
-    .await;
+    let server = manual_six;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -1579,22 +1557,9 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_manual_switch_survives_outgoing_eof() {
+async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: HlsTestServer) {
     let segment_count: usize = 6;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        ..Default::default()
-    })
-    .await;
+    let server = manual_six;
     let init_gate = server.init_gate(1);
 
     let url = server.url("/master.m3u8");
@@ -1722,22 +1687,11 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_manual_switch_works_after_cache_and_seek() {
+async fn runtime_manual_switch_works_after_cache_and_seek(
+    #[future(awt)] manual_eight: HlsTestServer,
+) {
     let segment_count: usize = 8;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        ..Default::default()
-    })
-    .await;
+    let server = manual_eight;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -1898,36 +1852,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
-    let segment_count: usize = 6;
-    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
-    let pcm_data = Arc::new(create_pcm_segments(segment_count));
-
-    // Long segment duration (6 s in playlist EXTINF) so a full prefetch
-    // pushes `buffer_ahead` over the default 10 s `min_buffer_for_up_switch`
-    // gate — same as the mixed-codec ladder. Without this the
-    // buffer gate alone blocks ABR and the test reports a false GREEN.
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 3,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: 6.0,
-        custom_data_per_variant: Some(vec![
-            Arc::clone(&pcm_data),
-            Arc::clone(&pcm_data),
-            Arc::clone(&pcm_data),
-        ]),
-        init_data_per_variant: Some(vec![
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-        ]),
-        // 1× / 2× / 4× — ABR should prefer the top variant once it has
-        // enough evidence, but not after a single 50 KB sample.
-        variant_bandwidths: Some(vec![256_000, 512_000, 1_024_000]),
-        ..Default::default()
-    })
-    .await;
+async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
+    #[future(awt)] first_boundary: HlsTestServer,
+) {
+    let server = first_boundary;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
@@ -2033,9 +1961,10 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
-async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
+    let (_server, url) = mixed_plain;
     // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3
     // FLAC. We need Manual(3) (cross-codec) then Manual(1) (same-codec
     // AAC sibling of v=0) before v=3's decoder recreate fires.
@@ -2169,12 +2098,12 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 )]
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+    let (_server, url) = mixed_plain;
     // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
     // The duration of every variant ≈ 220 s. We start on the top AAC (v=2)
     // so we can downswitch to the bottom one (v=0) for the same-codec
@@ -2402,12 +2331,12 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     #[case] backend: DecoderBackend,
     #[case] target_variant: usize,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+    let (_server, url) = mixed_plain;
     // The mixed-codec ladder: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
     // (fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 

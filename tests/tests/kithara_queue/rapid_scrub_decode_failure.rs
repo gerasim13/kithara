@@ -184,58 +184,7 @@ struct Harness {
 }
 
 impl Harness {
-    async fn setup(temp_dir: &TestTempDir) -> Self {
-        // AES-128 key + IV matching `packaged_encrypted_builder` in
-        // `tests/src/hls_server.rs` — every kithara fixture uses these
-        // same constants so the integration helpers can verify
-        // decryption end-to-end.
-        const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
-        const AES128_IV: [u8; 16] = [0u8; 16];
-        let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
-        let iv_hex: String = AES128_IV.iter().map(|b| format!("{b:02x}")).collect();
-
-        let helper = TestServerHelper::new().await;
-        // Mirror prod zvuk DRM shape: 4 variants (slq / smq / shq /
-        // slossless analogue), AES-128 CBC, ABR=Auto, per-segment
-        // delay above the audio worker's wait budget. Slow variant 0
-        // has higher delay so the ABR controller is tempted to
-        // upgrade — same as the prod trace where `commit_variant_switch
-        // reason=UpSwitch from_variant=0 to_variant=3` fires
-        // repeatedly mid-track.
-        let builder = HlsFixtureBuilder::new()
-            .variant_count(4)
-            .segments_per_variant(SEGMENT_COUNT)
-            .segment_duration_secs(SEGMENT_DURATION_S)
-            .variant_bandwidths(vec![300_000, 800_000, 1_800_000, 5_000_000])
-            // Codec choice mirrors prod (`aac2` = HE-AAC v2 with
-            // SBR + Parametric Stereo). The cascade does not
-            // reproduce on AAC-LC — Symphonia's fmp4 demuxer
-            // appears to handle plain mp4a fragments fine but
-            // mis-handles the moof layout that the HE-AAC v2
-            // fixtures (and prod zvuk DRM streams) generate, so
-            // the reproducer must use the same codec the bug
-            // surfaces on in production.
-            .packaged_audio_aac_he_v2(44_100, 2)
-            .encryption(EncryptionRequest {
-                key_hex,
-                iv_hex: Some(iv_hex),
-            })
-            .push_delay_rule(DelayRule {
-                variant: Some(0),
-                delay_ms: 300,
-                ..DelayRule::default()
-            })
-            .push_delay_rule(DelayRule {
-                delay_ms: CDN_DELAY_MS,
-                ..DelayRule::default()
-            });
-        let created = helper
-            .create_hls(builder)
-            .await
-            .expect("create multi-variant HLS fixture");
-        let master = created.master_url();
-        let master_url = master.as_str().to_string();
-
+    async fn setup(temp_dir: &TestTempDir, master_url: String) -> Self {
         let pools = pools();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
@@ -270,11 +219,12 @@ impl Harness {
 
         let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
-        let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
-            .downloader(downloader)
-            .store(store)
-            .initial_abr_mode(AbrMode::Auto(None))
-            .build();
+        let cfg =
+            ResourceConfig::for_src(ResourceSrc::parse(master_url.as_str()).expect("valid URL"))
+                .downloader(downloader)
+                .store(store)
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
         let mut rx = queue.subscribe();
         let id = queue
             .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
@@ -403,11 +353,13 @@ fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
 #[case::fwd_then_back(0.80, Some(0.20))]
 #[case::rapid_50_then_90(0.50, Some(0.90))]
 async fn seek_into_cold_range_does_not_fail(
+    #[future(awt)] scrub_source: (TestServerHelper, String),
     temp_dir: TestTempDir,
     #[case] first_ratio: f64,
     #[case] second_ratio: Option<f64>,
 ) {
-    let mut harness = Harness::setup(&temp_dir).await;
+    let (_helper, master_url) = scrub_source;
+    let mut harness = Harness::setup(&temp_dir, master_url).await;
 
     let first_target = TRACK_DURATION_S * first_ratio;
     let first_tag = if second_ratio.is_some() {
@@ -457,11 +409,16 @@ async fn seek_into_cold_range_does_not_fail(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::drag_mid(0.40)]
 #[case::drag_end(0.95)]
-async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] final_ratio: f64) {
+async fn seek_drag_into_cold_range_does_not_fail(
+    #[future(awt)] scrub_source: (TestServerHelper, String),
+    temp_dir: TestTempDir,
+    #[case] final_ratio: f64,
+) {
     const DRAG_DURATION: Duration = Duration::from_millis(400);
     const DRAG_STEPS: usize = 8;
 
-    let mut harness = Harness::setup(&temp_dir).await;
+    let (_helper, master_url) = scrub_source;
+    let mut harness = Harness::setup(&temp_dir, master_url).await;
     let final_target = TRACK_DURATION_S * final_ratio;
 
     harness
@@ -478,4 +435,60 @@ async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] 
     .await;
     harness.close().await;
     assert_not_failed(outcome, final_target, "drag");
+}
+
+#[kithara::fixture]
+async fn scrub_source() -> (TestServerHelper, String) {
+    // AES-128 key + IV matching `packaged_encrypted_builder` in
+    // `tests/src/hls_server.rs` — every kithara fixture uses these
+    // same constants so the integration helpers can verify
+    // decryption end-to-end.
+    const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
+    const AES128_IV: [u8; 16] = [0u8; 16];
+    let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
+    let iv_hex: String = AES128_IV.iter().map(|b| format!("{b:02x}")).collect();
+
+    let helper = TestServerHelper::new().await;
+    // Mirror prod zvuk DRM shape: 4 variants (slq / smq / shq /
+    // slossless analogue), AES-128 CBC, ABR=Auto, per-segment
+    // delay above the audio worker's wait budget. Slow variant 0
+    // has higher delay so the ABR controller is tempted to
+    // upgrade — same as the prod trace where `commit_variant_switch
+    // reason=UpSwitch from_variant=0 to_variant=3` fires
+    // repeatedly mid-track.
+    let builder = HlsFixtureBuilder::new()
+            .variant_count(4)
+            .segments_per_variant(SEGMENT_COUNT)
+            .segment_duration_secs(SEGMENT_DURATION_S)
+            .variant_bandwidths(vec![300_000, 800_000, 1_800_000, 5_000_000])
+            // Codec choice mirrors prod (`aac2` = HE-AAC v2 with
+            // SBR + Parametric Stereo). The cascade does not
+            // reproduce on AAC-LC — Symphonia's fmp4 demuxer
+            // appears to handle plain mp4a fragments fine but
+            // mis-handles the moof layout that the HE-AAC v2
+            // fixtures (and prod zvuk DRM streams) generate, so
+            // the reproducer must use the same codec the bug
+            // surfaces on in production.
+            .packaged_audio_aac_he_v2(44_100, 2)
+            .encryption(EncryptionRequest {
+                key_hex,
+                iv_hex: Some(iv_hex),
+            })
+            .push_delay_rule(DelayRule {
+                variant: Some(0),
+                delay_ms: 300,
+                ..DelayRule::default()
+            })
+            .push_delay_rule(DelayRule {
+                delay_ms: CDN_DELAY_MS,
+                ..DelayRule::default()
+            });
+    let created = helper
+        .create_hls(builder)
+        .await
+        .expect("create multi-variant HLS fixture");
+    let master = created.master_url();
+    let master_url = master.as_str().to_string();
+
+    (helper, master_url)
 }

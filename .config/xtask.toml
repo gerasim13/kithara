@@ -674,21 +674,6 @@ default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]
 
-[test.lanes.cold]
-program = "cargo"
-default_features = ["kithara-ui/render"]
-prefix_args = [
-  "nextest",
-  "run",
-  "--profile",
-  "cold",
-  "--workspace",
-  "--exclude",
-  "kithara-fuzz",
-  "--cargo-profile",
-  "test-release",
-]
-
 [test.lanes.loom]
 program = "cargo"
 prefix_args = [

@@ -412,6 +412,7 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
+    use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
     use kithara_warp::{SessionEpoch, SessionFrame, Warp, WarpConfig};
     use ringbuf::traits::{Consumer, Producer};
@@ -461,6 +462,7 @@ mod tests {
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
+        samples: Vec<f32>,
     }
 
     impl Default for EofReader {
@@ -474,6 +476,7 @@ mod tests {
                 ),
                 position_frames: 0,
                 total_frames: 0,
+                samples: Vec::new(),
                 _drop_probe: None,
             }
         }
@@ -504,9 +507,10 @@ mod tests {
             }
         }
 
-        fn with_frames(total_frames: usize) -> Self {
+        fn with_frames(samples: Vec<f32>) -> Self {
             Self {
-                total_frames,
+                total_frames: samples.len() / 2,
+                samples,
                 ..Self::default()
             }
         }
@@ -536,7 +540,8 @@ mod tests {
                 return Ok(self.eof());
             };
             let samples = frames.get() * 2;
-            buf[..samples].fill(0.5);
+            let end = self.position_frames * 2;
+            buf[..samples].copy_from_slice(&self.samples[end - samples..end]);
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
@@ -551,8 +556,11 @@ mod tests {
             let Some(frames) = self.take_frames(capacity) else {
                 return Ok(self.eof());
             };
-            for channel in output {
-                channel[..frames.get()].fill(0.5);
+            let start = self.position_frames - frames.get();
+            for (index, channel) in output.iter_mut().enumerate() {
+                for (offset, sample) in channel[..frames.get()].iter_mut().enumerate() {
+                    *sample = self.samples[(start + offset) * 2 + index];
+                }
             }
             Ok(ReadOutcome::Frames {
                 count: frames,
@@ -579,9 +587,9 @@ mod tests {
         pools: &PoolRegion<TestPools>,
         controls: &Arc<StretchControls>,
         src: &str,
+        samples: Vec<f32>,
     ) -> Box<PlayerResource> {
-        let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
-        let resource = Resource::from_reader(EofReader::with_frames(total_frames), None)
+        let resource = Resource::from_reader(EofReader::with_frames(samples), None)
             .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
         PlayerResource::new(resource, Arc::from(src), pools)
             .map(Box::new)
@@ -653,7 +661,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
+    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(half: Vec<f32>) {
         let controls = StretchControls::new(1.0);
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
@@ -678,7 +686,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &first),
+                resource: warped_player_resource(&pools, &controls, &first, half.clone()),
                 item_id: first_id,
             })
             .expect("load first track");
@@ -724,7 +732,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &next),
+                resource: warped_player_resource(&pools, &controls, &next, half),
                 item_id: next_id,
             })
             .expect("load next track");
@@ -818,13 +826,13 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn seek_withdraws_the_resident_warp_context() {
+    fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
         let mut warp = Warp::new((), &WarpConfig::builder().build());
         let publisher = warp
             .take_publisher()
             .expect("fixture Warp owns its publisher");
         let reader = publisher.reader();
-        let mut resource = Resource::from_reader(EofReader::with_frames(1), None);
+        let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
         let context = RenderContext::new(
             SessionFrame::new(0)..SessionFrame::new(1),
             NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
