@@ -2,8 +2,6 @@
 
 #[cfg(feature = "abr")]
 use crate::AbrEvent;
-#[cfg(feature = "app")]
-use crate::AppEvent;
 #[cfg(feature = "asset")]
 use crate::AssetEvent;
 #[cfg(feature = "audio")]
@@ -67,9 +65,6 @@ pub enum Event {
     /// DJ feature event.
     #[cfg(feature = "player")]
     Dj(DjEvent),
-    /// Application lifecycle event.
-    #[cfg(feature = "app")]
-    App(AppEvent),
     /// Asset cache event.
     #[cfg(feature = "asset")]
     Asset(AssetEvent),

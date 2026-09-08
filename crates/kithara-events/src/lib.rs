@@ -14,8 +14,6 @@ mod seek;
 
 #[cfg(feature = "abr")]
 mod abr;
-#[cfg(feature = "app")]
-mod app;
 #[cfg(feature = "asset")]
 mod asset;
 #[cfg(feature = "audio")]
@@ -40,8 +38,6 @@ pub use abr::{
     AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError,
     VariantDuration, VariantIndex, VariantInfo,
 };
-#[cfg(feature = "app")]
-pub use app::AppEvent;
 #[cfg(feature = "asset")]
 pub use asset::{AssetEvent, EvictReason};
 #[cfg(feature = "audio")]
