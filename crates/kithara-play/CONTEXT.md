@@ -115,14 +115,12 @@ There is no `resource:` section — `Document`'s `deny_unknown_fields` refuses o
 `sources::build_resource_config`, the only construction site a document reaches.
 
 ## Live Equalizer Layout
-`PlayerImpl::set_eq_layout` keeps the running master EQ node, and **the session
-graph is the actuator**: it builds both isolators on the control thread and sends
-them as one node event. The processor swaps them in, crosses over through
-`MixDSP` over `EqConfig.smoothing`, and returns the retired pair in the event.
-`SharedEq` is the control-plane gain mirror of session and slot handles - **no
-audio processor reads it**; gains travel by node event, and replacement swaps
-the band array behind the `ArcSwap` every handle clone points at
-(`a_handle_clone_sees_the_replacement_band_array`).
+The session graph prepares replacement isolators off RT; failure preserves the
+active layout. The processor completes its `MixDSP` crossover before activating
+the latest queued layout. Retired allocations return off RT through later events.
+Identity and silence use `MixDSP` over warm filters; flat EQ stays bit-exact.
+`SharedEq` mirrors control-plane gains; processors receive node events. Replacing
+its `ArcSwap` band array reaches every handle clone.
 
 ## Events
 One `kithara_events::EventBus` per player: `player.subscribe()` and

@@ -9,21 +9,15 @@ the change that lands the work, and keep it short.
 ## In Flight
 
 - Runtime parameter smoothing, PR `queue-sync-smoothing` off `production/main`.
-  Commit 1 pins that every runtime parameter step is ramped before DSP. Commit 2
-  delivers one smoothing primitive per parameter with its config on the owner:
-  `EngineConfig.gate_smoothing` and `EqConfig.smoothing` are `SmootherConfig`
-  document types; EQ gain ramps per sample with no bypass, silence or history
-  fast path; an EQ layout arrives as one node event and crosses over through
-  `MixDSP`; a crossfade-duration change latches for the next fade; the arch
-  check `smoothing_primitive_sites` denies a hand-rolled smoother outside
-  `effects/eq/gain.rs`. The full-playthrough census builds its harness with an
-  empty EQ layout: a flat isolator is magnitude-flat, not phase-flat, and the
-  census pins the seam. Left: `suite_light` carries 19 red rows against
-  `production/main`, every one pinning a flat EQ as bit-exact identity
-  (`kithara_audio::dsp_properties` directly; `rate_response`,
-  `advance_boundary_provenance` and `gapless_offline_e2e` through a 10-band
-  layout). No unity bypass contradicts that pin; which contract wins is a
-  product decision, taken before this PR leaves draft.
+  `EngineConfig.gate_smoothing` and `EqConfig.smoothing` configure firewheel
+  smoothers; crossfade-duration changes latch for the next fade. Review repairs
+  preserve bit-exact flat-EQ identity and full-cut silence through smoothed
+  mixes while filters keep running. Repeated layout requests queue the newest
+  layout until the current crossover settles; retired storage returns through
+  control events. Failed replacement allocation leaves the running EQ intact.
+  The original full-playthrough census EQ is restored. Validation: 436 package
+  tests, 1005 `suite_light` tests, `just lint fast` and the WASM check
+  through FFI passed. External CI and campaign-wide acceptance remain outstanding.
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is

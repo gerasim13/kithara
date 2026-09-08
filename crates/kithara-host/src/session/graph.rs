@@ -623,7 +623,10 @@ pub(super) mod controls {
             .map(|info| info.sample_rate)
             .ok_or_else(|| graph_state("session stream is not running"))?;
         let master_eq = MasterEqNode::new(EqConfig::builder(pools).build(), &eq_layout);
-        fw_ctx.queue_event_for(master_eq_id, master_eq.layout_event(sample_rate));
+        let event = master_eq.layout_event(sample_rate).map_err(|error| {
+            SessionError::Graph(format!("prepare master EQ layout failed: {error}"))
+        })?;
+        fw_ctx.queue_event_for(master_eq_id, event);
 
         let player = deck_at_mut(&mut state.graph, idx)?;
         player.eq_layout = eq_layout;

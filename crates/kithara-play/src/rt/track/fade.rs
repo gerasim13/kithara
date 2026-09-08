@@ -1,14 +1,12 @@
-use std::ops::Range;
+use std::{num::NonZeroU32, ops::Range};
 
-#[rustfmt::skip]
-use firewheel::dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON;
-#[rustfmt::skip]
-use firewheel::param::smoother::SmootherConfig;
-use std::num::NonZeroU32;
-
-use firewheel::dsp::{
-    fade::FadeCurve,
-    mix::{Mix, MixDSP},
+use firewheel::{
+    dsp::{
+        fade::FadeCurve,
+        filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
+        mix::{Mix, MixDSP},
+    },
+    param::smoother::SmootherConfig,
 };
 
 #[derive(fieldwork::Fieldwork)]

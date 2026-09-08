@@ -259,3 +259,33 @@ async fn eq_layout_switch_is_crossed_over() {
         Consts::EQ_SMOOTH_SECONDS,
     );
 }
+
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+async fn eq_layout_change_during_crossover_stays_continuous() {
+    let (harness, _) = sine_queue(SmoothingCase {
+        eq_layout: Some(Consts::THREE_BAND),
+    })
+    .await;
+    let before = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+    harness
+        .control()
+        .set_eq_layout(layout(Consts::FOUR_BAND))
+        .expect("first layout accepted");
+    let mut after = observe(&harness, 1).await;
+    harness
+        .control()
+        .set_eq_layout(layout(Consts::THREE_BAND))
+        .expect("second layout accepted");
+    after.extend(observe(&harness, Consts::OBSERVE_BLOCKS).await);
+    assert!(
+        last_block_peak(&after) > peak(&before) * 0.95,
+        "the final unity layout must become audible"
+    );
+    assert_step_is_ramped(
+        "layout replaced during crossover",
+        &before,
+        &after,
+        peak(&before),
+        Consts::EQ_SMOOTH_SECONDS,
+    );
+}

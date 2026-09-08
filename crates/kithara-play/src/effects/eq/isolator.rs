@@ -1,3 +1,9 @@
+use std::num::NonZeroU32;
+
+use firewheel_core::dsp::{
+    fade::FadeCurve,
+    mix::{Mix, MixDSP},
+};
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
@@ -7,6 +13,8 @@ use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::Gain
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
+    bypass: MixDSP,
+    silence: MixDSP,
     filters: CrossoverFilters,
     gains: GainBank,
 }
@@ -20,6 +28,18 @@ impl IsolatorEq {
     where
         S: HasPool<f32>,
     {
+        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        let bypass = if bands.iter().all(|band| band.gain_db() == GainDb::default()) {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        let silence = if !bands.is_empty() && bands.iter().all(|band| band.gain_db() == GainDb::MIN)
+        {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
         let sample_rate: f32 = sample_rate.as_();
         let crossover_count = bands.len().saturating_sub(1);
         let mut crossover_freqs = config.pools().get_with_len::<f32>(crossover_count)?;
@@ -27,6 +47,8 @@ impl IsolatorEq {
             *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
         }
         Ok(Self {
+            bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
+            silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
             filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
@@ -40,19 +62,54 @@ impl IsolatorEq {
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let input = sanitize_sample(input);
         self.gains.tick();
-        match self.gains.len() {
+        let mut output = [match self.gains.len() {
             0 => input,
             1 => sanitize_sample(input * self.gains.linear(0)),
             _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
-        }
+        }];
+        self.bypass.mix_dry_into_wet_mono(&[input], &mut output, 1);
+        self.silence.mix_dry_into_wet_mono(&[0.0], &mut output, 1);
+        sanitize_sample(output[0])
     }
 
     pub fn reset(&mut self) {
         self.gains.reset();
         self.filters.reset();
+        self.update_mix();
+        self.bypass.reset_to_target();
+        self.silence.reset_to_target();
+    }
+
+    pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
+        self.gains.set(band, gain_db);
+        self.update_mix();
+    }
+
+    fn update_mix(&mut self) {
+        let all =
+            |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));
+        self.bypass.set_mix(
+            if all(GainDb::default()) {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            FadeCurve::Linear,
+        );
+        self.silence.set_mix(
+            if self.gains.len() > 0 && all(GainDb::MIN) {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            FadeCurve::Linear,
+        );
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
+        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.bypass.update_sample_rate(rate);
+        self.silence.update_sample_rate(rate);
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
@@ -68,8 +125,6 @@ impl IsolatorEq {
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
             #[cfg(test)]
             pub(crate) fn is_smoothing(&self) -> bool;
-            #[call(set)]
-            pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
         }
     }
 }
