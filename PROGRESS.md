@@ -6,6 +6,10 @@ status; git owns completed changes. Keep this file short.
 
 ## In Flight
 
+- PR #341: `kithara-derive` owns `Ranged`; GainDb, PitchScale, Percent and Tempo
+  migrated, `ranged!` removed, and `derivable_ranged` detects manual bounds.
+  Follow-up PRs: Level (play/host/app), Zoom (UI/gallery), TempoPercent (app).
+
 - Build warnings and the Clippy `sccache` configuration trap are resolved.
   MSRV is 1.95; GUI-only app modules require `gui`. Lint autofixes reduced
   debt, and the commit hook now includes the style gate.
@@ -69,5 +73,3 @@ status; git owns completed changes. Keep this file short.
   `Out of bounds memory access` in `Node::cancel` at teardown. Unconfirmed:
   `wasm_safe_thread` 0.1.1 decrements `exit_state` in three JS handlers
   without a once-guard while kithara drops the `JoinHandle` at spawn.
-
-- Derive campaign: renamed the shared crate to `kithara-derive`; Ranged and bounded scalar migrations remain (vault plan-1, 2026-09-05).

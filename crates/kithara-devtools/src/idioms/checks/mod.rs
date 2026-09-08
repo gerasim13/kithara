@@ -24,6 +24,7 @@ pub(crate) mod derivable_deref;
 pub(crate) mod derivable_display;
 pub(crate) mod derivable_from;
 pub(crate) mod derivable_getter;
+pub(crate) mod derivable_ranged;
 mod derivable_support;
 pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
@@ -61,6 +62,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(guard_cascade::GuardCascade),
         Box::new(derivable_delegation::DerivableDelegation),
         Box::new(derivable_from::DerivableFrom),
+        Box::new(derivable_ranged::DerivableRanged),
         Box::new(derivable_deref::DerivableDeref),
         Box::new(derivable_display::DerivableDisplay),
         Box::new(derivable_getter::DerivableGetter),
