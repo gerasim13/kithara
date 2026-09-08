@@ -35,6 +35,7 @@ kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 num-traits = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

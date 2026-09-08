@@ -28,6 +28,7 @@ kithara = { workspace = true, features = [
     "signal",
 ] }
 kithara-integration-tests = { workspace = true }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["probe"] }
 
 [lints]
