@@ -125,12 +125,8 @@
     - if: $KITHARA_PIPELINE_KIND == "main"
     - if: $KITHARA_PIPELINE_KIND == "nightly"
 
-# A branch push runs the iOS-facing subset, not everything: the platform under
-# focus, on the host that is that platform. The branch kind is therefore added
-# to the jobs that subset names rather than to the shared sets above, which the
-# Linux, Android and web lanes also extend. Cancellation comes from the parent
-# `dispatch:branch`, which is interruptible and takes the child pipeline with
-# it, so these keep the interruptibility their own kind asks for.
+# Review checks can be superseded by another commit on the same branch.
+# Child jobs declare cancellation themselves; the trigger cannot do it for them.
 .rules-verify-and-branch:
   interruptible: true
   rules:
@@ -141,7 +137,9 @@
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+      interruptible: true
     - if: $KITHARA_PIPELINE_KIND == "merge-request"
+      interruptible: true
     - !reference [.rules-integration, rules]
 
 # Long lanes a review ref asks for on purpose. Keeping them off `main` leaves
@@ -151,7 +149,9 @@
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+      interruptible: true
     - if: $KITHARA_PIPELINE_KIND == "merge-request"
+      interruptible: true
     - if: $KITHARA_PIPELINE_KIND == "nightly"
 
 .rules-nightly:

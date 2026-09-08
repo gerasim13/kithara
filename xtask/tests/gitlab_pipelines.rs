@@ -221,7 +221,7 @@ impl GitlabConfig {
                             .as_str()
                             .unwrap_or_else(|| panic!("`{rules_owner}` has a non-string rule key"));
                         assert!(
-                            matches!(key, "if" | "when"),
+                            matches!(key, "if" | "when" | "interruptible"),
                             "`{rules_owner}` uses unsupported rule key `{key}`"
                         );
                     }
@@ -778,4 +778,53 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
             "{job} must retain measurement isolation"
         );
     }
+}
+
+#[test]
+fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
+    let root = workspace_root();
+    let document = yaml(root.join(".gitlab/ci/pipeline.yml"));
+    assert_eq!(
+        document["workflow"]["auto_cancel"]["on_new_commit"].as_str(),
+        Some("none")
+    );
+    let rules = document["workflow"]["rules"]
+        .as_sequence()
+        .expect("workflow rules");
+    assert_eq!(
+        rules[0]["if"].as_str(),
+        Some("$KITHARA_PIPELINE_KIND == \"branch\" || $KITHARA_PIPELINE_KIND == \"merge-request\"")
+    );
+    assert_eq!(
+        rules[0]["auto_cancel"]["on_new_commit"].as_str(),
+        Some("interruptible")
+    );
+    assert_eq!(rules[1]["when"].as_str(), Some("always"));
+    let config = GitlabConfig::load(root);
+    for owner in [".rules-integration-and-review", ".rules-review-or-nightly"] {
+        let rules = config.definition(owner)["rules"]
+            .as_sequence()
+            .expect("job rules");
+        for kind in ["branch", "merge-request"] {
+            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+            let rule = rules
+                .iter()
+                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+                .expect("review rule");
+            assert_eq!(
+                rule["interruptible"].as_bool(),
+                Some(true),
+                "{owner}: {kind}"
+            );
+        }
+        assert_eq!(
+            config.definition(owner)["interruptible"].as_bool(),
+            Some(false),
+            "non-review jobs retain their policy"
+        );
+    }
+    assert_eq!(
+        config.definition(".rules-release")["interruptible"].as_bool(),
+        Some(false)
+    );
 }
