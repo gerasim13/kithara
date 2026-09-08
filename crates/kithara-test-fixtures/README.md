@@ -12,9 +12,14 @@
 
 # kithara-test-fixtures
 
-Audio test assets produced at build time and served from a content-addressed
-store on disk. A test asks for bytes and gets them; nothing is synthesized or
+Audio test assets produced at build time and served from a persistent store
+on disk. A test asks for bytes and gets them; nothing is synthesized or
 encoded inside a test's wall-clock deadline.
+
+Source edits, dependency updates and commits do not invalidate prepared assets.
+The explicit `cache-version` file selects the shared cache revision. Change it
+only when intentionally replacing the cached fixture set; use a new case name
+for an individual replacement. Rebuilds reuse existing entries.
 
 ## Usage
 

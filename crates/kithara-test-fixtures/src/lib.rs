@@ -16,18 +16,20 @@ pub mod assets;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use hls::hydrate as hls_hydrate;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hls::manifest as hls_manifest;
 /// Shared build support is declared here for its unit tests.
 #[cfg(test)]
 mod context;
-#[cfg(test)]
-mod encoders;
 /// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
 /// gated inside the module with the encoder types it consumes.
 pub mod fmp4;
 #[cfg(test)]
 mod graph;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod remote_file;
 pub mod signal;
 pub mod signal_asset;
 #[cfg(not(target_arch = "wasm32"))]

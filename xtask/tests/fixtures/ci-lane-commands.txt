@@ -1325,41 +1325,89 @@
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-fixtures / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    KITHARA_REMOTE_FIXTURES=1
+    RTEN_NUM_THREADS=1
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache
