@@ -731,7 +731,10 @@ mod tests {
             .retire_legacy_macos_runner("gui/501", &launchctl)
             .expect_err("a loaded service must make the failed bootout fatal");
 
-        assert!(error.to_string().contains("retiring legacy macOS runner"));
+        assert!(
+            error.to_string().contains("retiring legacy macOS runner"),
+            "unexpected retirement error: {error:#}"
+        );
         assert!(legacy.is_file());
     }
 
