@@ -41,5 +41,11 @@ async fn every_provider_materialises_two_sources() {
             );
         }
     }
+    if std::env::var_os("KITHARA_REMOTE_FIXTURES").is_some_and(|value| !value.is_empty()) {
+        assert!(
+            blocked.is_empty(),
+            "requested remote fixtures are unavailable: {blocked:?}"
+        );
+    }
     eprintln!("blocked providers: {blocked:?}");
 }

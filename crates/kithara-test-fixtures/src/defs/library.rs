@@ -91,7 +91,11 @@ fn library_flac(
 ) -> Result<Vec<u8>, RemoteFileError> {
     enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
-    fetch_verified(&url, sha256, length, Library::TIMEOUT)
+    Ok(
+        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
+            panic!("requested library fixture `{file}` failed verification: {error}")
+        }),
+    )
 }
 
 #[kithara::asset(

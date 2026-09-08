@@ -92,6 +92,8 @@ without failing the build. It is reserved for opt-in remote hydration:
 - A failed optional producer emits a redacted Cargo warning and leaves no final
   entry. `Asset::try_bytes()` returns the recorded `AssetError::Unavailable`,
   and the next enabled build retries because the entry is still absent.
+- Opted-in library FLAC downloads fail the build on download, length, or SHA-256
+  verification errors; only the missing opt-in is optional.
 - Required producers retain the old fail-closed contract. `optional` cannot be
   combined with `embed` because unavailable bytes cannot be compiled into a
   binary.

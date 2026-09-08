@@ -8,7 +8,15 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Real tracks as an optional verified asset, PR `queue-sync-fixtures` off `production/main`. Eleven FLACs on the silvercomet media host reach the fixture store only under `KITHARA_REMOTE_FIXTURES=1`, each verified by length and SHA-256 and paired with a sidecar from the production beat analyzer (one session at a time: eleven concurrent sessions exhausted the shared pool region and settled without a beat grid); `Provider::Library` reads the `song2` + `slowtechno` pair, the env-path provider is gone, and `sync_fixture_census` proves every provider materialises two sources or names its blocker. Left: the host-sync seam row on real tracks (`queue-sync-real-track-seam`, after `queue-sync-core` merges).
+- Real tracks as optional verified fixtures, PR `queue-sync-fixtures` off
+  `production/main`. Eleven pinned FLACs and production beat sidecars are
+  enabled by `KITHARA_REMOTE_FIXTURES=1`. Explicitly requested download,
+  length or SHA-256 failures now fail the build; the requested-remote census
+  also rejects blocked providers. Gated and ungated census passed, including
+  a warm-cache repeat; 79 package tests passed, two ignored. `just lint
+  fast` passed with no new or regressed findings. External CI is pending.
+  The real-track HostSync seam follow-up waits for both core and fixtures
+  to merge into `production/main`, as specified in the campaign map.
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is
