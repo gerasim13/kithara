@@ -6,7 +6,10 @@ use std::{
 use kithara::{
     bufpool::{HasPool, PoolRegion},
     host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
-    output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
+    output::{
+        OfflineRenderError, OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink,
+        RenderSinkError,
+    },
     platform::{
         CancelScope,
         sync::{
@@ -282,6 +285,52 @@ where
             .await
     }
 
+    /// Render `frames` forward from the renderer's own cursor through the
+    /// product offline protocol, at the speed the decoder sustains.
+    ///
+    /// A paced session moves the same cursor from its own tick, so the request
+    /// is re-anchored on the frame the renderer reports instead of a cursor
+    /// this harness alone owns; frames the tick rendered count as rendered.
+    /// Returns the frames the timeline advanced.
+    pub async fn render_forward(&self, frames: u64) -> u64 {
+        let spec = self.spec;
+        let block = u64::from(self.max_block_frames.get());
+        self.off
+            .call(move |state| {
+                let cancel = CancelScope::new(None);
+                let mut cursor = state.position.load(Ordering::Relaxed);
+                let mut rendered = 0;
+                while rendered < frames {
+                    let end = cursor
+                        .checked_add(block.min(frames - rendered))
+                        .expect("offline render timeline fits u64");
+                    let request = OfflineRenderRequest::builder()
+                        .spec(spec)
+                        .frames(cursor..end)
+                        .build();
+                    match state
+                        .host
+                        .render(&request, &cancel.token(), &mut DiscardSink)
+                    {
+                        Ok(report) => {
+                            cursor = end;
+                            rendered += report.frames;
+                        }
+                        Err(OfflineRenderError::RangeUnavailable { current, .. }) => {
+                            rendered += current.saturating_sub(cursor);
+                            cursor = current;
+                        }
+                        Err(error) => {
+                            panic!("render product offline Host forward: {error}")
+                        }
+                    }
+                }
+                state.position.store(cursor, Ordering::Relaxed);
+                rendered
+            })
+            .await
+    }
+
     /// Current finite-render cursor maintained by this harness.
     #[must_use]
     pub fn position(&self) -> u64 {
@@ -355,6 +404,16 @@ where
         self.off
             .call(move |state| state.host.invalidate_audio_route(reason))
             .await
+    }
+}
+
+/// Drops rendered audio: a forward render is taken for the timeline it
+/// advances, not for the samples it produces.
+struct DiscardSink;
+
+impl RenderSink for DiscardSink {
+    fn write(&mut self, _samples: &[f32]) -> Result<(), RenderSinkError> {
+        Ok(())
     }
 }
 

@@ -53,6 +53,12 @@ const STAGNATION_TICKS: u32 = 75;
 /// Producer-tick wakes a quality switch is given to land before the harness
 /// stops waiting for it.
 const SWITCH_PROGRESS_TICKS: u32 = 200;
+/// Product render blocks one `RenderFor` turn takes before it re-reads the
+/// playhead and ticks the queue, the way an app update loop would.
+const RENDER_BATCH_BLOCKS: u64 = 16;
+/// How much audio past the request a `RenderFor` may render before it stops
+/// waiting for the playhead: a live engine reaches the target well inside it.
+const RENDER_OVERRUN: u64 = 2;
 
 /// `SimHarness` is the integration-test entry point for the user
 /// simulation scenarios. It owns a `Queue + Player + Downloader` triple
@@ -123,6 +129,7 @@ impl SimHarness {
             PlayerConfig::builder()
                 .sample_rate(session_config.sample_rate())
                 .worker(worker)
+                .block_on_underrun(true)
                 .build(),
         );
         let queue_owner = OfflineQueue::new(
@@ -237,7 +244,8 @@ impl SimHarness {
             Action::QualityAuto => self.do_quality_auto().await,
             Action::Pause => self.do_pause().await,
             Action::Resume => self.do_resume().await,
-            Action::PlayFor(d) | Action::RenderFor(d) => self.do_play_for(d).await,
+            Action::PlayFor(d) => self.do_play_for(d).await,
+            Action::RenderFor(d) => self.do_render_for(d).await,
         }
     }
 
@@ -795,6 +803,94 @@ impl SimHarness {
                     pre_entry.map(|e| e.status)
                 );
             }
+        }
+    }
+
+    /// Advance the playhead by rendering through the product offline renderer
+    /// instead of waiting out `at_least` of paced playback.
+    ///
+    /// The session blocks its reads on a producer-ring underrun, so a render
+    /// turn advances the playhead by exactly what it renders and the action
+    /// costs what the decode costs — the same under the virtual and the real
+    /// clock. A decode that stops is then a render that parks, which
+    /// `recv_outcome_blocking`'s own hang watchdog owns; what is left here is
+    /// `PlayFor`'s remaining pair of oracles, a playhead that ends short of
+    /// the request and a track that flips before its end.
+    async fn do_render_for(&mut self, at_least: Duration) {
+        let target = at_least.as_secs_f64();
+        let budget = self
+            .queue_owner
+            .host()
+            .spec()
+            .frame_at(at_least)
+            .expect("render target fits the offline timeline")
+            .saturating_mul(RENDER_OVERRUN);
+        let batch = u64::from(self.queue_owner.host().max_block_frames().get())
+            .saturating_mul(RENDER_BATCH_BLOCKS);
+
+        let mut pre_pos = self.position();
+        let pre_track = self.current_track_id();
+        let duration = self.duration();
+        let mut rendered: u64 = 0;
+
+        while rendered < budget {
+            if let Some(id) = pre_track
+                && let Some(entry) = self.queue.track(id)
+                && let TrackStatus::Failed(err) = &entry.status
+            {
+                panic!(
+                    "[RenderFor({}ms)] track Failed mid-render: {err}",
+                    at_least.as_millis()
+                );
+            }
+            let cur = self.position();
+            if cur + 1.0 < pre_pos {
+                pre_pos = cur;
+            }
+            if self.is_playing() {
+                if cur - pre_pos >= target * 0.9 {
+                    return;
+                }
+                if duration > 0.0 && (duration - cur).abs() < 0.5 {
+                    return;
+                }
+            }
+            rendered = rendered.saturating_add(self.queue_owner.host().render_forward(batch).await);
+            let _ = self.run(QueueControl::tick).await;
+        }
+
+        let post = self.position();
+        let advance = post - pre_pos;
+        let reached_eof = duration > 0.0 && (duration - post).abs() < 0.5;
+        if !reached_eof && advance < target * 0.5 {
+            panic!(
+                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s across {rendered} \
+                 rendered frames (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, \
+                 dur={duration:.3}s, playing={playing}, \
+                 player_status={player_status:?}, track_status={track_status:?}, \
+                 engine_load={engine_load:?})",
+                at_least.as_millis(),
+                playing = self.is_playing(),
+                player_status = self.queue.status(),
+                track_status = pre_track
+                    .and_then(|id| self.queue.track(id))
+                    .map(|entry| entry.status),
+                engine_load = self.queue.engine_load(),
+            );
+        }
+
+        if let Some(pre_id) = pre_track
+            && self.current_track_id() != Some(pre_id)
+            && advance < target - NATURAL_EOF_WINDOW_S
+        {
+            panic!(
+                "[RenderFor({}ms)] SPURIOUS AUTO-ADVANCE: track flipped from {pre_id:?} to \
+                 {:?} at position {post:.2}s after only {advance:.2}s of playback \
+                 (requested {target:.2}s). pre_status={:?}",
+                at_least.as_millis(),
+                self.current_track_id(),
+                self.queue.track(pre_id).map(|entry| entry.status),
+            );
         }
     }
 }
