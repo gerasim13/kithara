@@ -4,6 +4,7 @@
 //! a crate root and delegates to the module that owns each expansion.
 
 mod patch;
+mod ranged;
 
 use proc_macro::TokenStream;
 
@@ -16,4 +17,13 @@ use proc_macro::TokenStream;
 #[proc_macro_derive(Patch, attributes(patch))]
 pub fn patch(input: TokenStream) -> TokenStream {
     patch::expand(input)
+}
+
+/// Declares a bounded numeric newtype.
+///
+/// `checked` and `Deserialize` refuse out-of-range values; the optional
+/// `clamp` flag adds a clamping `From` and requires a declared default.
+#[proc_macro_derive(Ranged, attributes(ranged))]
+pub fn ranged(input: TokenStream) -> TokenStream {
+    ranged::expand(input)
 }
