@@ -2,8 +2,10 @@ mod wire {
     use std::num::NonZeroUsize;
 
     use kithara_bufpool::PoolRegion;
-    use kithara_events::EventBus;
-    use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
+    use kithara_events::{EventBus, TrackId};
+    use kithara_warp::{
+        BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, SyncAdmission, SyncError,
+    };
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -129,6 +131,12 @@ mod wire {
         SetSessionTempo {
             tempo: Tempo,
         },
+        PublishTrackGrid {
+            deck: BeatGridId,
+            item: TrackId,
+            segments: SegmentSet,
+            state: BeatGridState,
+        },
         SetSessionPlaying {
             playing: bool,
         },
@@ -169,6 +177,7 @@ mod wire {
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
+        SyncAdmission(SyncAdmission),
         Err(SessionError),
     }
 

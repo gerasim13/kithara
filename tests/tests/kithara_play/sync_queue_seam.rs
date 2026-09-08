@@ -4,14 +4,20 @@
 //! honoured, deck-level timestretch persists into the next track, and without a
 //! grid the stream stays continuous at the original tempo.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroU32};
 
-use kithara::{events::TrackId, platform::time::Duration};
+use kithara::{
+    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
+    events::TrackId,
+    platform::time::Duration,
+    warp::{AssetAxis, BeatGridState, SyncAdmission},
+};
 use kithara_integration_tests::{
     cochlea::{
         CochleaReport, marked_synchronization_failures, synchronization_failures,
         time_stretch_failures,
     },
+    grid::segment_set,
     kithara,
 };
 use kithara_test_fixtures::{asset::Asset, assets};
@@ -37,6 +43,28 @@ impl Fixture {
     const SEAM_OFF: SyncCase = SyncCase::queued("seam_off", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
     const SEAM_FADE_LENGTH: SyncCase =
         SyncCase::queued("seam_fade_length", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
+    const TRACK_GRID: SyncCase =
+        SyncCase::queued("track_grid", Self::SAMPLE_RATE, 2, Self::FADE_SECS);
+    const HOUSE_ANALYSIS: &str = "rhythm_expected_analysis_house_124_aligned";
+    const ANALYSIS_FINGERPRINT: &str = "rhythm-fixture:v1";
+}
+
+/// The asset grid the fixture score promises for `wav`, read from its
+/// analysis sidecar and laid on the WAV's own frame axis.
+fn asset_grid(wav: &str, analysis: &str) -> kithara::warp::SegmentSet {
+    let asset = assets::by_name(analysis).unwrap_or_else(|| panic!("missing `{analysis}`"));
+    let fingerprint = AnalysisFingerprint::new(Some(Fixture::ANALYSIS_FINGERPRINT), None);
+    let artifact: BeatArtifact = AnalysisFile::parse(asset.bytes(), &fingerprint)
+        .unwrap_or_else(|error| panic!("decode `{analysis}`: {error}"))
+        .latest()
+        .analysis()
+        .beat()
+        .unwrap_or_else(|| panic!("`{analysis}` has no beat analysis"))
+        .artifact()
+        .clone();
+    let rate = NonZeroU32::new(Fixture::SAMPLE_RATE).expect("fixture sample rate");
+    segment_set(&artifact, AssetAxis::new(rate, track_len(wav)))
+        .unwrap_or_else(|error| panic!("`{analysis}` is not a segment set: {error}"))
 }
 
 /// Session-axis span over which one track produced audio, from the `render`
@@ -299,5 +327,62 @@ async fn seam_honours_the_configured_crossfade_length() {
     assert!(
         (overlap - fade).abs() <= block,
         "tracks overlapped for {overlap} frames, configured crossfade is {fade} ± {block}",
+    );
+}
+
+/// A synced deck that has played past the house lead-in, where the fixture
+/// grid covers the presentation frontier.
+async fn synced_house_deck() -> ProductHarness {
+    let mut harness = ProductHarness::new(
+        Fixture::TRACK_GRID,
+        Provider::Rhythm(Fixture::HOUSE_THEN_TECHNO),
+        0,
+    )
+    .await;
+    harness.set_tempo(Fixture::TRACK_GRID, 124.0, true);
+    let lead_in = usize::try_from(bar_frames(124.0)).expect("lead-in fits usize");
+    let _ = harness
+        .capture_frames(Fixture::TRACK_GRID, lead_in, harness.block_frames)
+        .await;
+    harness.request_sync(Fixture::TRACK_GRID).await;
+    assert!(
+        harness.failures.is_empty(),
+        "sync request failed: {:?}",
+        harness.failures
+    );
+    harness
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(300)))]
+async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
+    let harness = synced_house_deck().await;
+    let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
+    let admission = harness
+        .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+        .unwrap_or_else(|error| panic!("publish the house grid: {error}"));
+    assert!(
+        matches!(admission, SyncAdmission::Prepared { .. }),
+        "the deck prepares a warp map for a complete track grid, got {admission:?}"
+    );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(300)))]
+async fn a_building_track_grid_defers_until_it_completes() {
+    let harness = synced_house_deck().await;
+    let item = harness.ids[0][0];
+    let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
+    let building = harness
+        .publish_track_grid(0, item, grid.clone(), BeatGridState::Building)
+        .unwrap_or_else(|error| panic!("publish the building grid: {error}"));
+    assert!(
+        matches!(building, SyncAdmission::Deferred { .. }),
+        "a building grid waits for coverage, got {building:?}"
+    );
+    let complete = harness
+        .publish_track_grid(0, item, grid, BeatGridState::Complete)
+        .unwrap_or_else(|error| panic!("republish the complete grid: {error}"));
+    assert!(
+        matches!(complete, SyncAdmission::Prepared { .. }),
+        "the completed revision replaces the building one and is prepared, got {complete:?}"
     );
 }

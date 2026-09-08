@@ -450,6 +450,11 @@ fn refresh_observation<B: AudioBackend, S>(
             }
         }
     }
+    for deck in state.root.nested_groups_mut() {
+        if let Err(error) = deck.acknowledge_prepared() {
+            tracing::warn!(%error, deck = %deck.id(), "deck did not acknowledge its warp map");
+        }
+    }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }

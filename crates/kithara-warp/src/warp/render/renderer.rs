@@ -13,8 +13,8 @@ use tracing::warn;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    temporal::RateTarget,
+    ActiveRegion, RegionPlan, RegionPlanSlot, RenderReader, RenderSnapshot, StretchControls,
+    WarpConfig, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -75,8 +75,10 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
+    /// Region plan cached from `plan_slot`; `Arc::ptr_eq` detects a live swap.
     pub(super) plan: Option<Arc<RegionPlan>>,
+    /// Live plan of the rendered item, shared with the deck that installs it.
+    pub(super) plan_slot: Arc<RegionPlanSlot>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
@@ -130,10 +132,11 @@ where
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
+        plan_slot: Arc<RegionPlanSlot>,
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
-        let plan = controls.region_plan();
+        let plan = plan_slot.load();
         let speed = controls.speed();
         let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
         let sample_rate: f32 = spec.sample_rate.get().as_();
@@ -154,6 +157,7 @@ where
             retired_engine: None,
             current_kind,
             controls,
+            plan_slot,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),
@@ -432,7 +436,7 @@ where
 
     /// Pull the live region plan handle; on a swap drop the region cursor.
     pub(super) fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
+        let want = self.plan_slot.load();
         let same = match (&self.plan, &want) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),

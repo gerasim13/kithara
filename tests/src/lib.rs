@@ -41,6 +41,8 @@ pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flash_pace;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod grid;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;

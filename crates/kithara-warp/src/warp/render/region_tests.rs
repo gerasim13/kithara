@@ -100,9 +100,10 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(plan.map(Arc::new));
     let config = WarpConfig::builder().stretch(controls).build();
-    let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
+    let warp = Warp::new((), &config);
+    warp.region_plan().install(plan.map(Arc::new));
+    let mut fx = warp.renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

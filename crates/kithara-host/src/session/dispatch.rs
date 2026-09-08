@@ -2,11 +2,12 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 use kithara_play::{PlayError, StreamShape, Tempo, player::PlayerMember};
 use kithara_warp::{
-    BeatGrid, BeatsPerMinute, SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected,
-    TopologyOperation,
+    BeatGrid, BeatGridId, BeatGridState, BeatsPerMinute, SegmentSet, SyncAdmission, SyncCapability,
+    SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
@@ -73,7 +74,7 @@ fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd
 fn transact_root<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     operation: SyncOperation<PlayerMember>,
-) -> Result<kithara_warp::SyncAdmission, SyncRejected<PlayerMember>> {
+) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             SyncError::CapabilityUnavailable {
@@ -98,6 +99,21 @@ fn set_root_tempo<B: AudioBackend, S>(
         .map_err(|rejected| SessionError::TransportSync(rejected.error().to_string()))?;
     state.publish_root();
     Ok(())
+}
+
+fn publish_track_grid<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+    deck: BeatGridId,
+    item: TrackId,
+    segments: SegmentSet,
+    grid_state: BeatGridState,
+) -> Result<SyncAdmission, SessionError> {
+    let member = state
+        .root
+        .nested_groups_mut()
+        .find(|member| member.id() == deck)
+        .ok_or(SyncError::GroupNotFound { group_id: deck })?;
+    Ok(member.publish_item_grid(item, segments, grid_state)?)
 }
 
 fn topology_conflicts_with_graph<B: AudioBackend, S>(
@@ -221,6 +237,15 @@ where
                 Err(err) => Reply::Err(err),
             }
         }
+        Cmd::PublishTrackGrid {
+            deck,
+            item,
+            segments,
+            state: grid_state,
+        } => match publish_track_grid(state, deck, item, segments, grid_state) {
+            Ok(admission) => Reply::SyncAdmission(admission),
+            Err(err) => Reply::Err(err),
+        },
         Cmd::SetSessionPlaying { playing } => match transport::set_playing(state, playing) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -598,7 +623,7 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
+    fn register_command(grid_id: BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             sample_rate,
@@ -727,7 +752,7 @@ mod tests {
     #[kithara::test]
     fn registration_rejects_a_player_before_canonical_attachment() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = kithara_warp::BeatGridId::allocate().expect("fixture player grid id");
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
 
         let reply = run_cmd(
             &mut state,
@@ -798,7 +823,7 @@ mod tests {
         let operation = detach(&state);
         assert!(matches!(
             run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         assert_eq!(member_count(&state), 0);
         assert_eq!(deck_count(&state), 0);
@@ -818,13 +843,13 @@ mod tests {
 
         assert!(matches!(
             run_host_cmd(&mut state, detach(first)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
         let after_first = state.root.topology().expect("updated topology").stamp();
         assert_ne!(after_first, before);
         assert!(matches!(
             run_host_cmd(&mut state, detach(second)),
-            HostReply::Admission(Ok(kithara_warp::SyncAdmission::TopologyChanged { .. }))
+            HostReply::Admission(Ok(SyncAdmission::TopologyChanged { .. }))
         ));
 
         let after_second = state.root.topology().expect("updated topology");
@@ -1332,7 +1357,7 @@ mod tests {
         let known = register_player(&mut state);
         start_player_cmd(&mut state, known);
         let known_grid = deck_by_player_id(&state, known).grid_id;
-        let unknown_grid = kithara_warp::BeatGridId::allocate().expect("foreign fixture grid id");
+        let unknown_grid = BeatGridId::allocate().expect("foreign fixture grid id");
 
         assert!(matches!(
             run_host_cmd(

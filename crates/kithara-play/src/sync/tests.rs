@@ -629,3 +629,26 @@ fn a_complete_grid_is_prepared_on_the_next_deck_beat_and_locks_on_acknowledge() 
         SyncError::DuplicateAcknowledgement { operation }
     );
 }
+
+#[kithara::test]
+fn a_deck_owning_its_tempo_reports_it() {
+    let deck = synced_deck();
+    assert_eq!(
+        deck.deck_tempo(),
+        Some(BeatsPerMinute::try_from(120.0).expect("fixture tempo"))
+    );
+}
+
+#[kithara::test]
+fn a_deck_inheriting_its_tempo_reads_it_from_the_live_session_grid() {
+    let deck = live_deck();
+    assert_eq!(
+        deck.deck_tempo(),
+        Some(BeatsPerMinute::try_from(120.0).expect("two beats per second"))
+    );
+}
+
+#[kithara::test]
+fn a_deck_without_a_grid_has_no_tempo() {
+    assert_eq!(fixture_group().deck_tempo(), None);
+}

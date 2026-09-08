@@ -41,8 +41,8 @@ pub use sync::{
 ))]
 pub use temporal::StretchKind;
 pub use temporal::{
-    ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RenderContext, RenderPublisher,
-    RenderReader, RenderSnapshot, StretchControls,
+    ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RegionPlanSlot, RenderContext,
+    RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;

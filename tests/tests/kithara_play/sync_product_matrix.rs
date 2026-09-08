@@ -15,14 +15,15 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
+        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{
-        AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
-        SyncGroup, SyncIntent, SyncOperation,
+        AlignmentSource, BeatGridState, LoadGeneration, PresentationFrontier, SegmentSet,
+        SessionFrame, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
     },
 };
 use kithara_app::recording::AssetPartSink;
@@ -699,6 +700,19 @@ impl ProductHarness {
                 let _ = self.render(case, self.block_frames).await;
             }
         }
+    }
+
+    /// Publishes `segments` as the asset grid of the queued track `item` on
+    /// deck `deck`; the deck reconciles the track onto its own tempo.
+    pub(super) fn publish_track_grid(
+        &self,
+        deck: usize,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, PlayError> {
+        self.host
+            .publish_track_grid(self.decks[deck].id(), item, segments, state)
     }
 
     pub(super) fn mark(&mut self, label: &str) {

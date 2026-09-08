@@ -1,12 +1,13 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
-    BeatGridStamp, BeatGridState, BeatsPerMinute, LoadGeneration, MapAxis, MapPoint, MapPosition,
-    MapRegion, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission,
-    SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember,
-    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
-    TopologyRevision, TopologyStamp, TransportRevision, WarpMapRevision,
+    AssetFrame, BeatEstimate, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
+    BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, LoadGeneration, MapAxis,
+    MapPoint, MapPosition, MapRegion, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+    SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp, TransportRevision,
+    WarpMapRevision,
 };
 
 use super::{TempoSource, prepare::PreparedSync, topology::materialize_topology, transaction};
@@ -16,6 +17,8 @@ use super::{TempoSource, prepare::PreparedSync, topology::materialize_topology, 
 /// `G` is the concrete nested-group representation. The group owns every live
 /// member exclusively; callers interact through transactions or closure-based
 /// access so member references cannot escape the owning lock.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     grid: BeatGridSnapshot,
     next_operation: Option<SyncOperationId>,
@@ -27,6 +30,7 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     generations: (LoadGeneration, TransportRevision),
     parent_anchor: Option<SessionAnchor>,
     warp_map: WarpMapRevision,
+    #[field(get, vis = "pub(crate)", copy)]
     prepared: Option<PreparedSync>,
     locked: Option<SyncApplied>,
     topology_revision: TopologyRevision,
@@ -264,31 +268,40 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 
     /// The tempo a `Disable` latches from the group or its first live grid.
     pub(crate) fn seed_local_tempo(&self) -> Option<BeatsPerMinute> {
+        self.deck_tempo().or_else(|| {
+            self.members
+                .iter()
+                .find_map(|member| match member {
+                    SyncMember::Grid { grid, .. } => {
+                        let snapshot = grid.snapshot();
+                        let origin = MapPoint::new(
+                            snapshot.stamp(),
+                            MapPosition::Asset(AssetFrame::new(0.0).ok()?),
+                        );
+                        Some(snapshot.tempo_at(origin))
+                    }
+                    SyncMember::Group { .. } => None,
+                })
+                .and_then(resolved_tempo)
+        })
+    }
+
+    /// The tempo this deck plays at: its local tempo, else the tempo of its
+    /// live session grid at the session origin.
+    #[must_use]
+    pub fn deck_tempo(&self) -> Option<BeatsPerMinute> {
         if let TempoSource::Local(tempo) = self.tempo {
             return Some(tempo);
         }
-        let live = (self.grid.state() == BeatGridState::Live).then(|| {
-            let origin = MapPoint::new(
-                self.grid.stamp(),
-                MapPosition::Session(SessionFrame::new(0)),
-            );
-            self.grid.tempo_at(origin)
-        });
-        let member = self.members.iter().find_map(|member| match member {
-            SyncMember::Grid { grid, .. } => {
-                let snapshot = grid.snapshot();
+        (self.grid.state() == BeatGridState::Live)
+            .then(|| {
                 let origin = MapPoint::new(
-                    snapshot.stamp(),
-                    MapPosition::Asset(AssetFrame::new(0.0).ok()?),
+                    self.grid.stamp(),
+                    MapPosition::Session(SessionFrame::new(0)),
                 );
-                Some(snapshot.tempo_at(origin))
-            }
-            SyncMember::Group { .. } => None,
-        });
-        live.or(member).and_then(|query| match query {
-            BeatGridQuery::Resolved(estimate) => Some(*estimate.value()),
-            _ => None,
-        })
+                self.grid.tempo_at(origin)
+            })
+            .and_then(resolved_tempo)
     }
 
     /// Creates an empty group whose session-axis grid is not available yet.
@@ -422,4 +435,11 @@ fn is_successor_epoch(current: SessionEpoch, next: SessionEpoch) -> bool {
     u64::from(current)
         .checked_add(1)
         .is_some_and(|successor| successor == u64::from(next))
+}
+
+fn resolved_tempo(query: BeatGridQuery<BeatEstimate<BeatsPerMinute>>) -> Option<BeatsPerMinute> {
+    match query {
+        BeatGridQuery::Resolved(estimate) => Some(*estimate.value()),
+        _ => None,
+    }
 }

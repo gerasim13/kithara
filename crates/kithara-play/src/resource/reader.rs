@@ -11,7 +11,8 @@ use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
+    PresentationFrontier, RegionPlanSlot, RenderContext, RenderPublisher, RenderReader,
+    StretchControls,
 };
 use tracing::warn;
 
@@ -73,6 +74,9 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
+    /// Region plan slot of the resident Warp lane; `None` for a plain reader.
+    #[field(get, deref = false)]
+    region_plan: Option<Arc<RegionPlanSlot>>,
     reader: ReaderOwner,
 }
 
@@ -185,6 +189,7 @@ impl Resource {
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
+            region_plan: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -211,6 +216,7 @@ impl Resource {
         let warp_controls = Arc::clone(config.warp().stretch());
         let mut audio = worker.open(config).await?;
         let priority = audio.priority();
+        let region_plan = audio.region_plan();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",
         })?;
@@ -221,6 +227,7 @@ impl Resource {
         }
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
+        resource.region_plan = Some(region_plan);
         Ok(resource)
     }
 

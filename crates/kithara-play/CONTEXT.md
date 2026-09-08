@@ -41,10 +41,11 @@ workspace production code can build a second playback scheduling path:
 exposes only the prepared source and wake contracts. One chain, one final
 output path:
 `decoded source -> WarpRenderer -> custom effects -> final output ring`. The Warp
-wrapper is resident even with synchronization off, so passthrough never selects a
-second implementation. A deck's session grid follows its `SyncMode` (Host anchor,
-own tempo, or none); the rest of sync is not yet wired end to end; final-ring admission is
-rendered readiness, not proof that a device callback presented those frames.
+wrapper stays resident with sync off. The deck owns its session grid and track
+grids; `Playlist` retains each plan until its Warp slot loads. Building grids
+defer reconciliation; complete grids can prepare it. Plans swap on the next
+chunk; activation and phase application are not yet wired end to end.
+Final-ring readiness does not prove device presentation.
 
 At true source EOF `WarpSource` drains the Warp tail through the effect chain
 before `EffectDrain` flushes the effects, preserving multi-pull tails.

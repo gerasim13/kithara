@@ -4,12 +4,13 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionAnchor, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
+    SyncRejected, SyncStatusSnapshot,
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
-use crate::{PlayError, SessionBinding};
+use crate::{PlayError, SessionBinding, api::TrackId};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "protocol/native.rs"]
@@ -39,6 +40,10 @@ impl fmt::Debug for PlayerMember {
 pub trait Player:
     BeatGrid + SyncGroup<NestedGroup = PlayerMember> + MaybeSend + MaybeSync + 'static
 {
+    /// Acknowledges the prepared warp map once the deck has rendered up to its
+    /// activation frame; `None` when nothing is due yet.
+    fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError>;
+
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
@@ -54,6 +59,15 @@ pub trait Player:
 
     /// Start or resume playback.
     fn play(&self);
+
+    /// Publishes the asset grid of one queued track on this deck's sync group
+    /// and reconciles the track onto the deck.
+    fn publish_item_grid(
+        &mut self,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError>;
 
     /// Read one coherent playback view.
     fn playback_view(&self) -> PlaybackView;
@@ -124,8 +138,8 @@ where
         );
         let admission = self.sync.transact(operation)?;
         if mode_or_tempo && matches!(admission, SyncAdmission::StateChanged { .. }) {
-            let now = self.runtime.render_frontier();
-            if let Err(error) = self.sync.refresh_session_grid(now) {
+            let now = self.runtime.presentation_frontier().output();
+            if let Err(error) = self.refresh_deck_grid(now) {
                 tracing::warn!(%error, "deck session grid did not follow its sync state");
             }
         }
@@ -144,12 +158,21 @@ impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
+        Self::acknowledge_prepared(self)
+    }
+
     fn close(&mut self) -> Result<(), PlayError> {
         self.make_control().close()
     }
 
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
-        self.sync.publish_session_anchor(anchor)
+        self.sync.publish_session_anchor(anchor)?;
+        let sync = &self.sync;
+        #[cfg(target_arch = "wasm32")]
+        let sync = sync.owned()?;
+        self.replan_tracks(sync.deck_tempo());
+        Ok(())
     }
 
     fn host_level(&self) -> f32 {
@@ -162,6 +185,15 @@ where
 
     fn play(&self) {
         let _ = self.runtime.with_open(PlayerRuntime::play);
+    }
+
+    fn publish_item_grid(
+        &mut self,
+        item: TrackId,
+        segments: SegmentSet,
+        state: BeatGridState,
+    ) -> Result<SyncAdmission, SyncError> {
+        Self::publish_item_grid(self, item, segments, state)
     }
 
     fn playback_view(&self) -> PlaybackView {

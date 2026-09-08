@@ -10,25 +10,18 @@ the change that lands the work, and keep it short.
 
 - Queue sync under warp and timestretch, three independent PRs off
   `production/main`. `queue-sync-core` pins the queue seam contract on the sync
-  product harness (crossfade length honoured, deck rate carried into the next
-  track, continuity with sync off) and then builds the seams; the continuity
-  row is green today, the other two are ignored-red until the RT trigger arms
-  the seam and the rate rides the render context. The listening tap now lives
-  in the offline harness: `just test audio-artifacts <dir> <filter>` publishes
-  every harness's output WAV and manifest with its control marks, and the
-  per-scenario recorders are gone. Sync mode and tempo have one owner: a
-  `GroupState` is built with its `SyncMode` (the session root `LocalSync`,
-  every deck `Off`) and carries a `TempoSource`, inherited until a `Tempo`
-  transaction latches a local one; mode and tempo transitions are admitted as
-  `StateChanged`, and `Cmd::SetSessionTempo` latches the root tempo through
-  that transaction. A deck's session grid follows its mode: the Host pushes
-  its committed session anchor into every deck after each transport commit, a
-  `HostSync` deck republishes on it, a `LocalSync` deck continues its own tempo
-  from the current render frontier, and an `Off` deck publishes no grid; a
-  `Reconcile` against a complete track grid is admitted `Prepared` on the
-  deck's next whole beat and locks on acknowledgement. Left: track asset
-  grids on the group, the per-block rate input, the RT seam trigger, and the
-  seam rows.
+  product harness and then builds the seams; the continuity row is green, the
+  crossfade and rate rows stay ignored-red until the RT trigger arms the seam
+  and the rate rides the render context. The listening tap lives in the
+  offline harness (`just test audio-artifacts <dir> <filter>`). Sync mode and
+  tempo have one owner: a `GroupState` carries its `SyncMode` and a
+  `TempoSource`; the Host pushes its session anchor into every deck, and each
+  deck publishes its session grid by mode. A track's asset grid is published
+  onto the deck group through `Host::publish_track_grid`, planned into a
+  `RegionPlan` at the deck tempo and installed in the track's Warp lane; the
+  admitted warp map is acknowledged from the host observation loop once the
+  presentation frontier passes its activation. Left: the per-block rate
+  input, the RT seam trigger, and the seam rows.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every

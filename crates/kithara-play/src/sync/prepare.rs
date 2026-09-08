@@ -7,10 +7,10 @@ use num_traits::ToPrimitive;
 /// A warp map admitted for one grid member and awaiting the renderer's
 /// acknowledgement.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PreparedSync {
-    pub(super) operation: SyncOperationId,
-    pub(super) warp_map: WarpMapRevision,
-    pub(super) activation: SessionFrame,
+pub(crate) struct PreparedSync {
+    pub(crate) operation: SyncOperationId,
+    pub(crate) warp_map: WarpMapRevision,
+    pub(crate) activation: SessionFrame,
 }
 
 /// The beat alignment of one grid member onto its owner's grid and the

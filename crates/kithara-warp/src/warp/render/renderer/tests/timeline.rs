@@ -5,8 +5,8 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{
-    Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced,
-    renderer, sine, spec,
+    Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, planned_renderer,
+    render_serviced, renderer, sine, spec,
 };
 use crate::{GridSegment, RegionPlan, Warp, WarpConfig};
 
@@ -96,7 +96,8 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
+    let (mut fx, plan) = planned_renderer(controls);
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![
             GridSegment::new(0, 1, 0.125),
             GridSegment::new(1, 2, 0.25),
@@ -105,7 +106,6 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
         ])
         .expect("one-frame regions are ordered and non-empty"),
     )));
-    let mut fx = renderer(controls);
     let pools = fx.pools.clone();
     let source = sine(4);
 
@@ -145,7 +145,8 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
+    let (mut fx, plan) = planned_renderer(controls);
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![
             GridSegment::new(0, 1, 1.0),
             GridSegment::new(1, 2, 0.75),
@@ -153,7 +154,6 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
         ])
         .expect("fixture regions are contiguous"),
     )));
-    let mut fx = renderer(controls);
     let pools = fx.pools.clone();
     let source = sine(3);
     let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
@@ -201,7 +201,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let source_latency = fx
         .engine
@@ -211,7 +211,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
         .latency()
         .source_frames();
     assert!(source_latency <= fx.source_block_frames.get());
-    controls.set_region_plan(Some(Arc::new(
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(
             u64::try_from(source_latency).expect("source latency fits u64") + 1,
             u64::try_from(source_latency).expect("source latency fits u64") + 2,
@@ -247,17 +247,17 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
+    let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
-    let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let source = sine(3);
     let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
-    controls.set_region_plan(None);
+    plan.install(None);
     let mut unity = chunk(
         &pools,
         &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
@@ -446,10 +446,10 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     let reference_controls = StretchControls::new(1.0);
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
-    reference_controls.set_region_plan(Some(Arc::new(
+    let (mut reference, reference_plan) = planned_renderer(Arc::clone(&reference_controls));
+    reference_plan.install(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, 1, 2.0)]).expect("fixture region is valid"),
     )));
-    let mut reference = renderer(Arc::clone(&reference_controls));
     let pools = reference.pools.clone();
     let reference_first = render_serviced(
         &mut reference,
@@ -457,7 +457,7 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     )
     .expect("the no-debt span emits two frames");
     assert_eq!(reference_first.frames(), 2);
-    reference_controls.set_region_plan(None);
+    reference_plan.install(None);
     let mut reference_unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     reference_unity.meta.frame_offset = 2;
     let reference_transition = render_serviced(&mut reference, reference_unity)
@@ -471,15 +471,14 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
+    let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![
             GridSegment::new(0, 1, 1.6),
             GridSegment::new(1, 2, 0.25),
         ])
         .expect("fixture regions are contiguous"),
     )));
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
-    let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
     let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
         .expect("the first span rounds to two frames");
     assert_eq!(first.frames(), 2);
@@ -491,7 +490,7 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     debt.meta.frame_offset = 1;
     assert!(render_serviced(&mut fx, debt).is_none());
 
-    controls.set_region_plan(None);
+    plan.install(None);
     let mut unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
@@ -520,16 +519,16 @@ fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind)
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
+    let (mut fx, plan) = planned_renderer(Arc::clone(&controls));
+    plan.install(Some(Arc::new(
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
-    let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let source = sine(2);
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());
 
     fx.reset();
-    controls.set_region_plan(None);
+    plan.install(None);
     fx.prepare(spec());
     let mut landed = chunk(&pools, &source[usize::from(Consts::CH)..]);
     landed.meta.frame_offset = 100;

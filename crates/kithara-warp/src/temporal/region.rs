@@ -1,3 +1,6 @@
+use arc_swap::ArcSwapOption;
+use kithara_platform::sync::Arc;
+
 /// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
 /// source frames with a single time-stretch ratio correction.
 #[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
@@ -34,7 +37,7 @@ pub struct RegionPlan {
 
 /// Validation error for [`RegionPlan::new`].
 #[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum RegionPlanError {
     /// A segment has `start_frame >= end_frame`.
     #[error("region segment {index} is empty or inverted (start >= end)")]
@@ -45,6 +48,9 @@ pub enum RegionPlanError {
     /// A segment starts before its predecessor ends (or out of order).
     #[error("region segment {index} overlaps or precedes its predecessor")]
     Overlap { index: usize },
+    /// A segment is positioned on the session axis instead of asset frames.
+    #[error("region segment {index} is not positioned in asset frames")]
+    SessionAxis { index: usize },
 }
 
 impl RegionPlan {
@@ -90,6 +96,27 @@ impl RegionPlan {
                 u64::MAX,
                 1.0,
             ),
+        }
+    }
+}
+
+/// Live region plan of one resident item, handed from the deck to the
+/// renderer that stretches that item. Swapped whole; picked up on the next chunk.
+#[derive(Debug, Default)]
+pub struct RegionPlanSlot {
+    plan: ArcSwapOption<RegionPlan>,
+}
+
+impl RegionPlanSlot {
+    delegate::delegate! {
+        to self.plan {
+            /// The installed plan, if any.
+            #[must_use]
+            #[call(load_full)]
+            pub fn load(&self) -> Option<Arc<RegionPlan>>;
+            /// Install or clear the plan.
+            #[call(store)]
+            pub fn install(&self, plan: Option<Arc<RegionPlan>>);
         }
     }
 }

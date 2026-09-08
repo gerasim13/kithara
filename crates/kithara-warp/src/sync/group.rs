@@ -3,8 +3,8 @@ use super::{
     SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp, WarpMapRevision,
 };
 use crate::{
-    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
-    SessionFrame,
+    BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridSnapshotError, BeatGridStamp,
+    BeatGridState, MapAxis, MapRegion, SessionFrame,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -94,6 +94,12 @@ pub enum SyncError {
     /// A grid owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
     BeatGridSnapshot(#[from] BeatGridSnapshotError),
+    /// A grid owner cannot allocate another grid identity.
+    #[error(transparent)]
+    BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
+    /// A grid owner cannot mint another revision of one grid.
+    #[error("beat grid revision space is exhausted for grid {grid_id}")]
+    BeatGridRevisionExhausted { grid_id: BeatGridId },
     /// No direct member with the requested identity exists in this group.
     #[error("member {member_id} was not found in group {group_id}")]
     MemberNotFound {

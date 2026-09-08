@@ -3,9 +3,13 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
+use kithara_warp::RegionPlan;
 use tracing::debug;
 
-use super::{QueuedResource, playlist::Playlist};
+use super::{
+    QueuedResource,
+    playlist::{Playlist, TrackGrid},
+};
 use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
@@ -105,6 +109,7 @@ impl ItemQueue {
             return Ok(None);
         };
         let (item_id, resource) = (queued.item_id, queued.resource);
+        playlist.track_loaded(item_id, resource.region_plan().cloned());
         let duration_seconds = resource
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
@@ -124,10 +129,23 @@ impl ItemQueue {
         }))
     }
 
+    /// Tracks with a published grid, paired with that grid.
+    pub(crate) fn track_grids(&self) -> Vec<(TrackId, TrackGrid)> {
+        self.playlist
+            .lock()
+            .track_grids()
+            .map(|(item, grid)| (item, grid.clone()))
+            .collect()
+    }
+
     delegate::delegate! {
         to self.playlist.lock() {
             #[call(clear)]
             pub(crate) fn clear_all(&self);
+            #[expr($.cloned())]
+            pub(crate) fn track_grid(&self, item: TrackId) -> Option<TrackGrid>;
+            pub(crate) fn publish_track_grid(&self, item: TrackId, grid: TrackGrid);
+            pub(crate) fn set_track_plan(&self, item: TrackId, plan: Option<Arc<RegionPlan>>);
             #[call(current)]
             pub(crate) fn current_index(&self) -> usize;
             pub(crate) fn has_resource(&self, index: usize) -> bool;
