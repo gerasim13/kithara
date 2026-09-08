@@ -409,7 +409,12 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
             Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
             Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-            Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
+            Lane::Verdict => verdict::lane(
+                &ctx.root,
+                environment.shared_root(),
+                args.kind,
+                &ext.ci.verdict.id_aliases,
+            ),
             ref lane => command_lane(
                 lane,
                 args.kind,

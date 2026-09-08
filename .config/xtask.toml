@@ -969,6 +969,19 @@ handler = "format-edited-paths"
 [ext.ci]
 pins = ".config/ci-pins.toml"
 
+# Moving integration sources into domain packages changed nextest's package
+# and binary prefix without changing the tests. The verdict canonicalizes both
+# the executor's existing journal and current reports through this one-time
+# project migration, so a moved known failure stays known while a new failure
+# still blocks the pipeline.
+[ext.ci.verdict.id_aliases]
+"suite_heavy::no_sync_real_media::" = "kithara-play-tests::play_heavy::no_sync_real_media::"
+"suite_light::kithara_audio::" = "kithara-audio-tests::audio::"
+"suite_light::kithara_play::" = "kithara-play-tests::play::"
+"suite_light::kithara_queue::" = "kithara-queue-tests::queue::"
+"suite_stress::kithara_hls::" = "kithara-hls-tests::hls_stress::"
+"suite_stress::kithara_play::" = "kithara-play-tests::play_stress::"
+
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
