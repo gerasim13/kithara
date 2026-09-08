@@ -14,15 +14,16 @@ use ::kithara::{
         tokio::sync::watch,
     },
 };
+use kithara_test_fixtures::assets;
 use kithara_test_utils::{kithara, off_thread::OffThread};
 
 use super::{
     AnalysisService,
     entry::{Stage, settled_for},
     fixtures::{
-        analysis, app_config, axis, fingerprint, grid, memory_store, mp3_track, mp3_track_48k,
-        other_axis, persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
-        snapshot, test_pools, track, wav_track,
+        analysis, app_config, asset_url, axis, fingerprint, grid, memory_store, mp3_track,
+        mp3_track_48k, other_axis, persistence, progress, queue_off, queue_off_named,
+        revision_held, revision_of, snapshot, test_pools, track, wav_track,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -93,7 +94,7 @@ async fn a_settled_hit_with_a_gap_is_served_without_a_pass() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let settled = snapshot(
         "test-track".into(),
         3,
@@ -125,7 +126,7 @@ async fn a_hit_missing_an_artifact_is_served_and_refilled() {
         "fixture needs an artifact to omit"
     );
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     owner.cache.put(
         target_of(&owner, &source),
         progress(snapshot("test-track".into(), 7, 1_000, fingerprint, None)),
@@ -148,7 +149,7 @@ async fn an_entry_is_held_only_while_a_deck_keeps_its_receiver() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
 
     let rx = owner.subscribe(queue, track_id, source, axis());
     assert!(owner.entries[0].is_held());
@@ -167,7 +168,7 @@ async fn a_complete_hit_is_served_without_a_pass() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -193,8 +194,8 @@ async fn every_revision_reaches_the_deck_that_holds_the_track() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (_playing, _) = track(&host, 8, "file:///tmp/track-8.mp3").await;
-    let (held, source) = track(&host, 7, "file:///tmp/track-7.mp3").await;
+    let (_playing, _) = track(&host, 8, &asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())).await;
+    let (held, source) = track(&host, 7, &asset_url(assets::sine_mp3_a440_2s())).await;
     assert_eq!(
         queue.current_index(),
         Some(0),
@@ -226,8 +227,8 @@ async fn two_decks_holding_one_track_share_one_pass() {
     let mut owner = owner(&cancel);
     let (host_a, queue_a) = queue_off_named("app-host-a").await;
     let (host_b, queue_b) = queue_off_named("app-host-b").await;
-    let (track_a, source_a) = track(&host_a, 1, "file:///tmp/shared.mp3").await;
-    let (track_b, source_b) = track(&host_b, 2, "file:///tmp/shared.mp3").await;
+    let (track_a, source_a) = track(&host_a, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
+    let (track_b, source_b) = track(&host_b, 2, &asset_url(assets::sine_mp3_a440_2s())).await;
 
     let rx_a = owner.subscribe(queue_a, track_a, source_a, axis());
     let tx = take_over_run(&mut owner, None);
@@ -251,8 +252,8 @@ async fn a_held_track_preempts_a_background_run() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (background, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
-    let (held, source) = track(&host, 2, "file:///tmp/track-2.mp3").await;
+    let (background, _) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
+    let (held, source) = track(&host, 2, &asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())).await;
     owner.warm(&queue, &[background], axis());
     assert_eq!(running_track(&owner), Some(background));
     let tx = take_over_run(&mut owner, None);
@@ -284,9 +285,10 @@ async fn a_background_track_waits_for_a_held_one() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (held, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
-    let (background, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
-    let (later, later_source) = track(&host, 3, "file:///tmp/track-3.mp3").await;
+    let (held, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
+    let (background, _) = track(&host, 2, &asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())).await;
+    let (later, later_source) =
+        track(&host, 3, &asset_url(assets::rhythm_mp3_deck_b_120bpm_48k())).await;
     let _rx = owner.subscribe(queue.clone(), held, source, axis());
     let _tx = take_over_run(&mut owner, None);
 
@@ -322,7 +324,7 @@ async fn a_pass_restarts_on_the_axis_the_next_request_names() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let _rx = owner.subscribe(queue.clone(), track_id, source.clone(), axis());
     let tx = take_over_run(&mut owner, None);
 
@@ -356,8 +358,9 @@ async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
     let cancel = CancelToken::root();
     let mut owner = owner_in(&cancel, store.clone());
     let (host, queue) = queue_off().await;
-    let (track_a, source_a) = track(&host, 1, "file:///tmp/track-a.mp3").await;
-    let (track_b, source_b) = track(&host, 2, "file:///tmp/track-b.mp3").await;
+    let (track_a, source_a) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
+    let (track_b, source_b) =
+        track(&host, 2, &asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())).await;
     let target = target_of(&owner, &source_a);
     let rx_a = owner.subscribe(queue.clone(), track_a, source_a, axis());
     let publication = take_over_run(&mut owner, Some(progress(analysis())));
@@ -430,7 +433,7 @@ async fn a_close_carrying_a_complete_value_publishes_and_caches_it() {
     let cancel = CancelToken::root();
     let mut run = close_run(
         &cancel,
-        "file:///tmp/track-1.mp3",
+        &asset_url(assets::sine_mp3_a440_2s()),
         Some(progress(analysis())),
     )
     .await;
@@ -449,7 +452,7 @@ async fn a_close_carrying_a_complete_value_publishes_and_caches_it() {
 #[kithara::test(native, tokio)]
 async fn a_close_without_a_value_is_retried_on_the_next_subscribe() {
     let cancel = CancelToken::root();
-    let mut run = close_run(&cancel, "file:///tmp/track-1.mp3", None).await;
+    let mut run = close_run(&cancel, &asset_url(assets::sine_mp3_a440_2s()), None).await;
 
     assert_eq!(revision_held(&run.rx), None);
     assert!(
@@ -572,7 +575,7 @@ async fn an_entry_is_queued_only_while_it_is_in_line() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -598,7 +601,7 @@ async fn a_finished_background_entry_holds_its_value_only_in_the_cache() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let target = target_of(&owner, &source);
     owner.warm(&queue, &[track_id], axis());
     let tx = take_over_run(&mut owner, Some(progress(analysis())));
@@ -626,7 +629,7 @@ async fn warm_seeds_nothing_before_the_run_opens() {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -638,7 +641,8 @@ async fn warm_seeds_nothing_before_the_run_opens() {
         .cache
         .put(target_of(&owner, &source), progress(complete));
     let _busy_rx = {
-        let (busy, busy_source) = track(&host, 2, "file:///tmp/track-2.mp3").await;
+        let (busy, busy_source) =
+            track(&host, 2, &asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())).await;
         owner.subscribe(queue.clone(), busy, busy_source, axis())
     };
     take_over_run(&mut owner, None);
@@ -660,8 +664,8 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry() {
     let mut owner = owner(&cancel);
     let (host_a, queue_a) = queue_off_named("app-host-a").await;
     let (host_b, queue_b) = queue_off_named("app-host-b").await;
-    let (track_a, source_a) = track(&host_a, 1, "file:///tmp/shared.mp3").await;
-    let (track_b, _) = track(&host_b, 2, "file:///tmp/shared.mp3").await;
+    let (track_a, source_a) = track(&host_a, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
+    let (track_b, _) = track(&host_b, 2, &asset_url(assets::sine_mp3_a440_2s())).await;
     let _rx = owner.subscribe(queue_a, track_a, source_a, axis());
 
     owner.warm(&queue_b, &[track_b], axis());
@@ -736,7 +740,7 @@ async fn an_invalid_layout_yields_no_analysis() {
     let cancel = CancelToken::root();
     let mut owner = owner_in(&cancel, store);
     let (host, queue) = queue_off().await;
-    let (track_id, source) = track(&host, 1, "file:///tmp/invalid.mp3").await;
+    let (track_id, source) = track(&host, 1, &asset_url(assets::sine_mp3_a440_2s())).await;
 
     let mut rx = owner.subscribe(queue, track_id, source, axis());
 

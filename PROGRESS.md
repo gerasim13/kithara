@@ -31,6 +31,7 @@ status; git owns completed changes. Keep this file short.
   complete async harness calls in the opt-in network suites. Both network
   binaries compile; the local ticker regression passes with `no_block` and
   fails when the ticker is stopped at construction.
+  Analysis tests use generated fixture files instead of global `/tmp` paths.
   Remote playback and device acceptance remain unverified.
 
 ## Next

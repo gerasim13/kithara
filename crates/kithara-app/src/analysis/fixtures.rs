@@ -28,9 +28,10 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
-use kithara_test_fixtures::assets;
+use kithara_test_fixtures::{asset::Asset, assets};
 use kithara_test_utils::off_thread::OffThread;
 use num_traits::cast::AsPrimitive;
+use url::Url;
 
 use super::{Entry, Request};
 use crate::{
@@ -210,6 +211,14 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
         TaskConfig::new(),
     ))
     .expect("persistence fixture starts")
+}
+
+pub(crate) fn asset_url(asset: Asset) -> String {
+    let path = asset.path().expect("fixture is stored on disk");
+    assert!(path.is_file(), "fixture file exists: {}", path.display());
+    Url::from_file_path(path)
+        .expect("fixture path is absolute")
+        .into()
 }
 
 pub(crate) fn mp3_track(directory: &Path) -> String {
