@@ -1,23 +1,12 @@
 # Progress
 
-What is in flight right now. The
-[GitHub Projects board](https://github.com/users/gerasim13/projects/3) owns
-capability status and the roadmap, and git owns the facts. This file owns
-intent: what is being worked on, what comes next, what is stuck. Update it in
-the change that lands the work, and keep it short.
+Current work and blockers. The [project board](https://github.com/users/gerasim13/projects/3) owns the roadmap; git records changes.
 
 ## In Flight
 
-- Runtime parameter smoothing, PR `queue-sync-smoothing` off `production/main`.
-  `EngineConfig.gate_smoothing` and `EqConfig.smoothing` configure firewheel
-  smoothers; crossfade-duration changes latch for the next fade. Review repairs
-  preserve bit-exact flat-EQ identity and full-cut silence through smoothed
-  mixes while filters keep running. Repeated layout requests queue the newest
-  layout until the current crossover settles; retired storage returns through
-  control events. Failed replacement allocation leaves the running EQ intact.
-  The original full-playthrough census EQ is restored. Validation: 436 package
-  tests, 1005 `suite_light` tests, `just lint fast` and the WASM check
-  through FFI passed. External CI and campaign-wide acceptance remain outstanding.
+- Queue SYNC smoothing #323: gain, gate and EQ review repairs are published.
+  PR description tracks tests; listening, platform and integration acceptance remain.
+
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is
