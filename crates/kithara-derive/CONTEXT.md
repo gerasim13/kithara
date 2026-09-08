@@ -88,3 +88,12 @@ A generated patch is `Deserialize` and never `Serialize`. By the time a document
 is typed its `$ENV` references are resolved, so the patch holds secrets in the
 clear; serializing one would write them out. The derive emits no `Serialize`,
 and adding one to a configuration must not add one to its patch.
+
+## Bounded Scalars
+
+`Ranged` is the only declaration of a bounded numeric newtype. `checked` and
+`Deserialize` refuse invalid values; `clamp` is the explicit knob exception
+and maps NaN to the declared default. Standard derives stay on the declaration.
+Generated paths use only `::core` and `::serde`, so declaring crates need
+`serde`. The derive never emits `Serialize`: configuration values are read,
+not exported by the derive.

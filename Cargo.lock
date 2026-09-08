@@ -4947,6 +4947,8 @@ dependencies = [
  "kithara-workspace-hack",
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_yaml_ng",
  "syn 3.0.3",
 ]
 

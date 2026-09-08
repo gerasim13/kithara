@@ -2,9 +2,9 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
-    Data, DeriveInput, Error, Expr, Fields, Lit, Result, Type, UnOp, parse_macro_input,
+    Data, DeriveInput, Error, Expr, Fields, Ident, Lit, Result, Type, UnOp, parse_macro_input,
     spanned::Spanned,
 };
 
@@ -15,14 +15,16 @@ enum Number {
 }
 
 impl Number {
-    fn of(ty: &Type) -> Option<Self> {
+    fn of(ty: &Type) -> Option<(Self, &Ident)> {
         let Type::Path(path) = ty else { return None };
-        match path.path.segments.last()?.ident.to_string().as_str() {
+        let ident = &path.path.segments.last()?.ident;
+        let number = match ident.to_string().as_str() {
             "f32" | "f64" => Some(Self::Float),
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
             | "u128" | "usize" => Some(Self::Integer),
             _ => None,
-        }
+        }?;
+        Some((number, ident))
     }
 }
 
@@ -167,7 +169,7 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
         ));
     }
     let ty = &fields.unnamed[0].ty;
-    let number = Number::of(ty).ok_or_else(|| {
+    let (number, primitive) = Number::of(ty).ok_or_else(|| {
         Error::new(
             ty.span(),
             "Ranged holds a primitive number: f32, f64, or an integer",
@@ -227,6 +229,29 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
             }
         }
     });
+    let deserialize = format_ident!(
+        "deserialize_{}",
+        match primitive.to_string().as_str() {
+            "usize" => "u64".to_owned(),
+            "isize" => "i64".to_owned(),
+            name => name.to_owned(),
+        }
+    );
+    let visits = ["i64", "u64", "i128", "u128", "f64"].map(|source| {
+        let source = format_ident!("{source}");
+        let visit = format_ident!("visit_{source}");
+        quote! {
+            fn #visit<E>(self, value: #source) -> ::core::result::Result<Self::Value, E>
+            where E: ::serde::de::Error {
+                let value = <#ty as ::serde::Deserialize<'de>>::deserialize(
+                    ::serde::de::IntoDeserializer::<E>::into_deserializer(value)
+                )?;
+                #name::checked(value).ok_or_else(|| E::custom(::core::format_args!(
+                    "{} must be between {} and {}, got {}", #label, #name::MIN.0, #name::MAX.0, value
+                )))
+            }
+        }
+    });
     Ok(quote! {
         #[automatically_derived]
         impl #name {
@@ -252,10 +277,16 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
         impl<'de> ::serde::Deserialize<'de> for #name {
             fn deserialize<D>(deserializer: D) -> ::core::result::Result<Self, D::Error>
             where D: ::serde::Deserializer<'de> {
-                let value = <#ty as ::serde::Deserialize<'de>>::deserialize(deserializer)?;
-                Self::checked(value).ok_or_else(|| <D::Error as ::serde::de::Error>::custom(
-                    ::core::format_args!("{} must be between {} and {}, got {}", #label, Self::MIN.0, Self::MAX.0, value)
-                ))
+                struct RangedVisitor;
+                #[automatically_derived]
+                impl<'de> ::serde::de::Visitor<'de> for RangedVisitor {
+                    type Value = #name;
+                    fn expecting(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        ::core::write!(formatter, "{} between {} and {}", #label, #name::MIN.0, #name::MAX.0)
+                    }
+                    #(#visits)*
+                }
+                deserializer.#deserialize(RangedVisitor)
             }
         }
     })
