@@ -166,7 +166,9 @@ arrival orders within the resampler's splice tolerance.
 
 A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
-spread across it at its own tempo while retaining detected marker positions. Run
+spread across it at its own tempo while retaining detected marker positions.
+Downbeat extrapolation requires two distinct downbeats to establish a bar period;
+a lone downbeat retains its confidence without inventing a meter. Run
 mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
 set opens at most four runs of its own while every physical allocation still
 competes under the region-wide hard byte budget. That cap bounds memory as much

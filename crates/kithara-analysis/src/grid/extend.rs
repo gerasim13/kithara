@@ -6,7 +6,7 @@ pub(crate) fn extend_over(grid: BeatArtifact, extent: u64, source_rate: u32) -> 
     let Some(beat) = beat_period(grid.bpm(), source_rate) else {
         return grid;
     };
-    let beats = spread(grid.beats(), grid.beat_confidence(), beat, extent);
+    let beats = spread(grid.beats(), grid.beat_confidence(), Some(beat), extent);
     let bar = bar_period(grid.downbeats(), beat);
     let downbeats = spread(grid.downbeats(), grid.downbeat_confidence(), bar, extent);
 
@@ -20,26 +20,28 @@ fn beat_period(bpm: f64, source_rate: u32) -> Option<f64> {
     Some(60.0 / bpm * f64::from(source_rate))
 }
 
-fn bar_period(downbeats: &[u64], beat: f64) -> f64 {
-    let observed = downbeats
+fn bar_period(downbeats: &[u64], beat: f64) -> Option<f64> {
+    let gap = downbeats
         .windows(2)
         .filter_map(|pair| pair[1].checked_sub(pair[0]))
         .filter_map(|gap| gap.to_f64())
-        .find(|gap| *gap > 0.0);
-    let Some(gap) = observed else {
-        return beat;
-    };
-    (gap / beat).round().max(1.0) * beat
+        .find(|gap| *gap > 0.0)?;
+    Some((gap / beat).round().max(1.0) * beat)
 }
 
-fn spread(marks: &[u64], confidence: &[Option<f32>], period: f64, extent: u64) -> Vec<MarkedBeat> {
-    if period <= 0.0 {
+fn spread(
+    marks: &[u64],
+    confidence: &[Option<f32>],
+    period: Option<f64>,
+    extent: u64,
+) -> Vec<MarkedBeat> {
+    let Some(period) = period.filter(|period| *period > 0.0) else {
         return marks
             .iter()
             .enumerate()
             .map(|(index, frame)| (*frame, confidence.get(index).copied().flatten()))
             .collect();
-    }
+    };
     let Some((first, last)) = marks.first().zip(marks.last()) else {
         return Vec::<MarkedBeat>::new();
     };
@@ -197,6 +199,15 @@ mod tests {
             &[0, 22_050, 44_100, 66_150, 88_200, 110_250, 132_300],
             "the gap must be divided at the observed period"
         );
+    }
+
+    #[kithara::test]
+    fn one_downbeat_does_not_establish_a_bar_period() {
+        let out = extend_over(grid(vec![88_200, 110_250]), 5 * u64::from(RATE), RATE);
+
+        assert!(out.beats().len() > 2);
+        assert_eq!(out.downbeats(), &[88_200]);
+        assert_eq!(out.downbeat_confidence(), &[Some(0.9)]);
     }
 
     #[kithara::test]
