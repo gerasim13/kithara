@@ -7,15 +7,17 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, Instant, timeout},
-        tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{
+        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc,
+    },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::{kithara, offline::QueueTicker, temp_dir};
+use kithara_test_utils::off_thread::OffThread;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -118,26 +120,25 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     );
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(host.requested_sample_rate())
-            .worker(worker)
-            .build(),
-    );
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
-    let queue = Arc::new(host.insert(queue).expect("attach queue to playback host"));
+    let owner = OffThread::spawn("cpal-seek-host", move || {
+        let mut host = Host::new(HostConfig::builder().build())?;
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(host.requested_sample_rate())
+                .worker(worker)
+                .build(),
+        );
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = host.insert(queue)?;
+        Ok::<_, PlayError>((queue, host))
+    })
+    .await
+    .expect("create playback host");
+    let queue = owner.call(|(queue, _)| queue.control().clone()).await;
     queue.set_volume(kithara_integration_tests::e2e::volume());
 
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(16)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let queue_for_tick = queue.clone();
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(16));
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(URL).expect("valid silvercomet URL"))
         .downloader(downloader.clone())
@@ -151,10 +152,13 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source).expect("append silvercomet HLS track");
+    let id = owner
+        .call(move |(q, _)| q.append(source))
+        .await
+        .expect("append silvercomet HLS track");
     wait_for_status(
         &mut rx,
-        queue.control(),
+        &queue,
         id,
         TrackStatus::Loaded,
         Duration::from_secs(30),
@@ -162,10 +166,13 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     .await
     .unwrap_or_else(|e| panic!("silvercomet track load failed: {e}"));
 
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    owner
+        .call(move |(q, _)| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    owner.call(move |(q, _)| q.play()).await;
 
-    let pos_before = wait_for_position_at_least(queue.control(), 2.0, Duration::from_secs(45))
+    let pos_before = wait_for_position_at_least(&queue, 2.0, Duration::from_secs(45))
         .await
         .expect("silvercomet track never played past 2s");
     eprintln!("[silvercomet] pre-seek pos={pos_before:.3}s");
@@ -173,7 +180,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let duration = queue.duration_seconds().unwrap_or(240.0);
     let seek_target = duration * 0.5;
     eprintln!("[silvercomet] duration={duration:.1}s, seeking to {seek_target:.1}s (50%)");
-    queue.seek(seek_target).expect("seek accepted");
+    owner
+        .call(move |(q, _)| q.seek(seek_target))
+        .await
+        .expect("seek accepted");
 
     let observation_deadline = Instant::now() + Duration::from_secs(90);
     let mut confirmed = false;
@@ -199,7 +209,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     }
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited without panic"),
             Err(e) => panic!("SEEK HANG REPRODUCED on silvercomet: {e}"),
         }
@@ -217,7 +227,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         "[silvercomet] backward seek: from {:?} to {backward_target:.1}s (25%)",
         queue.position_seconds()
     );
-    queue.seek(backward_target).expect("backward seek accepted");
+    owner
+        .call(move |(q, _)| q.seek(backward_target))
+        .await
+        .expect("backward seek accepted");
 
     let observation_deadline = Instant::now() + Duration::from_secs(90);
     let mut backward_confirmed = false;
@@ -243,7 +256,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     }
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited without panic"),
             Err(e) => panic!("BACKWARD SEEK HANG REPRODUCED on silvercomet: {e}"),
         }
@@ -256,11 +269,9 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         queue.position_seconds(),
     );
 
-    tick_handle.abort();
-    let _ = tick_handle.await;
-    host.remove(queue.as_ref())
-        .expect("detach queue from playback host");
+    tick_handle.stop().await;
     drop(queue);
+    owner.close().await;
     drop(downloader);
     drop(temp);
 }

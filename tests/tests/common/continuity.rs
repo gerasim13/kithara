@@ -93,7 +93,7 @@ impl PlaybackProgressProbe {
 }
 
 #[must_use]
-pub(crate) fn render_offline_window(
+pub(crate) async fn render_offline_window(
     player: &mut OfflinePlayer,
     blocks: u32,
     label: &str,
@@ -112,7 +112,7 @@ pub(crate) fn render_offline_window(
         // wall-clock contract (RTSan / block-budget). `Instant::now`/`elapsed`
         // here read real time because this helper runs with `active=false`.
         let started = Instant::now();
-        let out = player.render(block_frames);
+        let out = player.render(block_frames).await;
         let elapsed = started.elapsed();
         if elapsed > max_render {
             max_render = elapsed;

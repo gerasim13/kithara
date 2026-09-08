@@ -28,7 +28,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, sleep},
-        tokio,
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -37,7 +36,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 use url::Url;
@@ -110,7 +109,7 @@ async fn build_hls(
         .expect("create local HLS fixture")
 }
 
-fn build_queue(
+async fn build_queue(
     temp_dir: &TestTempDir,
 ) -> (OfflineQueue<TestPools>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
@@ -135,6 +134,7 @@ fn build_queue(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -328,25 +328,22 @@ async fn supersede_while_loading_cancels_slow_track() {
     let slow_url = slow.master_url();
 
     let temp = temp_dir();
-    let (queue, downloader, store) = build_queue(&temp);
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let (queue, downloader, store) = build_queue(&temp).await;
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let fast_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url,
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&fast_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append fast track");
     let slow_id = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(
-            &slow_url,
-            &downloader,
-            &store,
-        ))))
+        .run({
+            let source = TrackSource::Config(Box::new(mk_cfg(&slow_url, &downloader, &store)));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append slow track");
 
     // fast is undelayed and ungated → it reaches a terminal loaded state.
@@ -371,11 +368,13 @@ async fn supersede_while_loading_cancels_slow_track() {
 
     // select(slow): slow is loading → stashed as the pending selection.
     queue
-        .select(slow_id, Transition::None)
+        .run(move |q| q.select(slow_id, Transition::None))
+        .await
         .expect("select slow");
     // select(fast): supersedes the pending slow selection → slow Cancelled.
     queue
-        .select(fast_id, Transition::None)
+        .run(move |q| q.select(fast_id, Transition::None))
+        .await
         .expect("select fast");
 
     // Deterministic: the supersede marked slow Cancelled synchronously.
@@ -437,7 +436,8 @@ async fn supersede_while_loading_cancels_slow_track() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
 
-    tick_handle.abort();
+    tick_handle.stop().await;
+    queue.close().await;
 }
 
 /// Drain any backlog already buffered on `rx` so the completion-race watch
@@ -505,21 +505,21 @@ async fn concurrent_completion_race_does_not_barge_in() {
         let temp = temp_dir();
         // No tick: auto-advance is disabled, so `slow` can only become current
         // via the loader-completion race we are probing.
-        let (queue, downloader, store) = build_queue(&temp);
+        let (queue, downloader, store) = build_queue(&temp).await;
 
         let fast_id = queue
-            .append(TrackSource::Config(Box::new(mk_cfg(
-                &fast_url,
-                &downloader,
-                &store,
-            ))))
+            .run({
+                let source = TrackSource::Config(Box::new(mk_cfg(&fast_url, &downloader, &store)));
+                move |q| q.append(source)
+            })
+            .await
             .unwrap_or_else(|error| panic!("[iter {iter}] append fast: {error}"));
         let slow_id = queue
-            .append(TrackSource::Config(Box::new(mk_cfg(
-                &slow_url,
-                &downloader,
-                &store,
-            ))))
+            .run({
+                let source = TrackSource::Config(Box::new(mk_cfg(&slow_url, &downloader, &store)));
+                move |q| q.append(source)
+            })
+            .await
             .unwrap_or_else(|error| panic!("[iter {iter}] append slow: {error}"));
 
         let mut rx = queue.subscribe();
@@ -528,11 +528,13 @@ async fn concurrent_completion_race_does_not_barge_in() {
         // select(slow), then a short delay so slow's loader completion fires
         // around select(fast) — the contended window.
         queue
-            .select(slow_id, Transition::None)
+            .run(move |q| q.select(slow_id, Transition::None))
+            .await
             .unwrap_or_else(|e| panic!("[iter {iter}] select slow: {e}"));
         time::sleep(Consts::RACE_GAP).await;
         queue
-            .select(fast_id, Transition::None)
+            .run(move |q| q.select(fast_id, Transition::None))
+            .await
             .unwrap_or_else(|e| panic!("[iter {iter}] select fast: {e}"));
 
         // Watch the bounded window by following `CurrentTrackChanged` on the
@@ -573,6 +575,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
                 break;
             }
         }
+        queue.close().await;
     }
 
     assert!(

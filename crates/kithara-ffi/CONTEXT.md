@@ -108,3 +108,39 @@ track whose own rate differs needs a fixed-ratio stage to reach it. Without the 
 `PlaybackResamplerBackend` resolves to `NoResamplerBackend` and such a track fails to open at all.
 The Apple device set above can drop rubato because AudioToolbox decodes straight to the host rate;
 the browser offers no equivalent.
+
+### Track analysis
+
+The wasm arm enables `analysis-waveform` and `beat-dsp`, so the browser computes the same
+waveform and beat grid the desktop app does, through the same `kithara-analysis` pass. `analyze`
+starts a pass for a queued track and `setAnalysisObserver` registers the one callback every
+publication reaches, as a plain object:
+
+```js
+{ trackId, revision, settled, sampleRate, sourceFrames, waveform, beats, downbeats, bpm, beatFinal }
+```
+
+`waveform` is a `Float32Array` of `low, mid, high` per bucket; `beats` and `downbeats` are
+`Float64Array` in seconds on `sampleRate`. The typed arrays are allocated on the JS side, so nothing
+crosses as a view into wasm memory. Readiness is `settled`, which says the pass ran out of positions
+the source can deliver, never completeness of coverage. The route tag the worker stamps on the
+message is stripped before the callback sees it, so the delivered object carries those ten fields
+alone. The DSP beat backend reports beats, not downbeats. This surface is wasm-only; the UniFFI
+surface carries no analysis.
+
+`AnalysisRuns` (`src/web/analysis/runs.rs`) is the engine worker's analysis owner: one
+`AnalysisWorker` and the cancel token of the single live pass per track. Calling `analyze` again
+for a track cancels its previous pass and begins a new revision sequence for that track; the
+cancelled pass publishes nothing further. `Remove`, `Replace` and `RemoveAll` cancel the pass of
+the track they drop, and a pass that ends on its own releases its own slot. The queue owns the
+track's source: the pass opens the very `ResourceConfig` playback holds, or, for a track queued by
+URL, the configuration `build_config` (`src/web/worker.rs`) derives from it, the same one an
+insertion builds. Once that reader is open the pass's producer is attached to the queue so
+playback decode feeds it; the per-track observer slot is latest-wins
+(`kithara-audio::AudioObserverSlot`), so a restarted pass replaces the producer of the one it
+cancelled.
+Per-pass cancel tokens are children of the `AnalysisWorker`'s own scope, and that scope has no
+parent: the engine worker holds no master cancel to derive it from. Publications travel to the
+main thread over the `BroadcastChannel` that already carries player and item events, tagged with
+the `analysis` scope, and `Routes` (`src/web/observer/router.rs`) fans all three out from one
+listener.

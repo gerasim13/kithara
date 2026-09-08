@@ -15,6 +15,8 @@ impl Consts {
     const FRAMES_240MS_44K1: usize = 10_584;
     const FRAMES_2S_44K1: usize = 88_200;
     const FRAMES_30S_44K1: usize = 1_323_000;
+    const FRAMES_PER_BEAT_126BPM_44K1: usize = 21_000;
+    const FRAMES_CLICK_BURST_44K1: usize = 1_323;
     const FRAMES_60S_44K1: usize = 2_646_000;
     const FRAMES_6S_44K1: usize = 264_600;
     const RATE_44K1: u32 = 44_100;
@@ -203,6 +205,17 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
 )]
 #[case::sine880_30s(
     Wave::sine(880.0),
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_30S_44K1,
+    None
+)]
+#[case::clicks126_30s(
+    Wave::clicks(
+        1_000.0,
+        Consts::FRAMES_PER_BEAT_126BPM_44K1,
+        Consts::FRAMES_CLICK_BURST_44K1
+    ),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_30S_44K1,

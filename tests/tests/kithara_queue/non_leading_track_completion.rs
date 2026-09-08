@@ -48,47 +48,56 @@ enum NonLeadingRole {
 
 /// Load a track whose player-side `src` is its queue URI, the way a real
 /// source arrives.
-fn loaded_track(queue: &QueueControl<TestPools>, value: f32) -> (TrackId, Arc<str>) {
+async fn loaded_track(
+    harness: &OfflinePlayerHarness,
+    queue: &QueueControl<TestPools>,
+    value: f32,
+) -> (TrackId, Arc<str>) {
     let id = queue.register_for_test();
     let src: Arc<str> = Arc::from(format!("test://memory/{}", id.as_u64()));
     let spec = AudioSpec {
         channels: CHANNELS,
         sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };
-    queue.complete_load_for_test(
-        id,
-        resource_from_reader_with_src(
-            TestPcmReader::with_value(spec, TRACK_SECS, value),
-            Arc::clone(&src),
-        ),
-    );
+    let player_src = Arc::clone(&src);
+    harness
+        .run(queue, move |q| {
+            q.complete_load_for_test(
+                id,
+                resource_from_reader_with_src(
+                    TestPcmReader::with_value(spec, TRACK_SECS, value),
+                    player_src,
+                ),
+            )
+        })
+        .await;
     (id, src)
 }
 
-fn render_loop(
+async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = queue.tick();
-        pcm.extend(harness.render(BLOCK_FRAMES));
+        let _ = harness.run(queue, |q| q.tick()).await;
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
     pcm
 }
 
 /// Three loaded tracks with the first standing in for a non-leading slot.
-fn non_leading_fixture() -> (
+async fn non_leading_fixture() -> (
     OfflinePlayerHarness,
     QueueControl<TestPools>,
     TrackRef,
     TrackId,
 ) {
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE);
-    let (stale, stale_src) = loaded_track(&queue, QUIET);
-    let (current, _) = loaded_track(&queue, LOUD);
-    let (_next, _) = loaded_track(&queue, QUIET);
+    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (stale, stale_src) = loaded_track(&harness, &queue, QUIET).await;
+    let (current, _) = loaded_track(&harness, &queue, LOUD).await;
+    let (_next, _) = loaded_track(&harness, &queue, QUIET).await;
     (
         harness,
         queue,
@@ -126,16 +135,17 @@ async fn non_leading_completion_does_not_advance_the_queue(
     #[case] completion: Completion,
     #[case] role: NonLeadingRole,
 ) {
-    let (harness, queue, stale, current) = non_leading_fixture();
+    let (harness, queue, stale, current) = non_leading_fixture().await;
     let stale_id = stale.id;
 
-    queue
-        .select(current, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(current, Transition::None))
+        .await
         .expect("select the current track");
-    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     publish_completion(&harness, completion, role, stale);
-    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
 
     assert_eq!(
         queue.current_index(),
@@ -155,6 +165,8 @@ async fn non_leading_completion_does_not_advance_the_queue(
             "a background track's failure must not mark the entry failed: {status:?}"
         );
     }
+    drop(queue);
+    harness.close().await;
 }
 
 /// The audible half of the same defect: the listener hears the current
@@ -165,12 +177,13 @@ async fn non_leading_completion_does_not_advance_the_queue(
 async fn background_completion_does_not_cut_the_current_track_audio(
     #[case] completion: Completion,
 ) {
-    let (harness, queue, stale, current) = non_leading_fixture();
+    let (harness, queue, stale, current) = non_leading_fixture().await;
 
-    queue
-        .select(current, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(current, Transition::None))
+        .await
         .expect("select the current track");
-    let before_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
+    let before_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let before = mean_abs(&before_pcm[before_pcm.len() / 2..]);
     assert!(
         before > 0.005,
@@ -178,7 +191,7 @@ async fn background_completion_does_not_cut_the_current_track_audio(
     );
 
     publish_completion(&harness, completion, NonLeadingRole::Background, stale);
-    let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
+    let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
 
     assert!(
@@ -186,4 +199,6 @@ async fn background_completion_does_not_cut_the_current_track_audio(
         "the current track must keep sounding through a background track's {completion:?} — \
          the quieter successor took over instead: before={before}, after={after}"
     );
+    drop(queue);
+    harness.close().await;
 }

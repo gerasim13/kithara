@@ -26,7 +26,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue, drive_queue_ticks},
+    offline::{OfflinePlayer, OfflineQueue, QueueTicker},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -227,12 +227,12 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
     const BATCH: u32 = 16;
     for _ in 0..Consts::GATE_REQUEST_TICKS {
         for _ in 0..BATCH {
-            let _ = player.render(Consts::BLOCK_FRAMES);
+            let _ = player.render(Consts::BLOCK_FRAMES).await;
         }
         if gate.requested() > 0 {
             for _ in 0..Consts::GATE_HOLD_TICKS {
                 for _ in 0..BATCH {
-                    let _ = player.render(Consts::BLOCK_FRAMES);
+                    let _ = player.render(Consts::BLOCK_FRAMES).await;
                 }
                 sleep(Duration::from_millis(1)).await;
             }
@@ -300,8 +300,9 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -353,7 +354,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         }
     }
 
-    drop(player);
+    player.close().await;
     drop(downloader);
     drop(temp);
 
@@ -447,11 +448,9 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
-    let tick_handle = task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
     let hls_config = ResourceConfig::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid packaged HLS URL"),
@@ -469,15 +468,17 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
 
     let mut rx = queue.subscribe();
     let hls_id = queue
-        .append(TrackSource::Config(Box::new(hls_config)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(hls_config))))
+        .await
         .expect("append packaged HLS track");
     wait_for_loader_done_event(&mut rx, &queue, hls_id, Duration::from_secs(20))
         .await
         .expect("packaged HLS track must load");
     queue
-        .select(hls_id, Transition::None)
+        .run(move |q| q.select(hls_id, Transition::None))
+        .await
         .expect("loaded HLS track must select");
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let _ = wait_for_position_event(&mut rx, &queue, 0.75, Duration::from_secs(15))
         .await
@@ -577,9 +578,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     );
 
     shutdown.cancel();
-    tick_handle.abort();
-    let _tick_result = tick_handle.await;
-    drop(queue);
+    tick_handle.stop().await;
+    queue.close().await;
     drop(downloader);
     drop(temp);
 }

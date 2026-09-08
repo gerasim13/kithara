@@ -18,7 +18,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
+    play::{Resource, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
 };
 use kithara_integration_tests::{
@@ -38,14 +38,17 @@ const NO_CROSSFADE_SECS: f32 = 0.0;
 const BLOCK_BUDGET: usize = 3_000;
 
 async fn open_resource(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     src: ResourceSrc,
     cache_dir: &Path,
 ) -> Resource {
     let config = ResourceConfig::<TestPools>::for_src(src)
         .store(kithara_integration_tests::disk_asset_store(cache_dir))
         .build();
-    let config = player.prepare_config(config).expect("prepare resource");
+    let config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
+        .expect("prepare resource");
     let mut resource = Resource::new(config).await.expect("open resource");
     let _ = resource.preload().await;
     resource
@@ -93,20 +96,25 @@ async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackI
             .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let mut config = QueueConfig::builder().player(harness.take_player()).build();
     config.should_autoplay = false;
-    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config));
+    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(2);
     for index in 0..2 {
         let resource = open_resource(
-            harness.player(),
+            &harness,
             track_src(&server),
             &temp_dir.path().join(format!("track{index}")),
         )
         .await;
-        tracks.push(queue.insert_loaded_for_test(resource));
+        tracks.push(
+            harness
+                .run(&queue, move |q| q.insert_loaded_for_test(resource))
+                .await,
+        );
     }
     let (first, second) = (tracks[0], tracks[1]);
     let transition = if crossfade > 0.0 {
@@ -114,15 +122,16 @@ async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackI
     } else {
         Transition::None
     };
-    queue
-        .select(first, transition)
+    harness
+        .run(&queue, move |q| q.select(first, transition))
+        .await
         .expect("select the first track");
 
     let mut receiver = queue.subscribe();
     let mut log = QueueLog::default();
     for _ in 0..BLOCK_BUDGET {
-        let _ = queue.tick();
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(envelope) = receiver.try_recv() {
             match envelope.event {
                 Event::Queue(QueueEvent::CurrentTrackAdvance { id, reason }) => {
@@ -142,6 +151,8 @@ async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackI
         time::sleep(Duration::from_millis(1)).await;
     }
 
+    drop(queue);
+    harness.close().await;
     (log, second)
 }
 

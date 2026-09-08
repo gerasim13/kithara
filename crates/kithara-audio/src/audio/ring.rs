@@ -94,7 +94,7 @@ impl RingConsumer {
         let mut popped = false;
         while let Some(fetch) = self.audio_rx.try_pop() {
             popped = true;
-            if fetch.epoch() < epoch {
+            if fetch.epoch() < epoch && !is_producer_terminal(&fetch) {
                 if let Fetch::Data { data, .. } = fetch {
                     self.discard(data);
                 }
@@ -144,7 +144,7 @@ impl RingConsumer {
     }
 
     fn process_fetch(&mut self, fetch: Fetch<AudioChunk>) -> FetchOutcome {
-        if !self.validator.is_valid(&fetch) {
+        if !self.validator.is_valid(&fetch) && !is_producer_terminal(&fetch) {
             if let Fetch::Data { data, .. } = fetch {
                 self.discard(data);
             }
@@ -295,10 +295,9 @@ impl RingConsumer {
         epoch: u64,
         cursor: &mut ChunkCursor,
     ) {
-        debug_assert_eq!(
-            fetch.epoch(),
-            epoch,
-            "PCM ring preserved a fetch from a future seek epoch"
+        debug_assert!(
+            fetch.epoch() == epoch || is_producer_terminal(&fetch),
+            "PCM ring preserved an epoch-scoped fetch from another seek epoch"
         );
         match fetch {
             Fetch::Data {
@@ -352,6 +351,17 @@ struct ConsumerHangCtx {
     block_on_underrun: bool,
     preloaded: bool,
     epoch: u64,
+}
+
+/// Whether `fetch` reports a producer that will never produce again.
+///
+/// A failure marker is pushed once, immediately before the produce task
+/// retires, and the track FSM never leaves `Failed` — so no later epoch
+/// can restate it and the marker must terminalise the consumer whatever
+/// epoch it carries. Epoch scoping stays on data and natural EOF, both of
+/// which a live producer re-derives after a seek.
+const fn is_producer_terminal(fetch: &Fetch<AudioChunk>) -> bool {
+    matches!(fetch, Fetch::Failure { .. })
 }
 
 fn try_pop_and_wake(
@@ -696,6 +706,56 @@ mod tests {
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
         assert_eq!(
             failed.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_stale_producer_failure_survives_a_new_seek_epoch() {
+        let mut fixture = RingFixture::new(true);
+        fixture
+            .data_tx
+            .try_push(Fetch::failure(0))
+            .expect("failure reaches ring");
+
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+
+        assert_eq!(
+            fixture.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::ProducerAfterSeek
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_stale_natural_eof_does_not_terminate_a_new_seek_epoch() {
+        let mut fixture = RingFixture::new(true);
+        fixture
+            .data_tx
+            .try_push(Fetch::eof(0))
+            .expect("natural eof reaches ring");
+
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+
+        assert_eq!(fixture.ring.phase, ConsumerPhase::SeekPending { epoch: 1 });
+    }
+
+    #[kithara::test]
+    fn a_stale_producer_failure_terminates_the_consumer() {
+        let mut fixture = RingFixture::new(true);
+        fixture.ring.validator.epoch = 3;
+        fixture
+            .data_tx
+            .try_push(Fetch::failure(0))
+            .expect("failure reaches ring");
+
+        let _chunk = fixture.recv();
+
+        assert_eq!(
+            fixture.ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::Producer
             }

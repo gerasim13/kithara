@@ -16,6 +16,8 @@ pub mod asset;
 pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use hls::hydrate as hls_hydrate;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hls::manifest as hls_manifest;
 /// Read by this crate's build script through `#[path]`, and still by the
@@ -29,6 +31,8 @@ mod encoders;
 pub mod fmp4;
 #[cfg(test)]
 mod graph;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod remote_file;
 pub mod signal;
 pub mod signal_asset;
 #[cfg(not(target_arch = "wasm32"))]

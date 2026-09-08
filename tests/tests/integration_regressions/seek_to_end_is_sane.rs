@@ -126,6 +126,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(
         ResourceSrc::parse(fixture.master_url().as_str()).expect("valid HLS URL"),
@@ -241,6 +242,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     );
 
     queue.clear();
+    queue.close().await;
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]

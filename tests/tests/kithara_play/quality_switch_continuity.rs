@@ -107,6 +107,22 @@ struct PreparedPlayer {
     capture_frame: i64,
 }
 
+impl PreparedPlayer {
+    async fn close(self) {
+        let Self {
+            _temp,
+            player,
+            abr,
+            events,
+            capture_frame: _,
+        } = self;
+        drop(abr);
+        drop(events);
+        player.close().await;
+        drop(_temp);
+    }
+}
+
 #[derive(Debug)]
 struct SwitchRender {
     samples: Vec<f32>,
@@ -320,8 +336,9 @@ async fn prepare_player(
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and
@@ -394,7 +411,7 @@ async fn prepare_player(
 /// rather than of the pipeline under test.
 #[kithara::flash(true)]
 async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> Vec<f32> {
-    let block = player.render(frames);
+    let block = player.render(frames).await;
     sleep(Duration::from_secs_f64(
         frames.to_f64().expect("render frame count fits f64") / f64::from(SAMPLE_RATE),
     ))
@@ -501,12 +518,14 @@ async fn render_switch(
         "{} target decoder did not deliver enough post-event PCM: active={active_after_target}, required={target_pcm_frames}, target_event_frame={target_decoder_frame}",
         transition.label,
     );
-    SwitchRender {
+    let result = SwitchRender {
         samples,
         capture_frame: prepared.capture_frame,
         applied_frame,
         target_decoder_frame,
-    }
+    };
+    prepared.close().await;
+    result
 }
 
 async fn render_no_switch_control(
@@ -547,8 +566,10 @@ async fn render_no_switch_control(
         decoder_events.is_empty(),
         "{label} no-switch control must not recreate its decoder after Initial: {decoder_events:?}",
     );
-    ControlRender {
+    let result = ControlRender {
         samples,
         capture_frame: prepared.capture_frame,
-    }
+    };
+    prepared.close().await;
+    result
 }

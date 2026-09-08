@@ -31,7 +31,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
+    play::{Resource, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     stream::AudioCodec,
 };
@@ -263,15 +263,16 @@ async fn track_src(
 }
 
 async fn open_resource(
-    player: &PlayerControl<TestPools>,
+    harness: &OfflinePlayerHarness,
     src: ResourceSrc,
     cache_dir: &Path,
 ) -> Resource {
     let config = ResourceConfig::<TestPools>::for_src(src)
         .store(kithara_integration_tests::disk_asset_store(cache_dir))
         .build();
-    let config = player
-        .prepare_config(config)
+    let config = harness
+        .with_player(move |player| player.prepare_config(config))
+        .await
         .expect("prepare census resource");
     let mut resource = Resource::new(config).await.expect("open census resource");
     let _ = resource.preload().await;
@@ -282,6 +283,19 @@ struct Census {
     harness: OfflinePlayerHarness,
     queue: QueueControl<TestPools>,
     tracks: Vec<TrackId>,
+}
+
+impl Census {
+    async fn close(self) {
+        let Self {
+            harness,
+            queue,
+            tracks,
+        } = self;
+        drop(queue);
+        drop(tracks);
+        harness.close().await;
+    }
 }
 
 async fn build_queue(
@@ -297,25 +311,35 @@ async fn build_queue(
             .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     harness.set_host_level(CENSUS_LEVEL);
     let mut config = QueueConfig::builder().player(harness.take_player()).build();
     config.should_autoplay = false;
-    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config));
+    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(patterns.len());
     for (index, (origin, pattern)) in origins.iter().zip(patterns).enumerate() {
         let src = track_src(*origin, server, *pattern).await;
         let resource = open_resource(
-            harness.player(),
+            &harness,
             src,
             &temp_dir.path().join(format!("track{index}")),
         )
         .await;
-        tracks.push(queue.insert_loaded_for_test(resource));
+        tracks.push(
+            harness
+                .run(&queue, move |q| q.insert_loaded_for_test(resource))
+                .await,
+        );
     }
-    queue
-        .select(tracks[0], seam.transition())
+    harness
+        .run(&queue, {
+            let arg0 = tracks[0];
+            let arg1 = seam.transition();
+            move |q| q.select(arg0, arg1)
+        })
+        .await
         .expect("select the first track");
 
     Census {
@@ -353,8 +377,8 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let mut rendered = Vec::new();
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = census.queue.tick();
-        rendered.extend(census.harness.render(BLOCK_FRAMES));
+        let _ = census.harness.run(&census.queue, |q| q.tick()).await;
+        rendered.extend(census.harness.render(BLOCK_FRAMES).await);
 
         if let (Some(index), Some(duration)) = (
             census.queue.current_index(),
@@ -632,6 +656,7 @@ async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDi
         "a crossfade must be announced exactly at the configured boundaries"
     );
 
+    census.close().await;
     Take { rendered, ordered }
 }
 
@@ -640,6 +665,12 @@ async fn census_provenance(origins: &[Origin], seam: Seam, temp_dir: &TestTempDi
 /// quantisation, and a seam that fades rather than sums. A lossy container
 /// carries none of these, so a census over one runs the provenance half
 /// alone.
+///
+/// `no_block`: seconds of frame classification over the whole take, after the
+/// last await and over captured samples only. It occupies the poll it runs in
+/// the way the budget is meant to catch, but there is no product work left to
+/// starve.
+#[kithara::allow_block]
 fn census_acoustics(take: &Take) {
     let rendered = take.rendered.as_slice();
     let ordered = take.ordered.as_slice();

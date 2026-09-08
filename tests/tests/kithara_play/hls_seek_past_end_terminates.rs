@@ -47,7 +47,7 @@ async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
     while remaining > 0 {
         let this = remaining.min(BATCH);
         for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES);
+            let _ = player.render(Consts::BLOCK_FRAMES).await;
         }
         remaining -= this;
         sleep(Duration::from_millis(1)).await;
@@ -86,8 +86,9 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     // Warm-up is state-driven, not a fixed-size burst: the render races the
     // REAL network + decode pipeline, and under flash the burst's virtual
@@ -136,7 +137,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         wall_secs = Consts::POST_SEEK_RENDER_SECS,
     );
 
-    drop(player);
+    player.close().await;
     drop(downloader);
     drop(temp);
 }

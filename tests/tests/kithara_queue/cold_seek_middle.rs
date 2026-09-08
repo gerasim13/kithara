@@ -7,8 +7,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep, timeout},
-        tokio,
+        time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
@@ -17,7 +16,10 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
-    fixture_protocol::DelayRule, kithara, offline::OfflineQueue, temp_dir,
+    fixture_protocol::DelayRule,
+    kithara,
+    offline::{OfflineQueue, QueueTicker},
+    temp_dir,
     waits::wait_for_position_event,
 };
 
@@ -67,13 +69,13 @@ async fn wait_for_status(
     Err(format!("timeout waiting for {target:?}"))
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let pools = pools();
     let session = HostConfig::offline(pools.clone())
@@ -91,16 +93,10 @@ fn build_queue_with_tick(
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -197,7 +193,7 @@ async fn wait_for_post_seek_progress(
 async fn observe_seek_advance_or_panic(
     rx: &mut EventReceiver,
     queue: &QueueControl<TestPools>,
-    tick_handle: tokio::task::JoinHandle<()>,
+    mut tick_handle: QueueTicker,
     seek_target: f64,
     observation_window: Duration,
     pos_before: f64,
@@ -206,7 +202,7 @@ async fn observe_seek_advance_or_panic(
     let progress = wait_for_post_seek_progress(rx, queue, pos_before, observation_window).await;
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("[{label}] tick task exited unexpectedly"),
             Err(e) => panic!("[{label}] seek watchdog panicked — hang reproduced: {e}"),
         }
@@ -220,7 +216,7 @@ async fn observe_seek_advance_or_panic(
         ),
     }
 
-    tick_handle.abort();
+    tick_handle.stop().await;
 }
 
 async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
@@ -258,31 +254,26 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     let mut rx = queue.subscribe();
-    let ids: Vec<TrackId> = resolved
-        .iter()
-        .map(|u| {
-            let cfg = ResourceConfig::for_src(ResourceSrc::parse(u).expect("valid URL"))
-                .downloader(downloader.clone())
-                .store(store.clone())
-                .build();
+    let mut ids: Vec<TrackId> = Vec::with_capacity(resolved.len());
+    for u in &resolved {
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(u).expect("valid URL"))
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
+        ids.push(
             queue
-                .append(TrackSource::Config(Box::new(cfg)))
-                .expect("append cold-seek track")
-        })
-        .collect();
+                .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+                .await
+                .expect("append cold-seek track"),
+        );
+    }
     let selected_id = ids[select_index];
 
     wait_for_status(
@@ -295,8 +286,11 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     .await
     .unwrap_or_else(|e| panic!("selected track never reached Loaded: {e}"));
 
-    queue.select(selected_id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(selected_id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before_seek = wait_for_position_event(&mut rx, &queue, 1.0, Duration::from_secs(15))
         .await
@@ -326,7 +320,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             .await;
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited unexpectedly without panic"),
             Err(e) => panic!("seek watchdog panicked (expected on bug reproduction): {e}"),
         }
@@ -348,8 +342,8 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         ),
     }
 
-    tick_handle.abort();
-    drop(queue);
+    tick_handle.stop().await;
+    queue.close().await;
     let _ = ids;
 }
 
@@ -404,7 +398,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         .expect("create long HLS fixture");
     let master = created.master_url();
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -415,7 +409,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 
     let mut rx = queue.subscribe();
     let id = queue
-        .append(track_source(master.as_str()))
+        .run({
+            let arg0 = track_source(master.as_str());
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append long cold-seek track");
     wait_for_status(
         &mut rx,
@@ -426,8 +424,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|e| panic!("load: {e}"));
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
@@ -448,7 +449,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         "long-cold",
     )
     .await;
-    drop(queue);
+    queue.close().await;
 }
 
 /// Multi-variant ABR variant: 3 variants × 30 segments × 4s = 120s each,
@@ -494,7 +495,7 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         .expect("create multi-variant HLS fixture");
     let master = created.master_url();
 
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -505,7 +506,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
 
     let mut rx = queue.subscribe();
     let id = queue
-        .append(track_source(master.as_str()))
+        .run({
+            let arg0 = track_source(master.as_str());
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append multivariant cold-seek track");
     wait_for_status(
         &mut rx,
@@ -516,8 +521,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     )
     .await
     .unwrap_or_else(|e| panic!("load: {e}"));
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
@@ -538,5 +546,5 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         "multi-variant-cold",
     )
     .await;
-    drop(queue);
+    queue.close().await;
 }

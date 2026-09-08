@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -202,6 +202,7 @@ async fn resumes_after_outage(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
@@ -210,21 +211,20 @@ async fn resumes_after_outage(
         .store(store)
         .build();
 
-    let ticker = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(20),
-    ));
+    let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(20));
     let mut rx = queue.subscribe();
     let id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append offline-resume track");
     queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .expect("select HLS track");
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: {error}"));
-    queue.play();
+    queue.run(move |q| q.play()).await;
 
     let before_outage = wait_for_position_event(
         &mut rx,
@@ -302,6 +302,6 @@ async fn resumes_after_outage(
     );
 
     queue.clear();
-    ticker.abort();
-    let _ = ticker.await;
+    ticker.stop().await;
+    queue.close().await;
 }

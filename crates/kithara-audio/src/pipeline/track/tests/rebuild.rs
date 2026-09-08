@@ -14,7 +14,7 @@ use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
 };
 use kithara_platform::{
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, Notify},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
@@ -549,6 +549,7 @@ impl VariantControl for TestControl {
 pub(super) struct WaitPark {
     armed: AtomicBool,
     condvar: Condvar,
+    entered: Notify,
     state: Mutex<WaitParkState>,
 }
 
@@ -569,7 +570,7 @@ impl WaitPark {
         }
         let mut state = self.state.lock();
         state.entered = true;
-        self.condvar.notify_all();
+        self.entered.notify_one();
         while !state.released {
             state = self.condvar.wait(state);
         }
@@ -582,12 +583,11 @@ impl WaitPark {
         self.condvar.notify_all();
     }
 
-    /// Block until the holder is inside `wait_range` — i.e. the control
+    /// Wait until the holder is inside `wait_range` — i.e. the control
     /// mutex is held by a parked blocking read.
-    pub(super) fn wait_entered(&self) {
-        let mut state = self.state.lock();
-        while !state.entered {
-            state = self.condvar.wait(state);
+    pub(super) async fn wait_entered(&self) {
+        while !self.state.lock().entered {
+            self.entered.notified().await;
         }
     }
 }

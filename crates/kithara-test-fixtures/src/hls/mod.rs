@@ -1,7 +1,7 @@
 mod bundle;
 mod gapless;
 #[cfg(test)]
-mod hydrate;
+pub(crate) mod hydrate;
 mod long;
 pub(crate) mod manifest;
 mod rss;

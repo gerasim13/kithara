@@ -166,6 +166,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
     let mut rx = queue.subscribe();
 
@@ -231,4 +232,5 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     );
 
     queue.clear();
+    queue.close().await;
 }

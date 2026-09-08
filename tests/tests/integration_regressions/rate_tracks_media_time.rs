@@ -53,8 +53,8 @@ async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &
 
 async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) {
     for _ in 0..blocks {
-        let _ = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
+        let _ = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
         time::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -71,7 +71,8 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let tag = format!("rate-{rate}");
     let path = temp_dir.path().join(format!("{tag}.wav"));
     let frames = DRAIN_FIXTURE_SECS * SAMPLE_RATE as usize;
@@ -83,28 +84,37 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
         &temp_dir.path().join(format!("store-{tag}")),
     )
     .await;
-    harness.with_player(|player| {
-        player.insert(resource, TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+    harness
+        .with_player(move |player| {
+            player.insert(resource, TrackId::allocate(), None);
+            player
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
     harness.player().set_default_rate(rate);
 
     let mut blocks = 0usize;
+    let mut ended_at = None;
     for _ in 0..DRAIN_BLOCK_BUDGET {
-        let _ = harness.render(BLOCK_FRAMES);
+        let _ = harness.render(BLOCK_FRAMES).await;
         blocks += 1;
         let ended = harness
             .tick_and_drain()
+            .await
             .iter()
             .any(|event| matches!(event, PlayerEvent::ItemDidPlayToEnd { .. }));
         if ended {
-            return blocks;
+            ended_at = Some(blocks);
+            break;
         }
         time::sleep(Duration::from_millis(1)).await;
     }
-    panic!("the {rate}x track never reached end-of-stream within {DRAIN_BLOCK_BUDGET} blocks");
+    let blocks = ended_at.unwrap_or_else(|| {
+        panic!("the {rate}x track never reached end-of-stream within {DRAIN_BLOCK_BUDGET} blocks")
+    });
+    harness.close().await;
+    blocks
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -114,16 +124,19 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
+    )
+    .await;
     let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
-    harness.with_player(|player| {
-        player.insert(resource, TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select first queue item");
-    });
+    harness
+        .with_player(move |player| {
+            player.insert(resource, TrackId::allocate(), None);
+            player
+                .select_item(0, true)
+                .expect("select first queue item");
+        })
+        .await;
 
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let baseline = media_advance(&harness, MEASURE_BLOCKS).await;
@@ -142,6 +155,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
          {accelerated}s at rate {FAST_RATE} versus {baseline}s at rate 1.0 — \
          the reported clock is on the output scale, not the media scale"
     );
+    harness.close().await;
 }
 
 /// The other half of the same contract: the faster media clock has to be
