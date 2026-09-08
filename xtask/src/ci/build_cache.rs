@@ -406,7 +406,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Build directories kept in the executor cache rather than in a checkout.
 ///
-/// Linux Docker checkouts are temporary volumes. Their targets live below the
+/// GitLab checkouts are cleaned between jobs. Their targets live below the
 /// mounted cache root, one per runner slot, so the host budget must discover
 /// them without walking Cargo homes and compiler caches beside them.
 pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
