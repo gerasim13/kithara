@@ -1813,12 +1813,8 @@ fn frames_from_secs(secs: f64, sample_rate: u32) -> usize {
 }
 
 fn render_block_duration(sample_rate: u32) -> Duration {
-    if cfg!(feature = "flash") {
-        let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(sample_rate))
-    } else {
-        Duration::from_millis(1)
-    }
+    let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
+    Duration::from_secs_f64(f64::from(frames) / f64::from(sample_rate))
 }
 
 fn classify_tone_windows(left: &[f32], window: usize, sample_rate: u32) -> Vec<ToneClass> {

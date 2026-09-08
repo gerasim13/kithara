@@ -46,7 +46,7 @@ enum PerfScenario {
     SingleThreadGetPut,
 }
 
-#[kithara::test]
+#[kithara::test(flash(false))]
 #[case("pool_single_thread", PerfScenario::SingleThreadGetPut)]
 #[case("pool_multi_thread", PerfScenario::MultiThreadContention)]
 #[case("pool_allocation_rate", PerfScenario::AllocationRate)]
