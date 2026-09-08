@@ -21,6 +21,19 @@ The explicit `cache-version` file selects the shared cache revision. Change it
 only when intentionally replacing the cached fixture set; use a new case name
 for an individual replacement. Rebuilds reuse existing entries.
 
+Set `KITHARA_FIXTURE_CACHE` to an absolute persistent directory before building.
+There is no temporary-directory default. For all local worktrees, configure it
+once in your user Cargo configuration (`~/.cargo/config.toml`):
+
+```toml
+[env]
+KITHARA_FIXTURE_CACHE = "/absolute/persistent/path/kithara-fixtures"
+```
+
+The environment can override this value. CI supplies a persistent directory
+shared across branches and platforms within each trust boundary. When changing
+the root, copy the existing version directory to preserve prepared assets.
+
 ## Usage
 
 ```rust
@@ -40,7 +53,7 @@ use `#[future(awt)]` to receive those resources after preparation.
 
 ## Key Types
 
-- `store::STORE_ENV` — `KITHARA_FIXTURE_CACHE`, the store root override. CI
+- `store::STORE_ENV` — `KITHARA_FIXTURE_CACHE`, the required store root. CI
   points it at a persisted directory so a fresh job starts warm.
 - `store::asset_id` — stable identity of one case.
 - `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic

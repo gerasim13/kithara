@@ -6,7 +6,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-/// Overrides the store root. The cache revision is always appended to it.
+/// Required absolute store root. The cache revision is always appended to it.
 pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
 /// Leading digest bytes kept in an asset id. 128 bits: short enough to read in
@@ -29,16 +29,19 @@ pub fn asset_id(func: &str, case: &str) -> String {
     hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
 }
 
-/// Store root when [`STORE_ENV`] is unset.
-#[must_use]
-pub fn default_root() -> PathBuf {
-    std::env::temp_dir().join("kithara-fixture-cache")
-}
-
-/// Store root: [`STORE_ENV`] when set, [`default_root`] otherwise.
-#[must_use]
-pub fn root_from_env() -> PathBuf {
-    std::env::var_os(STORE_ENV).map_or_else(default_root, PathBuf::from)
+/// Reads the explicitly configured persistent store root.
+///
+/// # Errors
+///
+/// Returns an error when the parameter is missing or is not an absolute path.
+pub fn root_from_env() -> std::io::Result<PathBuf> {
+    let root = std::env::var_os(STORE_ENV).map(PathBuf::from);
+    root.filter(|path| path.is_absolute()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("set {STORE_ENV} to an absolute persistent directory shared by worktrees"),
+        )
+    })
 }
 
 /// Directory holding every entry of one explicit cache revision.
@@ -223,12 +226,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn explicit_root_wins_over_the_default() {
-        // The build environment may override the store root.
-        if std::env::var_os(STORE_ENV).is_some() {
-            return;
-        }
-        assert_eq!(root_from_env(), default_root());
-        assert!(default_root().starts_with(std::env::temp_dir()));
+    fn configured_root_is_absolute() {
+        let root = root_from_env().expect("configured persistent fixture root");
+        assert!(root.is_absolute());
+        assert_eq!(Some(root.into_os_string()), std::env::var_os(STORE_ENV));
     }
 }

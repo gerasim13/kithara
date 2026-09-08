@@ -262,7 +262,9 @@ fn main() {
     let resolved = resolve(&defs);
 
     let fingerprint = store::CACHE_VERSION.trim();
-    let namespace = store::namespace(&store::root_from_env(), fingerprint);
+    let root =
+        store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
+    let namespace = store::namespace(&root, fingerprint);
     let unavailable = materialize(&namespace, &resolved);
 
     // Written once per namespace so its mtime stays put on a no-op rerun; a
