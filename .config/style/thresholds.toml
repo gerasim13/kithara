@@ -73,11 +73,6 @@ warn = 8000
 deny = 10000
 
 [[doc_size.limits]]
-globs = ["PROGRESS.md"]
-warn = 2000
-deny = 4000
-
-[[doc_size.limits]]
 globs = ["**/CONTEXT.md"]
 warn = 20000
 deny = 24000
