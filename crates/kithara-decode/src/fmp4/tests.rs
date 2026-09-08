@@ -408,6 +408,52 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
 }
 
 #[kithara::test]
+fn aac_trimmed_packet_timestamp_names_the_first_retained_sample() {
+    let pools = pools();
+    let (mut codec, segment, ranges) = aac_codec_and_frames();
+    let packet_frames = u64::from(access_unit_frames(AudioCodec::AacLc));
+    let mut previous_end = None;
+    let mut observed_partial_packet = false;
+
+    for (index, &(offset, size)) in ranges.iter().take(4).enumerate() {
+        let packet_start = u64::try_from(index).expect("packet index") * packet_frames;
+        let pts = codec
+            .spec()
+            .duration_for(packet_start)
+            .expect("packet timestamp");
+        let mut samples = pools.get::<f32>();
+        let emitted = codec
+            .decode_frame(&segment[offset..offset + size], pts, &[], &mut samples)
+            .expect("decode AAC packet");
+        if emitted == 0 {
+            continue;
+        }
+        observed_partial_packet |= u64::from(emitted) < packet_frames;
+        let start = codec
+            .spec()
+            .frame_at(codec.decoded_pts(pts))
+            .expect("decoded timestamp");
+        assert_eq!(
+            start + u64::from(emitted),
+            packet_start + packet_frames,
+            "head trimming must retain the packet's original end"
+        );
+        if let Some(end) = previous_end {
+            assert_eq!(
+                start, end,
+                "head trim must not create an interior timestamp gap"
+            );
+        }
+        previous_end = Some(start + u64::from(emitted));
+    }
+
+    assert!(
+        observed_partial_packet,
+        "fixture must exercise a partial AAC packet"
+    );
+}
+
+#[kithara::test]
 fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
     let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
@@ -439,13 +485,9 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
 /// fdk-aac adapter drops `stream_info.outputDelay`, 1685 frames on this fixture,
 /// while `timestamp_bias_frames` models one access unit, 1024.
 ///
-/// The 661-frame remainder decides where an exact variant splice cuts. A decode
-/// that started at the head sees it as a container timeline gap the moment the
-/// next packet's timestamp runs past what the decoder has emitted; a decode
-/// that started mid-stream records no such jump, because `seek` resyncs the
-/// frame offset onto the packet timestamp instead. Observing the strip in
-/// `ComposedDecoder` is what lets its live timeline-gap query hand both the
-/// same figure.
+/// `decoded_pts` places a partially emitted packet at its retained suffix.
+/// `ComposedDecoder` also observes the complete strip so a decoder recreated
+/// mid-stream and one opened at the head use the same variant-splice offset.
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
     let pools = pools();

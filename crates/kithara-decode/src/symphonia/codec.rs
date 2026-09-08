@@ -52,6 +52,7 @@ impl Consts {
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
     spec: AudioSpec,
+    decoded_head_trim: Duration,
     decoder: Box<dyn AudioDecoder>,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata captured by the demuxer before the codec is
@@ -95,6 +96,7 @@ impl SymphoniaCodec {
         Ok(Self {
             decoder,
             spec,
+            decoded_head_trim: Duration::ZERO,
             codec: None,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
@@ -153,6 +155,7 @@ impl SymphoniaCodec {
         Ok(Self {
             decoder,
             spec,
+            decoded_head_trim: Duration::ZERO,
             codec: Some(track.codec),
             track_info: DecoderTrackInfo {
                 gapless: track_gapless,
@@ -182,6 +185,7 @@ impl FrameCodec for SymphoniaCodec {
         _packet_desc: &[u8],
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
+        self.decoded_head_trim = Duration::ZERO;
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
@@ -258,6 +262,20 @@ impl FrameCodec for SymphoniaCodec {
             return Ok(0);
         }
 
+        if cfg!(feature = "fdk-aac")
+            && matches!(
+                self.codec,
+                Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2)
+            )
+        {
+            let trimmed = u64::try_from(decoded.capacity().saturating_sub(decoded.frames()))
+                .map_err(DecodeError::backend)?;
+            self.decoded_head_trim = self
+                .spec
+                .duration_for(trimmed)
+                .map_err(DecodeError::backend)?;
+        }
+
         out.ensure_len(num_samples)?;
         kithara::measure_block!("symphonia::output::copy_interleaved", {
             decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
@@ -266,12 +284,17 @@ impl FrameCodec for SymphoniaCodec {
         Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }
 
+    fn decoded_pts(&self, input_pts: Duration) -> Duration {
+        input_pts.saturating_add(self.decoded_head_trim)
+    }
+
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
         symphonia_decoder_algo_delay(codec)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
         self.decoder.reset();
+        self.decoded_head_trim = Duration::ZERO;
         Ok(())
     }
 
