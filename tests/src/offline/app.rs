@@ -21,6 +21,7 @@ pub struct AppQueueFixture {
     pub config: AppConfig,
     pub queue: OfflineQueue<AppPools>,
     pub cache: TestTempDir,
+    ticker: QueueTicker,
 }
 
 impl AppQueueFixture {
@@ -29,7 +30,9 @@ impl AppQueueFixture {
             config,
             queue,
             cache,
+            mut ticker,
         } = self;
+        ticker.stop().await;
         drop(config);
         queue.close().await;
         drop(cache);
@@ -51,6 +54,10 @@ impl LazyAppQueueFixture {
 
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
 pub async fn insecure_app_queue() -> AppQueueFixture {
+    app_queue(Config::load(None, None).expect("the shipped configuration loads")).await
+}
+
+pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
@@ -59,7 +66,6 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -100,14 +106,12 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    drop(QueueTicker::spawn(
-        queue_for_tick,
-        Duration::from_millis(50),
-    ));
+    let ticker = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     AppQueueFixture {
         config,
         queue,
         cache: TestTempDir::new(),
+        ticker,
     }
 }

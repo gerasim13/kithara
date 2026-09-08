@@ -51,7 +51,7 @@ const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m
 
 /// Render `blocks` audio blocks, collect the raw interleaved samples,
 /// and return statistics covering exactly this window.
-fn render_and_collect(
+async fn render_and_collect(
     player: &mut OfflinePlayer,
     blocks: u32,
     samples_out: &mut Vec<f32>,
@@ -228,13 +228,14 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             player.load_and_fadein(resource).await;
 
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
-            let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);
+            let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples).await;
             eprintln!(
                 "[iter {iter}][t{track_idx}] warmup done, position={:.2}",
                 player.position()
             );
 
-            let initial = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+            let initial =
+                render_and_collect(&mut player, window_blocks, &mut iteration_samples).await;
             let initial_samples = &iteration_samples[initial.window_start_sample..];
             let initial_rms = rms(initial_samples);
             let initial_silence_fraction =
@@ -272,7 +273,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
             player.seek(seek_target, seek_epoch);
 
-            let after = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+            let after =
+                render_and_collect(&mut player, window_blocks, &mut iteration_samples).await;
             let after_samples = &iteration_samples[after.window_start_sample..];
             let after_rms = rms(after_samples);
             let after_silence_fraction =

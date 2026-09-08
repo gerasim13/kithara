@@ -41,9 +41,7 @@ mod test_statics {
 }
 
 async fn shared_test_ctx() -> &'static AppQueueFixture {
-    test_statics::TEST_CTX
-        .get_or_init(|| async { insecure_app_queue() })
-        .await
+    test_statics::TEST_CTX.get_or_init(insecure_app_queue).await
 }
 
 async fn wait_for_status(
@@ -322,7 +320,8 @@ async fn track_plays_end_to_end(
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx
         .queue
-        .append(source)
+        .run(move |q| q.append(source))
+        .await
         .expect("append real playlist track");
 
     wait_for_status(
@@ -352,7 +351,7 @@ async fn track_plays_end_to_end(
     let mut rng = Xorshift64::new(rng_seed);
     for i in 0..3 {
         let target = duration * rng.range_f64(0.05, 0.95);
-        ctx.queue.seek(target).expect("seek");
+        ctx.queue.run(move |q| q.seek(target)).await.expect("seek");
         wait_for_position_near(&ctx.queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
@@ -439,18 +438,16 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     ctx.queue.set_crossfade_duration(2.0);
 
     let mut rx = ctx.queue.subscribe();
-    let ids: Vec<TrackId> = urls
-        .iter()
-        .map(|u| {
-            ctx.queue
-                .run({
-                    let arg0 = build_track_source(u, ctx, backend, AbrMode::Auto(None));
-                    move |q| q.append(arg0)
-                })
-                .await
-                .expect("append playlist track")
-        })
-        .collect();
+    let mut ids = Vec::with_capacity(urls.len());
+    for url in &urls {
+        let source = build_track_source(url, ctx, backend, AbrMode::Auto(None));
+        let id = ctx
+            .queue
+            .run(move |q| q.append(source))
+            .await
+            .expect("append playlist track");
+        ids.push(id);
+    }
 
     ctx.queue
         .run({
@@ -473,7 +470,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .expect("first track position");
 
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
-    ctx.queue.pause();
+    ctx.queue.run(move |q| q.pause()).await;
     time::sleep(Duration::from_secs(2)).await;
     let during_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
@@ -499,7 +496,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .duration_seconds()
         .expect("duration for first track");
     let seek_target = duration_0 * 0.4;
-    ctx.queue.seek(seek_target).expect("seek");
+    ctx.queue
+        .run(move |q| q.seek(seek_target))
+        .await
+        .expect("seek");
     wait_for_position_near(&ctx.queue, seek_target, 1.0, Duration::from_secs(5))
         .await
         .expect("seek landed near target");
@@ -562,7 +562,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                         .duration_seconds()
                         .ok_or_else(|| "duration unknown".to_string())?;
                     let near_end = (dur - f64::from(xf_duration) - 2.0).max(0.0);
-                    ctx.queue.seek(near_end).map_err(|e| format!("seek: {e}"))?;
+                    ctx.queue
+                        .run(move |q| q.seek(near_end))
+                        .await
+                        .map_err(|e| format!("seek: {e}"))?;
                     wait_for_queue_event(
                     &mut rx,
                     |ev| matches!(
@@ -684,7 +687,8 @@ async fn prod_tracks_sequential_startup_latency() {
         let t0 = kithara::platform::time::Instant::now();
         let track_id = ctx
             .queue
-            .append(source)
+            .run(move |q| q.append(source))
+            .await
             .expect("append Apple production track");
 
         let outcome: Result<(Duration, Duration), String> = async {
@@ -855,21 +859,19 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
     let mut rx = ctx.queue.subscribe();
     let hls = ctx
         .queue
-        .append(build_track_source(
-            HLS_URL,
-            ctx,
-            backend,
-            AbrMode::Auto(None),
-        ))
+        .run({
+            let source = build_track_source(HLS_URL, ctx, backend, AbrMode::Auto(None));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append the HLS leg");
     let mpeg = ctx
         .queue
-        .append(build_track_source(
-            MPEG_URL,
-            ctx,
-            backend,
-            AbrMode::Auto(None),
-        ))
+        .run({
+            let source = build_track_source(MPEG_URL, ctx, backend, AbrMode::Auto(None));
+            move |q| q.append(source)
+        })
+        .await
         .expect("append the MPEG leg");
 
     wait_for_status(

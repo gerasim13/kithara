@@ -18,10 +18,9 @@ use kithara::{
     platform::{
         CancelToken,
         time::{Duration, sleep},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -31,7 +30,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestTempDir, kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, QueueTicker},
     user_sim::{actions::Action, scenarios},
 };
 
@@ -126,7 +125,11 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
-        .append(prod_drm_spec(url, &prod))
+        .run({
+            let source = prod_drm_spec(url, &prod);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append production DRM track");
 
     // Use the same harness assertions but skip the per-track-cache
@@ -140,7 +143,8 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
         .await
         .unwrap_or_else(|e| panic!("prod DRM load fail: {e}"));
     queue
-        .select(track_id, Transition::None)
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select prod DRM");
     wait_for_position_at_least(&queue, 1.0, Duration::from_secs(20))
         .await
@@ -157,7 +161,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     queue.close().await;
 }
 
-async fn apply_action_to_queue(queue: &QueueControl<AppPools>, action: &Action) {
+async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) {
     use kithara::play::SeekOutcome;
     let label = action.label();
     let duration = queue.duration_seconds().unwrap_or(0.0);
@@ -167,7 +171,8 @@ async fn apply_action_to_queue(queue: &QueueControl<AppPools>, action: &Action) 
             let target = (duration * r).clamp(0.0, duration);
             let pre_track = queue.current().map(|e| e.id);
             let outcome = queue
-                .seek(target)
+                .run(move |q| q.seek(target))
+                .await
                 .unwrap_or_else(|e| panic!("[{label}] seek Err: {e}"));
             if matches!(outcome, SeekOutcome::PastEof { .. }) {
                 return;
@@ -369,15 +374,23 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
 
     let track0 = queue
-        .append(prod_drm_spec(PROD_DRM_TRACK, &prod))
+        .run({
+            let source = prod_drm_spec(PROD_DRM_TRACK, &prod);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append production DRM track 0");
     let track1 = queue
-        .append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod))
+        .run({
+            let source = prod_drm_spec(PROD_DRM_TRACK_ALT, &prod);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append production DRM track 1");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
@@ -385,7 +398,8 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
         .await
         .unwrap_or_else(|e| panic!("prod DRM load fail: {e}"));
     queue
-        .select(track0, Transition::None)
+        .run(move |q| q.select(track0, Transition::None))
+        .await
         .expect("select prod DRM");
 
     let check_not_advanced = |label: &str| {
@@ -402,7 +416,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 
     let scrub_targets = [5.0_f64, 30.0, 60.0, 15.0, 90.0, 45.0, 20.0, 75.0];
     for target in scrub_targets {
-        let _ = queue.seek(target);
+        let _ = queue.run(move |q| q.seek(target)).await;
         check_not_advanced(&format!("after seek({target:.2}s)"));
         time::sleep(Duration::from_millis(120)).await;
         check_not_advanced(&format!("post-seek({target:.2}s)+120ms"));
@@ -412,6 +426,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     check_not_advanced("after 5s settle");
 
     tick.stop().await;
+    queue.close().await;
 }
 
 /// Like `run_prod_drm_scenario` but seeks AS SOON AS the queue reports
@@ -422,11 +437,15 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10)));
+    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
-        .append(prod_drm_spec(url, &prod))
+        .run({
+            let source = prod_drm_spec(url, &prod);
+            move |q| q.append(source)
+        })
+        .await
         .expect("append no-warmup production DRM track");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
@@ -434,7 +453,8 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
         .await
         .unwrap_or_else(|e| panic!("prod DRM load fail: {e}"));
     queue
-        .select(track_id, Transition::None)
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select prod DRM");
 
     // Wait until duration is *known* (post-mvhd) — that's the contract
@@ -454,7 +474,8 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     };
     let target = (duration * ratio).clamp(0.0, duration);
     let outcome = queue
-        .seek(target)
+        .run(move |q| q.seek(target))
+        .await
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
     if let SeekOutcome::PastEof {
         duration: reported_dur,
@@ -502,6 +523,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     );
 
     tick.stop().await;
+    queue.close().await;
 }
 
 /// Live prod-DRM tracks, all on `cdn-hls-slicer.zvuk.com` behind the same
@@ -578,8 +600,8 @@ async fn render_audio_frames(
     let mut pcm = Vec::with_capacity(target_frames * channels);
     let mut silent_since = None;
     while pcm.len() / channels < target_frames {
-        let block = queue.render(block_frames);
-        let _ = queue.tick();
+        let block = queue.render(block_frames).await;
+        let _ = queue.run(move |q| q.tick()).await;
         if block.iter().any(|s| s.abs() > SILENCE_FLOOR) {
             silent_since = None;
             pcm.extend_from_slice(&block);
@@ -610,8 +632,8 @@ async fn wait_for_handover(
         .expect("offline render block fits usize");
     let started = kithara::platform::time::Instant::now();
     loop {
-        let _ = queue.tick();
-        let _ = queue.render(block_frames);
+        let _ = queue.run(move |q| q.tick()).await;
+        let _ = queue.render(block_frames).await;
         if queue.current().map(|e| e.id) == Some(track_id)
             && queue.duration_seconds().is_some_and(|d| d > 0.0)
         {
@@ -700,7 +722,11 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     for url in urls {
         track_ids.push(
             queue
-                .append(prod_drm_spec(url, &prod))
+                .run({
+                    let source = prod_drm_spec(url, &prod);
+                    move |q| q.append(source)
+                })
+                .await
                 .expect("append multi-track production DRM track"),
         );
     }
@@ -716,7 +742,8 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             let ctx = format!("{label} [rot={rotation} idx={idx}]");
 
             queue
-                .select(track_id, Transition::None)
+                .run(move |q| q.select(track_id, Transition::None))
+                .await
                 .unwrap_or_else(|e| panic!("{ctx} select Err: {e}"));
 
             wait_for_handover(&queue, track_id, &ctx).await;
@@ -730,7 +757,8 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .expect("duration known after wait_for_handover");
             let target = (duration * 0.90).clamp(0.0, duration);
             let outcome = queue
-                .seek(target)
+                .run(move |q| q.seek(target))
+                .await
                 .unwrap_or_else(|e| panic!("{ctx} seek Err: {e}"));
             assert!(
                 matches!(outcome, SeekOutcome::Landed { .. }),

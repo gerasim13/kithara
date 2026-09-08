@@ -39,7 +39,11 @@ the change that lands the work, and keep it short.
   extent per pass in `kithara-analysis`. Left: the deck scenario on a release
   build with the full model, and the size of the resume blob.
 
-- `suite_network` has been dark since `#260`; the handover census found it.
+- PR #322 review fixes retain the app fixture ticker through teardown and
+  complete async harness calls in the opt-in network suites. Both network
+  binaries compile; the local ticker regression passes with `no_block` and
+  fails when the ticker is stopped at construction.
+  Remote playback and device acceptance remain unverified.
 
 ## Next
 
