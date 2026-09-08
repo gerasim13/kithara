@@ -8,7 +8,7 @@ use thiserror::Error;
 pub struct AssetEntry {
     /// MIME type declared by the generator.
     pub content_type: &'static str,
-    /// Content address inside the build fingerprint's namespace.
+    /// Content address inside the cache revision namespace.
     pub id: &'static str,
     /// Accessor name, `{func}_{case}`.
     pub name: &'static str,

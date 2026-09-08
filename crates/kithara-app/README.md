@@ -58,8 +58,8 @@ flowchart LR
 The app memoizes whole-track waveform and beat/BPM analysis in memory and on
 disk. Runtime freshness is guarded by `TrackId`; cross-session cache identity is
 owned by `AnalysisTarget`. The app owns the `AssetStore` cache I/O and policy;
-the pure analysis snapshot/codec comes from `kithara-analysis`. See CONTEXT.md
+the pure analysis snapshot/codec comes from `kithara-analysis`. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-app)
 for the key spaces, disk-tier lifecycle, and codec-version invalidation
 contract.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-app) for detailed contracts, invariants, and internals.

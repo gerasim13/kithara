@@ -61,4 +61,4 @@ Used by every crate that owns a configuration a document may reach, and by
 `kithara-app`, which deserializes the generated patches out of `app.yaml` and
 applies them onto the configurations it built.
 
-See [CONTEXT.md](CONTEXT.md) for the contract the generated code keeps.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-macros) for the contract the generated code keeps.

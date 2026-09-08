@@ -80,15 +80,13 @@ where
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
-    /// Serialises a selection-apply against a concurrent [`Queue::select`].
-    /// A track's `spawn_apply_after_load` completion and a later `select`
-    /// that supersedes it both mutate the same selection state (pending,
-    /// current, navigation cursor, `TrackStatus::Cancelled`); without a
-    /// single serialization point the completion can observe-not-cancelled
-    /// then `select_item` *after* the superseding select committed, so the
-    /// superseded track barges in. Held only across the synchronous apply
-    /// critical section — never across an `.await`. See the crate `CONTEXT.md`
-    /// "Selection serialization".
+    /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
+    /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
+    /// mutate the same selection state (pending, current, navigation cursor,
+    /// `TrackStatus::Cancelled`); without a single serialization point the completion
+    /// can observe-not-cancelled then `select_item` *after* the superseding select
+    /// committed, so the superseded track barges in. Held only across the synchronous
+    /// apply critical section — never across an `.await`.
     pub(super) select_apply: Arc<Mutex<()>>,
     /// Test-only respawn resource cache. Populated by
     /// [`Queue::supply_test_resource_for_respawn`] and consumed by

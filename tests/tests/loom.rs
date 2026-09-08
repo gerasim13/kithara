@@ -129,13 +129,12 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
     assert!(matches!(first.join(), Ok(true)));
 
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
-    // Spawn the signaller FIRST: `spawn_named` reserves its engine slot on
-    // this (engine-invisible) thread, so the waiter is never the last credit
-    // holder while parked on the backstop — the send's `notify_one` bumps
-    // `active` for the woken signaller under the core lock before the waiter's
-    // own park drops its credit. Waiter first, and it parks with nothing
-    // counted: the clock jumps the whole backstop before the signaller exists.
-    // See `kithara-platform/CONTEXT.md`, "Quiescence engine".
+    // Spawn the signaller FIRST: `spawn_named` reserves its engine slot on this
+    // (engine-invisible) thread, so the waiter is never the last credit holder while
+    // parked on the backstop — the send's `notify_one` bumps `active` for the woken
+    // signaller under the core lock before the waiter's own park drops its credit.
+    // Waiter first, and it parks with nothing counted: the clock jumps the whole
+    // backstop before the signaller exists.
     let second_gate = Arc::clone(&gate);
     let signaller = thread::spawn_named("threadgate-handoff-signaller", move || {
         assert_eq!(snapshot_rx.recv(), Ok(()));

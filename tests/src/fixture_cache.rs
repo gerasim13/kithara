@@ -22,28 +22,18 @@ fn cache_key(domain: &str, spec: &[u8]) -> String {
     hex
 }
 
-/// Appends `KITHARA_FIXTURE_BUILD` to the cache root, whether that root came
-/// from the environment or from the default.
-///
-/// The fingerprint covers the fixture-encoding code and the encoder versions the
-/// lockfile resolved, and entry keys are content-addressed over the spec alone —
-/// so the sub-directory is the only thing standing between a new encoder and the
-/// bytes an old one produced. A root that skipped it, as an explicitly configured
-/// one used to, is a cache that never invalidates: shared across runners and
-/// branches, it serves one build's fixtures to another. Identical across
-/// `suite_stress`, `suite_heavy`, … of one build, and launch-independent (no
-/// `current_exe`), so nextest and IDE runs of that build share one directory.
+/// Appends the explicit shared cache revision to the selected root.
 fn resolve_cache_dir(root: Option<PathBuf>) -> PathBuf {
     let root = root.unwrap_or_else(|| std::env::temp_dir().join("kithara-fixture-cache"));
     root.join(env!("KITHARA_FIXTURE_BUILD"))
 }
 
-/// Overrides the default cache root; the build fingerprint is always appended.
+/// Overrides the default cache root; the cache revision is always appended.
 pub(crate) const CACHE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
 /// Cross-process on-disk content cache.
 ///
-/// [`from_env`](Self::from_env) appends the build fingerprint to the configured
+/// [`from_env`](Self::from_env) appends the cache revision to the configured
 /// or default root. Only [`from_dir(None)`](Self::from_dir) disables the cache.
 #[derive(Clone)]
 pub(crate) struct FixtureCache {
@@ -162,8 +152,7 @@ mod tests {
             .file_name()
             .and_then(|f| f.to_str())
             .expect("fingerprint component");
-        assert_eq!(fingerprint.len(), 16, "build fingerprint is u64 hex");
-        assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(fingerprint, env!("KITHARA_FIXTURE_BUILD"));
     }
 
     #[kithara::test(native, flash(false))]
@@ -183,7 +172,7 @@ mod tests {
 
         assert!(
             dir.ends_with(env!("KITHARA_FIXTURE_BUILD")),
-            "resolved dir {dir:?} must end with the build fingerprint",
+            "resolved dir {dir:?} must end with the cache revision",
         );
     }
 

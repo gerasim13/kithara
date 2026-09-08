@@ -24,4 +24,4 @@ Encoded/container media facts remain in `kithara-stream`.
 The crate has no decoder, network, asset, worker, scheduler, Warp, stretch,
 player, analyzer, backend feature, or configuration responsibility.
 
-See [CONTEXT.md](CONTEXT.md) for the ownership contract.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-signal) for the ownership contract.

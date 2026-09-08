@@ -7,7 +7,7 @@ handoff, integration, or a workflow decision.
 ## Recommended Flow
 
 - Start with quick discovery: confirm the goal, affected paths, and matching crate
-  `README.md` / `CONTEXT.md` files.
+  `README.md` and linked wiki contracts files.
 - Use a `Task Packet` when coordination would otherwise be ambiguous. Small
   single-owner tasks can keep this lightweight.
 - A non-trivial `Task Packet` is incomplete until `Constraints`, `Non-goals`, and

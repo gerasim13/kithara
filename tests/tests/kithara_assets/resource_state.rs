@@ -303,11 +303,10 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
 
-    // One store per disk root, extra assets get scopes off it. A second
-    // `AssetStore` over the same directory is a second owner of
-    // `_index/pins.bin`: it hydrates its own copy at build time, and its flush
-    // hub later republishes that snapshot over the first store's unpin. See
-    // `crates/kithara-assets/CONTEXT.md`.
+    // One store per disk root, extra assets get scopes off it. A second `AssetStore`
+    // over the same directory is a second owner of `_index/pins.bin`: it hydrates its
+    // own copy at build time, and its flush hub later republishes that snapshot over
+    // the first store's unpin.
     let scope_a = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
