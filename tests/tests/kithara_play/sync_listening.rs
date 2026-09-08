@@ -36,7 +36,8 @@ async fn render_solo(case: SyncCase, provider: Provider, audible_deck: usize) ->
 async fn render_mix(case: SyncCase, provider: Provider, target_bpm: Option<f64>) -> Capture {
     let mut harness = ProductHarness::new(case, provider, 0).await;
     for deck in &harness.decks {
-        deck.set_muted(false);
+        let control = deck.control().clone();
+        harness.host.run(move || control.set_muted(false)).await;
     }
     harness.request_sync(case).await;
 
@@ -45,7 +46,9 @@ async fn render_mix(case: SyncCase, provider: Provider, target_bpm: Option<f64>)
         let mut rendered = 0;
         for step in 1..=RIDE_STEPS {
             let progress = step as f64 / RIDE_STEPS as f64;
-            harness.set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false);
+            harness
+                .set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false)
+                .await;
             let deadline = CAPTURE_FRAMES * step / RIDE_STEPS;
             pcm.extend(render_frames(&mut harness, case, deadline - rendered).await);
             rendered = deadline;

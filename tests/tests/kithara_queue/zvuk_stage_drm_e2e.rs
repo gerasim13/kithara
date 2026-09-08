@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{decode::DecoderBackend, platform::time::Duration, queue::Transition};
+use kithara::{decode::DecoderBackend, hls::AbrMode, platform::time::Duration, queue::Transition};
 use kithara_integration_tests::{
     kithara,
     offline::LazyAppQueueFixture,
@@ -36,16 +36,28 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 #[case::symphonia(DecoderBackend::Symphonia)]
 async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = CTX.get().await;
-    let source = super::source_helper::app_drm_track_source(STAGE_TRACK, ctx, backend);
+    let source = super::source_helper::app_track_source(
+        STAGE_TRACK,
+        &ctx.config,
+        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        backend,
+        AbrMode::Auto(None),
+        None,
+    );
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source).expect("append stage DRM track");
+    let track_id = ctx
+        .queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append stage DRM track");
 
     wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("stage DRM load fail [{STAGE_TRACK}]: {e}"));
 
     ctx.queue
-        .select(track_id, Transition::None)
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select");
     wait_for_position_at_least(&ctx.queue, 0.5, Duration::from_secs(15))
         .await

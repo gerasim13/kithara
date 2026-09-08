@@ -93,7 +93,7 @@ async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, unti
     loop {
         let this = min_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES);
+            let _ = player.render(Consts::BLOCK_FRAMES).await;
         }
         rendered = rendered.saturating_add(this);
         if player.position() >= until_position && rendered >= min_blocks {
@@ -125,7 +125,7 @@ async fn render_until_gate_requested(
         if gate.requested() > 0 {
             for _ in 0..hold_ticks {
                 for _ in 0..BATCH {
-                    let _ = player.render(Consts::BLOCK_FRAMES);
+                    let _ = player.render(Consts::BLOCK_FRAMES).await;
                 }
                 let held_position = player.position();
                 assert!(
@@ -223,8 +223,9 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         HostConfig::offline(pools())
             .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
-    );
-    player.load_and_fadein(resource);
+    )
+    .await;
+    player.load_and_fadein(resource).await;
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -280,7 +281,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
     );
 
-    drop(player);
+    player.close().await;
     drop(downloader);
     drop(temp);
 }

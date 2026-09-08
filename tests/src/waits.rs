@@ -419,7 +419,7 @@ pub async fn render_until_position(
     loop {
         let this = max_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
-            let _ = player.render(block_frames);
+            drop(player.render(block_frames).await);
         }
         rendered = rendered.saturating_add(this);
         let position = player.position();

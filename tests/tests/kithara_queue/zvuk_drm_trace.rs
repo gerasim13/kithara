@@ -29,7 +29,11 @@ async fn zvuk_drm_master_playlist_trace() {
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source).expect("append DRM trace track");
+    let track_id = ctx
+        .queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append DRM trace track");
     tracing::info!(%url, ?track_id, "DRM trace: track appended");
 
     match wait_for_terminal(&mut rx, &ctx.queue, track_id, Duration::from_secs(20)).await {

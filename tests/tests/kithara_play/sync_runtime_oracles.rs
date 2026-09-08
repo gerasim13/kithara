@@ -40,7 +40,7 @@ async fn tempo_retarget_run(block_frames: usize, warm_blocks: usize, retarget: b
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     if retarget {
-        harness.set_tempo(ONE_DECK, 132.0, false);
+        harness.set_tempo(ONE_DECK, 132.0, false).await;
     }
     samples.extend(
         harness

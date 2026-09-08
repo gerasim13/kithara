@@ -1371,10 +1371,11 @@ steps = [
   { args = [
     "test",
     "run",
+    "--no-block=on",
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]

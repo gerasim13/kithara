@@ -16,8 +16,9 @@ use kithara::{
     platform::sync::{Arc, Mutex},
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
-        SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
+        PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionBinding,
+        SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq, SlotId,
+        bridge::slot_channels,
     },
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, test_defaults::Consts};
@@ -108,7 +109,10 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
         .crossfade_duration(crossfade_duration)
         .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
+        .session(SessionBinding::new(
+            Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>,
+            Consts::NON_ZERO_SAMPLE_RATE,
+        ))
         .build();
     let player = PlayerImpl::new(player_config);
     (player, session)
@@ -132,7 +136,10 @@ fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
         .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .session(fixture_session())
+        .session(SessionBinding::new(
+            fixture_session(),
+            Consts::NON_ZERO_SAMPLE_RATE,
+        ))
         .build()
 }
 

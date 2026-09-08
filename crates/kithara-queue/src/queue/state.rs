@@ -384,8 +384,8 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq,
-        SlotId, bridge::slot_channels,
+        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode,
+        SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     };
     use kithara_test_utils::kithara;
 
@@ -439,11 +439,14 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn test_session() -> Arc<dyn SessionDispatcher<TestPools>> {
-        Arc::new(TestSession {
-            next_slot: AtomicU64::new(0),
-            nodes: Mutex::default(),
-        })
+    pub(crate) fn test_session() -> SessionBinding<TestPools> {
+        SessionBinding::new(
+            Arc::new(TestSession {
+                next_slot: AtomicU64::new(0),
+                nodes: Mutex::default(),
+            }),
+            TEST_SAMPLE_RATE,
+        )
     }
 
     fn queue_config() -> QueueConfig<TestPools> {

@@ -76,23 +76,26 @@ fn tone_resource() -> Resource {
     resource_from_reader(TestPcmReader::with_signal(spec, 6.0, Wave::sine(TONE_HZ)))
 }
 
-fn playing_harness() -> OfflinePlayerHarness {
+async fn playing_harness() -> OfflinePlayerHarness {
     let harness =
-        OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE);
-    harness.with_player(|player| {
-        player.insert(tone_resource(), TrackId::allocate(), None);
-        player.select_item(0, true).expect("select tone");
-    });
-    let _ = harness.render(BLOCK_FRAMES);
-    let _ = harness.tick_and_drain();
+        OfflinePlayerHarness::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE)
+            .await;
+    harness
+        .with_player(move |player| {
+            player.insert(tone_resource(), TrackId::allocate(), None);
+            player.select_item(0, true).expect("select tone");
+        })
+        .await;
+    let _ = harness.render(BLOCK_FRAMES).await;
+    let _ = harness.tick_and_drain().await;
     harness
 }
 
-fn render_blocks(harness: &OfflinePlayerHarness) -> Vec<f32> {
+async fn render_blocks(harness: &OfflinePlayerHarness) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(BLOCKS_PER_RATE * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..BLOCKS_PER_RATE {
-        rendered.extend_from_slice(&harness.render(BLOCK_FRAMES));
-        let _ = harness.tick_and_drain();
+        rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
+        let _ = harness.tick_and_drain().await;
     }
     rendered
 }
@@ -122,7 +125,7 @@ fn wav_rate(store: &AssetStore<TestPools>, key: &ResourceKey) -> u32 {
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn route_change_continues_recording_and_broadcast_in_new_segments() {
-    let harness = playing_harness();
+    let harness = playing_harness().await;
     let pools = pools();
     let worker = Worker::new(WorkerConfig::new());
     let store = memory_asset_store();
@@ -173,14 +176,16 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
     harness
         .host()
         .enable_outputs(outputs)
+        .await
         .expect("enable recorder and broadcast");
 
-    let before = render_blocks(&harness);
+    let before = render_blocks(&harness).await;
     harness
         .host()
         .restart_stream(NEW_RATE)
+        .await
         .expect("restart at the new device rate");
-    let after = render_blocks(&harness);
+    let after = render_blocks(&harness).await;
 
     assert_eq!(broadcast_handle.url(), url);
     assert!(before.iter().any(|sample| sample.abs() > 0.0));
@@ -188,6 +193,7 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
     harness
         .host()
         .disable_mix_tap()
+        .await
         .expect("release output group");
     let report = wait_recording(&recording_handle);
     broadcast_handle.stop();
@@ -218,4 +224,5 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments() {
             .all(|pair| pair[0] < pair[1])
     );
     assert!(playlist.text.contains("#EXT-X-ENDLIST\n"));
+    harness.close().await;
 }
