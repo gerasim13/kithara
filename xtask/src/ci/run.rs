@@ -403,7 +403,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         has_server_uds,
         || match lane {
             Lane::ReleaseXcframework => {
-                super::release::xcframework(&process, ctx, &ext, &temp, &args.package)
+                super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
             }
             Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
             Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),

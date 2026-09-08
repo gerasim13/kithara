@@ -2255,14 +2255,13 @@ wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
-# What each packaging run collects. The version gate belongs to publishing a
-# version, so a snapshot taken of a commit under review does not ask for one.
+# What each packaging run collects. Whether a version has to be named is the
+# pipeline's answer rather than a profile's: this same release profile builds
+# the versioned release and the rolling nightly, which names no version.
 [ext.release.packages.release]
-version_gate = true
 assets = ["core", "merged"]
 
 [ext.release.packages.snapshot]
-version_gate = false
 assets = ["merged"]
 
 # What delivery requires before it runs and what it then performs. The nightly

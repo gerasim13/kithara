@@ -578,13 +578,13 @@ pub(crate) enum AssetKey {
     Wasm,
 }
 
-/// What a packaging run collects, and whether the built framework has to match
-/// the version the Swift manifest records. Publishing a version asks that
-/// question; taking a snapshot of a commit does not.
+/// What a packaging run collects. Whether the built framework has to match a
+/// version belongs to the pipeline rather than to the profile: one job builds
+/// the same assets for a release someone named a version for and for the
+/// rolling nightly, which names none.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PackageProfile {
-    pub(crate) version_gate: bool,
     pub(crate) assets: Vec<AssetKey>,
 }
 
@@ -714,7 +714,7 @@ merged_asset = "Kithara.xcframework.zip"
     }
 
     #[test]
-    fn a_packaging_profile_names_its_assets_and_gate() {
+    fn a_packaging_profile_names_its_assets() {
         let ctx = ctx_from_config(
             r#"
 [ext.release]
@@ -722,7 +722,6 @@ core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
 
 [ext.release.packages.snapshot]
-version_gate = false
 assets = ["merged"]
 "#,
         );
@@ -730,7 +729,7 @@ assets = ["merged"]
         let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
 
         let profile = ext.release.package("snapshot").expect("snapshot profile");
-        assert!(!profile.version_gate);
+
         assert_eq!(profile.assets, vec![AssetKey::Merged]);
     }
 
@@ -840,7 +839,6 @@ assets = ["mergd"]
         let ctx = ctx_from_config(
             r#"
 [ext.release.packages.release]
-version_gate = true
 assets = ["core", "merged"]
 "#,
         );
