@@ -1,22 +1,12 @@
 # Progress
 
-What is in flight right now. The
-[GitHub Projects board](https://github.com/users/gerasim13/projects/3) owns
-capability status and the roadmap, and git owns the facts. This file owns
-intent: what is being worked on, what comes next, what is stuck. Update it in
-the change that lands the work, and keep it short.
+Current work and blockers. The [project board](https://github.com/users/gerasim13/projects/3) owns the roadmap; git records changes.
 
 ## In Flight
 
-- Real tracks as optional verified fixtures, PR `queue-sync-fixtures` off
-  `production/main`. Eleven pinned FLACs and production beat sidecars are
-  enabled by `KITHARA_REMOTE_FIXTURES=1`. Explicitly requested download,
-  length or SHA-256 failures now fail the build; the requested-remote census
-  also rejects blocked providers. Gated and ungated census passed, including
-  a warm-cache repeat; 79 package tests passed, two ignored. `just lint
-  fast` passed with no new or regressed findings. External CI is pending.
-  The real-track HostSync seam follow-up waits for both core and fixtures
-  to merge into `production/main`, as specified in the campaign map.
+- Queue SYNC fixtures #325: requested downloads fail on integrity errors.
+  PR description tracks validation; real-track seams depend on core and fixtures.
+
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
   ordering, because `loom` 0.7.2 carries only the deprecated name. MSRV is
