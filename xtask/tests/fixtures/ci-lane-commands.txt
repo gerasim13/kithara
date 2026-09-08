@@ -444,7 +444,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -454,7 +454,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -464,7 +464,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -474,7 +474,7 @@
   /usr/bin/xcodebuild -version
   just test run --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -484,7 +484,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -494,7 +494,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -506,7 +506,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -516,7 +516,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -526,7 +526,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -536,7 +536,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -546,7 +546,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -556,7 +556,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -566,7 +566,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -576,7 +576,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -586,7 +586,7 @@
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1723,7 +1723,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1733,7 +1733,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1743,7 +1743,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1753,7 +1753,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1763,7 +1763,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1773,7 +1773,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1783,7 +1783,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1793,7 +1793,7 @@
   <require tools> cargo just
   just test run --flash=off --timings
     CARGO_BUILD_FINGERPRINT=content
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1804,7 +1804,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1814,7 +1814,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1824,7 +1824,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1834,7 +1834,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1844,7 +1844,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1854,7 +1854,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1864,7 +1864,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1874,7 +1874,7 @@
   just test run --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
-    CARGO_LOG=cargo::core::compiler::fingerprint=info
+    CARGO_LOG=cargo::compiler::fingerprint=info
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
