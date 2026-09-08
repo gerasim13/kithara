@@ -443,6 +443,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -451,6 +452,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -459,6 +461,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -467,6 +470,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -475,6 +479,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -483,6 +488,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -493,6 +499,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -501,6 +508,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -509,6 +517,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -517,6 +526,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -525,6 +535,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -533,6 +544,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -541,6 +553,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -549,6 +562,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -557,6 +571,7 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -1692,6 +1707,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1700,6 +1716,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1708,6 +1725,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1716,6 +1734,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1724,6 +1743,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1732,6 +1752,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1740,6 +1761,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1748,6 +1770,7 @@
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1756,6 +1779,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1764,6 +1788,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1772,6 +1797,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1780,6 +1806,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1788,6 +1815,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1796,6 +1824,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1804,6 +1833,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
@@ -1812,6 +1842,7 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci --timings
+    CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
