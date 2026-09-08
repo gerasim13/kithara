@@ -427,7 +427,7 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
     );
     assert_eq!(
         review.get("extends").and_then(Value::as_str),
-        Some(".serialized")
+        Some(".dispatch")
     );
     let variables = mapping(
         review
@@ -461,25 +461,24 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
     );
     assert!(!review.contains_key("allow_failure"));
 
-    let serialized = mapping(
+    let template = mapping(
         dispatch
-            .get(".serialized")
-            .expect("dispatch has a serialized template"),
-        "the serialized dispatch template",
+            .get(".dispatch")
+            .expect("dispatch has a shared template"),
+        "the dispatch template",
     );
     assert_automatic_when(
-        serialized.get("when").map(|when| {
-            when.as_str()
-                .expect("serialized dispatch `when` is a string")
-        }),
-        ".serialized",
+        template
+            .get("when")
+            .map(|when| when.as_str().expect("dispatch template `when` is a string")),
+        ".dispatch",
     );
-    assert!(!serialized.contains_key("allow_failure"));
+    assert!(!template.contains_key("allow_failure"));
     let trigger = mapping(
-        serialized
+        template
             .get("trigger")
-            .expect("serialized dispatch has a trigger"),
-        "the serialized trigger",
+            .expect("dispatch template has a trigger"),
+        "the template trigger",
     );
     assert_eq!(
         trigger.get("strategy").and_then(Value::as_str),
@@ -488,7 +487,7 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
     let includes = trigger
         .get("include")
         .and_then(Value::as_sequence)
-        .expect("serialized trigger includes child configuration");
+        .expect("template trigger includes child configuration");
     assert!(includes.iter().any(|include| {
         include
             .as_mapping()
@@ -749,4 +748,34 @@ fn cargo_fetches_through_the_git_binary_that_reads_the_pinned_http_version() {
         Some("true"),
         "the pinned HTTP version reaches Cargo only through the git binary"
     );
+}
+
+#[test]
+fn dispatch_does_not_reserve_the_host_while_children_run() {
+    let document = yaml(workspace_root().join(".gitlab-ci.yml"));
+    for (name, definition) in mapping(&document, "dispatch pipeline") {
+        let Some(job) = definition.as_mapping() else {
+            continue;
+        };
+        assert!(
+            !job.contains_key("resource_group"),
+            "{name:?} must leave resource ownership to child jobs"
+        );
+    }
+    let config = GitlabConfig::load(workspace_root());
+    for job in [
+        "apple:test",
+        "apple:test-flash-off",
+        "apple:ios-test",
+        "apple:e2e",
+    ] {
+        assert_eq!(
+            config
+                .effective_value(job, "resource_group")
+                .as_ref()
+                .and_then(Value::as_str),
+            Some("kithara-suite"),
+            "{job} must retain measurement isolation"
+        );
+    }
 }
