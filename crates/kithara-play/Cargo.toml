@@ -88,11 +88,11 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
+kithara-derive = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
-kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }

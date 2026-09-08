@@ -37,7 +37,7 @@ fdk-aac = ["kithara-audio/fdk-aac"]
 kithara-audio = { workspace = true, default-features = false }
 kithara-beat = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }

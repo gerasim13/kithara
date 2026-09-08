@@ -6,8 +6,8 @@ use std::{
 
 use bon::Builder;
 use dashmap::DashMap;
+use kithara_derive::Patch;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
-use kithara_macros::Patch;
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},

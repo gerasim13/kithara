@@ -1,10 +1,10 @@
 [package]
-name = "kithara-macros"
+name = "kithara-derive"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "kithara macros: #[derive(Patch)], the configuration-document overlay of a configuration struct."
+description = "kithara derive macros: #[derive(Patch)] for configuration documents and #[derive(Ranged)] for bounded scalars."
 keywords = ["audio", "config", "serde", "macros", "kithara"]
 categories = ["config", "development-tools"]
 

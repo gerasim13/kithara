@@ -1,5 +1,5 @@
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 
 use crate::Percent;
 

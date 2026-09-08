@@ -69,3 +69,5 @@ status; git owns completed changes. Keep this file short.
   `Out of bounds memory access` in `Node::cancel` at teardown. Unconfirmed:
   `wasm_safe_thread` 0.1.1 decrements `exit_state` in three JS handlers
   without a once-guard while kithara drops the `JoinHandle` at spawn.
+
+- Derive campaign: renamed the shared crate to `kithara-derive`; Ranged and bounded scalar migrations remain (vault plan-1, 2026-09-05).

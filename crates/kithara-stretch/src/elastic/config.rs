@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, ops::RangeInclusive};
 
 use bon::{Builder, bon};
 use kithara_bufpool::PoolRegion;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};

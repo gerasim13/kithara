@@ -6,13 +6,13 @@
 
 <div align="center">
 
-[![crates.io](https://img.shields.io/crates/v/kithara-macros.svg)](https://crates.io/crates/kithara-macros)
-[![docs.rs](https://docs.rs/kithara-macros/badge.svg)](https://docs.rs/kithara-macros)
+[![crates.io](https://img.shields.io/crates/v/kithara-derive.svg)](https://crates.io/crates/kithara-derive)
+[![docs.rs](https://docs.rs/kithara-derive/badge.svg)](https://docs.rs/kithara-derive)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
-# kithara-macros
+# kithara-derive
 
 Proc-macro crate for Kithara's production code. It provides `#[derive(Patch)]`:
 from one configuration struct it generates `<Struct>Patch`, the shape a
@@ -23,7 +23,7 @@ generated, never written.
 ## Usage
 
 ```rust
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 
 #[derive(Patch)]
 pub struct HlsConfig<S> {

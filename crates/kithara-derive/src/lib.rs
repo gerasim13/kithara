@@ -1,7 +1,7 @@
-//! `kithara-macros` — proc-macros shared by Kithara's production crates.
+//! `kithara-derive` — the derive macros shared by Kithara's production crates.
 //!
-//! `lib.rs` holds only the `#[proc_macro_derive]` entry point Rust requires in
-//! a crate root and delegates to [`patch`].
+//! `lib.rs` holds only the `#[proc_macro_derive]` entry points Rust requires in
+//! a crate root and delegates to the module that owns each expansion.
 
 mod patch;
 

@@ -24,7 +24,7 @@ embed-full-int8-model = ["nn", "embed-model"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-platform = { workspace = true, optional = true }
 
 bon = { workspace = true }

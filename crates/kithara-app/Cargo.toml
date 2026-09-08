@@ -57,7 +57,7 @@ stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 [dependencies]
 kithara = { workspace = true, default-features = false, features = ["analysis", "file", "hls", "queue", "resample-rubato", "worker"] }
 kithara-assets = { workspace = true }
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 

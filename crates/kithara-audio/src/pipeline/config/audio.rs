@@ -1,8 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
+use kithara_derive::Patch;
 use kithara_events::EventBus;
-use kithara_macros::Patch;
 use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
