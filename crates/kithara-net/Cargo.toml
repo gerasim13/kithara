@@ -11,10 +11,9 @@ categories = ["network-programming", "asynchronous"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-# HTTP client backend. Pick exactly one per target. `client-reqwest`
-# (pure-Rust) is the portable default; `client-wreq` (BoringSSL + browser
-# TLS/HTTP2 emulation) and `client-apple` (NSURLSession) are native-only
-# opt-ins. See CONTEXT.md "HTTP client backends".
+# HTTP client backend. Pick exactly one per target. `client-reqwest` (pure-Rust) is the
+# portable default; `client-wreq` (BoringSSL + browser TLS/HTTP2 emulation) and
+# `client-apple` (NSURLSession) are native-only opt-ins.
 client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
 client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
 client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]

@@ -56,7 +56,7 @@ while let Ok(event) = rx.recv().await {
 
 ## Features
 
-The default feature set exposes the full event surface. See CONTEXT.md for the
+The default feature set exposes the full event surface. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for the
 per-feature table and the optional HTTP/TLS forwarding features.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for detailed contracts, invariants, and internals.

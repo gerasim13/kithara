@@ -279,7 +279,7 @@ where
                     }
                     continue;
                 }
-                // WHY: frame straddles target — trim leading samples (CONTEXT.md "Seek pre-roll and trim").
+                // WHY: frame straddles target — trim leading samples.
                 if frames > 0 && chunk_pts < target {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 =
@@ -490,7 +490,7 @@ mod default_priming_tests {
         tone_mp3: &'static [u8],
     ) {
         let decoder = build_mp3_decoder(tone_mp3);
-        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay (CONTEXT.md "Gapless probe contract").
+        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay.
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);

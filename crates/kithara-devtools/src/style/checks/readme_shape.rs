@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn the_contract_covers_crate_readmes_only() {
         assert!(selected(&config(), "crates/kithara-demo/README.md"));
-        assert!(!selected(&config(), "crates/kithara-demo/CONTEXT.md"));
+        assert!(!selected(&config(), "crates/kithara-demo/ARCHITECTURE.md"));
         assert!(!selected(&config(), "docs/README.md"));
         assert!(!selected(
             &config(),

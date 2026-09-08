@@ -98,4 +98,4 @@ The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
 `worker/`, plus the target-gated `wasm` surface. Concrete output-session state,
 graph dispatch, and platform clients live in `kithara-host`.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for detailed contracts, invariants, and internals.

@@ -235,10 +235,9 @@ where
         })
     }
 
-    /// Whether the peer has to park on a fetch that is already running, having
-    /// first cancelled that fetch if the reader cursor sits inside its span
-    /// past the bytes it has landed. Stored bytes decide, not a write offset
-    /// the fetch publishes. See CONTEXT.md "Fetch targeting".
+    /// Whether the peer has to park on a fetch that is already running, having first
+    /// cancelled that fetch if the reader cursor sits inside its span past the bytes it
+    /// has landed. Stored bytes decide, not a write offset the fetch publishes.
     fn park_on_running_fetch(&self, inner: &Arc<FileInner<S>>) -> bool {
         let Some((cancel, end_exclusive, start)) = self
             .inflight

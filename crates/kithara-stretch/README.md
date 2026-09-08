@@ -34,5 +34,5 @@ Feature flags select the compiled backends:
 - `stretch-signalsmith` enables `signalsmith-stretch` and is the default.
 - `stretch-bungee` enables the private `bungee-sys` adapter as an opt-in backend.
 
-Both current backends are native-only. See [CONTEXT.md](CONTEXT.md) for the
+Both current backends are native-only. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stretch) for the
 backend contract, wasm notes, and the future pure-Rust backend recipe.

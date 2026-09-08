@@ -585,10 +585,8 @@ fn derive_aac_asbd_from_esds(
     Ok(chosen.asbd)
 }
 
-/// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1
-/// ESDS descriptor chain Apple's `AudioFormat` / `AudioConverter`
-/// APIs accept as a magic cookie. Layout documented in
-/// `kithara-decode/CONTEXT.md` "Apple AAC input format (ESDS rationale)".
+/// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1 ESDS descriptor
+/// chain Apple's `AudioFormat` / `AudioConverter` APIs accept as a magic cookie.
 fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     const TOO_LONG: DecodeError = DecodeError::InvalidData {
         detail: "aac: descriptor too long for short-form ESDS size field",
@@ -599,7 +597,7 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
     let esd_body: u8 = esd_body_len.try_into().map_err(|_| TOO_LONG)?;
 
-    // WHY: ES_Descriptor chain; field layout is documented in CONTEXT.md.
+    // WHY: ES_Descriptor chain.
     let header: [u8; 22] = [
         0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,

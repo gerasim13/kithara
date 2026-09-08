@@ -5,7 +5,7 @@
 //! Asset declarations live in `src/defs/`, compile only into this crate's build
 //! script, and never enter the library. Fixture providers read prepared inputs
 //! for test parameters; signal primitives also support assertions and their own
-//! tests. See `CONTEXT.md` for preparation and invalidation contracts.
+//! tests.
 
 /// Every accessor that reads the store carries its own `cfg`, because the store
 /// is a host filesystem the browser cannot reach; an `embed` accessor carries

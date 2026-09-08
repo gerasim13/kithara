@@ -8,11 +8,10 @@ const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 
 /// A validated position into a peer's variant list.
 ///
-/// Keeps a variant position from being confused with a byte offset, a
-/// segment index, or an index into a different variant list. Construct via
-/// [`VariantIndex::try_new`] at trust boundaries (FFI, UI), or
-/// [`VariantIndex::new`] when validity is already structurally guaranteed
-/// (atomic reload, playlist parse). See `kithara-abr/CONTEXT.md`.
+/// Keeps a variant position from being confused with a byte offset, a segment index, or
+/// an index into a different variant list. Construct via [`VariantIndex::try_new`] at
+/// trust boundaries (FFI, UI), or [`VariantIndex::new`] when validity is already
+/// structurally guaranteed (atomic reload, playlist parse).
 #[derive(Clone, Copy, Debug, derive_more::Display, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct VariantIndex(usize);

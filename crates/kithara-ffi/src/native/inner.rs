@@ -625,11 +625,9 @@ fn merged_headers_for_item(
 }
 
 impl Drop for NativeInner {
-    /// Fire the master cancel pulse so the shutdown signal reaches
-    /// subsystems before structural Arc teardown unwinds. The facade
-    /// owns `NativeInner` by value, so this runs exactly when the
-    /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
-    /// "Cancel Hierarchy".
+    /// Fire the master cancel pulse so the shutdown signal reaches subsystems before
+    /// structural Arc teardown unwinds. The facade owns `NativeInner` by value, so this
+    /// runs exactly when the `AudioPlayer` is dropped.
     fn drop(&mut self) {
         if let Err(error) = super::session::remove(&self.queue_owner) {
             tracing::error!(?error, "failed to remove FFI Queue from the process Host");

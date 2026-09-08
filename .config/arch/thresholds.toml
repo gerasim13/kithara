@@ -117,7 +117,7 @@ warn_where = 4
 warn = 4
 # Per-crate overrides: app/test/macro crates may relax the threshold.
 [module_fan_out.overrides]
-"kithara-play" = 9       # Player/session orchestration spans sibling modules by crate contract; see crates/kithara-play/CONTEXT.md.
+"kithara-play" = 9       # Player/session orchestration spans sibling modules by crate contract; see https://github.com/zvuk/kithara/wiki/kithara-play#planes--ownership.
 "kithara-app" = 8
 "kithara-ffi" = 8
 "kithara-test-utils" = 8
@@ -209,7 +209,7 @@ allowed_crates = []
 # callers reach as `kithara_storage::{MmapOptions, MemOptions}`), and once as
 # `<Driver>::Options` so `Resource::<D>::open(cancel, opts)` can pick the
 # driver from the option type alone via call-site inference. Rationale is
-# recorded in `crates/kithara-storage/CONTEXT.md` ("Notes on the
+# recorded in [kithara-storage contracts](https://github.com/zvuk/kithara/wiki/kithara-storage) ("Notes on the
 # `redundant_reexport` audit warning") and `backend/traits.rs` doc comment on
 # `Driver`.
 exempt = ["MmapOptions", "MemOptions"]

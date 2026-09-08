@@ -74,4 +74,4 @@ The public storage contract is `AssetStore<S>` plus the source/resource/layout/k
 
 Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore<S>` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-assets) for detailed contracts, invariants, and internals.

@@ -10,7 +10,7 @@ and ASCII only.
 ## Method
 
 - Determine the review scope from the diff or touched files. If unclear, ask.
-- Load `AGENTS.md` and only the touched crates' `README.md` / `CONTEXT.md`.
+- Load `AGENTS.md` and only the touched crates' `README.md` and linked wiki contracts.
 - Load focused references only when relevant:
   - `docs/guides/red-flags.md`
   - `docs/guides/architecture-shape.md`
