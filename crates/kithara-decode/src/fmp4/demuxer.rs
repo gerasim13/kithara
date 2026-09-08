@@ -228,7 +228,7 @@ where
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: back off to `target - warmup` for SBR/PS pre-roll (CONTEXT.md "Seek pre-roll and trim").
+        // WHY: back off to `target - warmup` for SBR/PS pre-roll.
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));

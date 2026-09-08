@@ -63,15 +63,15 @@ include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
 opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
 without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
-fixture injection. See [CONTEXT.md](CONTEXT.md) for per-flag semantics and the
+fixture injection. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
 
 ### `#[kithara::probe(...)]` arguments
 
-A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthesized forms record parameter idents, computed `name = expr` values, an opt-in `caller`, or `probe_return`, up to the 6-arg USDT ceiling. See [CONTEXT.md](CONTEXT.md) for the full argument contract.
+A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthesized forms record parameter idents, computed `name = expr` values, an opt-in `caller`, or `probe_return`, up to the 6-arg USDT ceiling. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for the full argument contract.
 
 ## Integration
 
 Used by workspace tests (`tests/`, crate-local integration tests) to keep one test annotation model across native + wasm targets.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for detailed contracts, invariants, and internals.

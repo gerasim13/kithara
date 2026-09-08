@@ -42,4 +42,4 @@ let container = ContainerSession::new(&config)?;
 
 Consumes canonical media types from `kithara-stream`. Unsupported codec/container profiles fail explicitly; they are never substituted. The portable PCM/WAV path is available with no native encoder features, while FFmpeg and fdk-aac remain optional native backends. The streaming path feeds live broadcast; the packaged and byte paths generate encoded fixtures and packaged tracks for the integration harness.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-encode) for detailed contracts, invariants, and internals.

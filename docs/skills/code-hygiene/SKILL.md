@@ -22,7 +22,7 @@ to a few lines** rather than deleting. Remove doc entirely only on private/trivi
 items and on tests.
 
 Rules come from project conventions (`AGENTS.md`, `docs/workflows/rust-ai.md`) and
-the owning crates (`README.md`/`CONTEXT.md`). The skill **does not rewrite
+the owning crates (`README.md` and linked wiki contracts). The skill **does not rewrite
 silently**: mechanical findings are fixed after confirmation; judgment-call
 findings are listed (out-of-scope edits go to chat, not applied silently).
 
@@ -100,7 +100,7 @@ What to cut from the doc body (but not the public item's doc itself):
 
 Beyond 3 lines, keep only a non-obvious invariant that cannot be stated shorter -
 that is the owner's call, not the agent's. Long contracts/invariants live in the
-owning crate's `CONTEXT.md`, not in a doc comment. The "sensible limit": one or two
+owning crate's wiki page, not in a doc comment. The "sensible limit": one or two
 crisp sentences on *what it is and why*, without unrolling the implementation.
 
 ```
@@ -166,11 +166,10 @@ guardrails.)
 
 ### 8. Code -> docs reference direction
 
-References between code and docs are one-way: doc -> code, never the reverse. Code
-(including doc comments) does not reference doc files - the normative document
-points at the code, the code is self-contained. Flag, in sources and doc comments,
-references to a crate `README.md`/`CONTEXT.md`, the root `CONTEXT.md`, and
-`docs/*.md` (plans, workflow, notes).
+Code and doc comments explain their local API and safety requirements without
+links to wiki pages or repository documentation. Keep documentation routing in
+README and agent instructions. Do not copy cross-file rationale into source.
+Keep task status and implementation plans in issues and the Project.
 
 ### 9. Opaque abbreviations in names
 

@@ -59,7 +59,6 @@ exclude_paths = [
   "CLAUDE.md",
   "GEMINI.md",
   "WARP.md",
-  "CONTEXT.md",
   "ARCHITECTURE.md",
   "docs/plans/**",
   "docs/specs/**",
@@ -71,16 +70,6 @@ exclude_paths = [
 globs = ["AGENTS.md"]
 warn = 8000
 deny = 10000
-
-[[doc_size.limits]]
-globs = ["PROGRESS.md"]
-warn = 2000
-deny = 4000
-
-[[doc_size.limits]]
-globs = ["**/CONTEXT.md"]
-warn = 20000
-deny = 24000
 
 [[doc_size.limits]]
 globs = ["docs/guides/**/*.md"]
@@ -122,21 +111,21 @@ exclude_paths = [
   "CLAUDE.md",
   "GEMINI.md",
   "WARP.md",
-  "CONTEXT.md",
   "ARCHITECTURE.md",
   "docs/plans/**",
   "docs/specs/**",
   "docs/superpowers/**",
 ]
-include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md", "docs/**/*.md"]
+include_globs = ["AGENTS.md", "**/README.md", "docs/**/*.md"]
 
 # One shape for every crate README, so an agent that has read one knows where to
 # look in all of them: the shared header (centered logo, then badges keyed to
 # `publish`), a `# <package name>` title, a lead paragraph stating what the crate
 # is, then these sections. Each is optional and each may appear once. Content
-# that fits none of them is a `###` subsection of the one it belongs under - a
-# heading that fits nowhere is usually a contract, and contracts live in
-# `CONTEXT.md`.
+# that expands usage may be a `###` subsection of its owning section. A
+# contract explanation belongs on the owning crate wiki page. README stays an
+# overview and usage entrypoint with a wiki link; do not nest unrelated
+# architecture prose just to satisfy this section vocabulary.
 #
 # The header carries no path out of the package. crates.io and docs.rs render a
 # crate README where `../../logo.svg` does not exist, so the logo and the license

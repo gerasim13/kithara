@@ -92,7 +92,7 @@ let session = Session::new(SessionConfig {
   block at the top of a file.
 - An invariant is pinned by a test, not by a paragraph: a test fails when the
   invariant breaks, and a paragraph silently starts lying. Only what neither the
-  code shape nor a test can carry belongs in the owning crate `CONTEXT.md`, and
+  code shape nor a test can carry belongs in the owning crate wiki page, and
   `README.md` stays an overview that points to it.
 
 ## File Size And Decomposition

@@ -4,11 +4,10 @@
 //! the full wait-for picture instead of an opaque counter. Compiled ONLY under
 //! `flash` (gated in `lib.rs`), so it is free in production.
 //!
-//! Gated at runtime by `KITHARA_FLASH_SYNC_TRACE` (default OFF): off ⇒
-//! [`register`] returns `None` and a wrapped primitive pays only a null check.
+//! Gated at runtime by `KITHARA_FLASH_SYNC_TRACE` (default OFF): off ⇒ [`register`]
+//! returns `None` and a wrapped primitive pays only a null check.
 //! `KITHARA_FLASH_SYNC_BT=1` adds backtraces: the dumping thread's, and — for
-//! deadline-less waiters, captured where they park — the waiter's own. See the
-//! crate `CONTEXT.md` "Virtual time (`flash`)".
+//! deadline-less waiters, captured where they park — the waiter's own.
 
 mod registry;
 mod thread;

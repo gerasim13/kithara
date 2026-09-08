@@ -104,4 +104,4 @@ underlying player / audio / hls / file events through a single stream.
 - [`QueueEvent`] — queue-level signals delivered via [`Queue::subscribe`]
   alongside the underlying player / audio / hls / file events.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-queue) for detailed contracts, invariants, and internals.

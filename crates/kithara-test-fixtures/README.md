@@ -61,6 +61,6 @@ An asset declared `#[kithara::asset(..., embed)]` is baked into the binary with
 `include_bytes!` instead of being read from disk at run time. It is still
 generated once, into the store, like every other asset.
 
-See [CONTEXT.md](CONTEXT.md) for the store layout, the invalidation contract,
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-fixtures) for the store layout, the invalidation contract,
 and why the generators stay out of the library while the signal primitives do
 not.

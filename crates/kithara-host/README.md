@@ -35,4 +35,4 @@ output-frame ranges. Its offline variant carries the pool, render quantum,
 latency, worker, task, dispatcher, and optional probe pacing budgets.
 
 The current crate is a mechanical ownership extraction. Runtime invariants and
-dependency boundaries are documented in [`CONTEXT.md`](CONTEXT.md).
+dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).
