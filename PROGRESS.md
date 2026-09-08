@@ -1,28 +1,11 @@
 # Progress
 
-What is in flight right now. The
-[GitHub Projects board](https://github.com/users/gerasim13/projects/3) owns
-capability status and the roadmap, and git owns the facts. This file owns
-intent: what is being worked on, what comes next, what is stuck. Update it in
-the change that lands the work, and keep it short.
+Current work and blockers. The [project board](https://github.com/users/gerasim13/projects/3) owns the roadmap; git records changes.
 
 ## In Flight
 
-- Queue sync under warp and timestretch, three independent PRs off
-  `production/main`. `queue-sync-core` pins the queue seam contract on the sync
-  product harness and then builds the seams; the continuity row is green, the
-  crossfade and rate rows stay ignored-red until the RT trigger arms the seam
-  and the rate rides the render context. The listening tap lives in the
-  offline harness (`just test audio-artifacts <dir> <filter>`). Sync mode and
-  tempo have one owner: a `GroupState` carries its `SyncMode` and a
-  `TempoSource`; the Host pushes its session anchor into every deck, and each
-  deck publishes its session grid by mode. A track's asset grid is published
-  onto the deck group through `Host::publish_track_grid`, planned into a
-  `RegionPlan` at the deck tempo and installed in the track's Warp lane; the
-  admitted warp map is acknowledged from the host observation loop once the
-  presentation frontier passes its activation. Left: the per-block rate
-  input, the RT seam trigger, and the seam rows. Review repairs keep rejected
-  mode/tempo and parent-anchor updates atomic; all 21 sync tests pass.
+- Queue SYNC #321/#323/#325: finish phase activation, progressive grids, seams,
+  rate and device-latency acceptance. Evidence: PR descriptions.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
