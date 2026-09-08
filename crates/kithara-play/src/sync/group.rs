@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::num::NonZeroU32;
 
 use kithara_warp::{
@@ -77,11 +80,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Records the parent's committed session anchor; under
     /// [`SyncMode::HostSync`] republishes this group's session grid on it.
     pub fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
-        self.parent_anchor = Some(anchor);
-        if self.mode != SyncMode::HostSync {
-            return Ok(());
+        if self.mode == SyncMode::HostSync {
+            self.publish_session_grid(anchor)?;
         }
-        self.publish_session_grid(anchor)
+        self.parent_anchor = Some(anchor);
+        Ok(())
     }
 
     /// Republishes this group's session grid so it follows the current mode:

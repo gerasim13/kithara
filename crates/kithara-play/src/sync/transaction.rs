@@ -144,17 +144,19 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
             operation,
         )),
         SyncOperation::Sync { intent, .. } => match intent {
-            SyncIntent::Enable => {
-                *slots.mode = SyncMode::HostSync;
-                *slots.tempo = TempoSource::Inherited;
-                state_changed(grid, &mut slots, operation)
-            }
+            SyncIntent::Enable => state_changed(
+                grid,
+                &mut slots,
+                (SyncMode::HostSync, TempoSource::Inherited),
+                operation,
+            ),
             SyncIntent::Disable => match seed {
-                Some(tempo) => {
-                    *slots.mode = SyncMode::LocalSync;
-                    *slots.tempo = TempoSource::Local(tempo);
-                    state_changed(grid, &mut slots, operation)
-                }
+                Some(tempo) => state_changed(
+                    grid,
+                    &mut slots,
+                    (SyncMode::LocalSync, TempoSource::Local(tempo)),
+                    operation,
+                ),
                 None => deferred(
                     grid,
                     &mut slots,
@@ -162,11 +164,12 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
                     MapRegion::point(MapPosition::Session(SessionFrame::new(0))),
                 ),
             },
-            SyncIntent::Free => {
-                *slots.mode = SyncMode::Off;
-                *slots.tempo = TempoSource::Inherited;
-                state_changed(grid, &mut slots, operation)
-            }
+            SyncIntent::Free => state_changed(
+                grid,
+                &mut slots,
+                (SyncMode::Off, TempoSource::Inherited),
+                operation,
+            ),
             _ => preserve_rejected(
                 unavailable_admission(
                     grid.id(),
@@ -208,8 +211,8 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
                 operation,
             )),
             SyncMode::LocalSync => {
-                *slots.tempo = TempoSource::Local(*tempo);
-                state_changed(grid, &mut slots, operation)
+                let state = (SyncMode::LocalSync, TempoSource::Local(*tempo));
+                state_changed(grid, &mut slots, state, operation)
             }
             SyncMode::Off => Err(SyncRejected::new(
                 SyncError::CapabilityUnavailable {
@@ -299,12 +302,14 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
 fn state_changed<G: SyncGroup<NestedGroup = G>>(
     grid: &BeatGridSnapshot,
     slots: &mut GroupSlots<'_, G>,
+    state: (SyncMode, TempoSource),
     operation: SyncOperation<G>,
 ) -> Result<SyncAdmission, SyncRejected<G>> {
     let operation_id = match take_operation(grid.id(), slots.next_operation) {
         Ok(operation_id) => operation_id,
         Err(error) => return Err(SyncRejected::new(error, operation)),
     };
+    (*slots.mode, *slots.tempo) = state;
     *slots.unavailable = None;
     *slots.waiting = None;
     *slots.prepared = None;

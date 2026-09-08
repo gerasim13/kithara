@@ -21,7 +21,8 @@ the change that lands the work, and keep it short.
   `RegionPlan` at the deck tempo and installed in the track's Warp lane; the
   admitted warp map is acknowledged from the host observation loop once the
   presentation frontier passes its activation. Left: the per-block rate
-  input, the RT seam trigger, and the seam rows.
+  input, the RT seam trigger, and the seam rows. Review repairs keep rejected
+  mode/tempo and parent-anchor updates atomic; all 21 sync tests pass.
 
 - Build and test warnings, cleared. The four `Atomic*::fetch_update` sites
   moved to the `compare_exchange_weak` loop it compiles into, keeping every
