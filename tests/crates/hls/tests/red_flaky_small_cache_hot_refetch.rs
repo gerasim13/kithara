@@ -15,6 +15,7 @@ use kithara_integration_tests::{
     flash_pace::virtual_pace,
 };
 use tracing::info;
+use url::Url;
 
 struct Consts;
 impl Consts {
@@ -42,20 +43,10 @@ impl Consts {
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info,suite_stress=info")
 )]
-async fn red_flaky_small_cache_hot_refetch_behind_reader() {
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(Consts::VARIANTS)
-                .segments_per_variant(Consts::SEGMENTS)
-                .segment_duration_secs(Consts::SEGMENT_SECS)
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create the ladder the drain runs over");
-    let url = created.master_url();
-
+async fn red_flaky_small_cache_hot_refetch_behind_reader(
+    #[future(awt)] hot_refetch_hls: (TestServerHelper, Url),
+) {
+    let (_server, url) = hot_refetch_hls;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let store = AssetStore::builder(pools.clone())
@@ -137,4 +128,22 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         drained,
         Consts::MIN_PROGRESS_CHUNKS
     );
+}
+
+#[kithara::fixture]
+async fn hot_refetch_hls() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANTS)
+                .segments_per_variant(Consts::SEGMENTS)
+                .segment_duration_secs(Consts::SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the drain runs over");
+    let url = created.master_url();
+
+    (server, url)
 }

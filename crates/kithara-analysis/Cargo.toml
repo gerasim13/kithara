@@ -37,7 +37,7 @@ fdk-aac = ["kithara-audio/fdk-aac"]
 kithara-audio = { workspace = true, default-features = false }
 kithara-beat = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
@@ -65,6 +65,7 @@ kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, features = ["symphonia"] }
 kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 

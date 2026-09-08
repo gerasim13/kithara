@@ -79,7 +79,7 @@ fn a_slot_cap_rejects_growth_while_global_capacity_remains() {
         OverallBudget(100),
         PoolConfig::builder()
             .max_buffers(32)
-            .max_share(Percent(50))
+            .max_share(Percent::checked(50).expect("50 percent is inside the range"))
             .build(),
         config(32),
     )
@@ -175,8 +175,8 @@ fn invalid_configuration_is_rejected_before_publication() {
         TestPools::region(
             OverallBudget(1024),
             PoolConfig::builder()
-                .max_buffers(32)
-                .max_share(Percent(101))
+                .initial_buffers(9)
+                .max_buffers(8)
                 .build(),
             config(128),
         ),
@@ -308,7 +308,7 @@ fn smaller_idle_buffers_are_reclaimed_at_the_slot_cap() {
         OverallBudget(2 * POOL_BYTES),
         PoolConfig::builder()
             .max_buffers(64)
-            .max_share(Percent(50))
+            .max_share(Percent::checked(50).expect("50 percent is inside the range"))
             .build(),
         config(8),
     )

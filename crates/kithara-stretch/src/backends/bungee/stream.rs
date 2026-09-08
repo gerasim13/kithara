@@ -96,10 +96,8 @@ impl StreamCore {
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::TAU;
-
+    use kithara_test_fixtures::stretch_fixtures::{StretchPcm, stretch_pcm};
     use kithara_test_utils::kithara;
-    use num_traits::ToPrimitive;
 
     use super::*;
     use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, test_pools::pools};
@@ -112,23 +110,11 @@ mod tests {
         const SAMPLE_RATE: u32 = 48_000;
     }
 
-    fn signal(frames: usize, offset: usize) -> Vec<f32> {
-        let sample_rate = Fixture::SAMPLE_RATE
-            .to_f32()
-            .expect("the fixture sample rate fits f32 exactly");
-        (0..frames)
-            .flat_map(|frame| {
-                let position = (offset + frame)
-                    .to_f32()
-                    .expect("the fixture position fits f32 exactly");
-                let phase = position * TAU * 440.0 / sample_rate;
-                let sample = phase.sin() * 0.5;
-                [sample, sample * -0.5]
-            })
-            .collect()
+    fn signal(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
+        pcm.bungee[offset * Fixture::CHANNELS..(offset + frames) * Fixture::CHANNELS].to_vec()
     }
 
-    fn anchored_core() -> StreamCore {
+    fn anchored_core(stretch_pcm: &StretchPcm) -> StreamCore {
         let config = ElasticConfig::builder()
             .pools(pools())
             .sample_rate(Fixture::SAMPLE_RATE)
@@ -141,9 +127,17 @@ mod tests {
             .expect("the anchored fixture core prepares");
         core.prepare_input_capacity(Fixture::CONTEXT_FRAMES * 4)
             .expect("the fixture reserves its complete prime context");
-        let history = signal(Fixture::CONTEXT_FRAMES, 0);
-        let lookahead = signal(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES);
-        let warm_source = signal(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES * 2);
+        let history = signal(stretch_pcm, Fixture::CONTEXT_FRAMES, 0);
+        let lookahead = signal(
+            stretch_pcm,
+            Fixture::CONTEXT_FRAMES,
+            Fixture::CONTEXT_FRAMES,
+        );
+        let warm_source = signal(
+            stretch_pcm,
+            Fixture::CONTEXT_FRAMES,
+            Fixture::CONTEXT_FRAMES * 2,
+        );
         let mut discarded = vec![0.0; Fixture::CONTEXT_FRAMES * Fixture::CHANNELS];
         core.prime(
             &history,
@@ -159,7 +153,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn render_call_does_not_prefetch_a_grain_with_stale_controls() {
+    fn render_call_does_not_prefetch_a_grain_with_stale_controls(stretch_pcm: &'static StretchPcm) {
         const FRAMES: usize = 8192;
 
         let config = ElasticConfig::builder()
@@ -172,7 +166,7 @@ mod tests {
             .expect("the fixture shape is valid");
         let mut core = StreamCore::new(&config, FRAMES).expect("the fixture core prepares");
         let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
-        let source = vec![0.0; FRAMES * config.channels()];
+        let source = stretch_pcm.silence[..FRAMES * config.channels()].to_vec();
         let mut output = vec![0.0; source.len()];
 
         core.render(Some(&source), request, 1.0, Some(&mut output))
@@ -185,7 +179,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn adjacent_unprimed_rate_extremes_do_not_reset_native_continuity() {
+    fn adjacent_unprimed_rate_extremes_do_not_reset_native_continuity(
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FAST_OUTPUT_FRAMES: usize = 2048;
         const FAST_SOURCE_FRAMES: usize = 8192;
         const SLOW_OUTPUT_FRAMES: usize = 8000;
@@ -215,7 +211,7 @@ mod tests {
         core.discard().expect("the latency probe clears");
         let slow = ElasticRequest::new(SLOW_SOURCE_FRAMES, SLOW_OUTPUT_FRAMES)
             .expect("the slow request is valid");
-        let slow_source = signal(SLOW_SOURCE_FRAMES, 0);
+        let slow_source = signal(stretch_pcm, SLOW_SOURCE_FRAMES, 0);
         let mut slow_output = vec![0.0; SLOW_OUTPUT_FRAMES * Fixture::CHANNELS];
         core.render(Some(&slow_source), slow, 1.0, Some(&mut slow_output))
             .expect("the slow request renders");
@@ -223,7 +219,7 @@ mod tests {
 
         let fast = ElasticRequest::new(FAST_SOURCE_FRAMES, FAST_OUTPUT_FRAMES)
             .expect("the fast request is valid");
-        let fast_source = signal(FAST_SOURCE_FRAMES, SLOW_SOURCE_FRAMES);
+        let fast_source = signal(stretch_pcm, FAST_SOURCE_FRAMES, SLOW_SOURCE_FRAMES);
         let mut fast_output = vec![0.0; FAST_OUTPUT_FRAMES * Fixture::CHANNELS];
         core.render(Some(&fast_source), fast, 1.0, Some(&mut fast_output))
             .expect("the adjacent fast request renders");
@@ -234,18 +230,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn adjacent_control_changes_keep_the_original_anchor_and_native_history() {
+    fn adjacent_control_changes_keep_the_original_anchor_and_native_history(
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const QUANTUM: usize = 64;
         const TRANSITIONS: usize = 32;
 
-        let mut core = anchored_core();
+        let mut core = anchored_core(stretch_pcm);
         let mut source_position = Fixture::CONTEXT_FRAMES * 3;
         let mut previous: Option<[f32; Fixture::CHANNELS]> = None;
         for transition in 0..TRANSITIONS {
             let fast = transition.is_multiple_of(2);
             let source_frames = if fast { QUANTUM * 2 } else { QUANTUM };
             let pitch = if fast { 1.5 } else { 1.0 };
-            let source = signal(source_frames, source_position);
+            let source = signal(stretch_pcm, source_frames, source_position);
             let mut output = vec![f32::NAN; QUANTUM * Fixture::CHANNELS];
             core.render(
                 Some(&source),
@@ -280,12 +278,15 @@ mod tests {
     #[kithara::test]
     #[case::analyse(NativeFault::Analyse)]
     #[case::synthesise(NativeFault::Synthesise)]
-    fn native_failure_clears_the_request_and_remains_reusable(#[case] fault: NativeFault) {
+    fn native_failure_clears_the_request_and_remains_reusable(
+        #[case] fault: NativeFault,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const QUANTUM: usize = 64;
 
-        let mut core = anchored_core();
+        let mut core = anchored_core(stretch_pcm);
         core.native.fail_next(fault);
-        let source = signal(QUANTUM, Fixture::CONTEXT_FRAMES * 3);
+        let source = signal(stretch_pcm, QUANTUM, Fixture::CONTEXT_FRAMES * 3);
         let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("unity request");
         let mut output = vec![f32::NAN; QUANTUM * Fixture::CHANNELS];
 
@@ -303,6 +304,7 @@ mod tests {
         assert!(output.iter().all(|sample| sample.is_nan()));
 
         let recovery_source = signal(
+            stretch_pcm,
             Fixture::CONTEXT_FRAMES,
             Fixture::CONTEXT_FRAMES * 3 + QUANTUM,
         );

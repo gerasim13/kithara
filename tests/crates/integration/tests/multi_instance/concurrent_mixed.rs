@@ -18,8 +18,9 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{SignalAsset, integration_fixtures::concurrent_wav};
 use tracing::info;
+use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
@@ -39,13 +40,9 @@ struct InstanceResult {
     total_samples: u64,
 }
 
-fn generate_wav_data() -> Arc<Vec<u8>> {
-    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
-}
-
 async fn spawn_file_instance(
     id: usize,
-    url: url::Url,
+    url: Url,
     temp_path: &std::path::Path,
 ) -> JoinHandle<InstanceResult> {
     let pools = pools();
@@ -131,9 +128,14 @@ async fn spawn_hls_instance(
     (server, handle)
 }
 
-async fn run_mixed(file_count: usize, hls_count: usize) {
-    let wav_data = generate_wav_data();
-    let file_server = TestServerHelper::new().await;
+async fn run_mixed(
+    source: (TestServerHelper, Url),
+    concurrent_wav: &'static [u8],
+    file_count: usize,
+    hls_count: usize,
+) {
+    let wav_data = Arc::new(concurrent_wav.to_vec());
+    let (_file_server, file_url) = source;
 
     let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
@@ -141,12 +143,7 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
 
     for i in 0..file_count {
         let temp = TestTempDir::new();
-        let h = spawn_file_instance(
-            i,
-            file_server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
-            temp.path(),
-        )
-        .await;
+        let h = spawn_file_instance(i, file_url.clone(), temp.path()).await;
         temps.push(temp);
         handles.push(h);
     }
@@ -187,6 +184,18 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
 )]
 #[case::two_file_two_hls(2, 2)]
 #[case::four_file_four_hls(4, 4)]
-async fn concurrent_mixed_instances(#[case] file_count: usize, #[case] hls_count: usize) {
-    run_mixed(file_count, hls_count).await;
+async fn concurrent_mixed_instances(
+    concurrent_wav: &'static [u8],
+    #[future(awt)] file_source: (TestServerHelper, Url),
+    #[case] file_count: usize,
+    #[case] hls_count: usize,
+) {
+    run_mixed(file_source, concurrent_wav, file_count, hls_count).await;
+}
+
+#[kithara::fixture]
+async fn file_source() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
+    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
+    (server, url)
 }

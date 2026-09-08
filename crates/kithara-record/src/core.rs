@@ -186,6 +186,7 @@ mod tests {
     };
 
     use kithara_encode::EncodeConfig;
+    use kithara_test_fixtures::unit_fixtures::trim_silence;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -212,7 +213,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn frame_count_overflow_aborts_transaction() {
+    fn frame_count_overflow_aborts_transaction(trim_silence: Vec<f32>) {
         let aborted = Arc::new(AtomicBool::new(false));
         let config = RecordingConfig::builder()
             .encode(
@@ -233,12 +234,12 @@ mod tests {
         recording.frames = u64::MAX;
 
         assert!(matches!(
-            recording.push(&[0.0, 0.0]),
+            recording.push(&trim_silence[..2]),
             Err(RecordingError::FrameCountOverflow)
         ));
         assert!(aborted.load(Ordering::Acquire));
         assert!(matches!(
-            recording.push(&[0.0, 0.0]),
+            recording.push(&trim_silence[..2]),
             Err(RecordingError::Inactive)
         ));
     }

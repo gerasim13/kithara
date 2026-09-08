@@ -16,13 +16,15 @@ use crate::gapless_common::{
 };
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn gapless_encoding_variants_yield_matching_decoder_metadata() {
-    let server = TestServerHelper::new().await;
+async fn gapless_encoding_variants_yield_matching_decoder_metadata(
+    #[future(awt)] init_segments: (TestServerHelper, [Vec<u8>; 4]),
+) {
+    let (_server, [edts, itunsmpb, both, none]) = init_segments;
 
-    let edts = probe_init_segment(&server, GaplessEncoding::Edts).await;
-    let itunsmpb = probe_init_segment(&server, GaplessEncoding::ItunSmpb).await;
-    let both = probe_init_segment(&server, GaplessEncoding::Both).await;
-    let none = probe_init_segment(&server, GaplessEncoding::None).await;
+    let edts = probe_init_segment(edts);
+    let itunsmpb = probe_init_segment(itunsmpb);
+    let both = probe_init_segment(both);
+    let none = probe_init_segment(none);
 
     let edts_info = edts.expect("Edts fixture must yield gapless info");
     let itunsmpb_info = itunsmpb.expect("ItunSmpb fixture must yield gapless info");
@@ -54,11 +56,7 @@ async fn gapless_encoding_variants_yield_matching_decoder_metadata() {
     );
 }
 
-async fn probe_init_segment(
-    server: &TestServerHelper,
-    encoding: GaplessEncoding,
-) -> Option<kithara::decode::GaplessInfo> {
-    let init_bytes = build_init_segment(server, encoding).await;
+fn probe_init_segment(init_bytes: Vec<u8>) -> Option<kithara::decode::GaplessInfo> {
     probe_mp4_gapless(&mut Cursor::new(init_bytes), &pools()).expect("probe init segment")
 }
 
@@ -94,4 +92,16 @@ async fn build_init_segment(server: &TestServerHelper, encoding: GaplessEncoding
         .await
         .expect("read init segment bytes")
         .to_vec()
+}
+
+#[kithara::fixture]
+async fn init_segments() -> (TestServerHelper, [Vec<u8>; 4]) {
+    let server = TestServerHelper::new().await;
+    let segments = [
+        build_init_segment(&server, GaplessEncoding::Edts).await,
+        build_init_segment(&server, GaplessEncoding::ItunSmpb).await,
+        build_init_segment(&server, GaplessEncoding::Both).await,
+        build_init_segment(&server, GaplessEncoding::None).await,
+    ];
+    (server, segments)
 }

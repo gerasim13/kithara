@@ -1,6 +1,6 @@
 use bon::Builder;
 use kithara_abr::{AbrSettings, AbrSettingsPatch};
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 

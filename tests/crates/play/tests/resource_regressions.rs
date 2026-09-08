@@ -31,11 +31,7 @@ use kithara_integration_tests::{
     offline::resource_from_reader,
     temp_dir,
 };
-use kithara_test_fixtures::{
-    SignalAsset,
-    assets::signal_mp3_track_sine440_187s,
-    signal::{self, Wave},
-};
+use kithara_test_fixtures::{SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments};
 use tracing::info;
 
 use crate::{
@@ -52,7 +48,6 @@ impl Consts {
     const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
     const HLS_SEGMENT_COUNT: usize = 3;
     const HLS_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
-    const HLS_TOTAL_BYTES: usize = Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE;
     const HLS_SAMPLE_RATE: f64 = Shared::SAMPLE_RATE as f64;
     const HLS_CHANNELS: f64 = Shared::CHANNELS as f64;
     /// Expected duration of the generated `signal_mp3_track_sine440_187s` clip.
@@ -90,11 +85,12 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
 }
 
 /// (ok mp3 url with a `.mp3` extension, unavailable 503 url) on the shared server.
-async fn mp3_endpoints() -> (url::Url, url::Url) {
+#[kithara::fixture]
+async fn mp3_endpoints(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url, url::Url) {
     let helper = TestServerHelper::new().await;
     let ok = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            bytes: Arc::new(tone_mp3.to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -103,7 +99,7 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
         content: Content::Status(503),
         delivery: Delivery::Normal,
     });
-    (ok.child_url("ok.mp3"), gone.url())
+    (helper, ok.child_url("ok.mp3"), gone.url())
 }
 
 fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: &Pools) -> AssetStore<TestPools> {
@@ -255,16 +251,12 @@ fn read_hls_stream_bytes(
         .unwrap_or_else(|err| panic!("HLS stream should read for {}: {err}", url))
 }
 
-async fn open_audio_hls_server() -> HlsTestServer {
+#[kithara::fixture]
+async fn open_audio_hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
     let segment_duration =
         Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(signal::wav_of_size(
-            44_100u32,
-            2u16,
-            Consts::HLS_TOTAL_BYTES,
-            Wave::Sawtooth,
-        ))),
+        custom_data: Some(Arc::new(saw_segments.to_vec())),
         segment_duration_secs: segment_duration,
         segment_size: Consts::HLS_SEGMENT_SIZE,
         segments_per_variant: Consts::HLS_SEGMENT_COUNT,
@@ -385,13 +377,14 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn player_resource_repeated_unavailable_mp3_does_not_panic(
+    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (ok_url, bad_url) = mp3_endpoints().await;
+    let (_server, ok_url, bad_url) = mp3_endpoints;
     let region = pools();
     let store = asset_store(&temp_dir, true, &region);
 
@@ -455,6 +448,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     case::ephemeral_android(true, DecoderBackend::Android)
 )]
 async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
+    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
@@ -462,7 +456,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (ok_url, _) = mp3_endpoints().await;
+    let (_server, ok_url, _) = mp3_endpoints;
     let region = pools();
     let store = asset_store(&temp_dir, ephemeral, &region);
 
@@ -517,6 +511,8 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     case::ephemeral_android(true, DecoderBackend::Android)
 )]
 async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
+    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
@@ -524,8 +520,8 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let hls_server = open_audio_hls_server().await;
-    let (ok_url, bad_url) = mp3_endpoints().await;
+    let hls_server = open_audio_hls_server;
+    let (_server, ok_url, bad_url) = mp3_endpoints;
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -593,14 +589,16 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
+    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let hls_server = open_audio_hls_server().await;
-    let (ok_url, _) = mp3_endpoints().await;
+    let hls_server = open_audio_hls_server;
+    let (_server, ok_url, _) = mp3_endpoints;
     let region = pools();
     let worker = play_worker(&region);
     let store = asset_store(&temp_dir, true, &region);
@@ -704,14 +702,14 @@ enum WarmupTeardown {
     case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)
 )]
 async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
+    #[future(awt)] audio_hls_pair: (HlsTestServer, HlsTestServer),
     #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server_a = open_audio_hls_server().await;
-    let server_b = open_audio_hls_server().await;
+    let (server_a, server_b) = audio_hls_pair;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
     let region_a = pools();
@@ -785,9 +783,10 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     timeout(Duration::from_secs(10)),
     hang_timeout_secs(5)
 )]
-async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
-    let server_a = open_audio_hls_server().await;
-    let server_b = open_audio_hls_server().await;
+async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
+    #[future(awt)] audio_hls_pair: (HlsTestServer, HlsTestServer),
+) {
+    let (server_a, server_b) = audio_hls_pair;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
     let pools_a = pools();
@@ -805,27 +804,28 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
 }
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
-#[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia)]
+#[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple)
+    case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple, aac_source().await)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::aac_android(AudioCodec::AacLc, DecoderBackend::Android)
+    case::aac_android(AudioCodec::AacLc, DecoderBackend::Android, aac_source().await)
 )]
-#[case::flac_symphonia(AudioCodec::Flac, DecoderBackend::Symphonia)]
+#[case::flac_symphonia(AudioCodec::Flac, DecoderBackend::Symphonia, flac_source().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple)
+    case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple, flac_source().await)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::flac_android(AudioCodec::Flac, DecoderBackend::Android)
+    case::flac_android(AudioCodec::Flac, DecoderBackend::Android, flac_source().await)
 )]
 async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] codec: AudioCodec,
     #[case] backend: DecoderBackend,
+    #[case] packaged_source: (TestServerHelper, url::Url),
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -833,7 +833,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
 
     use kithara_integration_tests::offline::OfflinePlayer;
 
-    let (_server, url) = create_packaged_single_variant_fixture(codec).await;
+    let (_server, url) = packaged_source;
     let region = pools();
     let store = asset_store(&temp_dir, false, &region);
 
@@ -967,6 +967,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     case::ephemeral_android(true, DecoderBackend::Android)
 )]
 async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
+    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
@@ -974,8 +976,8 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let hls_server = open_audio_hls_server().await;
-    let (ok_url, _) = mp3_endpoints().await;
+    let hls_server = open_audio_hls_server;
+    let (_server, ok_url, _) = mp3_endpoints;
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -1053,14 +1055,17 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn stress_offline_crossfade_no_gaps() {
+async fn stress_offline_crossfade_no_gaps(
+    #[future(awt)] open_audio_hls_server: HlsTestServer,
+    tone_mp3: &'static [u8],
+) {
     use kithara_integration_tests::offline::OfflinePlayer;
 
     const BLOCK: usize = 512;
     const SR: u32 = 44100;
     let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
-    let hls_server = open_audio_hls_server().await;
+    let hls_server = open_audio_hls_server;
     let region = pools();
     let store = asset_store(&temp_dir(), true, &region);
     let hls_url = hls_server.url("/master.m3u8");
@@ -1076,7 +1081,7 @@ async fn stress_offline_crossfade_no_gaps() {
     .await;
 
     let media_dir = temp_dir();
-    let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
+    let local_mp3 = media_dir.write("track.mp3", tone_mp3);
 
     let make_mp3 = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let p = local_mp3.clone();
@@ -1244,44 +1249,33 @@ async fn stress_offline_crossfade_no_gaps() {
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
-#[case::with_extension_symphonia(Some("track.mp3"), DecoderBackend::Symphonia)]
+#[case::with_extension_symphonia(mp3_extension().await, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::with_extension_apple(Some("track.mp3"), DecoderBackend::Apple)
+    case::with_extension_apple(mp3_extension().await, DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::with_extension_android(Some("track.mp3"), DecoderBackend::Android)
+    case::with_extension_android(mp3_extension().await, DecoderBackend::Android)
 )]
-#[case::no_extension_symphonia(None, DecoderBackend::Symphonia)]
+#[case::no_extension_symphonia(mp3_no_extension().await, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::no_extension_apple(None, DecoderBackend::Apple)
+    case::no_extension_apple(mp3_no_extension().await, DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::no_extension_android(None, DecoderBackend::Android)
+    case::no_extension_android(mp3_no_extension().await, DecoderBackend::Android)
 )]
 async fn resource_mp3_no_hint_decodes_with_duration(
-    #[case] suffix: Option<&str>,
+    #[case] mp3_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let handle = helper.register_behavior(FixtureBehavior {
-        content: Content::StaticBytes {
-            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
-            content_type: Some("audio/mpeg"),
-        },
-        delivery: Delivery::Range,
-    });
-    let url = match suffix {
-        Some(s) => handle.child_url(s),
-        None => handle.url(),
-    };
+    let (_helper, url) = mp3_source;
     let region = pools();
     let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
@@ -1355,45 +1349,30 @@ enum LocalKind {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
-#[case::mp3_symphonia(LocalKind::Mp3, DecoderBackend::Symphonia)]
+#[case::mp3_symphonia(local_mp3().await, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(LocalKind::Mp3, DecoderBackend::Apple)
+    case::mp3_apple(local_mp3().await, DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_android(LocalKind::Mp3, DecoderBackend::Android)
+    case::mp3_android(local_mp3().await, DecoderBackend::Android)
 )]
-#[case::hls_aac_symphonia(LocalKind::HlsAac, DecoderBackend::Symphonia)]
+#[case::hls_aac_symphonia(local_hls().await, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_aac_apple(LocalKind::HlsAac, DecoderBackend::Apple)
+    case::hls_aac_apple(local_hls().await, DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::hls_aac_android(LocalKind::HlsAac, DecoderBackend::Android)
+    case::hls_aac_android(local_hls().await, DecoderBackend::Android)
 )]
 async fn local_resource_decodes_with_duration(
-    #[case] kind: LocalKind,
+    #[case] local_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    let helper = TestServerHelper::new().await;
-    let url = match kind {
-        LocalKind::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
-        LocalKind::HlsAac => {
-            let builder = HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(16)
-                .segment_duration_secs(4.0)
-                .packaged_audio_aac_lc(44_100, 2);
-            helper
-                .create_hls(builder)
-                .await
-                .expect("create local HLS fixture")
-                .master_url()
-        }
-    };
+    let (_helper, url) = local_source;
     let region = pools();
     let store = asset_store(&temp_dir, true, &region);
     let config: ResourceConfig<TestPools> =
@@ -1451,4 +1430,78 @@ async fn local_resource_decodes_with_duration(
         "{url}: must decode at least 2s, got {:?}",
         resource.position()
     );
+}
+
+#[kithara::fixture]
+async fn audio_hls_pair() -> (HlsTestServer, HlsTestServer) {
+    (open_audio_hls_server().await, open_audio_hls_server().await)
+}
+
+#[kithara::fixture]
+async fn aac_source() -> (TestServerHelper, url::Url) {
+    create_packaged_single_variant_fixture(AudioCodec::AacLc).await
+}
+
+#[kithara::fixture]
+async fn flac_source() -> (TestServerHelper, url::Url) {
+    create_packaged_single_variant_fixture(AudioCodec::Flac).await
+}
+
+async fn registered_mp3(
+    tone_mp3: &'static [u8],
+    suffix: Option<&str>,
+) -> (TestServerHelper, url::Url) {
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(tone_mp3.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let url = match suffix {
+        Some(s) => handle.child_url(s),
+        None => handle.url(),
+    };
+    (helper, url)
+}
+
+#[kithara::fixture]
+async fn mp3_extension(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url) {
+    registered_mp3(tone_mp3, Some("track.mp3")).await
+}
+
+#[kithara::fixture]
+async fn mp3_no_extension(tone_mp3: &'static [u8]) -> (TestServerHelper, url::Url) {
+    registered_mp3(tone_mp3, None).await
+}
+
+async fn local_source(kind: LocalKind) -> (TestServerHelper, url::Url) {
+    let helper = TestServerHelper::new().await;
+    let url = match kind {
+        LocalKind::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        LocalKind::HlsAac => {
+            let builder = HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2);
+            helper
+                .create_hls(builder)
+                .await
+                .expect("create local HLS fixture")
+                .master_url()
+        }
+    };
+    (helper, url)
+}
+
+#[kithara::fixture]
+async fn local_mp3() -> (TestServerHelper, url::Url) {
+    local_source(LocalKind::Mp3).await
+}
+
+#[kithara::fixture]
+async fn local_hls() -> (TestServerHelper, url::Url) {
+    local_source(LocalKind::HlsAac).await
 }

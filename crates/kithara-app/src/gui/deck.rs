@@ -152,7 +152,7 @@ fn eq_band_changed(deck: &DeckUi, band: usize, db: GainDb) {
         return;
     }
     if let Err(e) = deck.controller.queue().set_eq_gain(band, f32::from(db)) {
-        debug!("set EQ gain band={band} db={db:.1} deferred: {e:?}");
+        debug!(band, db = f32::from(db), error = ?e, "set EQ gain deferred");
     }
 }
 

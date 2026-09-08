@@ -485,19 +485,15 @@ fn tempo_rejects_values_outside_the_representable_range() {
         f64::NEG_INFINITY,
         f64::MAX,
         f64::MIN_POSITIVE,
-        Tempo::MIN_BEATS_PER_MINUTE - 0.001,
-        Tempo::MAX_BEATS_PER_MINUTE + 0.001,
+        f64::from(Tempo::MIN) - 0.001,
+        f64::from(Tempo::MAX) + 0.001,
     ] {
         assert!(
             Tempo::new(invalid).is_err(),
             "tempo {invalid} must be rejected"
         );
     }
-    for valid in [
-        Tempo::MIN_BEATS_PER_MINUTE,
-        120.0,
-        Tempo::MAX_BEATS_PER_MINUTE,
-    ] {
+    for valid in [f64::from(Tempo::MIN), 120.0, f64::from(Tempo::MAX)] {
         assert!(Tempo::new(valid).is_ok(), "tempo {valid} must be accepted");
     }
 }

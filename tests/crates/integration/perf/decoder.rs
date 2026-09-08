@@ -9,14 +9,13 @@ use kithara::{
     signal::AudioChunk,
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::integration_fixtures::{audio_wav_44100, perf_wav};
 
 fn decoder_config() -> DecoderConfig<NoResamplerBackend, TestPools> {
     DecoderConfig::builder().pools(pools()).build()
 }
 
-fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
-    let wav_data = signal::wav(44100, 2, frames, signal::TONE);
+fn create_wav_decoder(wav_data: &'static [u8]) -> Box<dyn Decoder> {
     let cursor = Cursor::new(wav_data);
     DecoderFactory::create_with_probe(cursor, Some("wav"), decoder_config()).unwrap()
 }
@@ -54,16 +53,21 @@ enum PerfScenario {
     Throughput,
 }
 
-#[kithara::test]
+#[kithara::test(flash(false))]
 #[case("decoder_wav", PerfScenario::DecodeLoop)]
 #[case("decoder_probe", PerfScenario::ProbeLatency)]
 #[case("decoder_f32_conversion", PerfScenario::F32Conversion)]
 #[case("decoder_throughput", PerfScenario::Throughput)]
-fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
+fn perf_decoder_scenarios(
+    audio_wav_44100: &'static [u8],
+    perf_wav: &'static [u8],
+    #[case] label: &'static str,
+    #[case] scenario: PerfScenario,
+) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::DecodeLoop => {
-            let mut decoder = create_wav_decoder(44100);
+            let mut decoder = create_wav_decoder(audio_wav_44100);
             let mut chunk_count = 0;
             while decoder_next_chunk_measured(&mut decoder).is_some() {
                 chunk_count += 1;
@@ -75,9 +79,9 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             println!("{:=<60}\n", "");
         }
         PerfScenario::ProbeLatency => {
-            let wav_data = signal::wav(44100, 2, 44100, signal::TONE);
+            let wav_data = audio_wav_44100;
             for _ in 0..10 {
-                decoder_probe_single(&wav_data);
+                decoder_probe_single(wav_data);
             }
 
             println!("\n{:=<60}", "");
@@ -86,7 +90,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             println!("{:=<60}\n", "");
         }
         PerfScenario::F32Conversion => {
-            let mut decoder = create_wav_decoder(44100);
+            let mut decoder = create_wav_decoder(audio_wav_44100);
             let mut chunk_count = 0;
             while decoder_chunk_process(&mut decoder).is_some() {
                 chunk_count += 1;
@@ -98,7 +102,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             println!("{:=<60}\n", "");
         }
         PerfScenario::Throughput => {
-            let mut decoder = create_wav_decoder(44100 * 5);
+            let mut decoder = create_wav_decoder(perf_wav);
 
             let start = Instant::now();
             let mut total_samples = 0;

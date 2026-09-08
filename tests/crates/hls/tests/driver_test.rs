@@ -21,6 +21,7 @@ use kithara_integration_tests::{
     hls_server::{
         TestServer,
         abr::{AbrTestServer, master_playlist},
+        test_server,
     },
     rt_cancel, temp_dir,
 };
@@ -36,8 +37,12 @@ use tracing::info;
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_cancel: CancelToken) {
-    let server = TestServer::new().await;
+async fn test_driver_seek_after_playlist_finished(
+    #[future(awt)] test_server: TestServer,
+    temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+) {
+    let server = test_server;
     let url = server.url("/master.m3u8");
 
     let pools = pools();

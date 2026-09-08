@@ -4,17 +4,19 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::bufpool_ext::pools;
-use kithara_test_fixtures::signal::{Pcm, Wave};
+use kithara_test_fixtures::{
+    integration_fixtures::{encoder_saw_aac, encoder_saw_he},
+    signal::Pcm,
+};
 
 #[kithara::test]
-fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
+fn encode_packaged_aac_happy_path_emits_monotonic_access_units(encoder_saw_aac: Pcm) {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
 
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
         .expect("BUG: AacLc must be supported by the packaged encoder");
-    let total_frames = 4 * frame_samples;
-    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, total_frames, Wave::Sawtooth);
+    let pcm = encoder_saw_aac;
     let media_info = MediaInfo::builder()
         .codec(AudioCodec::AacLc)
         .container(ContainerFormat::Fmp4)
@@ -72,16 +74,14 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
 }
 
 #[kithara::test]
-#[case::he(AudioCodec::AacHe, 64_000)]
-#[case::lc(AudioCodec::AacLc, 128_000)]
-fn encode_packaged_aac_reuses_injected_pools(#[case] codec: AudioCodec, #[case] bit_rate: u64) {
+#[case::he(AudioCodec::AacHe, 64_000, encoder_saw_he())]
+#[case::lc(AudioCodec::AacLc, 128_000, encoder_saw_aac())]
+fn encode_packaged_aac_reuses_injected_pools(
+    #[case] codec: AudioCodec,
+    #[case] bit_rate: u64,
+    #[case] pcm: Pcm,
+) {
     const SAMPLE_RATE: u32 = 48_000;
-    const CHANNELS: u16 = 2;
-
-    let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
-        panic!("BUG: {codec:?} must be supported by the packaged encoder: {error}")
-    });
-    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * frame_samples, Wave::Sawtooth);
     let pools = pools();
     let encode = || {
         EncoderFactory::encode_packaged(

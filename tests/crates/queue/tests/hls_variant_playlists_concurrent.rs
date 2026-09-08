@@ -228,11 +228,13 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBackend) {
+async fn variant_media_playlists_load_concurrently(
+    #[future(awt)] prepared_hls: (TestServerHelper, Url),
+    #[case] decoder: DecoderBackend,
+) {
     let recorder = probe_capture::install();
 
-    let helper = TestServerHelper::new().await;
-    let url = build_hls(&helper).await;
+    let (_server, url) = prepared_hls;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
@@ -295,4 +297,11 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
         format_variant_request_ids(&variant_request_ids),
     );
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn prepared_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_hls(&helper).await;
+    (helper, url)
 }

@@ -24,7 +24,7 @@ use kithara::{
     resampler::{ResamplerOptions, ResamplerQuality},
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
@@ -51,9 +51,13 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
 #[kithara::test]
 #[case::without_hint(None, false)]
 #[case::mp3_hint(Some("mp3"), true)]
-fn create_with_probe_uses_hint(#[case] hint: Option<&str>, #[case] should_succeed: bool) {
+fn create_with_probe_uses_hint(
+    #[case] hint: Option<&str>,
+    #[case] should_succeed: bool,
+    tone_mp3: &'static [u8],
+) {
     let result = DecoderFactory::create_with_probe(
-        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+        Cursor::new(tone_mp3.to_vec()),
         hint,
         TestDecoderConfig::builder().pools(pools()).build(),
     );
@@ -67,12 +71,12 @@ fn create_with_probe_uses_hint(#[case] hint: Option<&str>, #[case] should_succee
 }
 
 #[kithara::test]
-fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
+fn create_from_media_info_surfaces_error_without_native_probe_fallback(tone_mp3: &'static [u8]) {
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::AacLc))
         .maybe_container(Some(ContainerFormat::Fmp4))
         .build();
-    let source = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
+    let source = Cursor::new(tone_mp3.to_vec());
     let result = DecoderFactory::create_from_media_info(
         source,
         &media_info,
@@ -90,6 +94,7 @@ fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
     any(target_os = "macos", target_os = "ios")
 ))]
 fn apple_mp3_decoder(
+    tone_mp3: &[u8],
     media_info: &MediaInfo,
     resampler: Option<DecoderResamplerConfig<NoResamplerBackend>>,
 ) -> DecodeResult<Box<dyn Decoder>> {
@@ -98,11 +103,7 @@ fn apple_mp3_decoder(
         .backend(DecoderBackend::Apple)
         .maybe_resampler(resampler)
         .build();
-    DecoderFactory::create_from_media_info(
-        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
-        media_info,
-        config,
-    )
+    DecoderFactory::create_from_media_info(Cursor::new(tone_mp3.to_vec()), media_info, config)
 }
 
 /// With the SRC fused into the Apple codec there is no external resampler
@@ -114,12 +115,12 @@ fn apple_mp3_decoder(
     any(target_os = "macos", target_os = "ios")
 ))]
 #[kithara::test]
-fn apple_fused_src_decodes_at_the_requested_host_rate() {
+fn apple_fused_src_decodes_at_the_requested_host_rate(tone_mp3: &'static [u8]) {
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Mp3))
         .maybe_container(Some(ContainerFormat::MpegAudio))
         .build();
-    let source_rate = apple_mp3_decoder(&media_info, None)
+    let source_rate = apple_mp3_decoder(tone_mp3, &media_info, None)
         .expect("BUG: the Apple backend must open the MP3 fixture")
         .spec()
         .sample_rate;
@@ -136,7 +137,7 @@ fn apple_fused_src_decodes_at_the_requested_host_rate() {
             .build(),
     );
 
-    match apple_mp3_decoder(&media_info, resampler) {
+    match apple_mp3_decoder(tone_mp3, &media_info, resampler) {
         Ok(decoder) => assert_eq!(
             decoder.spec().sample_rate,
             target_rate,

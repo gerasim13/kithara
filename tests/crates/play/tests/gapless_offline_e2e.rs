@@ -27,7 +27,7 @@ use kithara::{
     play::PlaybackResamplerBackend,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
@@ -37,7 +37,10 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_test_fixtures::signal::goertzel_magnitude;
+use kithara_test_fixtures::{
+    analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
+    signal::goertzel_magnitude,
+};
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -55,8 +58,6 @@ const FUSED_FIXTURE_SOURCE_RATE: u32 = 44_100;
 const FUSED_FIXTURE_DEVICE_RATE: u32 = 48_000;
 const FUSED_FIXTURE_SOURCE_FRAMES: u64 = 44_100;
 const FUSED_FIXTURE_IDEAL_DEVICE_FRAMES: usize = 48_000;
-const FUSED_FIXTURE_SEAM_OMEGA: f64 = 0.23925;
-const FUSED_FIXTURE_SEAM_PHASE: f64 = -1.365_523_678_408_751_2;
 const FUSED_FIXTURE_MASTER_LEVEL: f32 = 0.32;
 #[cfg(all(
     feature = "apple-fused-src",
@@ -107,8 +108,10 @@ fn expected_total_decoded_frames() -> usize {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn single_track_silence_trim_strips_leading_priming(
+    temp_dir: TestTempDir,
+    #[future(awt)] primed: (TestServerHelper, CreatedHls),
+) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -119,15 +122,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     )
     .await;
 
-    let resource = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        0,
-    )
-    .await;
+    let resource = create_resource(&harness, &primed.1, temp_dir.path()).await;
 
     let [single] = load_tagged_queue(&harness, [resource]).await;
 
@@ -168,8 +163,11 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
+    temp_dir: TestTempDir,
+    #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
+    #[future(awt)] trimmed_next: (TestServerHelper, CreatedHls),
+) {
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -181,24 +179,8 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     )
     .await;
 
-    let first = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-    )
-    .await;
-    let second = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        u64::try_from(visible).expect("visible frames fit u64"),
-    )
-    .await;
+    let first = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
+    let second = create_resource(&harness, &trimmed_next.1, temp_dir.path()).await;
 
     let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -252,8 +234,11 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn two_tracks_gapless_stitch_continuity_metric(
+    temp_dir: TestTempDir,
+    #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
+    #[future(awt)] trimmed_stitch: (TestServerHelper, CreatedHls),
+) {
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -265,24 +250,8 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     )
     .await;
 
-    let first = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-    )
-    .await;
-    let second = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        u64::try_from(stitch_frame).expect("stitch frame fits u64"),
-    )
-    .await;
+    let first = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
+    let second = create_resource(&harness, &trimmed_stitch.1, temp_dir.path()).await;
 
     let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -315,9 +284,14 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
-    let compensated = render_synthetic_fused_deficit_seam(true).await;
-    let uncompensated = render_synthetic_fused_deficit_seam(false).await;
+async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
+    fused_seam: Vec<f32>,
+    fused_seam_stereo: Vec<f32>,
+) {
+    let compensated =
+        render_synthetic_fused_deficit_seam(true, &fused_seam, &fused_seam_stereo).await;
+    let uncompensated =
+        render_synthetic_fused_deficit_seam(false, &fused_seam, &fused_seam_stereo).await;
 
     let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
     let compensated_db = seam_step_db(&compensated.left, stitch_frame);
@@ -353,8 +327,12 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
     any(target_os = "macos", target_os = "ios")
 ))]
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
+    temp_dir: TestTempDir,
+    #[future(awt)] apple_probe: (TestServerHelper, CreatedHls),
+    #[future(awt)] apple_first: (TestServerHelper, CreatedHls),
+    #[future(awt)] apple_next: (TestServerHelper, CreatedHls),
+) {
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
     let floor_frames = usize::try_from(floor_scaled_frames(
         source_stitch_frame,
@@ -383,15 +361,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
-    let probe = create_apple_fused_resource(
-        probe_harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        0,
-    )
-    .await;
+    let probe = create_apple_fused_resource(&probe_harness, &apple_probe.1, temp_dir.path()).await;
     let probe = drain_resource_to_eof(probe).await;
     assert!(
         (floor_frames..=ceil_frames).contains(&probe.output_frames),
@@ -400,8 +370,13 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     );
     probe_harness.close().await;
 
-    let pending_decision =
-        render_apple_fused_deficit_seam(&server, temp_dir.path(), probe.output_frames).await;
+    let pending_decision = render_apple_fused_deficit_seam(
+        &apple_first.1,
+        &apple_next.1,
+        temp_dir.path(),
+        probe.output_frames,
+    )
+    .await;
 
     println!(
         "APPLE_FUSED_TAIL_SEAM measured_frames={} rounds_to={floor_frames}..={ceil_frames} \
@@ -430,11 +405,11 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
     any(target_os = "macos", target_os = "ios")
 ))]
 async fn render_apple_fused_deficit_seam(
-    server: &TestServerHelper,
+    first_source: &CreatedHls,
+    second_source: &CreatedHls,
     cache_dir: &std::path::Path,
     stitch_frame: usize,
 ) -> AppleFusedSeamRender {
-    let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -445,24 +420,8 @@ async fn render_apple_fused_deficit_seam(
     )
     .await;
 
-    let first = create_apple_fused_resource(
-        harness,
-        server,
-        cache_dir,
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        0,
-    )
-    .await;
-    let second = create_apple_fused_resource(
-        harness,
-        server,
-        cache_dir,
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        source_stitch_frame,
-    )
-    .await;
+    let first = create_apple_fused_resource(&harness, first_source, cache_dir).await;
+    let second = create_apple_fused_resource(&harness, second_source, cache_dir).await;
 
     let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -506,8 +465,10 @@ async fn render_apple_fused_deficit_seam(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn disabled_gapless_mode_keeps_full_decoded_length(
+    temp_dir: TestTempDir,
+    #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
+) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -518,15 +479,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     )
     .await;
 
-    let resource = create_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-    )
-    .await;
+    let resource = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
 
     let [only] = load_tagged_queue(&harness, [resource]).await;
 
@@ -556,8 +509,8 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_metadata(
     temp_dir: TestTempDir,
+    #[future(awt)] untagged_primed: (TestServerHelper, CreatedHls),
 ) {
-    let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -568,16 +521,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     )
     .await;
 
-    let resource = create_resource_with_encoding(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        0,
-        GaplessEncoding::None,
-    )
-    .await;
+    let resource = create_resource(&harness, &untagged_primed.1, temp_dir.path()).await;
 
     let [only] = load_tagged_queue(&harness, [resource]).await;
 
@@ -596,8 +540,9 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     temp_dir: TestTempDir,
+    #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
+    #[future(awt)] untagged_trimmed_next: (TestServerHelper, CreatedHls),
 ) {
-    let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -608,28 +553,8 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     )
     .await;
 
-    let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
-
-    let first = create_resource_with_encoding(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-        GaplessEncoding::None,
-    )
-    .await;
-    let second = create_resource_with_encoding(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        u64::try_from(visible).expect("visible frames fit u64"),
-        GaplessEncoding::None,
-    )
-    .await;
+    let first = create_resource(&harness, &untagged_trimmed.1, temp_dir.path()).await;
+    let second = create_resource(&harness, &untagged_trimmed_next.1, temp_dir.path()).await;
 
     let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -689,8 +614,10 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
+    temp_dir: TestTempDir,
+    #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
+) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -701,16 +628,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     )
     .await;
 
-    let resource = create_resource_with_encoding(
-        &harness,
-        &server,
-        temp_dir.path(),
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-        GaplessEncoding::None,
-    )
-    .await;
+    let resource = create_resource(&harness, &untagged_trimmed.1, temp_dir.path()).await;
     let [only] = load_tagged_queue(&harness, [resource]).await;
 
     let (rendered, events) = render_until_item_end(&harness, only).await;
@@ -754,39 +672,13 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     harness.close().await;
 }
 
-async fn create_resource(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &std::path::Path,
-    encoder_delay: Option<u32>,
-    trailing_delay: Option<u32>,
-    start_frame: u64,
-) -> Resource {
-    create_resource_with_encoding(
-        harness,
-        server,
-        cache_dir,
-        encoder_delay,
-        trailing_delay,
-        start_frame,
-        GaplessEncoding::default(),
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixture builder: each parameter pins one HLS-fixture knob"
-)]
-async fn create_resource_with_encoding(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &std::path::Path,
+async fn gapless_source(
     encoder_delay: Option<u32>,
     trailing_delay: Option<u32>,
     start_frame: u64,
     gapless_encoding: GaplessEncoding,
-) -> Resource {
+) -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -812,6 +704,14 @@ async fn create_resource_with_encoding(
         .await
         .expect("create gapless e2e HLS fixture");
 
+    (server, created)
+}
+
+async fn create_resource(
+    harness: &OfflinePlayerHarness,
+    created: &CreatedHls,
+    cache_dir: &std::path::Path,
+) -> Resource {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
@@ -833,43 +733,11 @@ async fn create_resource_with_encoding(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixture builder: each parameter pins one HLS-fixture knob"
-)]
 async fn create_apple_fused_resource(
     harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
+    created: &CreatedHls,
     cache_dir: &std::path::Path,
-    encoder_delay: Option<u32>,
-    trailing_delay: Option<u32>,
-    start_frame: u64,
 ) -> Resource {
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(APPLE_FUSED_DEFICIT_SEGMENTS)
-                .segment_duration_secs(APPLE_FUSED_DEFICIT_SEGMENT_SECS)
-                .packaged_audio(PackagedAudioRequest {
-                    codec: AudioCodec::AacLc,
-                    sample_rate: FUSED_FIXTURE_SOURCE_RATE,
-                    channels: GAPLESS_CHANNELS,
-                    start_frame: NonZeroU32::new(
-                        u32::try_from(start_frame).expect("start_frame fits u32"),
-                    ),
-                    timescale: Some(FUSED_FIXTURE_SOURCE_RATE),
-                    bit_rate: Some(128_000),
-                    encoder_delay: encoder_delay.and_then(NonZeroU32::new),
-                    trailing_delay: trailing_delay.and_then(NonZeroU32::new),
-                    source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: SINE_HZ }),
-                    gapless_encoding: GaplessEncoding::default(),
-                    variant_overrides: Vec::new(),
-                }),
-        )
-        .await
-        .expect("create Apple fused gapless HLS fixture");
-
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let decoder_defaults = AudioDecoderConfig::builder()
         .resampler(
@@ -905,7 +773,11 @@ async fn create_apple_fused_resource(
     resource
 }
 
-async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> SyntheticSeamRender {
+async fn render_synthetic_fused_deficit_seam(
+    tail_compensation: bool,
+    pcm: &[f32],
+    stereo: &[f32],
+) -> SyntheticSeamRender {
     let expected_device_frames = ceil_scaled_frames(
         FUSED_FIXTURE_SOURCE_FRAMES,
         FUSED_FIXTURE_DEVICE_RATE,
@@ -926,7 +798,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
     )
     .await;
     harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
-    let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
+    let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
     let first = Resource::from_reader(
         SyntheticPcmReader::new(first_frames, first_frame_count),
@@ -934,7 +806,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
     );
     let second = Resource::from_reader(
         SyntheticPcmReader::new(
-            synthetic_second_track_frames(),
+            pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
             FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
         ),
         Some(Arc::from("fused-deficit-2")),
@@ -959,15 +831,16 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
     result
 }
 
-fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
+fn synthetic_tail_trimmed_first_frames(tail_compensation: bool, stereo: &[f32]) -> Vec<f32> {
     const TRAILING_FRAMES: u64 = 1;
 
     let actual_pre_trim_frames =
         FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + usize::try_from(TRAILING_FRAMES).expect("fits") - 1;
     let ideal_pre_trim_frames =
         u64::try_from(actual_pre_trim_frames).expect("fixture frame count fits u64") + 1;
-    let source =
-        synthetic_interleaved_chunk((0..actual_pre_trim_frames).map(fused_seam_sample).collect());
+    let source = synthetic_interleaved_chunk(
+        &stereo[..actual_pre_trim_frames * usize::from(GAPLESS_CHANNELS)],
+    );
     let mut trimmer = GaplessTrimmer::from(GaplessInfo::new(0, TRAILING_FRAMES))
         .with_tail_compensation(
             tail_compensation.then_some(GaplessTailCompensation::new(ideal_pre_trim_frames)),
@@ -979,26 +852,17 @@ fn synthetic_tail_trimmed_first_frames(tail_compensation: bool) -> Vec<f32> {
     output
 }
 
-fn synthetic_second_track_frames() -> Vec<f32> {
-    let start = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
-    let end = start + FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
-    (start..end).map(fused_seam_sample).collect()
-}
-
-fn synthetic_interleaved_chunk(frames: Vec<f32>) -> AudioChunk {
+fn synthetic_interleaved_chunk(pcm: &[f32]) -> AudioChunk {
     let spec = AudioSpec::new(
         GAPLESS_CHANNELS,
         NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
     );
-    let frame_count = frames.len();
+    let frame_count = pcm.len() / usize::from(GAPLESS_CHANNELS);
     let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
     let mut samples = pools()
         .get_with_len::<f32>(sample_count)
         .expect("synthetic chunk exceeds PCM pool budget");
-    for (frame, sample) in frames.into_iter().enumerate() {
-        let offset = frame * usize::from(GAPLESS_CHANNELS);
-        samples[offset..offset + usize::from(GAPLESS_CHANNELS)].fill(sample);
-    }
+    samples.copy_from_slice(pcm);
     AudioChunk::new(
         AudioChunkInfo {
             frames: u32::try_from(frame_count).expect("fixture frame count fits u32"),
@@ -1395,12 +1259,6 @@ fn ceil_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
     clippy::cast_precision_loss,
     reason = "test-only signal synthesis narrows bounded sine samples to f32"
 )]
-fn fused_seam_sample(global_frame: usize) -> f32 {
-    let global = u32::try_from(global_frame).expect("fixture frame fits u32");
-    let seam = u32::try_from(FUSED_FIXTURE_IDEAL_DEVICE_FRAMES - 1).expect("seam fits u32");
-    let delta = f64::from(global) - f64::from(seam);
-    (FUSED_FIXTURE_SEAM_PHASE + delta * FUSED_FIXTURE_SEAM_OMEGA).sin() as f32
-}
 
 fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
     assert!(
@@ -1484,4 +1342,153 @@ fn assert_close_to(
         "{label}: actual={actual}, expected={expected}, delta={delta}, tolerance={tolerance}; \
          events={events:?}"
     );
+}
+
+#[kithara::fixture]
+async fn untagged_trimmed() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        0,
+        GaplessEncoding::None,
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn untagged_trimmed_next() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        u64::try_from(expected_visible_frames(
+            AAC_GAPLESS_ENCODER_DELAY,
+            AAC_GAPLESS_TRAILING_DELAY,
+        ))
+        .expect("visible frames fit u64"),
+        GaplessEncoding::None,
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn untagged_primed() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+        GaplessEncoding::None,
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn trimmed() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        0,
+        GaplessEncoding::default(),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn trimmed_stitch() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        u64::try_from(crate::gapless_common::generated_aac_elst_visible_frames())
+            .expect("stitch frame fits u64"),
+        GaplessEncoding::default(),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn trimmed_next() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        Some(AAC_GAPLESS_TRAILING_DELAY),
+        u64::try_from(expected_visible_frames(
+            AAC_GAPLESS_ENCODER_DELAY,
+            AAC_GAPLESS_TRAILING_DELAY,
+        ))
+        .expect("visible frames fit u64"),
+        GaplessEncoding::default(),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn primed() -> (TestServerHelper, CreatedHls) {
+    gapless_source(
+        Some(AAC_GAPLESS_ENCODER_DELAY),
+        None,
+        0,
+        GaplessEncoding::default(),
+    )
+    .await
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+async fn apple_source(start_frame: u64) -> (TestServerHelper, CreatedHls) {
+    let encoder_delay = Some(AAC_GAPLESS_ENCODER_DELAY);
+    let trailing_delay: Option<u32> = None;
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(APPLE_FUSED_DEFICIT_SEGMENTS)
+                .segment_duration_secs(APPLE_FUSED_DEFICIT_SEGMENT_SECS)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: FUSED_FIXTURE_SOURCE_RATE,
+                    channels: GAPLESS_CHANNELS,
+                    start_frame: NonZeroU32::new(
+                        u32::try_from(start_frame).expect("start_frame fits u32"),
+                    ),
+                    timescale: Some(FUSED_FIXTURE_SOURCE_RATE),
+                    bit_rate: Some(128_000),
+                    encoder_delay: encoder_delay.and_then(NonZeroU32::new),
+                    trailing_delay: trailing_delay.and_then(NonZeroU32::new),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: SINE_HZ }),
+                    gapless_encoding: GaplessEncoding::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create Apple fused gapless HLS fixture");
+
+    (server, created)
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::fixture]
+async fn apple_probe() -> (TestServerHelper, CreatedHls) {
+    apple_source(0).await
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::fixture]
+async fn apple_first() -> (TestServerHelper, CreatedHls) {
+    apple_source(0).await
+}
+
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+#[kithara::fixture]
+async fn apple_next() -> (TestServerHelper, CreatedHls) {
+    apple_source(APPLE_FUSED_DEFICIT_SOURCE_FRAMES).await
 }

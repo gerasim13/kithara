@@ -449,7 +449,7 @@ mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
-    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+    use kithara_test_fixtures::fixtures::tone_mp3;
     use symphonia::{
         core::{
             formats::{FormatOptions, probe::Hint},
@@ -462,9 +462,10 @@ mod default_priming_tests {
     use super::*;
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    fn build_mp3_decoder()
-    -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec, crate::test_pools::TestPools> {
-        let cursor = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
+    fn build_mp3_decoder(
+        tone_mp3: &[u8],
+    ) -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec, crate::test_pools::TestPools> {
+        let cursor = Cursor::new(tone_mp3.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -485,8 +486,10 @@ mod default_priming_tests {
     }
 
     #[kithara::test]
-    fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay() {
-        let decoder = build_mp3_decoder();
+    fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay(
+        tone_mp3: &'static [u8],
+    ) {
+        let decoder = build_mp3_decoder(tone_mp3);
         // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay.
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
@@ -521,7 +524,7 @@ mod smoke_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
-    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+    use kithara_test_fixtures::fixtures::tone_mp3;
     use kithara_test_utils::kithara;
     use symphonia::{
         core::{
@@ -538,8 +541,8 @@ mod smoke_tests {
         traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     };
 
-    fn build_mp3_demuxer() -> SymphoniaDemuxer {
-        let cursor = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
+    fn build_mp3_demuxer(tone_mp3: &[u8]) -> SymphoniaDemuxer {
+        let cursor = Cursor::new(tone_mp3.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -556,8 +559,8 @@ mod smoke_tests {
     }
 
     #[kithara::test]
-    fn mp3_track_info_carries_codec_and_rate() {
-        let demuxer = build_mp3_demuxer();
+    fn mp3_track_info_carries_codec_and_rate(tone_mp3: &'static [u8]) {
+        let demuxer = build_mp3_demuxer(tone_mp3);
         let info = demuxer.track_info();
         assert_eq!(info.codec, AudioCodec::Mp3);
         assert!(info.sample_rate > 0, "sample rate must be populated");
@@ -565,8 +568,8 @@ mod smoke_tests {
     }
 
     #[kithara::test]
-    fn mp3_universal_decoder_emits_non_empty_chunks() {
-        let demuxer = build_mp3_demuxer();
+    fn mp3_universal_decoder_emits_non_empty_chunks(tone_mp3: &'static [u8]) {
+        let demuxer = build_mp3_demuxer(tone_mp3);
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
@@ -593,8 +596,8 @@ mod smoke_tests {
     }
 
     #[kithara::test]
-    fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks() {
-        let demuxer = build_mp3_demuxer();
+    fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks(tone_mp3: &'static [u8]) {
+        let demuxer = build_mp3_demuxer(tone_mp3);
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
@@ -623,9 +626,9 @@ mod smoke_tests {
     }
 
     #[kithara::test]
-    fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek() {
+    fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek(tone_mp3: &'static [u8]) {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
-            Cursor::new(signal_mp3_track_sine440_187s().bytes()),
+            Cursor::new(tone_mp3),
             FileOpen {
                 hint: Some("mp3".into()),
                 container: None,
@@ -662,6 +665,7 @@ mod smoke_tests {
 
 #[cfg(test)]
 fn write_silent_test_frame(
+    pcm: &[f32],
     spec: AudioSpec,
     frames_per_call: u32,
     out: &mut SampleBuffer,
@@ -673,9 +677,7 @@ fn write_silent_test_frame(
             detail: "test frame sample count overflow",
         })?;
     out.ensure_len(samples)?;
-    for slot in out.iter_mut() {
-        *slot = 0.0;
-    }
+    out[..samples].copy_from_slice(&pcm[..samples]);
     out.truncate(samples);
     Ok(frames_per_call)
 }
@@ -708,11 +710,13 @@ mod test_stub_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct ConstFrameCodec {
+        pcm: Vec<f32>,
         spec: AudioSpec,
         frames_per_call: u32,
     }
 
     pub(super) struct LaggedQueueCodec {
+        pcm: Vec<f32>,
         spec: AudioSpec,
         decoded_pts: Duration,
         pending_pts: Option<Duration>,
@@ -720,8 +724,9 @@ mod test_stub_codec {
     }
 
     impl ConstFrameCodec {
-        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(pcm: Vec<f32>, spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
+                pcm,
                 spec,
                 frames_per_call,
             }
@@ -729,8 +734,9 @@ mod test_stub_codec {
     }
 
     impl LaggedQueueCodec {
-        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(pcm: Vec<f32>, spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
+                pcm,
                 spec,
                 frames_per_call,
                 pending_pts: None,
@@ -747,7 +753,7 @@ mod test_stub_codec {
             _packet_desc: &[u8],
             out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
-            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+            super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -772,7 +778,7 @@ mod test_stub_codec {
                 return Ok(0);
             };
             self.decoded_pts = decoded_pts;
-            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
+            super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
         }
 
         fn decoded_pts(&self, _input_pts: Duration) -> Duration {
@@ -805,6 +811,7 @@ mod test_counting_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct CountingCodec {
+        pcm: Vec<f32>,
         pub(super) decode_calls: Arc<AtomicU32>,
         pub(super) flush_calls: Arc<AtomicU32>,
         pub(super) spec: AudioSpec,
@@ -813,8 +820,9 @@ mod test_counting_codec {
     }
 
     impl CountingCodec {
-        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(pcm: Vec<f32>, spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
+                pcm,
                 spec,
                 frames_per_call,
                 frames: VecDeque::new(),
@@ -839,7 +847,7 @@ mod test_counting_codec {
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
             let frames = self.frames.pop_front().unwrap_or(self.frames_per_call);
-            super::write_silent_test_frame(self.spec, frames, out)
+            super::write_silent_test_frame(&self.pcm, self.spec, frames, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -865,6 +873,7 @@ mod test_eof_drain_codec {
     use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct EofDrainCodec {
+        pcm: Vec<f32>,
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: AudioSpec,
         tail_pending: bool,
@@ -873,8 +882,14 @@ mod test_eof_drain_codec {
     }
 
     impl EofDrainCodec {
-        pub(super) fn new(spec: AudioSpec, frames_per_call: u32, tail_frames: u32) -> Self {
+        pub(super) fn new(
+            pcm: Vec<f32>,
+            spec: AudioSpec,
+            frames_per_call: u32,
+            tail_frames: u32,
+        ) -> Self {
             Self {
+                pcm,
                 empty_decode_calls: Arc::new(AtomicU32::new(0)),
                 spec,
                 frames_per_call,
@@ -903,7 +918,7 @@ mod test_eof_drain_codec {
             } else {
                 self.frames_per_call
             };
-            super::write_silent_test_frame(self.spec, frames, out)
+            super::write_silent_test_frame(&self.pcm, self.spec, frames, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -917,6 +932,7 @@ mod test_eof_drain_codec {
     }
 
     pub(super) struct QueueCodec {
+        pcm: Vec<f32>,
         pub(super) empty_decode_calls: Arc<AtomicU32>,
         spec: AudioSpec,
         tail_pending: bool,
@@ -924,8 +940,9 @@ mod test_eof_drain_codec {
     }
 
     impl QueueCodec {
-        pub(super) fn new(spec: AudioSpec, tail_frames: u32) -> Self {
+        pub(super) fn new(pcm: Vec<f32>, spec: AudioSpec, tail_frames: u32) -> Self {
             Self {
+                pcm,
                 spec,
                 tail_frames,
                 empty_decode_calls: Arc::new(AtomicU32::new(0)),
@@ -954,7 +971,7 @@ mod test_eof_drain_codec {
                 return Ok(0);
             }
             self.tail_pending = false;
-            super::write_silent_test_frame(self.spec, self.tail_frames, out)
+            super::write_silent_test_frame(&self.pcm, self.spec, self.tail_frames, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -974,12 +991,12 @@ mod test_eof_drain_codec {
 
 #[cfg(test)]
 mod seek_trim_tests {
-
     use std::{num::NonZeroU32, sync::atomic::Ordering};
 
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::AudioSpec;
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::{mock_fixtures::zero_packet, unit_fixtures::trim_silence};
     use kithara_test_utils::kithara;
 
     use super::{test_counting_codec::CountingCodec, test_stub_codec::LaggedQueueCodec, *};
@@ -1061,7 +1078,6 @@ mod seek_trim_tests {
                 _ => return Ok(DemuxOutcome::Eof),
             };
             self.idx += 1;
-            self.held = vec![0u8; 4];
             Ok(DemuxOutcome::Frame(Frame {
                 pts: Duration::from_millis(pts_ms),
                 duration: Duration::from_millis(20),
@@ -1085,7 +1101,6 @@ mod seek_trim_tests {
                 return Ok(DemuxOutcome::Eof);
             };
             self.idx += 1;
-            self.held = vec![0u8; 4];
             Ok(DemuxOutcome::Frame(Frame {
                 pts: frame.pts,
                 duration: frame.duration,
@@ -1153,10 +1168,14 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
-    fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target() {
+    fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         const FRAME_FRAMES: u32 = 882;
 
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             FRAME_FRAMES,
         );
@@ -1164,7 +1183,7 @@ mod seek_trim_tests {
         let demuxer = ThreeFrameDemuxer {
             track: empty_track(),
             idx: 0,
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
         };
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
@@ -1185,6 +1204,7 @@ mod seek_trim_tests {
 
         let packet = test_duration(Consts::SAMPLE_RATE, 1_024);
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
@@ -1194,7 +1214,7 @@ mod seek_trim_tests {
         .with_frames([363]);
         let demuxer = BoundaryFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
             idx: 0,
             frames: vec![
                 BoundaryFrame {
@@ -1226,7 +1246,10 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
-    fn composed_decoder_observes_head_strip_from_packet_duration() {
+    fn composed_decoder_observes_head_strip_from_packet_duration(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         const SOURCE_SAMPLE_RATE: u32 = 24_000;
         const OUTPUT_SAMPLE_RATE: u32 = 48_000;
         const PACKET_DURATION: Duration = Duration::from_millis(20);
@@ -1243,6 +1266,7 @@ mod seek_trim_tests {
         );
 
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(OUTPUT_SAMPLE_RATE).expect("test rate"),
@@ -1252,7 +1276,7 @@ mod seek_trim_tests {
         .with_frames([480, 720]);
         let demuxer = BoundaryFrameDemuxer {
             track: track_with_rate(SOURCE_SAMPLE_RATE),
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
             idx: 0,
             frames: vec![
                 BoundaryFrame {
@@ -1284,20 +1308,24 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
-    fn fully_trimmed_seek_packet_is_dropped_before_target_chunk() {
+    fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         const SAMPLE_RATE: u32 = 44_100;
         const PACKET_FRAMES: u32 = 1024;
 
         let target = test_duration(SAMPLE_RATE, u64::from(PACKET_FRAMES));
         let rounded_past_target = target.saturating_add(Duration::from_nanos(1));
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             PACKET_FRAMES,
         );
         let calls = Arc::clone(&codec.decode_calls);
         let demuxer = BoundaryFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
             idx: 0,
             frames: vec![
                 BoundaryFrame {
@@ -1328,18 +1356,22 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
-    fn queue_codec_keeps_seek_target_until_straddling_pcm_arrives() {
+    fn queue_codec_keeps_seek_target_until_straddling_pcm_arrives(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         const FRAME_FRAMES: u32 = 882;
 
         let target = Duration::from_millis(10);
         let codec = LaggedQueueCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             FRAME_FRAMES,
         );
         let demuxer = ThreeFrameDemuxer {
             track: empty_track(),
             idx: 0,
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
         };
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
@@ -1377,8 +1409,11 @@ mod seek_trim_tests {
     fn seek_trim_lands_first_chunk_on_exact_target_frame(
         #[case] target: Duration,
         #[case] layout: SeekTrimLayout,
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
     ) {
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
@@ -1387,7 +1422,7 @@ mod seek_trim_tests {
         );
         let demuxer = BoundaryFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
             frames: seek_frames_for(target, layout),
             idx: 0,
         };
@@ -1422,7 +1457,10 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
-    fn seek_trim_uses_codec_output_rate_for_resampled_chunks() {
+    fn seek_trim_uses_codec_output_rate_for_resampled_chunks(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         let source_packet_start =
             test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES));
         let target = test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512);
@@ -1433,6 +1471,7 @@ mod seek_trim_tests {
         ))
         .expect("output packet frame count fits in u32");
         let codec = CountingCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::OUTPUT_SAMPLE_RATE).expect("test rate"),
@@ -1441,7 +1480,7 @@ mod seek_trim_tests {
         );
         let demuxer = BoundaryFrameDemuxer {
             track: track_with_rate(Consts::SAMPLE_RATE),
-            held: Vec::new(),
+            held: zero_packet.to_vec(),
             frames: regular_seek_frames(),
             idx: 0,
         };
@@ -1469,11 +1508,11 @@ mod seek_trim_tests {
 
 #[cfg(test)]
 mod eof_drain_tests {
-
     use std::{num::NonZeroU32, sync::atomic::Ordering};
 
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::{mock_fixtures::one_packet, unit_fixtures::trim_silence};
     use kithara_test_utils::kithara;
 
     use super::{
@@ -1501,7 +1540,6 @@ mod eof_drain_tests {
                 return Ok(DemuxOutcome::Eof);
             }
             self.emitted = true;
-            self.held = vec![1u8; 4];
             Ok(DemuxOutcome::Frame(Frame {
                 pts: Duration::ZERO,
                 duration: Duration::from_millis(20),
@@ -1529,12 +1567,16 @@ mod eof_drain_tests {
     }
 
     #[kithara::test]
-    fn rate_mismatch_default_codec_drains_tail_before_eof() {
+    fn rate_mismatch_default_codec_drains_tail_before_eof(
+        trim_silence: Vec<f32>,
+        one_packet: &'static [u8],
+    ) {
         const FRAMES: u32 = 960;
         const TAIL_FRAMES: u32 = 17;
         const SAMPLE_RATE: u32 = 48_000;
 
         let codec = EofDrainCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             FRAMES,
             TAIL_FRAMES,
@@ -1542,7 +1584,7 @@ mod eof_drain_tests {
         let empty_calls = Arc::clone(&codec.empty_decode_calls);
         let demuxer = OneFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: one_packet.to_vec(),
             emitted: false,
         };
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
@@ -1574,18 +1616,22 @@ mod eof_drain_tests {
     }
 
     #[kithara::test]
-    fn equal_rate_queue_codec_emits_tail_before_eof() {
+    fn equal_rate_queue_codec_emits_tail_before_eof(
+        trim_silence: Vec<f32>,
+        one_packet: &'static [u8],
+    ) {
         const TAIL_FRAMES: u32 = 17;
         const SAMPLE_RATE: u32 = 44_100;
 
         let codec = QueueCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             TAIL_FRAMES,
         );
         let empty_calls = Arc::clone(&codec.empty_decode_calls);
         let demuxer = OneFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: one_packet.to_vec(),
             emitted: false,
         };
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
@@ -1602,12 +1648,13 @@ mod eof_drain_tests {
     }
 
     #[kithara::test]
-    fn equal_rate_default_codec_skips_eof_drain() {
+    fn equal_rate_default_codec_skips_eof_drain(trim_silence: Vec<f32>, one_packet: &'static [u8]) {
         const FRAMES: u32 = 960;
         const TAIL_FRAMES: u32 = 17;
         const SAMPLE_RATE: u32 = 44_100;
 
         let codec = EofDrainCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             FRAMES,
             TAIL_FRAMES,
@@ -1615,7 +1662,7 @@ mod eof_drain_tests {
         let empty_calls = Arc::clone(&codec.empty_decode_calls);
         let demuxer = OneFrameDemuxer {
             track: empty_track(),
-            held: Vec::new(),
+            held: one_packet.to_vec(),
             emitted: false,
         };
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
@@ -1631,13 +1678,13 @@ mod eof_drain_tests {
 
 #[cfg(test)]
 mod hook_tests {
-
     use std::{num::NonZeroU32, sync::Mutex};
 
     use kithara_platform::sync::Arc;
     use kithara_stream::{
         BoxedEventSink, PendingReason, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal,
     };
+    use kithara_test_fixtures::{mock_fixtures::zero_packet, unit_fixtures::trim_silence};
     use kithara_test_utils::kithara;
 
     use super::{test_stub_codec::ConstFrameCodec, *};
@@ -1681,11 +1728,7 @@ mod hook_tests {
     /// separate so the borrowed `DemuxOutcome<'_>` returned by
     /// `next_frame` can be backed by the stub's own buffer.
     enum StubOutcome {
-        Frame {
-            data: Vec<u8>,
-            pts: Duration,
-            duration: Duration,
-        },
+        Frame { pts: Duration, duration: Duration },
         Pending(PendingReason),
     }
 
@@ -1694,21 +1737,22 @@ mod hook_tests {
     /// container/codec.
     struct StubDemuxer {
         track: TrackInfo,
-        /// Current frame's owned bytes — live so the returned
-        /// `Frame<'_>` slice has somewhere to point. Replaced on each
-        /// `next_frame` call.
         held: Vec<u8>,
         next: Vec<StubOutcome>,
         seek: Vec<DemuxSeekOutcome>,
     }
 
     impl StubDemuxer {
-        fn with_outcomes(next: Vec<StubOutcome>, seek: Vec<DemuxSeekOutcome>) -> Self {
+        fn with_outcomes(
+            zero_packet: &[u8],
+            next: Vec<StubOutcome>,
+            seek: Vec<DemuxSeekOutcome>,
+        ) -> Self {
             Self {
                 next,
                 seek,
                 track: empty_track(),
-                held: Vec::new(),
+                held: zero_packet.to_vec(),
             }
         }
     }
@@ -1719,19 +1763,12 @@ mod hook_tests {
         }
         fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
             match self.next.pop() {
-                Some(StubOutcome::Frame {
-                    data,
+                Some(StubOutcome::Frame { pts, duration }) => Ok(DemuxOutcome::Frame(Frame {
                     pts,
                     duration,
-                }) => {
-                    self.held = data;
-                    Ok(DemuxOutcome::Frame(Frame {
-                        pts,
-                        duration,
-                        data: &self.held,
-                        packet_desc: &[],
-                    }))
-                }
+                    data: &self.held,
+                    packet_desc: &[],
+                })),
                 Some(StubOutcome::Pending(reason)) => Ok(DemuxOutcome::Pending(reason)),
                 None => Ok(DemuxOutcome::Eof),
             }
@@ -1762,10 +1799,12 @@ mod hook_tests {
     }
 
     fn build(
+        trim_silence: Vec<f32>,
         demuxer: StubDemuxer,
         log: Arc<Mutex<CallLog>>,
     ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec, crate::test_pools::TestPools> {
         let codec = ConstFrameCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
@@ -1783,32 +1822,39 @@ mod hook_tests {
     #[kithara::test]
     #[case::chunk_signal(
         StubOutcome::Frame {
-            data: vec![0u8; 4],
             pts: Duration::ZERO,
             duration: Duration::from_millis(20),
         },
         "chunk"
     )]
     #[case::pending_signal(StubOutcome::Pending(PendingReason::SeekPending), "pending")]
-    fn next_chunk_emits_signal(#[case] outcome: StubOutcome, #[case] expected_signal: &str) {
+    fn next_chunk_emits_signal(
+        #[case] outcome: StubOutcome,
+        #[case] expected_signal: &str,
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(vec![outcome], Vec::new());
-        let mut decoder = build(demuxer, Arc::clone(&log));
+        let demuxer = StubDemuxer::with_outcomes(zero_packet, vec![outcome], Vec::new());
+        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec![expected_signal]);
     }
 
     #[kithara::test]
-    fn zero_frame_codec_yields_pending_before_demux_eof() {
+    fn zero_frame_codec_yields_pending_before_demux_eof(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
         let outcomes = (0..=ZERO_FRAME_BUDGET)
             .map(|index| StubOutcome::Frame {
-                data: vec![0; 4],
                 pts: Duration::from_millis(u64::from(index)),
                 duration: Duration::from_millis(1),
             })
             .collect();
-        let demuxer = StubDemuxer::with_outcomes(outcomes, Vec::new());
+        let demuxer = StubDemuxer::with_outcomes(zero_packet, outcomes, Vec::new());
         let codec = ConstFrameCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             0,
         );
@@ -1844,38 +1890,38 @@ mod hook_tests {
         #[case] outcome: DemuxSeekOutcome,
         #[case] target: Duration,
         #[case] expected_signal: &str,
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
     ) {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(Vec::new(), vec![outcome]);
-        let mut decoder = build(demuxer, Arc::clone(&log));
+        let demuxer = StubDemuxer::with_outcomes(zero_packet, Vec::new(), vec![outcome]);
+        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
         let _ = decoder.seek(target).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
     }
 
     #[kithara::test]
-    fn owned_hooks_fire_exactly_once_per_chunk() {
+    fn owned_hooks_fire_exactly_once_per_chunk(trim_silence: Vec<f32>, zero_packet: &'static [u8]) {
         let log = Arc::new(Mutex::new(CallLog::default()));
         let demuxer = StubDemuxer::with_outcomes(
+            zero_packet,
             vec![
                 StubOutcome::Frame {
-                    data: vec![0u8; 4],
                     pts: Duration::from_millis(40),
                     duration: Duration::from_millis(20),
                 },
                 StubOutcome::Frame {
-                    data: vec![0u8; 4],
                     pts: Duration::from_millis(20),
                     duration: Duration::from_millis(20),
                 },
                 StubOutcome::Frame {
-                    data: vec![0u8; 4],
                     pts: Duration::ZERO,
                     duration: Duration::from_millis(20),
                 },
             ],
             Vec::new(),
         );
-        let mut decoder = build(demuxer, Arc::clone(&log));
+        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
 
         for _ in 0..3 {
             let _ = decoder.next_chunk().unwrap();
@@ -1893,18 +1939,18 @@ mod hook_tests {
 
 #[cfg(test)]
 mod pool_budget_tests {
-
     use std::num::NonZeroU32;
 
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
+    use kithara_test_fixtures::unit_fixtures::trim_silence;
     use kithara_test_utils::kithara;
 
     use super::test_stub_codec::ConstFrameCodec;
     use crate::{codec::FrameCodec, test_pools::pools};
 
     #[kithara::test]
-    fn codec_warm_pool_keeps_allocated_bytes_stable() {
+    fn codec_warm_pool_keeps_allocated_bytes_stable(trim_silence: Vec<f32>) {
         let pools = pools();
         for _ in 0..4 {
             let mut buf = pools.get::<f32>();
@@ -1913,6 +1959,7 @@ mod pool_budget_tests {
         let warmup_bytes = pools.stats().allocated_bytes;
 
         let mut codec = ConstFrameCodec::new(
+            trim_silence.clone(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1024,
         );

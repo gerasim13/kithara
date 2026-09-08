@@ -30,8 +30,8 @@ tls-rustls = ["kithara-events/tls-rustls"]
 tls-native = ["kithara-events/tls-native"]
 
 [dependencies]
+kithara-derive = { workspace = true }
 kithara-events = { workspace = true }
-kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true }
 

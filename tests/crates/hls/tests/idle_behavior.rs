@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    hls_server::packaged_test_server,
     temp_dir,
 };
 
@@ -58,10 +59,13 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(2)
 )]
-async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
+async fn idle_does_not_panic_hang_detector(
+    #[future(awt)] packaged_test_server: PackagedTestServer,
+    temp_dir: TestTempDir,
+) {
     let watchdog_fired = arm_panic_marker("HangDetector");
 
-    let server = PackagedTestServer::new().await;
+    let server = packaged_test_server;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
@@ -144,27 +148,12 @@ fn count_files_recursive(root: &Path) -> usize {
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
-async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    // A variant long enough that "stopped at the cap" and "drained the
-    // whole thing" cannot be confused. One variant at the encoder's
-    // default 128 kbit/s puts roughly 32 KiB in each 2 s segment, so the
-    // look-ahead below buys a handful of them out of SEGMENTS — the gap
-    // is wide enough that the exact segment size does not matter.
-    const SEGMENTS: usize = 24;
+async fn idle_prefetch_is_capped(
+    temp_dir: TestTempDir,
+    #[future(awt)] capped_hls: (TestServerHelper, url::Url),
+) {
     const LOOK_AHEAD_BYTES: u64 = 128 * 1024;
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(SEGMENTS)
-                .segment_duration_secs(2.0)
-                .variant_bandwidths(vec![128_000])
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create the capped-prefetch fixture");
-    let url = created.master_url();
+    let (_server, url) = capped_hls;
     // Shared bus so the downloader's per-fetch `DownloaderEvent`s reach a
     // root subscriber here — the real signal that prefetch is or is not
     // still running.
@@ -238,4 +227,29 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
          variant, got {files} files on disk — HlsVariant::dispatch is \
          draining the full segment queue without honoring the byte-ahead cap"
     );
+}
+
+const SEGMENTS: usize = 24;
+
+#[kithara::fixture]
+async fn capped_hls() -> (TestServerHelper, url::Url) {
+    let server = TestServerHelper::new().await;
+    // A variant long enough that "stopped at the cap" and "drained the
+    // whole thing" cannot be confused. One variant at the encoder's
+    // default 128 kbit/s puts roughly 32 KiB in each 2 s segment, so the
+    // look-ahead below buys a handful of them out of SEGMENTS — the gap
+    // is wide enough that the exact segment size does not matter.
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(SEGMENTS)
+                .segment_duration_secs(2.0)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the capped-prefetch fixture");
+    let url = created.master_url();
+    (server, url)
 }

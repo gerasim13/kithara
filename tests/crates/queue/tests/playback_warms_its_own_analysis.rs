@@ -21,17 +21,18 @@ use kithara_integration_tests::{
     analysis_pass::stalled_reader,
     kithara,
     offline::{OfflineQueue, QueueTicker},
-    temp_dir,
+    served_mp3, temp_dir,
     waits::wait_until,
 };
-use kithara_test_fixtures::SignalAsset;
+use url::Url;
 
 use crate::bufpool_ext::pools;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
-    let helper = TestServerHelper::new().await;
-    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
+async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
+    #[future(awt)] served_mp3: (TestServerHelper, Url),
+) {
+    let (_helper, url) = served_mp3;
 
     let temp = temp_dir();
     let pools = pools();

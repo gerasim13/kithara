@@ -181,8 +181,10 @@ struct CapturedAudio {
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
-    run_real_media_matrix(false).await;
+async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(
+    #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
+) {
+    run_real_media_matrix(false, real_media_sources).await;
 }
 
 #[kithara::test(
@@ -194,8 +196,10 @@ async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
     timeout(Duration::from_secs(360))
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_real_media_artifacts() {
-    run_real_media_matrix(true).await;
+async fn record_no_sync_real_media_artifacts(
+    #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
+) {
+    run_real_media_matrix(true, real_media_sources).await;
 }
 
 /// The one body every HLS deck reads.
@@ -243,13 +247,30 @@ async fn hls_ladder_url(server: &TestServerHelper) -> Url {
         .master_url()
 }
 
-async fn run_real_media_matrix(record_artifacts: bool) {
+#[kithara::fixture]
+async fn real_media_sources() -> (TestServerHelper, Url, TestTempDir) {
     let server = TestServerHelper::new().await;
     let hls = hls_ladder_url(&server).await;
+    let dir = TestTempDir::new();
+    for case in CASES {
+        for media in case.media {
+            if let Media::Mp3(asset) = media {
+                let _ = media_path(&dir, *asset);
+            }
+        }
+    }
+    (server, hls, dir)
+}
+
+async fn run_real_media_matrix(
+    record_artifacts: bool,
+    sources: (TestServerHelper, Url, TestTempDir),
+) {
+    let (_server, hls, media_dir) = sources;
     let mut failures = Vec::new();
     for case in CASES {
         failures.extend(
-            run_case(case, &hls, record_artifacts)
+            run_case(case, &hls, record_artifacts, &media_dir)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -262,7 +283,12 @@ async fn run_real_media_matrix(record_artifacts: bool) {
     );
 }
 
-async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
+async fn run_case(
+    case: &Case,
+    hls: &Url,
+    record_artifacts: bool,
+    media_dir: &TestTempDir,
+) -> Vec<String> {
     let pool_region = pools();
     let sample_rate = NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero");
     let max_block_frames =
@@ -278,21 +304,10 @@ async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String>
     .unwrap_or_else(|error| panic!("{}: create product offline Host: {error}", case.label));
     let mut failures = Vec::new();
 
-    let media_dir = TestTempDir::new();
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(
-            prepare_deck(
-                case,
-                deck_index,
-                media,
-                hls,
-                &media_dir,
-                &pool_region,
-                &host,
-            )
-            .await,
-        );
+        decks
+            .push(prepare_deck(case, deck_index, media, hls, media_dir, &pool_region, &host).await);
     }
 
     load_decks(case, &host, &decks, &mut failures).await;
@@ -923,7 +938,9 @@ async fn prepare_deck(
     );
     let events = player.subscribe();
     let src = match media {
-        Media::Mp3(asset) => media_path(media_dir, asset)
+        Media::Mp3(asset) => media_dir
+            .path()
+            .join(format!("{}.{}", asset.name(), asset.ext()))
             .to_str()
             .expect("temporary media path is UTF-8")
             .to_owned(),

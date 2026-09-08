@@ -19,7 +19,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant},
+        time::{self, Duration, Instant},
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
@@ -54,7 +54,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
 /// Requires internet (silvercomet) and corporate VPN (zvuk).
 // flash(false): live-internet sockets are invisible to the flash engine; virtual
 // sleep/deadline would outrun the real download and fail spuriously.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
+#[kithara::test(
+    tokio,
+    flash(false),
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(10)
+)]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     DecoderBackend::Symphonia
@@ -171,7 +176,7 @@ async fn live_remote_resource_decodes_with_duration(
             )
             .build();
 
-    let mut resource = Resource::new(config)
+    let mut resource = Box::pin(Resource::new(config))
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
@@ -224,7 +229,12 @@ async fn live_remote_resource_decodes_with_duration(
 /// `select_item` + `duration_seconds()`. This is what the GUI reads.
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
+#[kithara::test(
+    tokio,
+    flash(false),
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(10)
+)]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     DecoderBackend::Symphonia
@@ -294,7 +304,7 @@ async fn player_mp3_duration_matches_app_flow(
         .prepare_config(config)
         .expect("prepare live remote resource config");
 
-    let resource = Resource::new(config)
+    let resource = Box::pin(Resource::new(config))
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 

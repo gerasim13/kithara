@@ -22,6 +22,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::wait_for_position_event,
 };
+use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -219,10 +220,14 @@ async fn observe_seek_advance_or_panic(
     tick_handle.stop().await;
 }
 
-async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
+async fn run_seek_scenario(
+    server: &PackagedTestServer,
+    urls: &[&str],
+    select_index: usize,
+    temp: TestTempDir,
+) {
     install_tracing();
 
-    let server = PackagedTestServer::new().await;
     let resolved: Vec<String> = urls
         .iter()
         .map(|p| server.url(p).as_str().to_string())
@@ -351,8 +356,13 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
 #[case::one_track(&["/master.m3u8"], 0)]
 #[case::first_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 0)]
 #[case::second_of_two(&["/master.m3u8", "/master-encrypted.m3u8"], 1)]
-async fn queue_seek_at_index(temp_dir: TestTempDir, #[case] paths: &[&str], #[case] index: usize) {
-    run_seek_scenario(paths, index, temp_dir).await;
+async fn queue_seek_at_index(
+    #[future(awt)] packaged_source: PackagedTestServer,
+    temp_dir: TestTempDir,
+    #[case] paths: &[&str],
+    #[case] index: usize,
+) {
+    run_seek_scenario(&packaged_source, paths, index, temp_dir).await;
 }
 
 /// Two concurrent `Queue::append` calls for the exact same HLS URL
@@ -369,8 +379,17 @@ async fn queue_seek_at_index(temp_dir: TestTempDir, #[case] paths: &[&str], #[ca
 /// this test fails under `just test` and keeps the bug visible.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
 #[ignore = "pins real regression — pending downloader request coalescer; unignore when single-flight layer lands"]
-async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
-    run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0, temp_dir).await;
+async fn queue_seek_same_url_twice_index0(
+    #[future(awt)] packaged_source: PackagedTestServer,
+    temp_dir: TestTempDir,
+) {
+    run_seek_scenario(
+        &packaged_source,
+        &["/master.m3u8", "/master.m3u8"],
+        0,
+        temp_dir,
+    )
+    .await;
 }
 
 /// Long-track variant: 20 segments × 4s = 80s, with a 150ms delay on
@@ -378,25 +397,13 @@ async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
+async fn queue_seek_long_cold_cache_far_segment(
+    temp_dir: TestTempDir,
+    #[future(awt)] long_hls: (TestServerHelper, Url),
+) {
     install_tracing();
 
-    let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(1)
-        .segments_per_variant(20)
-        .segment_duration_secs(4.0)
-        .variant_bandwidths(vec![1_280_000])
-        .packaged_audio_aac_lc(44_100, 2)
-        .push_delay_rule(DelayRule {
-            delay_ms: 150,
-            ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
-        .await
-        .expect("create long HLS fixture");
-    let master = created.master_url();
+    let (_helper, master) = long_hls;
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
@@ -470,30 +477,13 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
+async fn queue_seek_multi_variant_cold_far(
+    temp_dir: TestTempDir,
+    #[future(awt)] multi_hls: (TestServerHelper, Url),
+) {
     install_tracing();
 
-    let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(30)
-        .segment_duration_secs(4.0)
-        .variant_bandwidths(vec![1_800_000, 800_000, 300_000])
-        .packaged_audio_aac_lc(44_100, 2)
-        .push_delay_rule(DelayRule {
-            variant: Some(1),
-            delay_ms: 250,
-            ..DelayRule::default()
-        })
-        .push_delay_rule(DelayRule {
-            delay_ms: 80,
-            ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
-        .await
-        .expect("create multi-variant HLS fixture");
-    let master = created.master_url();
+    let (_helper, master) = multi_hls;
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir).await;
     let track_source = |url: &str| -> TrackSource<TestPools> {
@@ -547,4 +537,56 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     )
     .await;
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn long_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(20)
+        .segment_duration_secs(4.0)
+        .variant_bandwidths(vec![1_280_000])
+        .packaged_audio_aac_lc(44_100, 2)
+        .push_delay_rule(DelayRule {
+            delay_ms: 150,
+            ..DelayRule::default()
+        });
+    let created = helper
+        .create_hls(builder)
+        .await
+        .expect("create long HLS fixture");
+    let master = created.master_url();
+    (helper, master)
+}
+
+#[kithara::fixture]
+async fn multi_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(3)
+        .segments_per_variant(30)
+        .segment_duration_secs(4.0)
+        .variant_bandwidths(vec![1_800_000, 800_000, 300_000])
+        .packaged_audio_aac_lc(44_100, 2)
+        .push_delay_rule(DelayRule {
+            variant: Some(1),
+            delay_ms: 250,
+            ..DelayRule::default()
+        })
+        .push_delay_rule(DelayRule {
+            delay_ms: 80,
+            ..DelayRule::default()
+        });
+    let created = helper
+        .create_hls(builder)
+        .await
+        .expect("create multi-variant HLS fixture");
+    let master = created.master_url();
+    (helper, master)
+}
+
+#[kithara::fixture]
+async fn packaged_source() -> PackagedTestServer {
+    PackagedTestServer::new().await
 }

@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
+use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -65,17 +66,11 @@ async fn wait_for_failed(
 /// Pins the production hang where `Resource::new` blocked indefinitely on
 /// an unbounded playlist body read.
 #[kithara::test(tokio, timeout(Duration::from_secs(60)))]
-async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
-    let helper = TestServerHelper::new().await;
-    let playlist = b"#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=66005\nindex.m3u8\n";
-    let handle = helper.register_behavior(FixtureBehavior {
-        content: Content::StaticBytes {
-            bytes: Arc::new(playlist.to_vec()),
-            content_type: Some("application/vnd.apple.mpegurl"),
-        },
-        delivery: Delivery::StallAfter { after_bytes: 8 },
-    });
-    let url = handle.child_url("master.m3u8");
+async fn stalled_master_playlist_fails_load(
+    temp_dir: TestTempDir,
+    #[future(awt)] stalled_playlist: (TestServerHelper, Url),
+) {
+    let (_helper, url) = stalled_playlist;
 
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(200))
@@ -137,4 +132,19 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
 
     tick_handle.stop().await;
     queue.close().await;
+}
+
+#[kithara::fixture]
+async fn stalled_playlist() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let playlist = b"#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=66005\nindex.m3u8\n";
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(playlist.to_vec()),
+            content_type: Some("application/vnd.apple.mpegurl"),
+        },
+        delivery: Delivery::StallAfter { after_bytes: 8 },
+    });
+    let url = handle.child_url("master.m3u8");
+    (helper, url)
 }

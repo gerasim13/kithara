@@ -9,7 +9,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     temp_dir,
 };
@@ -29,18 +29,12 @@ const CHANNELS: u16 = 2;
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: DecoderBackend) {
-    let server = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(1)
-        .segments_per_variant(8)
-        .segment_duration_secs(0.5)
-        .packaged_audio_aac_he_v2(SAMPLE_RATE, CHANNELS);
-    let created = server
-        .create_hls(builder)
-        .await
-        .expect("create AAC HE v2 HLS fixture");
-
+async fn aac_he_v2_hls_produces_pcm(
+    temp_dir: TestTempDir,
+    #[case] backend: DecoderBackend,
+    #[future(awt)] he_hls: (TestServerHelper, CreatedHls),
+) {
+    let (_server, created) = he_hls;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(created.master_url())
@@ -103,4 +97,20 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
         "HE-AAC v2 PCM looks like silence: {nonzero}/{} non-zero samples",
         pcm.len()
     );
+}
+
+#[kithara::fixture]
+async fn he_hls() -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(8)
+        .segment_duration_secs(0.5)
+        .packaged_audio_aac_he_v2(SAMPLE_RATE, CHANNELS);
+    let created = server
+        .create_hls(builder)
+        .await
+        .expect("create AAC HE v2 HLS fixture");
+
+    (server, created)
 }

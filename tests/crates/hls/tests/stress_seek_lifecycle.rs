@@ -16,12 +16,14 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
 };
-use kithara_test_fixtures::signal::{
-    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::{
+    hls_pcm_forty, hls_pcm_forty_descending, hls_pcm_forty_shifted, hls_stream_header,
 };
+use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use tracing::{info, warn};
 
-use crate::common::test_defaults::{SawWav, frames_in_segments};
+use crate::common::test_defaults::SawWav;
 
 struct Consts;
 impl Consts {
@@ -88,56 +90,17 @@ fn freeze_active_variant(abr: &AbrHandle) -> usize {
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
-)]
-#[case::ephemeral(true)]
-#[cfg(not(target_arch = "wasm32"))]
-#[case::mmap(false)]
-async fn stress_seek_lifecycle_with_zero_reset(
-    #[case] ephemeral: bool,
-    abr_fast: kithara::abr::AbrSettings,
-) {
-    let init_segment = Arc::new(signal::header(
-        Consts::D.sample_rate,
-        Consts::D.channels,
-        None,
-    ));
-    let v0_pcm = Arc::new(Vec::from(Pcm::new(
-        Consts::D.sample_rate,
-        Consts::D.channels,
-        frames_in_segments(
-            Consts::SEGMENT_COUNT,
-            Consts::D.segment_size,
-            Consts::D.channels,
-        ),
-        Wave::Sawtooth,
-    )));
-    let v1_pcm = Arc::new(Vec::from(Pcm::new(
-        Consts::D.sample_rate,
-        Consts::D.channels,
-        frames_in_segments(
-            Consts::SEGMENT_COUNT,
-            Consts::D.segment_size,
-            Consts::D.channels,
-        ),
-        Wave::SawtoothDescending,
-    )));
-    let v2_pcm = Arc::new(Vec::from(Pcm::new(
-        Consts::D.sample_rate,
-        Consts::D.channels,
-        frames_in_segments(
-            Consts::SEGMENT_COUNT,
-            Consts::D.segment_size,
-            Consts::D.channels,
-        ),
-        Wave::SawtoothShifted,
-    )));
+#[kithara::fixture]
+async fn audio_server(
+    hls_stream_header: Vec<u8>,
+    hls_pcm_forty: Vec<u8>,
+    hls_pcm_forty_descending: Vec<u8>,
+    hls_pcm_forty_shifted: Vec<u8>,
+) -> HlsTestServer {
+    let init_segment = Arc::new(hls_stream_header);
+    let v0_pcm = Arc::new(hls_pcm_forty);
+    let v1_pcm = Arc::new(hls_pcm_forty_descending);
+    let v2_pcm = Arc::new(hls_pcm_forty_shifted);
 
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
@@ -177,6 +140,28 @@ async fn stress_seek_lifecycle_with_zero_reset(
     })
     .await;
 
+    server
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    hang_timeout_secs(5),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+)]
+#[case::ephemeral(true)]
+#[cfg(not(target_arch = "wasm32"))]
+#[case::mmap(false)]
+async fn stress_seek_lifecycle_with_zero_reset(
+    #[future(awt)] audio_server: HlsTestServer,
+    #[case] ephemeral: bool,
+    abr_fast: kithara::abr::AbrSettings,
+) {
+    let server = audio_server;
+    let segment_duration = server.config().segment_duration_secs;
+    let total_secs = segment_duration * Consts::SEGMENT_COUNT as f64;
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready");
 

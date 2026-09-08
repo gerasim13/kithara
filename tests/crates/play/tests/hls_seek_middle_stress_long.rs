@@ -25,7 +25,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
+    CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
+    Xorshift64,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker},
     temp_dir,
     waits::{
@@ -250,12 +251,14 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
     case::apple(DecoderBackend::Apple)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
-async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBackend) {
+async fn hls_seek_middle_repeated_seeks_long_stress(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] gated_source: (PackagedTestServer, Vec<SegmentGateHandle>),
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let gate_specs = Consts::GATED_SEGMENTS.map(|segment| (Consts::GATED_VARIANT, segment));
-    let (server, handles) = PackagedTestServer::with_segment_gates(&gate_specs).await;
+    let (server, handles) = gated_source;
     let mut gates: Vec<ControlledGate> = Consts::GATED_SEGMENTS
         .into_iter()
         .zip(handles)
@@ -382,7 +385,10 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 #[ignore = "run: just test run --flash=off -p kithara-integration-tests --test suite_stress --run-ignored=only -E 'test(~hls_rate_seek_stress_keeps_playback_live)'"]
-async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBackend) {
+async fn hls_rate_seek_stress_keeps_playback_live(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] ladder_source: (TestServerHelper, CreatedHls),
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -393,18 +399,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
         Consts::SEEK_MAX_SECONDS,
     );
 
-    let server = TestServerHelper::new().await;
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(Consts::LADDER_SEGMENTS)
-                .segment_duration_secs(Consts::LADDER_SEGMENT_SECS)
-                .variant_bandwidths(vec![128_000])
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create the ladder the seek stress runs over");
+    let (_server, created) = ladder_source;
     let master = created.master_url();
     let temp = temp_dir();
     let shutdown = CancelScope::new(None);
@@ -582,4 +577,28 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     queue.close().await;
     drop(downloader);
     drop(temp);
+}
+
+#[kithara::fixture]
+async fn gated_source() -> (PackagedTestServer, Vec<SegmentGateHandle>) {
+    let gate_specs = Consts::GATED_SEGMENTS.map(|segment| (Consts::GATED_VARIANT, segment));
+    let (server, handles) = PackagedTestServer::with_segment_gates(&gate_specs).await;
+    (server, handles)
+}
+
+#[kithara::fixture]
+async fn ladder_source() -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(Consts::LADDER_SEGMENTS)
+                .segment_duration_secs(Consts::LADDER_SEGMENT_SECS)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the seek stress runs over");
+    (server, created)
 }

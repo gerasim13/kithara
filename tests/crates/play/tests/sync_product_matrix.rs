@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{env, io, num::NonZeroU32, path::Path};
+use std::{env, io, num::NonZeroU32};
 
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
@@ -282,13 +282,14 @@ const CROSS_STYLE: &[&str] = &[
     "rhythm_wav_house_124_aligned",
     "rhythm_wav_breakbeat_140_aligned",
 ];
+pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowtechno"];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
     Synthetic,
     Rhythm(&'static [&'static str]),
     HlsSame(HlsProtection),
-    Library,
+    Library(&'static [&'static str]),
     Mp3Same,
     Mp3Distinct,
     HlsMp3(HlsProtection),
@@ -301,6 +302,19 @@ pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_B
 pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
 
 impl Provider {
+    pub(super) const ALL: &[Provider] = &[
+        Self::Synthetic,
+        Self::Rhythm(CROSS_STYLE),
+        Self::HlsSame(HlsProtection::Plain),
+        Self::HlsSame(HlsProtection::Drm),
+        Self::Library(LIBRARY),
+        Self::Mp3Same,
+        Self::Mp3Distinct,
+        Self::HlsMp3(HlsProtection::Plain),
+        Self::HlsMp3(HlsProtection::Drm),
+        Self::Sweep,
+    ];
+
     const fn has_score_markers(self) -> bool {
         matches!(self, Self::Rhythm(_))
     }
@@ -382,29 +396,47 @@ fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, Off
     (host, request)
 }
 
+pub(super) type PreparedSources = (Provider, TestServerHelper, Vec<String>);
+
+pub(super) async fn prepared_sources(provider: Provider) -> PreparedSources {
+    let server = TestServerHelper::new().await;
+    let paths = sources(provider, 4, &server).await;
+    (provider, server, paths)
+}
+
 impl ProductHarness {
-    pub(super) async fn new(case: SyncCase, provider: Provider, audible_deck: usize) -> Self {
-        Self::build(case, provider, audible_deck, BLOCK_FRAMES, false).await
+    pub(super) async fn new(
+        case: SyncCase,
+        prepared: &PreparedSources,
+        audible_deck: usize,
+    ) -> Self {
+        Self::build(case, prepared, audible_deck, BLOCK_FRAMES, false).await
     }
 
     pub(super) async fn new_for_block(
         case: SyncCase,
-        provider: Provider,
+        prepared: &PreparedSources,
         audible_deck: usize,
         block_frames: usize,
     ) -> Self {
-        Self::build(case, provider, audible_deck, block_frames, true).await
+        Self::build(case, prepared, audible_deck, block_frames, true).await
     }
 
     async fn build(
         case: SyncCase,
-        provider: Provider,
+        prepared: &PreparedSources,
         audible_deck: usize,
         block_frames: usize,
         paced: bool,
     ) -> Self {
-        let server = TestServerHelper::new().await;
-        let sources = sources(provider, case.decks, &server).await;
+        let provider = prepared.0;
+        let sources: Vec<_> = prepared
+            .2
+            .iter()
+            .cycle()
+            .take(case.decks)
+            .cloned()
+            .collect();
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
@@ -846,7 +878,11 @@ fn offline_renderer_publishes_only_complete_recordings() {
     );
 }
 
-async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) -> Vec<String> {
+pub(super) async fn sources(
+    provider: Provider,
+    decks: usize,
+    server: &TestServerHelper,
+) -> Vec<String> {
     match provider {
         Provider::Synthetic => cycle_paths(
             &[
@@ -867,7 +903,22 @@ async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) ->
                 )
             })
             .collect(),
-        Provider::Library => cycle_paths_from_strings(&library_paths(), decks),
+        Provider::Library(names) => names
+            .iter()
+            .cycle()
+            .take(decks)
+            .map(|name| {
+                let asset = by_name(name).unwrap_or_else(|| {
+                    panic!(
+                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build with KITHARA_REMOTE_FIXTURES=1"
+                    )
+                });
+                asset
+                    .try_bytes()
+                    .unwrap_or_else(|error| panic!("BLOCKED_FIXTURE: {error}"));
+                asset_path(asset)
+            })
+            .collect(),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
         Provider::Sweep => cycle_paths(&[signal_mp3_sweep_up_60s()], decks),
         Provider::Mp3Distinct => cycle_paths(
@@ -925,33 +976,6 @@ fn cycle_paths(assets: &[Asset], count: usize) -> Vec<String> {
         .collect()
 }
 
-fn cycle_paths_from_strings(paths: &[String], count: usize) -> Vec<String> {
-    paths.iter().cycle().take(count).cloned().collect()
-}
-
-fn library_paths() -> [String; 2] {
-    let root = env::var_os("KITHARA_SYNC_LIBRARY").unwrap_or_else(|| {
-        panic!("BLOCKED_FIXTURE: KITHARA_SYNC_LIBRARY must name the opt-in music library root")
-    });
-    let root = Path::new(&root);
-    let track = |name: &str| {
-        let relative = env::var_os(name).unwrap_or_else(|| {
-            panic!("BLOCKED_FIXTURE: {name} must name a track under KITHARA_SYNC_LIBRARY")
-        });
-        let path = root.join(relative);
-        assert!(
-            path.is_file(),
-            "BLOCKED_FIXTURE: {name} does not resolve to a file under KITHARA_SYNC_LIBRARY: {}",
-            path.display(),
-        );
-        path.to_string_lossy().into_owned()
-    };
-    [
-        track("KITHARA_SYNC_LIBRARY_TRACK_A"),
-        track("KITHARA_SYNC_LIBRARY_TRACK_B"),
-    ]
-}
-
 fn asset_path(asset: Asset) -> String {
     asset
         .path()
@@ -989,14 +1013,15 @@ async fn hls(
         .to_string()
 }
 
-async fn run(case: SyncCase, provider: Provider) {
+async fn run(case: SyncCase, prepared: PreparedSources) {
+    let provider = prepared.0;
     let expected_samples = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round() as usize
         * usize::from(CHANNELS);
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        let mut harness = ProductHarness::new(case, provider, audible_deck).await;
+        let mut harness = ProductHarness::new(case, &prepared, audible_deck).await;
         harness.run_operations(case).await;
         harness.ride_tempo(case).await;
         let pcm = harness.capture(case).await;
@@ -1045,10 +1070,11 @@ async fn run(case: SyncCase, provider: Provider) {
     flash(false),
     timeout(Duration::from_secs(60))
 )]
-#[case::mp3(Provider::Mp3Same)]
-#[case::drm(Provider::HlsSame(HlsProtection::Drm))]
-async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] provider: Provider) {
-    let mut harness = ProductHarness::new(ONE_DECK, provider, 0).await;
+#[case::mp3(source_mp3_same().await)]
+#[case::drm(source_hls_same_drm().await)]
+async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
+    let provider = prepared.0;
+    let mut harness = ProductHarness::new(ONE_DECK, &prepared, 0).await;
     let pcm = harness.capture(ONE_DECK).await;
     let mut failures = synchronization_failures(
         &format!("encoded rhythmic control {provider:?}"),
@@ -1074,22 +1100,25 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] provider: Provid
     timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
-#[case::play_sync_seek(PLAY_SYNC_SEEK, Provider::Synthetic)]
-#[case::play_seek_sync(PLAY_SEEK_SYNC, Provider::Synthetic)]
-#[case::seek_play_sync(SEEK_PLAY_SYNC, Provider::Synthetic)]
-#[case::seek_sync_play(SEEK_SYNC_PLAY, Provider::Synthetic)]
-#[case::sync_play_seek(SYNC_PLAY_SEEK, Provider::Synthetic)]
-#[case::sync_seek_play(SYNC_SEEK_PLAY, Provider::Synthetic)]
-#[case::sequential_sync(SEQUENTIAL_SYNC, Provider::Synthetic)]
-#[case::paused_sync_then_play(PAUSED_SYNC, Provider::Synthetic)]
-#[case::four_deck_sequential_sync(FOUR_DECK_SYNC, Provider::Synthetic)]
-#[case::tempo_up_120hz(TEMPO_UP_120, Provider::Synthetic)]
-#[case::tempo_down_30hz(TEMPO_DOWN_30, Provider::Synthetic)]
-#[case::ambient_trip_hop(AMBIENT_TRIP_HOP_SYNC, AMBIENT_TRIP_HOP_PROVIDER)]
-#[case::downtempo_house(DOWNTEMPO_HOUSE_SYNC, DOWNTEMPO_HOUSE_PROVIDER)]
-#[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, TECHNO_BREAKBEAT_PROVIDER)]
-#[case::cross_style_four_deck(CROSS_STYLE_SYNC, CROSS_STYLE_PROVIDER)]
-async fn wav_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase, #[case] provider: Provider) {
+#[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
+#[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
+#[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
+#[case::seek_sync_play(SEEK_SYNC_PLAY, source_synthetic().await)]
+#[case::sync_play_seek(SYNC_PLAY_SEEK, source_synthetic().await)]
+#[case::sync_seek_play(SYNC_SEEK_PLAY, source_synthetic().await)]
+#[case::sequential_sync(SEQUENTIAL_SYNC, source_synthetic().await)]
+#[case::paused_sync_then_play(PAUSED_SYNC, source_synthetic().await)]
+#[case::four_deck_sequential_sync(FOUR_DECK_SYNC, source_synthetic().await)]
+#[case::tempo_up_120hz(TEMPO_UP_120, source_synthetic().await)]
+#[case::tempo_down_30hz(TEMPO_DOWN_30, source_synthetic().await)]
+#[case::ambient_trip_hop(AMBIENT_TRIP_HOP_SYNC, source_ambient_trip_hop_provider().await)]
+#[case::downtempo_house(DOWNTEMPO_HOUSE_SYNC, source_downtempo_house_provider().await)]
+#[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, source_techno_breakbeat_provider().await)]
+#[case::cross_style_four_deck(CROSS_STYLE_SYNC, source_cross_style_provider().await)]
+async fn wav_product_rows_reach_the_pcm_oracle(
+    #[case] case: SyncCase,
+    #[case] provider: PreparedSources,
+) {
     run(case, provider).await;
 }
 
@@ -1102,74 +1131,74 @@ async fn wav_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase, #[case] p
     timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
-#[case::hls_same_play_sync_seek(Provider::HlsSame(HlsProtection::Plain), PLAY_SYNC_SEEK)]
-#[case::hls_same_play_seek_sync(Provider::HlsSame(HlsProtection::Plain), PLAY_SEEK_SYNC)]
-#[case::hls_same_seek_play_sync(Provider::HlsSame(HlsProtection::Plain), SEEK_PLAY_SYNC)]
-#[case::hls_same_seek_sync_play(Provider::HlsSame(HlsProtection::Plain), SEEK_SYNC_PLAY)]
-#[case::hls_same_sync_play_seek(Provider::HlsSame(HlsProtection::Plain), SYNC_PLAY_SEEK)]
-#[case::hls_same_sync_seek_play(Provider::HlsSame(HlsProtection::Plain), SYNC_SEEK_PLAY)]
-#[case::hls_same_sequential_sync(Provider::HlsSame(HlsProtection::Plain), SEQUENTIAL_SYNC)]
-#[case::hls_same_paused_sync_then_play(Provider::HlsSame(HlsProtection::Plain), PAUSED_SYNC)]
-#[case::hls_same_four_deck_sequential_sync(Provider::HlsSame(HlsProtection::Plain), FOUR_DECK_SYNC)]
-#[case::hls_same_tempo_up_120hz(Provider::HlsSame(HlsProtection::Plain), TEMPO_UP_120)]
-#[case::hls_same_tempo_down_30hz(Provider::HlsSame(HlsProtection::Plain), TEMPO_DOWN_30)]
-#[case::drm_same_play_sync_seek(Provider::HlsSame(HlsProtection::Drm), PLAY_SYNC_SEEK)]
-#[case::drm_same_play_seek_sync(Provider::HlsSame(HlsProtection::Drm), PLAY_SEEK_SYNC)]
-#[case::drm_same_seek_play_sync(Provider::HlsSame(HlsProtection::Drm), SEEK_PLAY_SYNC)]
-#[case::drm_same_seek_sync_play(Provider::HlsSame(HlsProtection::Drm), SEEK_SYNC_PLAY)]
-#[case::drm_same_sync_play_seek(Provider::HlsSame(HlsProtection::Drm), SYNC_PLAY_SEEK)]
-#[case::drm_same_sync_seek_play(Provider::HlsSame(HlsProtection::Drm), SYNC_SEEK_PLAY)]
-#[case::drm_same_sequential_sync(Provider::HlsSame(HlsProtection::Drm), SEQUENTIAL_SYNC)]
-#[case::drm_same_paused_sync_then_play(Provider::HlsSame(HlsProtection::Drm), PAUSED_SYNC)]
-#[case::drm_same_four_deck_sequential_sync(Provider::HlsSame(HlsProtection::Drm), FOUR_DECK_SYNC)]
-#[case::drm_same_tempo_up_120hz(Provider::HlsSame(HlsProtection::Drm), TEMPO_UP_120)]
-#[case::drm_same_tempo_down_30hz(Provider::HlsSame(HlsProtection::Drm), TEMPO_DOWN_30)]
-#[case::mp3_same_play_sync_seek(Provider::Mp3Same, PLAY_SYNC_SEEK)]
-#[case::mp3_same_play_seek_sync(Provider::Mp3Same, PLAY_SEEK_SYNC)]
-#[case::mp3_same_seek_play_sync(Provider::Mp3Same, SEEK_PLAY_SYNC)]
-#[case::mp3_same_seek_sync_play(Provider::Mp3Same, SEEK_SYNC_PLAY)]
-#[case::mp3_same_sync_play_seek(Provider::Mp3Same, SYNC_PLAY_SEEK)]
-#[case::mp3_same_sync_seek_play(Provider::Mp3Same, SYNC_SEEK_PLAY)]
-#[case::mp3_same_sequential_sync(Provider::Mp3Same, SEQUENTIAL_SYNC)]
-#[case::mp3_same_paused_sync_then_play(Provider::Mp3Same, PAUSED_SYNC)]
-#[case::mp3_same_four_deck_sequential_sync(Provider::Mp3Same, FOUR_DECK_SYNC)]
-#[case::mp3_same_tempo_up_120hz(Provider::Mp3Same, TEMPO_UP_120)]
-#[case::mp3_same_tempo_down_30hz(Provider::Mp3Same, TEMPO_DOWN_30)]
-#[case::mp3_distinct_play_sync_seek(Provider::Mp3Distinct, PLAY_SYNC_SEEK)]
-#[case::mp3_distinct_play_seek_sync(Provider::Mp3Distinct, PLAY_SEEK_SYNC)]
-#[case::mp3_distinct_seek_play_sync(Provider::Mp3Distinct, SEEK_PLAY_SYNC)]
-#[case::mp3_distinct_seek_sync_play(Provider::Mp3Distinct, SEEK_SYNC_PLAY)]
-#[case::mp3_distinct_sync_play_seek(Provider::Mp3Distinct, SYNC_PLAY_SEEK)]
-#[case::mp3_distinct_sync_seek_play(Provider::Mp3Distinct, SYNC_SEEK_PLAY)]
-#[case::mp3_distinct_sequential_sync(Provider::Mp3Distinct, SEQUENTIAL_SYNC)]
-#[case::mp3_distinct_paused_sync_then_play(Provider::Mp3Distinct, PAUSED_SYNC)]
-#[case::mp3_distinct_four_deck_sequential_sync(Provider::Mp3Distinct, FOUR_DECK_SYNC)]
-#[case::mp3_distinct_tempo_up_120hz(Provider::Mp3Distinct, TEMPO_UP_120)]
-#[case::mp3_distinct_tempo_down_30hz(Provider::Mp3Distinct, TEMPO_DOWN_30)]
-#[case::hls_mp3_play_sync_seek(Provider::HlsMp3(HlsProtection::Plain), PLAY_SYNC_SEEK)]
-#[case::hls_mp3_play_seek_sync(Provider::HlsMp3(HlsProtection::Plain), PLAY_SEEK_SYNC)]
-#[case::hls_mp3_seek_play_sync(Provider::HlsMp3(HlsProtection::Plain), SEEK_PLAY_SYNC)]
-#[case::hls_mp3_seek_sync_play(Provider::HlsMp3(HlsProtection::Plain), SEEK_SYNC_PLAY)]
-#[case::hls_mp3_sync_play_seek(Provider::HlsMp3(HlsProtection::Plain), SYNC_PLAY_SEEK)]
-#[case::hls_mp3_sync_seek_play(Provider::HlsMp3(HlsProtection::Plain), SYNC_SEEK_PLAY)]
-#[case::hls_mp3_sequential_sync(Provider::HlsMp3(HlsProtection::Plain), SEQUENTIAL_SYNC)]
-#[case::hls_mp3_paused_sync_then_play(Provider::HlsMp3(HlsProtection::Plain), PAUSED_SYNC)]
-#[case::hls_mp3_four_deck_sequential_sync(Provider::HlsMp3(HlsProtection::Plain), FOUR_DECK_SYNC)]
-#[case::hls_mp3_tempo_up_120hz(Provider::HlsMp3(HlsProtection::Plain), TEMPO_UP_120)]
-#[case::hls_mp3_tempo_down_30hz(Provider::HlsMp3(HlsProtection::Plain), TEMPO_DOWN_30)]
-#[case::drm_mp3_play_sync_seek(Provider::HlsMp3(HlsProtection::Drm), PLAY_SYNC_SEEK)]
-#[case::drm_mp3_play_seek_sync(Provider::HlsMp3(HlsProtection::Drm), PLAY_SEEK_SYNC)]
-#[case::drm_mp3_seek_play_sync(Provider::HlsMp3(HlsProtection::Drm), SEEK_PLAY_SYNC)]
-#[case::drm_mp3_seek_sync_play(Provider::HlsMp3(HlsProtection::Drm), SEEK_SYNC_PLAY)]
-#[case::drm_mp3_sync_play_seek(Provider::HlsMp3(HlsProtection::Drm), SYNC_PLAY_SEEK)]
-#[case::drm_mp3_sync_seek_play(Provider::HlsMp3(HlsProtection::Drm), SYNC_SEEK_PLAY)]
-#[case::drm_mp3_sequential_sync(Provider::HlsMp3(HlsProtection::Drm), SEQUENTIAL_SYNC)]
-#[case::drm_mp3_paused_sync_then_play(Provider::HlsMp3(HlsProtection::Drm), PAUSED_SYNC)]
-#[case::drm_mp3_four_deck_sequential_sync(Provider::HlsMp3(HlsProtection::Drm), FOUR_DECK_SYNC)]
-#[case::drm_mp3_tempo_up_120hz(Provider::HlsMp3(HlsProtection::Drm), TEMPO_UP_120)]
-#[case::drm_mp3_tempo_down_30hz(Provider::HlsMp3(HlsProtection::Drm), TEMPO_DOWN_30)]
+#[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
+#[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
+#[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
+#[case::hls_same_seek_sync_play(source_hls_same_plain().await, SEEK_SYNC_PLAY)]
+#[case::hls_same_sync_play_seek(source_hls_same_plain().await, SYNC_PLAY_SEEK)]
+#[case::hls_same_sync_seek_play(source_hls_same_plain().await, SYNC_SEEK_PLAY)]
+#[case::hls_same_sequential_sync(source_hls_same_plain().await, SEQUENTIAL_SYNC)]
+#[case::hls_same_paused_sync_then_play(source_hls_same_plain().await, PAUSED_SYNC)]
+#[case::hls_same_four_deck_sequential_sync(source_hls_same_plain().await, FOUR_DECK_SYNC)]
+#[case::hls_same_tempo_up_120hz(source_hls_same_plain().await, TEMPO_UP_120)]
+#[case::hls_same_tempo_down_30hz(source_hls_same_plain().await, TEMPO_DOWN_30)]
+#[case::drm_same_play_sync_seek(source_hls_same_drm().await, PLAY_SYNC_SEEK)]
+#[case::drm_same_play_seek_sync(source_hls_same_drm().await, PLAY_SEEK_SYNC)]
+#[case::drm_same_seek_play_sync(source_hls_same_drm().await, SEEK_PLAY_SYNC)]
+#[case::drm_same_seek_sync_play(source_hls_same_drm().await, SEEK_SYNC_PLAY)]
+#[case::drm_same_sync_play_seek(source_hls_same_drm().await, SYNC_PLAY_SEEK)]
+#[case::drm_same_sync_seek_play(source_hls_same_drm().await, SYNC_SEEK_PLAY)]
+#[case::drm_same_sequential_sync(source_hls_same_drm().await, SEQUENTIAL_SYNC)]
+#[case::drm_same_paused_sync_then_play(source_hls_same_drm().await, PAUSED_SYNC)]
+#[case::drm_same_four_deck_sequential_sync(source_hls_same_drm().await, FOUR_DECK_SYNC)]
+#[case::drm_same_tempo_up_120hz(source_hls_same_drm().await, TEMPO_UP_120)]
+#[case::drm_same_tempo_down_30hz(source_hls_same_drm().await, TEMPO_DOWN_30)]
+#[case::mp3_same_play_sync_seek(source_mp3_same().await, PLAY_SYNC_SEEK)]
+#[case::mp3_same_play_seek_sync(source_mp3_same().await, PLAY_SEEK_SYNC)]
+#[case::mp3_same_seek_play_sync(source_mp3_same().await, SEEK_PLAY_SYNC)]
+#[case::mp3_same_seek_sync_play(source_mp3_same().await, SEEK_SYNC_PLAY)]
+#[case::mp3_same_sync_play_seek(source_mp3_same().await, SYNC_PLAY_SEEK)]
+#[case::mp3_same_sync_seek_play(source_mp3_same().await, SYNC_SEEK_PLAY)]
+#[case::mp3_same_sequential_sync(source_mp3_same().await, SEQUENTIAL_SYNC)]
+#[case::mp3_same_paused_sync_then_play(source_mp3_same().await, PAUSED_SYNC)]
+#[case::mp3_same_four_deck_sequential_sync(source_mp3_same().await, FOUR_DECK_SYNC)]
+#[case::mp3_same_tempo_up_120hz(source_mp3_same().await, TEMPO_UP_120)]
+#[case::mp3_same_tempo_down_30hz(source_mp3_same().await, TEMPO_DOWN_30)]
+#[case::mp3_distinct_play_sync_seek(source_mp3_distinct().await, PLAY_SYNC_SEEK)]
+#[case::mp3_distinct_play_seek_sync(source_mp3_distinct().await, PLAY_SEEK_SYNC)]
+#[case::mp3_distinct_seek_play_sync(source_mp3_distinct().await, SEEK_PLAY_SYNC)]
+#[case::mp3_distinct_seek_sync_play(source_mp3_distinct().await, SEEK_SYNC_PLAY)]
+#[case::mp3_distinct_sync_play_seek(source_mp3_distinct().await, SYNC_PLAY_SEEK)]
+#[case::mp3_distinct_sync_seek_play(source_mp3_distinct().await, SYNC_SEEK_PLAY)]
+#[case::mp3_distinct_sequential_sync(source_mp3_distinct().await, SEQUENTIAL_SYNC)]
+#[case::mp3_distinct_paused_sync_then_play(source_mp3_distinct().await, PAUSED_SYNC)]
+#[case::mp3_distinct_four_deck_sequential_sync(source_mp3_distinct().await, FOUR_DECK_SYNC)]
+#[case::mp3_distinct_tempo_up_120hz(source_mp3_distinct().await, TEMPO_UP_120)]
+#[case::mp3_distinct_tempo_down_30hz(source_mp3_distinct().await, TEMPO_DOWN_30)]
+#[case::hls_mp3_play_sync_seek(source_hls_mp3_plain().await, PLAY_SYNC_SEEK)]
+#[case::hls_mp3_play_seek_sync(source_hls_mp3_plain().await, PLAY_SEEK_SYNC)]
+#[case::hls_mp3_seek_play_sync(source_hls_mp3_plain().await, SEEK_PLAY_SYNC)]
+#[case::hls_mp3_seek_sync_play(source_hls_mp3_plain().await, SEEK_SYNC_PLAY)]
+#[case::hls_mp3_sync_play_seek(source_hls_mp3_plain().await, SYNC_PLAY_SEEK)]
+#[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
+#[case::hls_mp3_sequential_sync(source_hls_mp3_plain().await, SEQUENTIAL_SYNC)]
+#[case::hls_mp3_paused_sync_then_play(source_hls_mp3_plain().await, PAUSED_SYNC)]
+#[case::hls_mp3_four_deck_sequential_sync(source_hls_mp3_plain().await, FOUR_DECK_SYNC)]
+#[case::hls_mp3_tempo_up_120hz(source_hls_mp3_plain().await, TEMPO_UP_120)]
+#[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
+#[case::drm_mp3_play_sync_seek(source_hls_mp3_drm().await, PLAY_SYNC_SEEK)]
+#[case::drm_mp3_play_seek_sync(source_hls_mp3_drm().await, PLAY_SEEK_SYNC)]
+#[case::drm_mp3_seek_play_sync(source_hls_mp3_drm().await, SEEK_PLAY_SYNC)]
+#[case::drm_mp3_seek_sync_play(source_hls_mp3_drm().await, SEEK_SYNC_PLAY)]
+#[case::drm_mp3_sync_play_seek(source_hls_mp3_drm().await, SYNC_PLAY_SEEK)]
+#[case::drm_mp3_sync_seek_play(source_hls_mp3_drm().await, SYNC_SEEK_PLAY)]
+#[case::drm_mp3_sequential_sync(source_hls_mp3_drm().await, SEQUENTIAL_SYNC)]
+#[case::drm_mp3_paused_sync_then_play(source_hls_mp3_drm().await, PAUSED_SYNC)]
+#[case::drm_mp3_four_deck_sequential_sync(source_hls_mp3_drm().await, FOUR_DECK_SYNC)]
+#[case::drm_mp3_tempo_up_120hz(source_hls_mp3_drm().await, TEMPO_UP_120)]
+#[case::drm_mp3_tempo_down_30hz(source_hls_mp3_drm().await, TEMPO_DOWN_30)]
 async fn real_media_product_rows_reach_the_pcm_oracle(
-    #[case] provider: Provider,
+    #[case] provider: PreparedSources,
     #[case] case: SyncCase,
 ) {
     run(case, provider).await;
@@ -1183,7 +1212,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires KITHARA_SYNC_LIBRARY and product Warp alignment"]
+#[ignore = "ignored-red: requires KITHARA_REMOTE_FIXTURES at build time and product Warp alignment, 2026-09-07"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC)]
@@ -1195,6 +1224,86 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
 #[case::four_deck_sequential_sync(FOUR_DECK_SYNC)]
 #[case::tempo_up_120hz(TEMPO_UP_120)]
 #[case::tempo_down_30hz(TEMPO_DOWN_30)]
-async fn opt_in_library_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
-    run(case, Provider::Library).await;
+async fn opt_in_library_product_rows_reach_the_pcm_oracle(
+    #[case] case: SyncCase,
+    #[future(awt)] library_sources: PreparedSources,
+) {
+    run(case, library_sources).await;
+}
+
+#[kithara::fixture]
+pub(super) async fn synthetic_sources() -> PreparedSources {
+    prepared_sources(Provider::Synthetic).await
+}
+#[kithara::fixture]
+pub(super) async fn sweep_sources() -> PreparedSources {
+    prepared_sources(Provider::Sweep).await
+}
+#[kithara::fixture]
+pub(super) async fn mixed_sources() -> PreparedSources {
+    prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
+}
+#[kithara::fixture]
+pub(super) async fn listening_sources() -> PreparedSources {
+    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_mp3_same() -> PreparedSources {
+    prepared_sources(Provider::Mp3Same).await
+}
+
+#[kithara::fixture]
+async fn source_hls_same_drm() -> PreparedSources {
+    prepared_sources(Provider::HlsSame(HlsProtection::Drm)).await
+}
+
+#[kithara::fixture]
+async fn source_synthetic() -> PreparedSources {
+    prepared_sources(Provider::Synthetic).await
+}
+
+#[kithara::fixture]
+async fn source_ambient_trip_hop_provider() -> PreparedSources {
+    prepared_sources(AMBIENT_TRIP_HOP_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_downtempo_house_provider() -> PreparedSources {
+    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_techno_breakbeat_provider() -> PreparedSources {
+    prepared_sources(TECHNO_BREAKBEAT_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_cross_style_provider() -> PreparedSources {
+    prepared_sources(CROSS_STYLE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_hls_same_plain() -> PreparedSources {
+    prepared_sources(Provider::HlsSame(HlsProtection::Plain)).await
+}
+
+#[kithara::fixture]
+async fn source_mp3_distinct() -> PreparedSources {
+    prepared_sources(Provider::Mp3Distinct).await
+}
+
+#[kithara::fixture]
+async fn source_hls_mp3_plain() -> PreparedSources {
+    prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
+}
+
+#[kithara::fixture]
+async fn source_hls_mp3_drm() -> PreparedSources {
+    prepared_sources(Provider::HlsMp3(HlsProtection::Drm)).await
+}
+
+#[kithara::fixture]
+async fn library_sources() -> PreparedSources {
+    prepared_sources(Provider::Library(LIBRARY)).await
 }

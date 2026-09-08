@@ -23,15 +23,9 @@ use kithara_integration_tests::{
 )]
 async fn prefetch_403_returns_err_quickly(
     temp_dir: TestTempDir,
+    #[future(awt)] denied_key: PackagedTestServer,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = PackagedTestServer::with_error_rules(vec![HttpErrorRule {
-        kind: HlsRouteKind::Key,
-        status: 403,
-        body: Some("{\"detail\":\"User not registered\"}".to_string()),
-        ..Default::default()
-    }])
-    .await;
-
+    let server = denied_key;
     let url = server.url("/master-encrypted.m3u8");
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -69,4 +63,15 @@ async fn prefetch_403_returns_err_quickly(
     );
 
     Ok(())
+}
+
+#[kithara::fixture]
+async fn denied_key() -> PackagedTestServer {
+    PackagedTestServer::with_error_rules(vec![HttpErrorRule {
+        kind: HlsRouteKind::Key,
+        status: 403,
+        body: Some("{\"detail\":\"User not registered\"}".to_string()),
+        ..Default::default()
+    }])
+    .await
 }

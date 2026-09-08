@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
 };
+use kithara_test_fixtures::integration_fixtures::constant_loud;
 
 use crate::bufpool_ext::TestPools;
 
@@ -28,10 +29,14 @@ const BLOCK_FRAMES: usize = 512;
 /// ≈ 0.74 s of rendered audio — far short of `TRACK_SECS`.
 const WARMUP_BLOCKS: usize = 64;
 const TRACK_SECS: f64 = 30.0;
-const LOUD: f32 = 0.80;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
 
-async fn load(harness: &OfflinePlayerHarness, queue: &QueueControl<TestPools>, id: TrackId) {
+async fn load(
+    harness: &OfflinePlayerHarness,
+    queue: &QueueControl<TestPools>,
+    id: TrackId,
+    constant_loud: &'static [u8],
+) {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
@@ -41,7 +46,7 @@ async fn load(harness: &OfflinePlayerHarness, queue: &QueueControl<TestPools>, i
             q.complete_load_for_test(
                 id,
                 resource_from_reader_with_src(
-                    TestPcmReader::with_value(spec, TRACK_SECS, LOUD),
+                    TestPcmReader::from_pcm(spec, TRACK_SECS, constant_loud),
                     Arc::from(REPEATED_SRC),
                 ),
             )
@@ -70,7 +75,9 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 }
 
 /// The failing track is the *second* entry carrying this URL.
-async fn fixture_playing_the_second_copy() -> (
+async fn fixture_playing_the_second_copy(
+    constant_loud: &'static [u8],
+) -> (
     OfflinePlayerHarness,
     QueueControl<TestPools>,
     TrackId,
@@ -85,8 +92,8 @@ async fn fixture_playing_the_second_copy() -> (
         .run(&queue, move |q| q.append(REPEATED_SRC))
         .await
         .expect("append second copy");
-    load(&harness, &queue, first).await;
-    load(&harness, &queue, playing).await;
+    load(&harness, &queue, first, constant_loud).await;
+    load(&harness, &queue, playing, constant_loud).await;
 
     harness
         .run(&queue, move |q| q.select(playing, Transition::None))
@@ -109,8 +116,11 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
 #[kithara::test(tokio)]
 #[case::played_entry(true)]
 #[case::same_url_entry(false)]
-async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
-    let (harness, queue, first, playing) = fixture_playing_the_second_copy().await;
+async fn a_failure_only_flags_the_entry_that_played(
+    #[case] played_entry: bool,
+    constant_loud: &'static [u8],
+) {
+    let (harness, queue, first, playing) = fixture_playing_the_second_copy(constant_loud).await;
 
     publish_leading_failure(&harness, playing);
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;

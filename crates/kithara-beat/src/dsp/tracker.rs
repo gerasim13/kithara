@@ -81,6 +81,9 @@ fn confidence(curve: &[f32], at: f32, mean: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{
+        click_silence_20s, clicks_120_20s, clicks_150_12s, clicks_change_24s, clicks_change_40s,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -94,8 +97,7 @@ mod tests {
     const SECONDS: f32 = 20.0;
 
     /// The tempo of a click train, read from the marks the tracker returns.
-    fn reported_bpm(tempo: Tempo, clicks_per_minute: f32) -> f32 {
-        let pcm = clicks::track(SECONDS, 60.0 / clicks_per_minute);
+    fn reported_bpm(tempo: Tempo, pcm: &[f32]) -> f32 {
         let beats: Vec<f32> = SpectralBeats::new(pools(), tempo)
             .expect("a fresh region has room for the window")
             .analyze(&pcm)
@@ -114,7 +116,7 @@ mod tests {
     /// train reads as its own tempo under the default band, and as its half
     /// under a band holding only the half.
     #[kithara::test(native, flash(false))]
-    fn the_band_holds_the_tempo_the_tracker_reports() {
+    fn the_band_holds_the_tempo_the_tracker_reports(clicks_120_20s: Vec<f32>) {
         let clicks_per_minute = 120.0;
         let halved = Tempo::builder()
             .band(55.0..=75.0)
@@ -122,13 +124,13 @@ mod tests {
             .build()
             .expect("a band the comb scores");
 
-        let default = reported_bpm(Tempo::default(), clicks_per_minute);
+        let default = reported_bpm(Tempo::default(), &clicks_120_20s);
         assert!(
             (default - clicks_per_minute).abs() < 4.0,
             "the default band reads the click tempo, read as {default} BPM"
         );
 
-        let narrowed = reported_bpm(halved, clicks_per_minute);
+        let narrowed = reported_bpm(halved, &clicks_120_20s);
         assert!(
             halved.band().contains(&narrowed),
             "a band of {:?} BPM reported {narrowed} BPM",
@@ -136,14 +138,7 @@ mod tests {
         );
     }
 
-    fn tempo_change(switch_seconds: f32, total_seconds: f32, first: f32, second: f32) -> Vec<f32> {
-        let mut pcm = clicks::track(switch_seconds, first);
-        pcm.extend(clicks::track(total_seconds - switch_seconds, second));
-        pcm
-    }
-
-    fn detect(period_seconds: f32) -> Vec<f32> {
-        let pcm = clicks::track(SECONDS, period_seconds);
+    fn detect(pcm: &[f32]) -> Vec<f32> {
         tracker()
             .analyze(&pcm)
             .expect("the analysis fits the region")
@@ -154,9 +149,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn markers_land_on_the_clicks() {
+    fn markers_land_on_the_clicks(clicks_120_20s: Vec<f32>) {
         let period = 0.5;
-        let found = detect(period);
+        let found = detect(&clicks_120_20s);
         let expected = clicks::positions(SECONDS, period);
         assert!(
             found.len() >= expected.len() - 1,
@@ -177,9 +172,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_tempo_change_lands_in_separate_segments() {
+    fn a_tempo_change_lands_in_separate_segments(clicks_change_40s: Vec<f32>) {
         let switch = 20.0;
-        let pcm = tempo_change(switch, 40.0, 60.0 / 100.0, 60.0 / 140.0);
+        let pcm = clicks_change_40s;
         let beats: Vec<f32> = tracker()
             .analyze(&pcm)
             .expect("the analysis fits the region")
@@ -214,8 +209,8 @@ mod tests {
     /// A tracker takes its buffers from a shared region, so the same audio
     /// must decode to the same grid however it is reached.
     #[kithara::test(native, flash(false))]
-    fn the_same_audio_yields_the_same_marks() {
-        let pcm = tempo_change(9.0, 24.0, 60.0 / 100.0, 60.0 / 137.0);
+    fn the_same_audio_yields_the_same_marks(clicks_150_12s: Vec<f32>, clicks_change_24s: Vec<f32>) {
+        let pcm = clicks_change_24s;
         let region = pools();
         let marks = |tracker: &SpectralBeats<_>, pcm: &[f32]| -> Vec<f32> {
             tracker
@@ -230,7 +225,7 @@ mod tests {
         let reused = SpectralBeats::new(region.clone(), Tempo::default())
             .expect("a fresh region has room for the window");
         let first = marks(&reused, &pcm);
-        let _ = marks(&reused, &clicks::track(12.0, 0.4));
+        let _ = marks(&reused, &clicks_150_12s);
         let again = marks(&reused, &pcm);
         let fresh = marks(
             &SpectralBeats::new(region.clone(), Tempo::default())
@@ -246,18 +241,18 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn silence_yields_no_markers() {
+    fn silence_yields_no_markers(click_silence_20s: Vec<f32>) {
         let raw = tracker()
-            .analyze(&clicks::silence(20.0))
+            .analyze(&click_silence_20s)
             .expect("the analysis fits the region");
         assert!(raw.beats.is_empty(), "silence has no beats to report");
         assert!(raw.downbeats.is_empty());
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_grid_carries_beats_and_no_downbeats() {
+    fn a_grid_carries_beats_and_no_downbeats(clicks_120_20s: Vec<f32>) {
         let raw = tracker()
-            .analyze(&clicks::track(SECONDS, 0.5))
+            .analyze(&clicks_120_20s)
             .expect("the analysis fits the region");
         assert!(!raw.beats.is_empty());
         assert!(
@@ -276,6 +271,9 @@ mod tests {
 #[cfg(test)]
 mod optimality {
     use kithara_bufpool::SampleBuffer;
+    use kithara_test_fixtures::unit_fixtures::{
+        click_silence_20s, clicks_120_20s, clicks_150_12s, clicks_change_24s, clicks_change_40s,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -315,9 +313,9 @@ mod optimality {
     }
 
     #[kithara::test(native, flash(false))]
-    fn the_decoded_path_scores_the_dynamic_programs_optimum() {
+    fn the_decoded_path_scores_the_dynamic_programs_optimum(clicks_120_20s: Vec<f32>) {
         let region = pools();
-        let pcm = clicks::track(20.0, 0.5);
+        let pcm = clicks_120_20s;
         let curve = Novelty::new(region.clone())
             .expect("a fresh region has room for the window")
             .curve(&pcm)

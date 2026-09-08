@@ -700,21 +700,6 @@ default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]
 
-[test.lanes.cold]
-program = "cargo"
-default_features = ["kithara-ui/render"]
-prefix_args = [
-  "nextest",
-  "run",
-  "--profile",
-  "cold",
-  "--workspace",
-  "--exclude",
-  "kithara-fuzz",
-  "--cargo-profile",
-  "test-release",
-]
-
 [test.lanes.loom]
 program = "cargo"
 prefix_args = [
@@ -1535,7 +1520,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
+  { args = [
+    "test",
+    "run",
+    "-E",
+    "package(kithara-test-fixtures) | test(sync_fixture_census)",
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
 ]
 role = "deep"
 kinds = []
@@ -2315,14 +2306,13 @@ wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
-# What each packaging run collects. The version gate belongs to publishing a
-# version, so a snapshot taken of a commit under review does not ask for one.
+# What each packaging run collects. Whether a version has to be named is the
+# pipeline's answer rather than a profile's: this same release profile builds
+# the versioned release and the rolling nightly, which names no version.
 [ext.release.packages.release]
-version_gate = true
 assets = ["core", "merged"]
 
 [ext.release.packages.snapshot]
-version_gate = false
 assets = ["merged"]
 
 # What delivery requires before it runs and what it then performs. The nightly

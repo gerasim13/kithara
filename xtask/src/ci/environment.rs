@@ -299,7 +299,7 @@ impl CiEnvironment {
         let lease = cache_lease(&cache_root)?;
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
-        let fixture_cache = cache_root.join("fixtures");
+        let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
         let npm_cache = cache_root.join("npm");
         let swiftpm_cache = cache_root.join("swiftpm");
         let temp = scratch_root().join(trust.as_str());
@@ -878,6 +878,11 @@ mod tests {
 
             let environment = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos).unwrap();
             let vars = environment.vars();
+            assert_eq!(
+                vars.get(OsStr::new("KITHARA_FIXTURE_CACHE"))
+                    .map(OsString::as_os_str),
+                Some(root.join("review/fixtures").as_os_str())
+            );
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));

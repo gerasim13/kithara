@@ -29,7 +29,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 

@@ -1,10 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara::{
-    platform::{sync::Arc, time::Duration},
-    signal::AudioSpec,
-};
-use kithara_test_fixtures::signal;
+use kithara::{platform::time::Duration, signal::AudioSpec};
 
 /// Default audio parameters for generated WAV test fixtures.
 ///
@@ -44,16 +40,6 @@ impl SawWav {
     /// Byte count for `segments` consecutive segments of `segment_size`.
     pub const fn total_bytes(&self, segments: usize) -> usize {
         segments * self.segment_size
-    }
-
-    /// Generate a WAV blob sized to `segments * segment_size` bytes.
-    pub fn build_wav(&self, segments: usize) -> Arc<Vec<u8>> {
-        Arc::new(signal::wav_of_size(
-            self.sample_rate,
-            self.channels,
-            self.total_bytes(segments),
-            signal::TONE,
-        ))
     }
 }
 

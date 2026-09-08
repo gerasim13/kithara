@@ -1640,16 +1640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console_error_panic_hook"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
-dependencies = [
- "cfg-if",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4637,8 +4627,8 @@ dependencies = [
  "delegate",
  "fieldwork",
  "humantime-serde",
+ "kithara-derive",
  "kithara-events",
- "kithara-macros",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4675,11 +4665,12 @@ dependencies = [
  "kithara-beat",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-derive",
  "kithara-events",
- "kithara-macros",
  "kithara-platform",
  "kithara-resampler",
  "kithara-signal",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-worker",
@@ -4719,8 +4710,8 @@ dependencies = [
  "iced",
  "kithara",
  "kithara-assets",
+ "kithara-derive",
  "kithara-encode",
- "kithara-macros",
  "kithara-record",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -4758,6 +4749,7 @@ dependencies = [
  "block2 0.6.2",
  "fieldwork",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4784,9 +4776,9 @@ dependencies = [
  "humantime-serde",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-drm",
  "kithara-events",
- "kithara-macros",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4840,10 +4832,10 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-derive",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
- "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-resampler",
@@ -4891,8 +4883,9 @@ dependencies = [
  "bon",
  "hex",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4918,8 +4911,8 @@ dependencies = [
  "hls_m3u8",
  "humantime-serde",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-encode",
- "kithara-macros",
  "kithara-output",
  "kithara-platform",
  "kithara-signal",
@@ -4957,8 +4950,9 @@ dependencies = [
  "delegate",
  "hotpath",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5038,6 +5032,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-derive"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_yaml_ng",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "kithara-devtools"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5087,6 +5094,8 @@ dependencies = [
  "ffmpeg-next",
  "kithara-bufpool",
  "kithara-stream",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "tempfile",
@@ -5140,7 +5149,6 @@ name = "kithara-ffi"
 version = "0.0.1-alpha4"
 dependencies = [
  "bytes",
- "console_error_panic_hook",
  "cpal 0.18.1",
  "dashmap",
  "delegate",
@@ -5221,8 +5229,8 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-events",
- "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5305,10 +5313,10 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
- "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5385,7 +5393,6 @@ dependencies = [
  "bytes",
  "cbc",
  "cochlea-features",
- "console_error_panic_hook",
  "criterion",
  "firewheel",
  "futures",
@@ -5404,6 +5411,7 @@ dependencies = [
  "rand 0.10.2",
  "reqwest",
  "ringbuf 0.5.0",
+ "rkyv",
  "serde",
  "serde_json",
  "serial_test",
@@ -5416,6 +5424,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.0",
  "tracing",
+ "tracing-log",
  "tracing-wasm",
  "unimock",
  "url",
@@ -5424,16 +5433,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
-]
-
-[[package]]
-name = "kithara-macros"
-version = "0.0.1-alpha4"
-dependencies = [
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]
@@ -5465,7 +5464,7 @@ dependencies = [
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-net",
  "kithara-platform",
  "kithara-test-macros",
@@ -5518,7 +5517,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
  "assert_no_alloc",
- "console_error_panic_hook",
  "cpu-time",
  "criterion",
  "delegate",
@@ -5575,17 +5573,18 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-derive",
  "kithara-drm",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
- "kithara-macros",
  "kithara-net",
  "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-signal",
  "kithara-stream",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-warp",
@@ -5610,6 +5609,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "cochlea-features",
  "firewheel",
+ "futures",
  "hex",
  "kithara",
  "kithara-app",
@@ -5639,8 +5639,8 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-events",
- "kithara-macros",
  "kithara-platform",
  "kithara-play",
  "kithara-test-utils",
@@ -5681,6 +5681,7 @@ dependencies = [
  "kithara-output",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-worker",
  "ringbuf 0.5.0",
@@ -5698,6 +5699,7 @@ dependencies = [
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -5717,6 +5719,7 @@ dependencies = [
  "fast-interleave",
  "kithara-bufpool",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
 ]
@@ -5772,8 +5775,8 @@ dependencies = [
  "humantime-serde",
  "kithara-abr",
  "kithara-bufpool",
+ "kithara-derive",
  "kithara-events",
- "kithara-macros",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5814,9 +5817,10 @@ dependencies = [
  "fieldwork",
  "hotpath",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5832,6 +5836,7 @@ name = "kithara-test-fixtures"
 version = "0.0.1-alpha4"
 dependencies = [
  "aes",
+ "bon",
  "bytes",
  "cbc",
  "cochlea-render",
@@ -5919,7 +5924,7 @@ dependencies = [
  "iced_tiny_skia",
  "iced_wgpu",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -5957,10 +5962,11 @@ dependencies = [
  "fieldwork",
  "firewheel-core",
  "kithara-bufpool",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
  "kithara-signal",
  "kithara-stretch",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5982,7 +5988,7 @@ dependencies = [
  "fieldwork",
  "hotpath",
  "humantime-serde",
- "kithara-macros",
+ "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",

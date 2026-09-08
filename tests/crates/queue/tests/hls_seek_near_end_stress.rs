@@ -469,33 +469,32 @@ async fn wait_for_post_seek_advance(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::symphonia_no_sidx(DecoderBackend::Symphonia, false)]
-#[case::symphonia_with_sidx(DecoderBackend::Symphonia, true)]
+#[case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await)]
+#[case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_no_sidx(DecoderBackend::Apple, false)
+    case::apple_no_sidx(DecoderBackend::Apple, plain_hls().await)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_with_sidx(DecoderBackend::Apple, true)
+    case::apple_with_sidx(DecoderBackend::Apple, sidx_hls().await)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::android_no_sidx(DecoderBackend::Android, false)
+    case::android_no_sidx(DecoderBackend::Android, plain_hls().await)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::android_with_sidx(DecoderBackend::Android, true)
+    case::android_with_sidx(DecoderBackend::Android, sidx_hls().await)
 )]
 async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
-    #[case] include_sidx: bool,
+    #[case] source: (TestServerHelper, Url),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let url = build_hls(&helper, include_sidx).await;
+    let (_helper, url) = source;
 
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
@@ -553,4 +552,18 @@ async fn hls_seek_near_end_fresh_player_stress(
             errors = errors.join("\n"),
         );
     }
+}
+
+#[kithara::fixture]
+async fn sidx_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_hls(&helper, true).await;
+    (helper, url)
+}
+
+#[kithara::fixture]
+async fn plain_hls() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_hls(&helper, false).await;
+    (helper, url)
 }

@@ -14,6 +14,9 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
+use kithara_test_fixtures::integration_fixtures::{
+    constant_four, constant_loud, constant_quiet, constant_three, constant_two,
+};
 
 use crate::bufpool_ext::TestPools;
 
@@ -30,10 +33,10 @@ fn with_autoplay(
     config
 }
 
-fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
+fn make_resource(label: &str, secs: f64, samples: &'static [u8]) -> Resource {
     let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
     resource_from_reader_with_src(
-        TestPcmReader::with_value(spec, secs, value),
+        TestPcmReader::from_pcm(spec, secs, samples),
         Arc::from(format!("memory://{label}")),
     )
 }
@@ -78,7 +81,7 @@ async fn render_loop(
 }
 
 #[kithara::test(tokio)]
-async fn crossfade_started_requires_a_live_predecessor() {
+async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static [u8]) {
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -96,7 +99,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
         .await;
     let id = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("initial", 0.2, 0.3))
+            q.insert_loaded_for_test(make_resource("initial", 0.2, constant_three))
         })
         .await;
     let mut receiver = queue.subscribe();
@@ -138,7 +141,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
     let successor = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("successor", 1.0, 0.3))
+            q.insert_loaded_for_test(make_resource("successor", 1.0, constant_three))
         })
         .await;
     let mut receiver = queue.subscribe();
@@ -161,7 +164,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 }
 
 #[kithara::test(tokio)]
-async fn repeat_one_natural_advance_keeps_current_track() {
+async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static [u8]) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -177,7 +180,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         .await;
     let id = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("one", 1.0, 0.3))
+            q.insert_loaded_for_test(make_resource("one", 1.0, constant_three))
         })
         .await;
     harness
@@ -209,7 +212,10 @@ async fn repeat_one_natural_advance_keeps_current_track() {
 }
 
 #[kithara::test(tokio)]
-async fn repeat_all_natural_advance_wraps_last_track_to_first() {
+async fn repeat_all_natural_advance_wraps_last_track_to_first(
+    constant_loud: &'static [u8],
+    constant_two: &'static [u8],
+) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -225,12 +231,12 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         .await;
     let first = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("first", 1.0, 0.2))
+            q.insert_loaded_for_test(make_resource("first", 1.0, constant_two))
         })
         .await;
     let last = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("last", 1.0, 0.8))
+            q.insert_loaded_for_test(make_resource("last", 1.0, constant_loud))
         })
         .await;
     harness
@@ -265,7 +271,10 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
 /// arena handover at EOF promotes the armed next track, and the second
 /// track's PCM signal must replace the first one's.
 #[kithara::test(tokio)]
-async fn cf_zero_queue_tick_advances_to_second_track_audio() {
+async fn cf_zero_queue_tick_advances_to_second_track_audio(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
@@ -286,12 +295,12 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let _ = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
     harness
@@ -345,7 +354,10 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 /// the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.
 #[kithara::test(tokio)]
-async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
+async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
     const TRACK_A_VALUE: f32 = 0.10;
@@ -367,12 +379,12 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let _ = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
     harness
@@ -431,7 +443,10 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 /// reach the bus during a cf>0 cycle — purely event-level, but pinned to
 /// the real `Queue::tick` path.
 #[kithara::test(tokio)]
-async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
+async fn queue_tick_pumps_audio_thread_notifications_to_bus(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     use kithara::{
         events::{Event, PlayerEvent},
         platform::tokio::sync::broadcast::error::TryRecvError,
@@ -457,12 +472,12 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let _ = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
     harness
@@ -520,7 +535,10 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 /// Track A is quiet, track B is loud — if B preempted A the early
 /// window's mean amplitude would jump to B's level.
 #[kithara::test(tokio)]
-async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
+async fn autoplay_first_registered_track_plays_first_even_when_loaded_last(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     const TRACK_SECS: f64 = 0.4;
     const QUIET_VALUE: f32 = 0.10;
     const LOUD_VALUE: f32 = 0.80;
@@ -544,12 +562,12 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
 
     harness
         .run(&queue, move |q| {
-            q.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE))
+            q.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
     harness
         .run(&queue, move |q| {
-            q.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE))
+            q.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
 
@@ -598,10 +616,11 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
 /// `Resource`s to the loader so spawn completes synthetically, mirroring
 /// what a real network loader would deliver on a replay.
 #[kithara::test(tokio)]
-async fn cf_zero_replay_after_full_playthrough_still_advances() {
+async fn cf_zero_replay_after_full_playthrough_still_advances(
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     const TRACK_SECS: f64 = 0.4;
-    const TRACK_A_VALUE: f32 = 0.10;
-    const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -619,12 +638,12 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let id_b = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
 
@@ -639,8 +658,8 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         "first playthrough must reach track B"
     );
 
-    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_A_VALUE));
-    queue.supply_test_resource_for_respawn(id_b, make_resource("b2", TRACK_SECS, TRACK_B_VALUE));
+    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, constant_quiet));
+    queue.supply_test_resource_for_respawn(id_b, make_resource("b2", TRACK_SECS, constant_loud));
 
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
@@ -678,7 +697,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 /// When the last track finishes, the live playback snapshot must become inactive
 /// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
-async fn queue_stops_live_playback_when_last_track_ends() {
+async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static [u8]) {
     use kithara::{
         events::{Event, QueueEvent},
         platform::tokio::sync::broadcast::error::TryRecvError,
@@ -703,7 +722,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_three))
         })
         .await;
     harness
@@ -748,9 +767,10 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 /// written on autoplay start. If `peek_next` defaults `None` to `Some(0)`,
 /// the prefetch handler arms slot 0 against the already-playing decoder.
 #[kithara::test(tokio)]
-async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
+async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder(
+    constant_three: &'static [u8],
+) {
     const TRACK_SECS: f64 = 0.4;
-    const TRACK_VALUE: f32 = 0.30;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -768,7 +788,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     let _id = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE))
+            q.insert_loaded_for_test(make_resource("solo", TRACK_SECS, constant_three))
         })
         .await;
 
@@ -807,7 +827,11 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 /// it. Two tracks cannot show this — there is no successor left to jump to, so
 /// the sibling crossfade test above stays green while a playlist skips.
 #[kithara::test(tokio)]
-async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
+async fn a_middle_track_is_heard_in_the_middle_of_its_own_span(
+    constant_quiet: &'static [u8],
+    constant_loud: &'static [u8],
+    constant_four: &'static [u8],
+) {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
     const LEVEL_A: f32 = 0.10;
@@ -830,17 +854,17 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, LEVEL_A))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let _ = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, LEVEL_B))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
     let _ = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("c", TRACK_SECS, LEVEL_C))
+            q.insert_loaded_for_test(make_resource("c", TRACK_SECS, constant_four))
         })
         .await;
     // The app starts a catalog row exactly this way, with no fade into the

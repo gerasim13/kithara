@@ -88,8 +88,11 @@ fn track_src(server: &TestServerHelper) -> ResourceSrc {
 
 /// Play a two-track queue from the first track to the end of the queue, and
 /// report what the queue did and which track it moved onto.
-async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackId) {
-    let server = TestServerHelper::new().await;
+async fn play_queue(
+    crossfade: f32,
+    temp_dir: &TestTempDir,
+    sources: Vec<ResourceSrc>,
+) -> (QueueLog, TrackId) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(crossfade)
@@ -103,10 +106,10 @@ async fn play_queue(crossfade: f32, temp_dir: &TestTempDir) -> (QueueLog, TrackI
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(2);
-    for index in 0..2 {
+    for (index, source) in sources.into_iter().enumerate() {
         let resource = open_resource(
             &harness,
-            track_src(&server),
+            source,
             &temp_dir.path().join(format!("track{index}")),
         )
         .await;
@@ -161,8 +164,9 @@ async fn mp3_track_ends_rather_than_fails(
     crossfade: f32,
     expected_crossfades: usize,
     temp_dir: &TestTempDir,
+    sources: Vec<ResourceSrc>,
 ) {
-    let (log, second) = play_queue(crossfade, temp_dir).await;
+    let (log, second) = play_queue(crossfade, temp_dir, sources).await;
     let left_by = log.advances_onto(second);
 
     assert!(
@@ -197,8 +201,12 @@ async fn mp3_track_ends_rather_than_fails(
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(30)
 )]
-async fn a_streamed_mp3_ends_its_track_without_a_crossfade(temp_dir: TestTempDir) {
-    mp3_track_ends_rather_than_fails(NO_CROSSFADE_SECS, 0, &temp_dir).await;
+async fn a_streamed_mp3_ends_its_track_without_a_crossfade(
+    temp_dir: TestTempDir,
+    #[future(awt)] mp3_sources: (TestServerHelper, Vec<ResourceSrc>),
+) {
+    let (_server, sources) = mp3_sources;
+    mp3_track_ends_rather_than_fails(NO_CROSSFADE_SECS, 0, &temp_dir, sources).await;
 }
 
 #[kithara::test(
@@ -207,6 +215,17 @@ async fn a_streamed_mp3_ends_its_track_without_a_crossfade(temp_dir: TestTempDir
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(30)
 )]
-async fn a_streamed_mp3_ends_its_track_with_a_crossfade(temp_dir: TestTempDir) {
-    mp3_track_ends_rather_than_fails(CROSSFADE_SECS, 1, &temp_dir).await;
+async fn a_streamed_mp3_ends_its_track_with_a_crossfade(
+    temp_dir: TestTempDir,
+    #[future(awt)] mp3_sources: (TestServerHelper, Vec<ResourceSrc>),
+) {
+    let (_server, sources) = mp3_sources;
+    mp3_track_ends_rather_than_fails(CROSSFADE_SECS, 1, &temp_dir, sources).await;
+}
+
+#[kithara::fixture]
+async fn mp3_sources() -> (TestServerHelper, Vec<ResourceSrc>) {
+    let server = TestServerHelper::new().await;
+    let sources = (0..2).map(|_| track_src(&server)).collect();
+    (server, sources)
 }

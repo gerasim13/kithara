@@ -78,19 +78,35 @@ enum TrackKind {
 /// Build a track spec for `kind`. HLS fixtures get 16 segments ×
 /// 4 s = 64 s of media so `SeekNearEnd` lands with room before
 /// natural EOF.
-async fn build_spec(
-    helper: &TestServerHelper,
-    kind: TrackKind,
-    abr: AbrMode,
-    backend: DecoderBackend,
-) -> TrackSpec {
-    let url = match kind {
+type PreparedTrack = (TestServerHelper, Url);
+type PreparedTracks = (TestServerHelper, Vec<Url>);
+
+async fn prepared_track(kind: TrackKind) -> PreparedTrack {
+    let helper = TestServerHelper::new().await;
+    let url = track_url(&helper, kind).await;
+    (helper, url)
+}
+
+async fn prepared_tracks(kinds: &[TrackKind]) -> PreparedTracks {
+    let helper = TestServerHelper::new().await;
+    let mut urls = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        urls.push(track_url(&helper, *kind).await);
+    }
+    (helper, urls)
+}
+
+async fn track_url(helper: &TestServerHelper, kind: TrackKind) -> Url {
+    match kind {
         TrackKind::Mp3File => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
         TrackKind::Mp3StreamHq => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
         TrackKind::HlsAacLcAbr4 => build_hls_abr(helper, false, false).await,
         TrackKind::HlsMixedCodecAbr4 => build_hls_abr(helper, false, true).await,
         TrackKind::HlsAacLcDrmAbr4 => build_hls_abr(helper, true, false).await,
-    };
+    }
+}
+
+fn build_spec(url: Url, abr: AbrMode, backend: DecoderBackend) -> TrackSpec {
     TrackSpec::new(url, backend)
         .with_abr_mode(abr)
         .with_backend(backend)
@@ -132,38 +148,30 @@ async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
     harness.close().await;
 }
 
-async fn run_single(kind: TrackKind, abr: AbrMode, actions: Vec<Action>) {
+async fn run_single(kind: PreparedTrack, abr: AbrMode, actions: Vec<Action>) {
     run_single_backend(kind, abr, DecoderBackend::Symphonia, actions).await;
 }
 
 async fn run_single_backend(
-    kind: TrackKind,
+    kind: PreparedTrack,
     abr: AbrMode,
     backend: DecoderBackend,
     actions: Vec<Action>,
 ) {
-    let helper = TestServerHelper::new().await;
-    let spec = build_spec(&helper, kind, abr, backend).await;
+    let (_helper, url) = kind;
+    let spec = build_spec(url, abr, backend);
     run_scenario(vec![spec], actions).await;
 }
 
 /// Multi-track helper. Builds N `TrackSpecs` and appends them to the
 /// same Queue so scenarios can `SelectAt(idx)` between them. ABR
 /// mode is `Auto(None)` for every track (production default).
-async fn run_multi(kinds: &[TrackKind], actions: Vec<Action>) {
-    let helper = TestServerHelper::new().await;
-    let mut specs = Vec::with_capacity(kinds.len());
-    for kind in kinds {
-        specs.push(
-            build_spec(
-                &helper,
-                *kind,
-                AbrMode::Auto(None),
-                DecoderBackend::Symphonia,
-            )
-            .await,
-        );
-    }
+async fn run_multi(kinds: PreparedTracks, actions: Vec<Action>) {
+    let (_helper, urls) = kinds;
+    let specs = urls
+        .into_iter()
+        .map(|url| build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia))
+        .collect();
     run_scenario(specs, actions).await;
 }
 
@@ -174,80 +182,83 @@ async fn run_multi(kinds: &[TrackKind], actions: Vec<Action>) {
 /// the same `seek_forward_unbuffered` path hits Auto's switch-decision
 /// arm AND Manual's no-switch arm.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::mp3_streamhq(track_mp3_stream_hq().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(track_hls_mixed_codec_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::seek_forward_unbuffered_repro()).await;
 }
 
 /// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
 /// the harness panics on stuck position.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::mp3_streamhq(track_mp3_stream_hq().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(track_hls_mixed_codec_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_seek_backward_repro(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::seek_backward_repro()).await;
 }
 
 /// Bug #7 — seek to 95-99 % crashes the decoder thread. With the
 /// 64 s fixture, 97 % = 62.08 s leaves ~2 s before EOF.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::mp3_streamhq(track_mp3_stream_hq().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(track_hls_mixed_codec_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_seek_near_end_repro(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::seek_near_end_repro()).await;
 }
 
 /// Production symptom: long playback → backward seek → silent hang
 /// or false-EOF.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_seek_backward_after_long_play(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::seek_backward_after_long_play_repro()).await;
 }
 
 /// Pinpoint: play to natural EOF, then seek backward.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_seek_backward_after_natural_eof(
+    #[case] kind: PreparedTrack,
+    #[case] abr: AbrMode,
+) {
     run_single(
         kind,
         abr,
@@ -261,44 +272,44 @@ async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[cas
 /// Scripted scenario from the plan: 90 % → 10 % → 50 %. Each ABR
 /// mode separately because Auto changes variant during the trajectory.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(track_hls_mixed_codec_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_scripted_forward_back_end(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::scripted_forward_back_end()).await;
 }
 
 // ─── Seeded random fuzz ──────────────────────────────────────────────────────
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_random_seed_42(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::random_seed(42, 12)).await;
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
-#[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_random_seed_1337(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::random_seed(1337, 12)).await;
 }
 
@@ -307,23 +318,23 @@ async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode
 /// 30 s playback then backward seek — the production manual repro.
 /// HLS + DRM matrix; ABR Auto since that's the default users hit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_long_play_then_seek_backward(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::long_play_then_seek_backward()).await;
 }
 
 /// 30 s playback then forward seek — Bug #5 path on long playback.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+async fn user_sim_long_play_then_seek_forward(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::long_play_then_seek_forward()).await;
 }
 
@@ -338,20 +349,14 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] a
 /// production playlist shape) and seeks the moment status flips to
 /// `Loaded`, exactly like the prod UI does.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::aac_drm(TrackKind::HlsAacLcDrmAbr4, 0.50)]
-#[case::aac_drm_low(TrackKind::HlsAacLcDrmAbr4, 0.20)]
-#[case::aac_drm_high(TrackKind::HlsAacLcDrmAbr4, 0.95)]
-#[case::aac_plain(TrackKind::HlsAacLcAbr4, 0.50)]
-#[case::mp3_streamhq(TrackKind::Mp3StreamHq, 0.50)]
-async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case] ratio: f64) {
-    let helper = TestServerHelper::new().await;
-    let spec = build_spec(
-        &helper,
-        kind,
-        AbrMode::Auto(None),
-        DecoderBackend::Symphonia,
-    )
-    .await;
+#[case::aac_drm(track_hls_aac_lc_drm_abr4().await, 0.50)]
+#[case::aac_drm_low(track_hls_aac_lc_drm_abr4().await, 0.20)]
+#[case::aac_drm_high(track_hls_aac_lc_drm_abr4().await, 0.95)]
+#[case::aac_plain(track_hls_aac_lc_abr4().await, 0.50)]
+#[case::mp3_streamhq(track_mp3_stream_hq().await, 0.50)]
+async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[case] ratio: f64) {
+    let (_helper, url) = kind;
+    let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::Symphonia);
     let temp = temp_dir();
     let pools = pools();
     let downloader = Downloader::new(
@@ -434,12 +439,12 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
 /// Aggressive seek storm — many seeks in rapid succession, like a
 /// user dragging the slider. Loader has to cancel and restart fetches.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+async fn user_sim_seek_storm(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
     run_single(kind, abr, scenarios::seek_storm()).await;
 }
 
@@ -452,15 +457,18 @@ async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
 /// always stay green). The Manual cases protect against accidentally
 /// breaking the working path while fixing the Auto one.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
-#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
-#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
-async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_abr_manual_top(track_hls_aac_lc_abr4().await, AbrMode::manual(3))]
+#[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
+#[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(track_hls_mixed_codec_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_manual_top(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(3))]
+#[case::aac_drm_manual0(track_hls_aac_lc_drm_abr4().await, AbrMode::manual(0))]
+async fn user_sim_auto_abr_upswitch_then_seek_burst(
+    #[case] kind: PreparedTrack,
+    #[case] abr: AbrMode,
+) {
     run_single(kind, abr, scenarios::auto_abr_upswitch_then_seek_burst()).await;
 }
 
@@ -471,24 +479,24 @@ async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[c
 // covers each ordering of DRM/non-DRM combinations.
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::drm_then_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
-#[case::plain_then_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
-#[case::drm_then_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
-#[case::mp3_then_drm(&[TrackKind::Mp3File, TrackKind::HlsAacLcDrmAbr4])]
-#[case::drm_then_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
-#[case::flac_then_drm(&[TrackKind::HlsMixedCodecAbr4, TrackKind::HlsAacLcDrmAbr4])]
-async fn user_sim_switch_track_then_seek(#[case] kinds: &[TrackKind]) {
+#[case::drm_then_plain(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
+#[case::plain_then_drm(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
+#[case::drm_then_mp3(tracks_hls_aac_lc_drm_abr4_mp3_file().await)]
+#[case::mp3_then_drm(tracks_mp3_file_hls_aac_lc_drm_abr4().await)]
+#[case::drm_then_flac(tracks_hls_aac_lc_drm_abr4_hls_mixed_codec_abr4().await)]
+#[case::flac_then_drm(tracks_hls_mixed_codec_abr4_hls_aac_lc_drm_abr4().await)]
+async fn user_sim_switch_track_then_seek(#[case] kinds: PreparedTracks) {
     run_multi(kinds, scenarios::switch_track_then_seek()).await;
 }
 
 /// Many `SelectAt` + seek bounces between two tracks. Lights up the
 /// "previous DRM key state still mounted" path if there is one.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-#[case::drm_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
-#[case::plain_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
-#[case::drm_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
-#[case::drm_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
-async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: &[TrackKind]) {
+#[case::drm_plain(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
+#[case::plain_drm(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
+#[case::drm_mp3(tracks_hls_aac_lc_drm_abr4_mp3_file().await)]
+#[case::drm_flac(tracks_hls_aac_lc_drm_abr4_hls_mixed_codec_abr4().await)]
+async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: PreparedTracks) {
     run_multi(kinds, scenarios::bounce_between_tracks_with_seeks()).await;
 }
 
@@ -496,11 +504,11 @@ async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: &[TrackKind]) 
 /// Mirrors the user's manual ride: settle into a track for a while,
 /// then jump to another in the playlist and drag the playhead.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-#[case::drm_then_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
-#[case::plain_then_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
-#[case::drm_then_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
-#[case::drm_then_flac(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4])]
-async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: &[TrackKind]) {
+#[case::drm_then_plain(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
+#[case::plain_then_drm(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
+#[case::drm_then_mp3(tracks_hls_aac_lc_drm_abr4_mp3_file().await)]
+#[case::drm_then_flac(tracks_hls_aac_lc_drm_abr4_hls_mixed_codec_abr4().await)]
+async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: PreparedTracks) {
     run_multi(kinds, scenarios::long_play_then_switch_then_seek()).await;
 }
 
@@ -508,17 +516,9 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: &[TrackKind]) {
 /// DRM track must initialise fresh — covers the per-track DRM key
 /// state isolation path.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-#[case::drm_plain_drm(&[
-    TrackKind::HlsAacLcDrmAbr4,
-    TrackKind::HlsAacLcAbr4,
-    TrackKind::HlsAacLcDrmAbr4,
-])]
-#[case::plain_drm_plain(&[
-    TrackKind::HlsAacLcAbr4,
-    TrackKind::HlsAacLcDrmAbr4,
-    TrackKind::HlsAacLcAbr4,
-])]
-async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
+#[case::drm_plain_drm(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
+#[case::plain_drm_plain(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
+async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
     // Walk all three with seeks: 0 → seek mid → 1 → seek mid → 2 → seek mid.
     let actions = vec![
         Action::PlayFor(Duration::from_secs(2)),
@@ -544,18 +544,18 @@ mod apple_backend {
     use super::*;
 
     #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-    #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-    #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-    async fn user_sim_seek_storm_apple(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+    #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+    #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+    async fn user_sim_seek_storm_apple(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
         kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
         run_single_backend(kind, abr, DecoderBackend::Apple, scenarios::seek_storm()).await;
     }
 
     #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-    #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-    #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
+    #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+    #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
     async fn user_sim_long_play_then_seek_backward_apple(
-        #[case] kind: TrackKind,
+        #[case] kind: PreparedTrack,
         #[case] abr: AbrMode,
     ) {
         kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
@@ -567,4 +567,79 @@ mod apple_backend {
         )
         .await;
     }
+}
+
+#[kithara::fixture]
+async fn track_mp3_file() -> PreparedTrack {
+    prepared_track(TrackKind::Mp3File).await
+}
+
+#[kithara::fixture]
+async fn track_mp3_stream_hq() -> PreparedTrack {
+    prepared_track(TrackKind::Mp3StreamHq).await
+}
+
+#[kithara::fixture]
+async fn track_hls_aac_lc_abr4() -> PreparedTrack {
+    prepared_track(TrackKind::HlsAacLcAbr4).await
+}
+
+#[kithara::fixture]
+async fn track_hls_mixed_codec_abr4() -> PreparedTrack {
+    prepared_track(TrackKind::HlsMixedCodecAbr4).await
+}
+
+#[kithara::fixture]
+async fn track_hls_aac_lc_drm_abr4() -> PreparedTrack {
+    prepared_track(TrackKind::HlsAacLcDrmAbr4).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4]).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4]).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_drm_abr4_mp3_file() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File]).await
+}
+
+#[kithara::fixture]
+async fn tracks_mp3_file_hls_aac_lc_drm_abr4() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::Mp3File, TrackKind::HlsAacLcDrmAbr4]).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_drm_abr4_hls_mixed_codec_abr4() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsMixedCodecAbr4]).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_mixed_codec_abr4_hls_aac_lc_drm_abr4() -> PreparedTracks {
+    prepared_tracks(&[TrackKind::HlsMixedCodecAbr4, TrackKind::HlsAacLcDrmAbr4]).await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4_hls_aac_lc_drm_abr4() -> PreparedTracks {
+    prepared_tracks(&[
+        TrackKind::HlsAacLcDrmAbr4,
+        TrackKind::HlsAacLcAbr4,
+        TrackKind::HlsAacLcDrmAbr4,
+    ])
+    .await
+}
+
+#[kithara::fixture]
+async fn tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4_hls_aac_lc_abr4() -> PreparedTracks {
+    prepared_tracks(&[
+        TrackKind::HlsAacLcAbr4,
+        TrackKind::HlsAacLcDrmAbr4,
+        TrackKind::HlsAacLcAbr4,
+    ])
+    .await
 }

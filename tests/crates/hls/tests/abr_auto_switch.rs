@@ -22,32 +22,16 @@ use kithara_integration_tests::{
     reads::read_to_eof,
     temp_dir,
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::{hls_pcm_thirty, hls_stream_header};
 use tracing::info;
 
-use crate::common::test_defaults::{SawWav, frames_in_segments};
+use crate::common::test_defaults::SawWav;
 
 struct Consts;
 impl Consts {
     const D: SawWav = SawWav::DEFAULT;
     const SEGMENT_COUNT: usize = 30;
-}
-
-fn create_wav_init_segment() -> Vec<u8> {
-    signal::header(Consts::D.sample_rate, Consts::D.channels, None)
-}
-
-fn create_pcm_segments() -> Vec<u8> {
-    Vec::from(Pcm::new(
-        Consts::D.sample_rate,
-        Consts::D.channels,
-        frames_in_segments(
-            Consts::SEGMENT_COUNT,
-            Consts::D.segment_size,
-            Consts::D.channels,
-        ),
-        Wave::Sawtooth,
-    ))
 }
 
 /// ABR must switch variant at least once during HLS playback.
@@ -58,20 +42,10 @@ fn create_pcm_segments() -> Vec<u8> {
 /// Also verifies that `content_duration` from fast initial segments (< 10ms)
 /// is accumulated for buffer level tracking, which is required for up-switch
 /// decisions (`min_buffer_for_up_switch_secs` check).
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(3),
-    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
-)]
-async fn abr_auto_switch_during_playback(
-    temp_dir: TestTempDir,
-    _abr_fast: kithara::abr::AbrSettings,
-) {
-    let init_segment = Arc::new(create_wav_init_segment());
-    let pcm_data = Arc::new(create_pcm_segments());
+#[kithara::fixture]
+async fn audio_server(hls_stream_header: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> HlsTestServer {
+    let init_segment = Arc::new(hls_stream_header);
+    let pcm_data = Arc::new(hls_pcm_thirty);
 
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
@@ -95,6 +69,23 @@ async fn abr_auto_switch_during_playback(
     })
     .await;
 
+    server
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(3),
+    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
+)]
+async fn abr_auto_switch_during_playback(
+    #[future(awt)] audio_server: HlsTestServer,
+    temp_dir: TestTempDir,
+    _abr_fast: kithara::abr::AbrSettings,
+) {
+    let server = audio_server;
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 

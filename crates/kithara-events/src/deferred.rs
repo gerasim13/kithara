@@ -6,17 +6,14 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 
 /// Decode-core → shell hand-off for reader-hook events.
 ///
-/// Reader hooks run on the worker's forbid-blocking decode core, where they
-/// resolve a fully-formed event from live cursor state. Publishing it goes
-/// through `tokio::broadcast::Sender::send`, which takes an internal lock —
-/// forbidden on the produce core. `DeferredBus` splits the two:
-/// [`enqueue`](Self::enqueue) pushes the resolved event into a fixed,
-/// lock-free ring on the decode core (no alloc, no lock); [`flush`](Self::flush)
-/// drains the ring and publishes from the scheduler's unchecked shell, once
-/// per pass. The ring is FIFO, so events keep their decode order.
+/// Reader hooks resolve events on the worker's forbid-blocking decode core,
+/// where `tokio::broadcast::Sender::send` cannot run: it takes an internal
+/// lock. [`enqueue`](Self::enqueue) pushes into a fixed lock-free ring;
+/// [`flush`](Self::flush) drains it FIFO, stamping each envelope, from the
+/// scheduler's unchecked shell once per pass.
 ///
-/// The element is the narrow per-domain event (`HlsEvent` / `FileEvent`),
-/// converted to [`Event`] only at publish time, so the ring stays small.
+/// The element is the narrow per-domain event, converted to [`Event`] only at
+/// publish time, so the ring stays small.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeferredBus<E> {
@@ -30,7 +27,6 @@ pub struct DeferredBus<E> {
 struct DeferredEvent<E> {
     event: E,
     seq: u64,
-    ts_micros: u64,
 }
 
 impl<E: Into<Event>> DeferredBus<E> {
@@ -49,7 +45,9 @@ impl<E: Into<Event>> DeferredBus<E> {
 
     /// Queue a resolved event for shell-side publish.
     ///
-    /// Lock-free and alloc-free, so it is safe to call from the decode core.
+    /// Lock-free, alloc-free and clock-free, so it is safe to call from the
+    /// decode core.
+    ///
     /// Drops the event if the ring is full: the only high-volume producer is
     /// monotonic progress, where the next pass's event supersedes a dropped
     /// one, so a drop under burst is self-healing.
@@ -57,7 +55,6 @@ impl<E: Into<Event>> DeferredBus<E> {
         let pending = DeferredEvent {
             event,
             seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
-            ts_micros: crate::bus::ts_micros(),
         };
         if self.pending.push(pending).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -66,15 +63,16 @@ impl<E: Into<Event>> DeferredBus<E> {
 
     /// Drain the ring and publish every queued event in FIFO order.
     ///
-    /// Runs in the unchecked scheduler shell, so the `broadcast::send` lock
-    /// stays off the forbid-blocking decode core.
+    /// Runs in the unchecked scheduler shell, so the `broadcast::send` lock and
+    /// the stamp's clock read stay off the decode core. `seq`, taken at
+    /// enqueue, carries the producer's order.
     pub fn flush(&self) {
         while let Some(event) = self.pending.pop() {
             self.bus.publish_envelope(Envelope {
                 meta: EventMeta {
                     origin: self.bus.scope.id(),
                     seq: event.seq,
-                    ts_micros: event.ts_micros,
+                    ts_micros: crate::bus::ts_micros(),
                     deck: self.bus.label.deck,
                     track: self.bus.label.track,
                 },
@@ -158,14 +156,20 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn flush_preserves_enqueue_time_seq_and_ts() {
+    async fn flush_stamps_the_publish_time_and_keeps_enqueue_order() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe();
         let deferred = DeferredBus::new(bus, 4);
 
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
+
+        // Leaving the enqueue tick puts a stamp taken there below `before`.
+        let enqueued = crate::bus::ts_micros();
+        while crate::bus::ts_micros() <= enqueued {}
+        let before = crate::bus::ts_micros();
         deferred.flush();
+        let after = crate::bus::ts_micros();
 
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
@@ -179,7 +183,14 @@ mod tests {
             ts_micros: second_ts,
             ..
         } = second.meta;
+        assert_progress(&first, 1);
+        assert_progress(&second, 2);
         assert!(first_seq < second_seq);
-        assert!(first_ts <= second_ts);
+        for ts in [first_ts, second_ts] {
+            assert!(
+                (before..=after).contains(&ts),
+                "stamp {ts} lies outside the {before}..={after} the flush spans"
+            );
+        }
     }
 }

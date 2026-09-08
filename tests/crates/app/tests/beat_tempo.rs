@@ -33,6 +33,7 @@ impl Consts {
     const SECONDS_PER_MINUTE: f64 = 60.0;
 }
 
+#[kithara::fixture]
 fn records() -> Vec<(String, f64)> {
     let spec = std::env::var("KITHARA_TEMPO_RECORDS").unwrap_or_else(|_| {
         panic!("KITHARA_TEMPO_RECORDS must name records as /path=bpm;/path=bpm")
@@ -164,8 +165,8 @@ fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
-async fn the_reported_tempo_matches_the_known_record() {
-    for (path, known) in records() {
+async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>) {
+    for (path, known) in records {
         let (grid, rate) = grid_of(&path).await;
         println!(
             "{path}: reported {:.3} BPM against known {known:.2}, {} markers at {rate} Hz",
@@ -182,8 +183,8 @@ async fn the_reported_tempo_matches_the_known_record() {
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
-async fn the_reported_tempo_is_the_tempo_the_markers_march_at() {
-    for (path, _known) in records() {
+async fn the_reported_tempo_is_the_tempo_the_markers_march_at(records: Vec<(String, f64)>) {
+    for (path, _known) in records {
         let (grid, rate) = grid_of(&path).await;
         let marched = marker_tempo(&grid, rate)
             .unwrap_or_else(|| panic!("{path} has too few markers to name a tempo"));

@@ -13,6 +13,18 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+use url::Url;
+
+#[kithara::fixture]
+async fn queue_sources() -> (TestServerHelper, [Url; 2]) {
+    let server = TestServerHelper::new().await;
+    let urls = [
+        SignalAsset::WAV_SINE440_120MS,
+        SignalAsset::WAV_SINE880_240MS,
+    ]
+    .map(|asset| server.signal(asset));
+    (server, urls)
+}
 
 use crate::bufpool_ext::TestPools;
 
@@ -21,8 +33,11 @@ const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn auto_advance_starts_next_track_without_explicit_play(
+    temp_dir: TestTempDir,
+    #[future(awt)] queue_sources: (TestServerHelper, [Url; 2]),
+) {
+    let (_server, [first_url, second_url]) = queue_sources;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -33,20 +48,8 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
     let first_id = TrackId::allocate();
     let second_id = TrackId::allocate();
 
-    let first = make_signal_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        SignalAsset::WAV_SINE440_120MS,
-    )
-    .await;
-    let second = make_signal_resource(
-        &harness,
-        &server,
-        temp_dir.path(),
-        SignalAsset::WAV_SINE880_240MS,
-    )
-    .await;
+    let first = make_signal_resource(&harness, temp_dir.path(), first_url).await;
+    let second = make_signal_resource(&harness, temp_dir.path(), second_url).await;
     harness
         .with_player(move |player| {
             player.insert(first, first_id, None);
@@ -129,11 +132,9 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
 
 async fn make_signal_resource(
     harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
     cache_dir: &Path,
-    asset: SignalAsset,
+    url: Url,
 ) -> Resource {
-    let url = server.signal(asset);
     let mut config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL"),
     )

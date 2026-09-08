@@ -216,12 +216,12 @@ async fn wait_for_current_track(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-#[case::plain(FixtureMode::Plain)]
-#[case::aes128(FixtureMode::Aes128)]
-async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMode) {
-    let helper = TestServerHelper::new().await;
-    let url_a = build_hls(&helper, mode).await;
-    let url_b = build_hls(&helper, mode).await;
+#[case::plain(replay_plain().await)]
+#[case::aes128(replay_encrypted().await)]
+async fn replay_track_after_switch_does_not_hang_loader(
+    #[case] tracks: (FixtureMode, TestServerHelper, Url, Url),
+) {
+    let (mode, _helper, url_a, url_b) = tracks;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
@@ -329,22 +329,9 @@ async fn wait_for_position(
 async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     #[case] crossfade_seconds: f32,
     #[case] transition: Transition,
+    #[future(awt)] mp3_hls_pair: (TestServerHelper, Url, Url),
 ) {
-    let helper = TestServerHelper::new().await;
-    let url_a = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
-    // 16 × 4 s = 64 s: long enough that B is still mid-play when we switch
-    // back, and far from the mp3's 162 s so the duration marker is unambiguous.
-    let url_b = helper
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(16)
-                .segment_duration_secs(4.0)
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create long HLS fixture")
-        .master_url();
+    let (_helper, url_a, url_b) = mp3_hls_pair;
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) =
@@ -460,4 +447,40 @@ async fn wait_for(
         );
         sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[kithara::fixture]
+async fn mp3_hls_pair() -> (TestServerHelper, Url, Url) {
+    let helper = TestServerHelper::new().await;
+    let url_a = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
+    // 16 × 4 s = 64 s: long enough that B is still mid-play when we switch
+    // back, and far from the mp3's 162 s so the duration marker is unambiguous.
+    let url_b = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create long HLS fixture")
+        .master_url();
+    (helper, url_a, url_b)
+}
+
+#[kithara::fixture]
+async fn replay_plain() -> (FixtureMode, TestServerHelper, Url, Url) {
+    let helper = TestServerHelper::new().await;
+    let url_a = build_hls(&helper, FixtureMode::Plain).await;
+    let url_b = build_hls(&helper, FixtureMode::Plain).await;
+    (FixtureMode::Plain, helper, url_a, url_b)
+}
+
+#[kithara::fixture]
+async fn replay_encrypted() -> (FixtureMode, TestServerHelper, Url, Url) {
+    let helper = TestServerHelper::new().await;
+    let url_a = build_hls(&helper, FixtureMode::Aes128).await;
+    let url_b = build_hls(&helper, FixtureMode::Aes128).await;
+    (FixtureMode::Aes128, helper, url_a, url_b)
 }

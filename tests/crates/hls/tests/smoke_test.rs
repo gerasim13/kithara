@@ -17,7 +17,7 @@ use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
     hls_fixture::HlsStreamBuilder,
-    hls_server::TestServer,
+    hls_server::{TestServer, test_server},
     temp_dir,
 };
 use tracing::info;
@@ -25,9 +25,10 @@ use url::Url;
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_session_creation(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
+    let server = test_server;
     let test_stream_url = server.url("/master.m3u8");
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
@@ -74,10 +75,11 @@ async fn test_hls_session_creation(
 #[case::plain(false)]
 #[case::with_init(true)]
 async fn test_hls_stream_creation(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     #[case] with_init: bool,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = TestServer::new().await;
+    let server = test_server;
 
     let builder = HlsStreamBuilder::new();
     let builder = if with_init {

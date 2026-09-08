@@ -10,7 +10,7 @@ use kithara::{
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
 struct Consts;
 impl Consts {
@@ -27,10 +27,6 @@ impl Consts {
     const TARGET_FRACTION_DEN: u32 = 100;
 }
 
-fn track_mp3() -> &'static [u8] {
-    signal_mp3_track_sine440_187s().bytes()
-}
-
 fn partial_slice(full: &'static [u8]) -> &'static [u8] {
     let cut = full.len() * Consts::PARTIAL_FRACTION_NUM / Consts::PARTIAL_FRACTION_DEN;
     &full[..cut]
@@ -44,8 +40,8 @@ fn decoder_config() -> TestDecoderConfig {
 /// a 6 % slice of the file. Duration is therefore *not* the bit that
 /// goes stale; it's the byte availability that does.
 #[kithara::test]
-fn xing_partial_probe_reports_full_duration() {
-    let full = track_mp3();
+fn xing_partial_probe_reports_full_duration(tone_mp3: &'static [u8]) {
+    let full = tone_mp3;
     let partial = partial_slice(full);
 
     let full_decoder =
@@ -71,8 +67,8 @@ fn xing_partial_probe_reports_full_duration() {
 /// This is the `decoder.seek` error path that the FSM hands off to
 /// recreation.
 #[kithara::test]
-fn partial_decoder_seek_past_available_bytes_errors() {
-    let full = track_mp3();
+fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
+    let full = tone_mp3;
     let partial = partial_slice(full);
 
     let mut decoder =
@@ -101,8 +97,8 @@ fn partial_decoder_seek_past_available_bytes_errors() {
 /// (with a fresh view of the now-complete byte range) instead of
 /// bailing out of seek entirely.
 #[kithara::test]
-fn full_decoder_seeks_to_same_target_without_error() {
-    let full = track_mp3();
+fn full_decoder_seeks_to_same_target_without_error(tone_mp3: &'static [u8]) {
+    let full = tone_mp3;
 
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())

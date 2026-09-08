@@ -10,17 +10,19 @@ use kithara::{
 };
 use kithara_app::document::Config;
 use kithara_integration_tests::{
-    TestServerHelper, kithara, offline::app_queue, temp_dir, waits::wait_for_position_at_least,
+    TestServerHelper, kithara, offline::app_queue, served_mp3, temp_dir,
+    waits::wait_for_position_at_least,
 };
-use kithara_test_fixtures::SignalAsset;
+use url::Url;
 
 use super::{app_disk_asset_store, app_track_source};
 
 /// The native ticker uses a real timed channel receive, so its lifetime needs a real clock.
 #[kithara::test(tokio, flash(false))]
-async fn app_fixture_updates_position_without_manual_ticks() {
-    let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
+async fn app_fixture_updates_position_without_manual_ticks(
+    #[future(awt)] served_mp3: (TestServerHelper, Url),
+) {
+    let (_server, url) = served_mp3;
     let document = spawn_blocking(|| {
         let temp = temp_dir();
         let path = temp.path().join("app.yaml");

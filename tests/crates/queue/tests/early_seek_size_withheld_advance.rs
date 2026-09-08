@@ -190,11 +190,16 @@ enum Trigger {
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
-async fn immediate_seek_size_withheld() {
-    run_case(GateMode {
-        withhold_head: true,
-        withhold_body: false,
-    })
+async fn immediate_seek_size_withheld(
+    #[future(awt)] gated_source: (PackagedTestServer, SegmentGateHandle),
+) {
+    run_case(
+        gated_source,
+        GateMode {
+            withhold_head: true,
+            withhold_body: false,
+        },
+    )
     .await;
 }
 
@@ -208,17 +213,21 @@ async fn immediate_seek_size_withheld() {
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
-async fn immediate_seek_size_and_body_withheld() {
-    run_case(GateMode {
-        withhold_head: true,
-        withhold_body: true,
-    })
+async fn immediate_seek_size_and_body_withheld(
+    #[future(awt)] gated_source: (PackagedTestServer, SegmentGateHandle),
+) {
+    run_case(
+        gated_source,
+        GateMode {
+            withhold_head: true,
+            withhold_body: true,
+        },
+    )
     .await;
 }
 
-async fn run_case(mode: GateMode) {
-    let (server, gate): (PackagedTestServer, SegmentGateHandle) =
-        PackagedTestServer::with_segment_gate(GATED_VARIANT, GATED_SEGMENT).await;
+async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: GateMode) {
+    let (server, gate) = gated_source;
     // `with_segment_gate` parks the body by default. Apply the requested mode.
     if mode.withhold_head {
         gate.withhold_head();
@@ -363,4 +372,9 @@ async fn run_case(mode: GateMode) {
     drop(queue);
     drop(server);
     harness.close().await;
+}
+
+#[kithara::fixture]
+async fn gated_source() -> (PackagedTestServer, SegmentGateHandle) {
+    PackagedTestServer::with_segment_gate(GATED_VARIANT, GATED_SEGMENT).await
 }

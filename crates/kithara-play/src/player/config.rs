@@ -6,8 +6,8 @@ use std::{
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
+use kithara_derive::Patch;
 use kithara_events::EventBus;
-use kithara_macros::Patch;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 

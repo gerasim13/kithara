@@ -89,31 +89,7 @@ async fn wait_for_status(
 /// pinned separately by `playlist_stall_fails_load` and the kithara-net
 /// `*_when_body_stalls` tests. This mirror pins the healthy-path contract
 /// across decoder/ABR-mode axes.
-async fn run_drm_seek(backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    run_drm_seek_case(backend, abr, None, temp).await;
-}
-
-/// Same scenario on the same ladder plus a per-segment fetch delay modelling
-/// CDN RTT. The delay is engine-backed (virtual) under flash, so the "seek
-/// target segment is not yet available" window the real CDN opens is
-/// reproduced deterministically.
-async fn run_delayed_drm_seek(
-    backend: DecoderBackend,
-    abr: AbrMode,
-    delay_ms: u64,
-    temp: TestTempDir,
-) {
-    run_drm_seek_case(backend, abr, Some(delay_ms), temp).await;
-}
-
-async fn run_drm_seek_case(
-    backend: DecoderBackend,
-    abr: AbrMode,
-    delay_ms: Option<u64>,
-    temp: TestTempDir,
-) {
-    install_tracing();
-
+async fn drm_source(delay_ms: Option<u64>) -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let mut builder = mixed_codec_ladder_encrypted();
     if let Some(delay_ms) = delay_ms {
@@ -127,7 +103,17 @@ async fn run_drm_seek_case(
         .await
         .expect("create encrypted HLS fixture");
     let url = created.master_url();
-    run_seek_scenario(&url, backend, abr, temp).await;
+    (helper, url)
+}
+
+#[kithara::fixture]
+async fn drm_track() -> (TestServerHelper, Url) {
+    drm_source(None).await
+}
+
+#[kithara::fixture]
+async fn delayed_drm_track() -> (TestServerHelper, Url) {
+    drm_source(Some(150)).await
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
@@ -251,11 +237,14 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
 )]
 async fn drm_seek_resumes(
+    #[future(awt)] drm_track: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
     temp_dir: TestTempDir,
 ) {
-    run_drm_seek(backend, abr, temp_dir).await;
+    let (_helper, url) = drm_track;
+    install_tracing();
+    run_seek_scenario(&url, backend, abr, temp_dir).await;
 }
 
 // flash(false): the e2e this mirrors runs real-clock; the stall window is
@@ -277,11 +266,14 @@ async fn drm_seek_resumes(
     case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
 )]
 async fn drm_seek_resumes_realtime(
+    #[future(awt)] drm_track: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
     temp_dir: TestTempDir,
 ) {
-    run_drm_seek(backend, abr, temp_dir).await;
+    let (_helper, url) = drm_track;
+    install_tracing();
+    run_seek_scenario(&url, backend, abr, temp_dir).await;
 }
 
 #[kithara::test(tokio)]
@@ -301,9 +293,12 @@ async fn drm_seek_resumes_realtime(
     case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
 )]
 async fn drm_seek_resumes_delayed_cdn(
+    #[future(awt)] delayed_drm_track: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
     temp_dir: TestTempDir,
 ) {
-    run_delayed_drm_seek(backend, abr, 150, temp_dir).await;
+    let (_helper, url) = delayed_drm_track;
+    install_tracing();
+    run_seek_scenario(&url, backend, abr, temp_dir).await;
 }

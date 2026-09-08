@@ -8,3 +8,5 @@ mod common;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod multi_instance;
+
+mod offline_browser;

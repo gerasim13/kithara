@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, sync::RwLock};
+use std::{collections::HashMap, sync::RwLock};
 
 use aes::Aes128;
 use cbc::{
@@ -6,21 +6,24 @@ use cbc::{
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara::{
-    encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource},
+    encode::{EncodeError, EncoderFactory},
     platform::sync::Arc,
     stream::MediaInfo,
 };
-use kithara_test_fixtures::signal::{self, Pcm, SweepMode, Wave};
-use num_traits::AsPrimitive;
+use kithara_test_fixtures::{
+    hls_fixtures::{load_header, load_pcm, load_variant, load_wav},
+    signal::{SweepMode, Wave},
+    variant_input::VariantInput,
+};
 
 use crate::{
-    bufpool_ext::pools,
     fixture_protocol::{HlsRouteKind, HttpErrorRule, eval_http_error, generate_segment},
-    fmp4::{PackagedVariantData, mux_packaged_variant},
+    fmp4::PackagedVariantData,
     hls_spec::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
         ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
     },
+    rfc6381::Rfc6381Ext,
     test_defaults::{frames_in_segments, packaged_content_frames},
 };
 
@@ -69,77 +72,6 @@ enum MaterializedHlsBody {
     Packaged {
         variants: Vec<PackagedVariantData>,
     },
-}
-
-struct DelayPaddedPcm<'a> {
-    inner: &'a dyn PcmSource,
-    encoder_delay_frames: usize,
-    trailing_delay_frames: usize,
-}
-
-impl DelayPaddedPcm<'_> {
-    fn bytes_per_frame(&self) -> usize {
-        usize::from(self.inner.channels()) * size_of::<i16>()
-    }
-
-    fn encoder_delay_bytes(&self) -> usize {
-        self.encoder_delay_frames
-            .saturating_mul(self.bytes_per_frame())
-    }
-
-    fn trailing_delay_bytes(&self) -> usize {
-        self.trailing_delay_frames
-            .saturating_mul(self.bytes_per_frame())
-    }
-}
-
-impl PcmSource for DelayPaddedPcm<'_> {
-    fn channels(&self) -> u16 {
-        self.inner.channels()
-    }
-
-    fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
-        let Some(total_len) = self.total_byte_len() else {
-            return 0;
-        };
-        if offset >= total_len || buf.is_empty() {
-            return 0;
-        }
-
-        let writable = (total_len - offset).min(buf.len());
-        let window = &mut buf[..writable];
-        window.fill(0);
-
-        let encoder_delay_bytes = self.encoder_delay_bytes();
-        let inner_len = self.inner.total_byte_len().unwrap_or(0);
-        let inner_start = encoder_delay_bytes;
-        let inner_end = inner_start.saturating_add(inner_len);
-        let copy_start = offset.max(inner_start);
-        let copy_end = (offset + writable).min(inner_end);
-
-        if copy_start < copy_end {
-            let inner_offset = copy_start - inner_start;
-            let dst_offset = copy_start - offset;
-            let dst_end = dst_offset + (copy_end - copy_start);
-            let _ = self
-                .inner
-                .read_pcm_at(inner_offset, &mut window[dst_offset..dst_end]);
-        }
-
-        writable
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.inner.sample_rate()
-    }
-
-    fn total_byte_len(&self) -> Option<usize> {
-        self.inner.total_byte_len().map(|inner_len| {
-            inner_len
-                .saturating_add(self.encoder_delay_bytes())
-                .saturating_add(self.trailing_delay_bytes())
-        })
-    }
 }
 
 impl GeneratedHls {
@@ -296,131 +228,17 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
     if let Some(packaged) = &spec.packaged_audio {
         let segment_frames = packaged_segment_frames(packaged)
             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-        // A cold-cache encode is CPU-bound ffmpeg work running inside the
-        // calling test's wall budget: encode variants concurrently so a fully
-        // cold fixture costs one variant's encode time, not the sum.
-        let variants = std::thread::scope(|scope| {
-            let handles: Vec<_> = packaged
-                .variants
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| {
-                    scope.spawn(move || {
-                        let cache = crate::fixture_cache::FixtureCache::from_env();
-                        let key = format!("{}|v{idx}", spec.cache_key());
-                        if let Some(data) = cache
-                            .get("hls-variant", key.as_bytes())
-                            .and_then(|blob| decode_variant_blob(&blob))
-                        {
-                            return Ok(data);
-                        }
-                        let _lock = cache.lock_entry("hls-variant", key.as_bytes());
-                        if let Some(data) = cache
-                            .get("hls-variant", key.as_bytes())
-                            .and_then(|blob| decode_variant_blob(&blob))
-                        {
-                            return Ok(data);
-                        }
-                        tracing::info!(key, "cold hls-variant fixture encode");
-                        let track = encode_packaged_variant(packaged, variant, segment_frames)
-                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                        let data = mux_packaged_variant(&track, packaged.gapless_encoding)
-                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                        cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
-                        Ok(data)
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| {
-                    handle.join().unwrap_or_else(|_| {
-                        Err(HlsSpecError::PackagedAudio(
-                            "variant encode thread panicked".into(),
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })?;
+        let variants = packaged
+            .variants
+            .iter()
+            .map(|variant| load_packaged_variant(packaged, variant, segment_frames))
+            .collect::<Result<Vec<_>, _>>()?;
         return Ok(MaterializedHlsBody::Packaged { variants });
     }
 
     Ok(MaterializedHlsBody::Legacy {
-        data_mode: materialize_data_mode(spec),
-        init_segments: materialize_init_mode(spec),
-    })
-}
-
-fn put_u64(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn put_block(out: &mut Vec<u8>, block: &[u8]) {
-    put_u64(out, block.len().as_());
-    out.extend_from_slice(block);
-}
-
-fn take_block<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
-    if buf.len() < 8 {
-        return None;
-    }
-    let len: usize = u64::from_le_bytes(buf[..8].try_into().ok()?).as_();
-    let rest = &buf[8..];
-    if rest.len() < len {
-        return None;
-    }
-    let (block, tail) = rest.split_at(len);
-    *buf = tail;
-    Some(block)
-}
-
-fn take_u64(buf: &mut &[u8]) -> Option<u64> {
-    if buf.len() < 8 {
-        return None;
-    }
-    let v = u64::from_le_bytes(buf[..8].try_into().ok()?);
-    *buf = &buf[8..];
-    Some(v)
-}
-
-fn encode_variant_blob(v: &PackagedVariantData) -> Vec<u8> {
-    let mut out = Vec::new();
-    put_block(&mut out, &v.init_segment);
-    put_block(&mut out, v.rfc6381_codec.as_bytes());
-    put_u64(&mut out, v.media_segments.len().as_());
-    for seg in &v.media_segments {
-        put_block(&mut out, seg);
-    }
-    put_u64(&mut out, v.segment_durations_secs.len().as_());
-    for d in &v.segment_durations_secs {
-        out.extend_from_slice(&d.to_le_bytes());
-    }
-    out
-}
-
-fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
-    let mut buf = blob;
-    let init = take_block(&mut buf)?.to_vec();
-    let codec = std::str::from_utf8(take_block(&mut buf)?).ok()?.to_owned();
-    let media_count: usize = take_u64(&mut buf)?.as_();
-    let mut media_segments = Vec::with_capacity(media_count);
-    for _ in 0..media_count {
-        media_segments.push(Arc::new(take_block(&mut buf)?.to_vec()));
-    }
-    let dur_count: usize = take_u64(&mut buf)?.as_();
-    let mut segment_durations_secs = Vec::with_capacity(dur_count);
-    for _ in 0..dur_count {
-        if buf.len() < 8 {
-            return None;
-        }
-        segment_durations_secs.push(f64::from_le_bytes(buf[..8].try_into().ok()?));
-        buf = &buf[8..];
-    }
-    Some(PackagedVariantData {
-        init_segment: Arc::new(init),
-        rfc6381_codec: Cow::Owned(codec),
-        media_segments,
-        segment_durations_secs,
+        data_mode: materialize_data_mode(spec)?,
+        init_segments: materialize_init_mode(spec)?,
     })
 }
 
@@ -481,12 +299,13 @@ fn greatest_common_divisor(mut lhs: usize, mut rhs: usize) -> usize {
     lhs
 }
 
-fn encode_packaged_variant(
+fn load_packaged_variant(
     packaged: &ResolvedPackagedAudioSpec,
     variant: &ResolvedPackagedVariant,
     segment_frames: usize,
-) -> Result<EncodedTrack, EncodeError> {
-    let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
+) -> Result<PackagedVariantData, HlsSpecError> {
+    let frame_samples = EncoderFactory::frame_samples(variant.codec)
+        .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
     let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
         packaged_frame_layout(packaged, frame_samples, segment_frames);
 
@@ -510,32 +329,36 @@ fn encode_packaged_variant(
         ),
         ResolvedPackagedSignal::Pattern(pattern) => pattern.into(),
     };
-    let sample_rate = packaged.sample_rate;
-    let pcm = Pcm::from_fn(sample_rate, packaged.channels, content_frames, |frame| {
-        wave.sample(frame.saturating_add(start_frame), sample_rate)
-    });
-    let padded = DelayPaddedPcm {
-        inner: &pcm,
-        encoder_delay_frames: packaged.encoder_delay as usize,
-        trailing_delay_frames: aligned_trailing_delay as usize,
-    };
-
-    EncoderFactory::encode_packaged(
-        &pools(),
-        &PackagedEncodeRequest::builder()
-            .pcm(&padded)
+    let package = load_variant(
+        &VariantInput::builder()
+            .codec(variant.codec)
+            .sample_rate(packaged.sample_rate)
+            .channels(packaged.channels)
+            .content_frames(content_frames)
             .packets_per_segment(packets_per_segment)
-            .media_info(media_info)
-            .timescale(packaged.timescale)
+            .signal(wave)
+            .start_frame(start_frame)
             .bit_rate(variant.bit_rate)
+            .timescale(packaged.timescale)
             .encoder_delay(packaged.encoder_delay)
             .trailing_delay(aligned_trailing_delay)
+            .gapless_encoding(packaged.gapless_encoding)
             .build(),
     )
+    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
+    let rfc6381_codec = media_info
+        .rfc6381_codec()
+        .ok_or(HlsSpecError::UnsupportedPackagedCodec(variant.codec))?;
+    Ok(PackagedVariantData {
+        init_segment: Arc::new(package.init_segment),
+        rfc6381_codec,
+        media_segments: package.media_segments.into_iter().map(Arc::new).collect(),
+        segment_durations_secs: package.segment_durations_secs,
+    })
 }
 
-fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
-    match &spec.data_mode {
+fn materialize_data_mode(spec: &ResolvedHlsSpec) -> Result<MaterializedDataMode, HlsSpecError> {
+    Ok(match &spec.data_mode {
         ResolvedDataMode::TestPattern => MaterializedDataMode::TestPattern,
         ResolvedDataMode::AbrBinary => MaterializedDataMode::AbrBinary,
         ResolvedDataMode::SharedBytes(bytes) => {
@@ -548,12 +371,12 @@ fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
             sample_rate,
             channels,
         } => {
-            let wav = signal::wav(
+            let wav = load_wav(
                 *sample_rate,
                 *channels,
                 frames_in_segments(spec.segments_per_variant, spec.segment_size, *channels),
-                Wave::Sawtooth,
-            );
+            )
+            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
             MaterializedDataMode::SharedBytes(Arc::new(wav))
         }
         ResolvedDataMode::PerVariantPcm {
@@ -567,17 +390,19 @@ fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
                         .get(variant)
                         .copied()
                         .unwrap_or(crate::fixture_protocol::PcmPattern::Ascending);
-                    Arc::new(Vec::from(Pcm::new(
+                    load_pcm(
                         *sample_rate,
                         *channels,
                         frames_in_segments(spec.segments_per_variant, spec.segment_size, *channels),
                         pattern.into(),
-                    )))
+                    )
+                    .map(Arc::new)
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
             MaterializedDataMode::PerVariantBytes(bytes)
         }
-    }
+    })
 }
 
 fn generate_abr_binary_segment(variant: usize, segment: usize) -> Vec<u8> {
@@ -597,8 +422,8 @@ fn generate_abr_binary_segment(variant: usize, segment: usize) -> Vec<u8> {
     data
 }
 
-fn materialize_init_mode(spec: &ResolvedHlsSpec) -> Vec<Arc<Vec<u8>>> {
-    match &spec.init_mode {
+fn materialize_init_mode(spec: &ResolvedHlsSpec) -> Result<Vec<Arc<Vec<u8>>>, HlsSpecError> {
+    Ok(match &spec.init_mode {
         ResolvedInitMode::None => (0..spec.variant_count)
             .map(|_| Arc::new(Vec::new()))
             .collect(),
@@ -609,7 +434,10 @@ fn materialize_init_mode(spec: &ResolvedHlsSpec) -> Vec<Arc<Vec<u8>>> {
             sample_rate,
             channels,
         } => {
-            let header = Arc::new(signal::header(*sample_rate, *channels, None));
+            let header = Arc::new(
+                load_header(*sample_rate, *channels)
+                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?,
+            );
             vec![header; spec.variant_count]
         }
         ResolvedInitMode::PerVariantBytes(data) => (0..spec.variant_count)
@@ -619,7 +447,7 @@ fn materialize_init_mode(spec: &ResolvedHlsSpec) -> Vec<Arc<Vec<u8>>> {
                     .unwrap_or_else(|| Arc::new(Vec::new()))
             })
             .collect(),
-    }
+    })
 }
 
 fn generate_test_init_segment(variant: usize) -> Vec<u8> {
@@ -759,25 +587,6 @@ mod tests {
         hls_url::{HlsSpec, encode_hls_spec},
         kithara,
     };
-
-    #[kithara::test]
-    fn packaged_variant_blob_roundtrips() {
-        let original = PackagedVariantData {
-            init_segment: Arc::new(vec![1, 2, 3, 4]),
-            rfc6381_codec: Cow::Borrowed("mp4a.40.2"),
-            media_segments: vec![Arc::new(vec![5, 6]), Arc::new(vec![7, 8, 9])],
-            segment_durations_secs: vec![4.0, 3.5],
-        };
-        let blob = encode_variant_blob(&original);
-        let back = decode_variant_blob(&blob).expect("valid blob");
-        assert_eq!(back, original);
-    }
-
-    #[kithara::test]
-    fn truncated_variant_blob_is_a_miss() {
-        let blob = vec![0xFFu8; 4];
-        assert!(decode_variant_blob(&blob).is_none());
-    }
 
     #[kithara::test]
     fn builds_master_and_media_playlist() {

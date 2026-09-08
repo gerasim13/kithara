@@ -15,9 +15,12 @@ use kithara_integration_tests::{
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_test_fixtures::signal::{self, Wave};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::{hls_sized_wav_forty_eight, hls_sized_wav_hundred};
+use kithara_test_fixtures::signal;
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
+use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
@@ -319,10 +322,69 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn wav_hundred(hls_sized_wav_hundred: Vec<u8>) -> (Url, SizeProbeCounter) {
+    wav_seek(hls_sized_wav_hundred, 100).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn wav_forty_eight(hls_sized_wav_forty_eight: Vec<u8>) -> (Url, SizeProbeCounter) {
+    wav_seek(hls_sized_wav_forty_eight, 48).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (Url, SizeProbeCounter) {
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        segments_per_variant: segment_count,
+        segment_size: Consts::D.segment_size,
+        segment_duration_secs: Consts::D.segment_duration_secs(),
+        custom_data: Some(Arc::new(wav_data)),
+        ..Default::default()
+    })
+    .await;
+    (
+        server.url("/master.m3u8"),
+        SizeProbeCounter::HlsServer(server),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn flac_hundred() -> (Url, SizeProbeCounter) {
+    let helper = TestServerHelper::new().await;
+    let created = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANT_COUNT)
+                .segments_per_variant(100)
+                .segment_duration_secs(Consts::D.segment_duration_secs())
+                .packaged_audio_per_variant_pcm_flac(
+                    Consts::D.sample_rate,
+                    Consts::D.channels,
+                    vec![PcmPattern::Ascending],
+                ),
+        )
+        .await
+        .expect("create FLAC/fMP4 HLS fixture");
+    let url = created.master_url();
+    let token = created.token().to_owned();
+    (
+        url,
+        SizeProbeCounter::Helper {
+            helper,
+            segments: 100,
+            token,
+            variants: Consts::VARIANT_COUNT,
+        },
+    )
+}
+
 /// Random seek+read cycles with PCM verification on `Audio<Stream<Hls>>`.
 ///
 /// Scenario:
-/// 1. Generate a file-like WAV or packaged FLAC/fMP4 saw-tooth fixture
+/// 1. Receive a prepared file-like WAV or packaged FLAC/fMP4 saw-tooth fixture
 /// 2. Create `Audio<Stream<Hls>>` with a matching media hint
 /// 3. Verify duration
 /// 4. 1000 random seeks with verification:
@@ -338,7 +400,8 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
         DecoderBackend::Apple,
         SeekAudioFixture::WavFileLike,
         100,
-        Some(110)
+        Some(110),
+        wav_hundred().await
     )
 )]
 #[cfg(not(target_arch = "wasm32"))]
@@ -347,39 +410,51 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     100,
-    Some(110)
+    Some(110),
+    wav_hundred().await
 )]
 #[case::wav_symphonia_mmap(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     100,
-    None
+    None,
+    wav_hundred().await
 )]
 #[case::wav_symphonia_full_cache(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::WavFileLike,
     48,
-    Some(56)
+    Some(56),
+    wav_forty_eight().await
 )]
 #[case::flac_fmp4_symphonia_ephemeral(
     true,
     DecoderBackend::Symphonia,
     SeekAudioFixture::FlacFmp4,
     100,
-    Some(110)
+    Some(110),
+    flac_hundred().await
 )]
 #[case::flac_fmp4_symphonia_mmap(
     false,
     DecoderBackend::Symphonia,
     SeekAudioFixture::FlacFmp4,
     100,
-    None
+    None,
+    flac_hundred().await
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::wav_apple_mmap(false, DecoderBackend::Apple, SeekAudioFixture::WavFileLike, 100, None)
+    case::wav_apple_mmap(
+        false,
+        DecoderBackend::Apple,
+        SeekAudioFixture::WavFileLike,
+        100,
+        None,
+        wav_hundred().await
+    )
 )]
 async fn stress_seek_audio_hls(
     #[case] ephemeral: bool,
@@ -387,70 +462,13 @@ async fn stress_seek_audio_hls(
     #[case] fixture: SeekAudioFixture,
     #[case] segment_count: usize,
     #[case] cache_capacity_override: Option<usize>,
+    #[case] prepared: (Url, SizeProbeCounter),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let expected_dur = matches!(fixture, SeekAudioFixture::WavFileLike)
         .then(|| Consts::expected_duration_secs(segment_count));
-    let (url, counter) = match fixture {
-        SeekAudioFixture::WavFileLike => {
-            let wav_data = signal::wav_of_size(
-                Consts::D.sample_rate,
-                Consts::D.channels,
-                Consts::total_bytes(segment_count),
-                Wave::Sawtooth,
-            );
-            if let Some(expected_dur) = expected_dur {
-                info!(
-                    total_bytes = Consts::total_bytes(segment_count),
-                    duration_secs = format!("{expected_dur:.2}"),
-                    "Generated saw-tooth WAV"
-                );
-            }
-            let server = HlsTestServer::new(HlsTestServerConfig {
-                segments_per_variant: segment_count,
-                segment_size: Consts::D.segment_size,
-                segment_duration_secs: segment_duration,
-                custom_data: Some(Arc::new(wav_data)),
-                ..Default::default()
-            })
-            .await;
-            (
-                server.url("/master.m3u8"),
-                SizeProbeCounter::HlsServer(server),
-            )
-        }
-        SeekAudioFixture::FlacFmp4 => {
-            let helper = TestServerHelper::new().await;
-            let created = helper
-                .create_hls(
-                    HlsFixtureBuilder::new()
-                        .variant_count(Consts::VARIANT_COUNT)
-                        .segments_per_variant(segment_count)
-                        .segment_duration_secs(segment_duration)
-                        .packaged_audio_per_variant_pcm_flac(
-                            Consts::D.sample_rate,
-                            Consts::D.channels,
-                            vec![PcmPattern::Ascending],
-                        ),
-                )
-                .await
-                .expect("create FLAC/fMP4 HLS fixture");
-            let url = created.master_url();
-            let token = created.token().to_owned();
-            (
-                url,
-                SizeProbeCounter::Helper {
-                    helper,
-                    segments: segment_count,
-                    token,
-                    variants: Consts::VARIANT_COUNT,
-                },
-            )
-        }
-    };
+    let (url, counter) = prepared;
 
     info!(?fixture, %url, segments = segment_count, "HLS server ready");
 

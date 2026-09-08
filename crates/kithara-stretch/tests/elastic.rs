@@ -4,13 +4,14 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
-use std::{f32::consts::TAU, num::NonZeroUsize, ops::RangeInclusive};
+use std::{num::NonZeroUsize, ops::RangeInclusive};
 
 use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
 use kithara_stretch::{
     BungeeConfig, ElasticBackendConfig, ElasticCapabilities, ElasticConfig, ElasticEngine,
     ElasticError, ElasticRequest, ElasticSpanConfig, SignalsmithConfig, StretchKind, build_engine,
 };
+use kithara_test_fixtures::stretch_fixtures::{StretchPcm, stretch_pcm};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -80,13 +81,8 @@ fn prepared_backend_with_rate_envelope(
     build_engine(config).expect("the selected engine prepares for a valid shape")
 }
 
-fn interleaved_signal(frames: usize) -> Vec<f32> {
-    (0..frames)
-        .flat_map(|frame| {
-            let sample = if frame % 64 < 32 { 0.25 } else { -0.25 };
-            [sample, -sample]
-        })
-        .collect()
+fn interleaved_signal(pcm: &StretchPcm, frames: usize) -> Vec<f32> {
+    pcm.square[..frames * CHANNELS].to_vec()
 }
 
 fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
@@ -110,50 +106,15 @@ fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
     panic!("terminal drain must converge to an empty flush");
 }
 
-fn impulse_markers(frames: usize, offset: usize) -> Vec<f32> {
-    marker_signal(frames, offset, |index| {
-        if index.is_multiple_of(64) {
-            let marker_index = u16::try_from((index / 64) % 7)
-                .expect("invariant: marker index is bounded below 7");
-            0.5 + f32::from(marker_index) / 14.0
-        } else {
-            0.0
-        }
-    })
+fn impulse_markers(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
+    pcm.impulses[offset * CHANNELS..(offset + frames) * CHANNELS].to_vec()
 }
 
-fn marker_signal(
-    frames: usize,
-    offset: usize,
-    mut marker_at: impl FnMut(usize) -> f32,
-) -> Vec<f32> {
-    (0..frames)
-        .flat_map(|frame| {
-            let index = offset.wrapping_add(frame);
-            let marker = marker_at(index);
-            [marker, marker * -0.5]
-        })
-        .collect()
+fn continuous_tone(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
+    pcm.continuous[offset * CHANNELS..(offset + frames) * CHANNELS].to_vec()
 }
 
-fn continuous_tone(frames: usize, offset: usize) -> Vec<f32> {
-    tone_signal(frames, offset, TONE_HZ)
-}
-
-fn tone_signal(frames: usize, offset: usize, frequency: f64) -> Vec<f32> {
-    let phase_step = TAU
-        * frequency
-            .to_f32()
-            .expect("the fixture frequency fits in f32")
-        / SAMPLE_RATE
-            .to_f32()
-            .expect("the fixture sample rate fits in f32");
-    marker_signal(frames, offset, |index| {
-        (index.to_f32().expect("the fixture timeline fits in f32") * phase_step).sin() * 0.5
-    })
-}
-
-fn landmark_signal(frames: usize, landmarks: &[usize]) -> Vec<f32> {
+fn landmark_signal(pcm: &StretchPcm, frames: usize, landmarks: &[usize]) -> Vec<f32> {
     assert!(!landmarks.is_empty());
     assert!(frames >= landmarks.len());
     (0..frames)
@@ -162,24 +123,17 @@ fn landmark_signal(frames: usize, landmarks: &[usize]) -> Vec<f32> {
             let slot_start = slot * frames / landmarks.len();
             let slot_end = (slot + 1) * frames / landmarks.len();
             let slot_frames = slot_end - slot_start;
-            let slot_position = frame - slot_start;
-            let guarded = slot_position < slot_frames / 8
-                || slot_position >= slot_frames.saturating_mul(7) / 8;
-            let frequency = if guarded {
-                TONE_HZ
+            let position = frame - slot_start;
+            let guarded =
+                position < slot_frames / 8 || position >= slot_frames.saturating_mul(7) / 8;
+            let tone = if guarded {
+                &pcm.tones[12]
             } else {
-                LANDMARK_FREQUENCIES[landmarks[slot]]
-            }
-            .to_f32()
-            .expect("the landmark frequency fits in f32");
-            let position = slot_position
-                .to_f32()
-                .expect("the landmark position fits in f32");
-            let sample_rate = SAMPLE_RATE
-                .to_f32()
-                .expect("the fixture sample rate fits in f32");
-            let sample = (TAU * frequency * position / sample_rate).sin() * 0.5;
-            [sample, sample * -0.5]
+                &pcm.tones[landmarks[slot]]
+            };
+            tone[position * CHANNELS..(position + 1) * CHANNELS]
+                .iter()
+                .copied()
         })
         .collect()
 }
@@ -214,38 +168,22 @@ fn first_audible_frame(samples: &[f32], channels: usize) -> Option<usize> {
         .position(|frame| frame.iter().any(|sample| sample.abs() >= 1.0e-4))
 }
 
-fn terminal_marker_signal_with_span(frames: usize, marker_span: usize) -> Vec<f32> {
+fn terminal_marker_signal_with_span(
+    pcm: &StretchPcm,
+    frames: usize,
+    marker_span: usize,
+) -> Vec<f32> {
     let marker_frames = frames.min(marker_span);
     let marker_start = frames - marker_frames;
-    (0..frames)
-        .flat_map(|frame| {
-            let sample = if frame < marker_start {
-                0.0
-            } else {
-                let marker_frame = frame - marker_start;
-                let frequency = if marker_frame < marker_frames / 2 {
-                    TERMINAL_LOW_HZ
-                } else {
-                    TERMINAL_HIGH_HZ
-                };
-                let frequency = frequency
-                    .to_f32()
-                    .expect("the terminal marker frequency fits in f32");
-                let marker_frame = marker_frame
-                    .to_f32()
-                    .expect("the terminal marker position fits in f32");
-                let sample_rate = SAMPLE_RATE
-                    .to_f32()
-                    .expect("the terminal sample rate fits in f32");
-                (TAU * frequency * marker_frame / sample_rate).sin() * 0.5
-            };
-            [sample, sample * -0.5]
-        })
-        .collect()
+    let mut source = pcm.silence[..marker_start * CHANNELS].to_vec();
+    let midpoint = marker_frames / 2;
+    source.extend_from_slice(&pcm.tones[13][..midpoint * CHANNELS]);
+    source.extend_from_slice(&pcm.tones[14][midpoint * CHANNELS..marker_frames * CHANNELS]);
+    source
 }
 
-fn short_marker_signal(frames: usize) -> Vec<f32> {
-    tone_signal(frames, 0, SHORT_MARKER_HZ)
+fn short_marker_signal(pcm: &StretchPcm, frames: usize) -> Vec<f32> {
+    pcm.short[..frames * CHANNELS].to_vec()
 }
 
 fn short_marker_is_present(samples: &[f32]) -> bool {
@@ -341,13 +279,15 @@ fn landmarks_appear_once_in_order(samples: &[f32], landmarks: &[usize]) -> bool 
 }
 
 #[kithara::test]
-fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop() {
+fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop(
+    stretch_pcm: &'static StretchPcm,
+) {
     const MARKER_FRAMES: usize = 2_048;
 
     let fixture = |order: &[usize]| {
         let mut samples = Vec::new();
         for &landmark in order {
-            samples.extend_from_slice(&landmark_signal(MARKER_FRAMES, &[landmark]));
+            samples.extend_from_slice(&landmark_signal(stretch_pcm, MARKER_FRAMES, &[landmark]));
         }
         samples
     };
@@ -378,10 +318,13 @@ fn indexed_landmark_oracle_rejects_reorder_omission_replay_and_partial_drop() {
     ));
     assert!(!landmarks_appear_once_in_order(&partial, &expected));
 
-    let short = short_marker_signal(CONTROL_QUANTUM);
+    let short = short_marker_signal(stretch_pcm, CONTROL_QUANTUM);
     assert!(short_marker_is_present(&short));
-    assert!(!short_marker_is_present(&vec![0.0; short.len()]));
+    assert!(!short_marker_is_present(
+        &stretch_pcm.silence[..short.len()]
+    ));
     assert!(!short_marker_is_present(&continuous_tone(
+        stretch_pcm,
         CONTROL_QUANTUM,
         0
     )));
@@ -516,10 +459,13 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn renders_the_requested_output_frame_count(#[case] backend: StretchKind) {
+    fn renders_the_requested_output_frame_count(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         let mut engine = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4800, 4000).expect("the request is non-empty");
-        let source = interleaved_signal(request.source_frames());
+        let source = interleaved_signal(stretch_pcm, request.source_frames());
         let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
 
         engine
@@ -536,12 +482,15 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn renders_exact_spans_at_both_declared_rate_edges(#[case] backend: StretchKind) {
+    fn renders_exact_spans_at_both_declared_rate_edges(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         let mut engine = prepared_backend(backend, 8192, 4096);
         let capabilities = engine.capabilities();
 
         for request in edge_requests(capabilities) {
-            let source = interleaved_signal(request.source_frames());
+            let source = interleaved_signal(stretch_pcm, request.source_frames());
             let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
 
             engine
@@ -559,7 +508,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn output_is_independent_of_request_partitioning(#[case] backend: StretchKind) {
+    fn output_is_independent_of_request_partitioning(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         for (source_frames, output_frames, source_partition, output_partition) in [
             (16_384, 16_384, 512, 512),
             (8192, 10_240, 512, 640),
@@ -567,7 +519,7 @@ mod facade {
         ] {
             let mut whole = prepared_backend(backend, source_frames, output_frames);
             let mut partitioned = prepared_backend(backend, source_frames, output_frames);
-            let source = impulse_markers(source_frames, 0);
+            let source = impulse_markers(stretch_pcm, source_frames, 0);
             let mut whole_output = vec![0.0; output_frames * CHANNELS];
             whole
                 .process(
@@ -606,7 +558,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn keeps_capabilities_stable_through_rate_changes(#[case] backend: StretchKind) {
+    fn keeps_capabilities_stable_through_rate_changes(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FAST_OUTPUT_FRAMES: usize = 100;
         const FAST_SOURCE_FRAMES: usize = 400;
         const SLOW_OUTPUT_FRAMES: usize = 8000;
@@ -625,7 +580,7 @@ mod facade {
             ElasticRequest::new(FAST_SOURCE_FRAMES, FAST_OUTPUT_FRAMES).expect("fastest request"),
             ElasticRequest::new(4096, 4096).expect("unity request"),
         ] {
-            let source = continuous_tone(request.source_frames(), source_position);
+            let source = continuous_tone(stretch_pcm, request.source_frames(), source_position);
             let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
 
             engine
@@ -656,7 +611,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn pitch_control_is_independent_of_exact_frame_advance(#[case] backend: StretchKind) {
+    fn pitch_control_is_independent_of_exact_frame_advance(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         let mut reference = prepared_backend(backend, 8192, 8192);
         let mut pitched = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4096, 4096).expect("unity request");
@@ -664,9 +622,9 @@ mod facade {
 
         pitched.set_pitch(1.25).expect("positive pitch scale");
         for block in 0..4 {
-            let source = marker_signal(request.source_frames(), block * 4096, |index| {
-                f32::from(u16::try_from(index % 997).expect("marker index fits")) / 997.0 - 0.5
-            });
+            let source = stretch_pcm.ramp
+                [block * 4096 * CHANNELS..(block * 4096 + request.source_frames()) * CHANNELS]
+                .to_vec();
             let mut reference_output = vec![f32::NAN; request.output_frames() * CHANNELS];
             let mut pitched_output = vec![f32::NAN; request.output_frames() * CHANNELS];
             reference
@@ -724,7 +682,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn terminal_flush_reaches_last_source_audio_at_each_rate(#[case] backend: StretchKind) {
+    fn terminal_flush_reaches_last_source_audio_at_each_rate(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 8192;
         for request in [
             ElasticRequest::new(FRAMES / 2, FRAMES).expect("half-speed request"),
@@ -734,7 +695,11 @@ mod facade {
             let mut engine = prepared_backend(backend, FRAMES, FRAMES);
             let capabilities = engine.capabilities();
             let marker_frames = rate_aware_terminal_source_frames(capabilities, request);
-            let source = terminal_marker_signal_with_span(request.source_frames(), marker_frames);
+            let source = terminal_marker_signal_with_span(
+                stretch_pcm,
+                request.source_frames(),
+                marker_frames,
+            );
             let mut output = vec![0.0; request.output_frames() * CHANNELS];
             engine
                 .process(request, &source, &mut output)
@@ -805,6 +770,7 @@ mod facade {
     fn terminal_flush_drains_through_caller_sized_quantums(
         #[case] backend: StretchKind,
         #[case] rate: f64,
+        stretch_pcm: &'static StretchPcm,
     ) {
         const OUTPUT_FRAMES: usize = 8_000;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 4;
@@ -815,7 +781,7 @@ mod facade {
         let request = ElasticRequest::new(source_frames, OUTPUT_FRAMES)
             .expect("the exact-rate request is non-empty");
         let marker_frames = rate_aware_terminal_source_frames(capabilities, request);
-        let source = terminal_marker_signal_with_span(source_frames, marker_frames);
+        let source = terminal_marker_signal_with_span(stretch_pcm, source_frames, marker_frames);
         let mut output = vec![0.0; OUTPUT_FRAMES * CHANNELS];
         engine
             .process(request, &source, &mut output)
@@ -872,7 +838,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn terminal_flush_reaches_each_new_rate_within_declared_latency(#[case] backend: StretchKind) {
+    fn terminal_flush_reaches_each_new_rate_within_declared_latency(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
         for (initial_is_minimum, settled_is_minimum) in [(true, false), (false, true)] {
@@ -886,7 +855,7 @@ mod facade {
             let initial = edge_request(capabilities, OUTPUT_FRAMES, initial_is_minimum);
             let mut source_position = 0;
             for _ in 0..2 {
-                let source = continuous_tone(initial.source_frames(), source_position);
+                let source = continuous_tone(stretch_pcm, initial.source_frames(), source_position);
                 let mut output = vec![0.0; initial.output_frames() * CHANNELS];
                 engine
                     .process(initial, &source, &mut output)
@@ -896,7 +865,7 @@ mod facade {
 
             let settled_output_frames = capabilities.latency().output_frames();
             let settled = edge_request(capabilities, settled_output_frames, settled_is_minimum);
-            let settled_source = short_marker_signal(settled.source_frames());
+            let settled_source = short_marker_signal(stretch_pcm, settled.source_frames());
             let mut settled_output = vec![0.0; settled.output_frames() * CHANNELS];
             engine
                 .process(settled, &settled_source, &mut settled_output)
@@ -926,6 +895,7 @@ mod facade {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn terminal_flush_reaches_practical_rate_edges_after_declared_latency(
         #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
     ) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 4;
@@ -936,7 +906,7 @@ mod facade {
             let initial = edge_request(capabilities, OUTPUT_FRAMES, initial_is_minimum);
             let mut source_position = 0;
             for _ in 0..2 {
-                let source = continuous_tone(initial.source_frames(), source_position);
+                let source = continuous_tone(stretch_pcm, initial.source_frames(), source_position);
                 let mut output = vec![0.0; initial.output_frames() * CHANNELS];
                 engine
                     .process(initial, &source, &mut output)
@@ -946,7 +916,7 @@ mod facade {
 
             let settled_output_frames = capabilities.latency().output_frames();
             let settled = edge_request(capabilities, settled_output_frames, settled_is_minimum);
-            let source = continuous_tone(settled.source_frames(), source_position);
+            let source = continuous_tone(stretch_pcm, settled.source_frames(), source_position);
             let mut output = vec![0.0; settled.output_frames() * CHANNELS];
             engine
                 .process(settled, &source, &mut output)
@@ -972,7 +942,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn transitional_eof_preserves_every_indexed_marker(#[case] backend: StretchKind) {
+    fn transitional_eof_preserves_every_indexed_marker(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const OUTPUT_FRAMES: usize = 8192;
         const MAX_SOURCE_FRAMES: usize = OUTPUT_FRAMES * 2;
         const INITIAL_LANDMARKS: usize = 8;
@@ -991,7 +964,7 @@ mod facade {
             for start in (0..INITIAL_LANDMARKS).step_by(LANDMARKS_PER_INITIAL_BLOCK) {
                 let end = start + LANDMARKS_PER_INITIAL_BLOCK;
                 let landmarks = (start..end).collect::<Vec<_>>();
-                let source = landmark_signal(initial.source_frames(), &landmarks);
+                let source = landmark_signal(stretch_pcm, initial.source_frames(), &landmarks);
                 let mut output = vec![0.0; initial.output_frames() * CHANNELS];
                 engine
                     .process(initial, &source, &mut output)
@@ -1012,7 +985,7 @@ mod facade {
             let transition =
                 ElasticRequest::new(transition_source_frames, transition_output_frames)
                     .expect("the short transition request is valid");
-            let source = short_marker_signal(transition.source_frames());
+            let source = short_marker_signal(stretch_pcm, transition.source_frames());
             let mut output = vec![0.0; transition.output_frames() * CHANNELS];
             engine
                 .process(transition, &source, &mut output)
@@ -1040,12 +1013,15 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn flush_rejects_partial_frame_storage_without_disarming_tail(#[case] backend: StretchKind) {
+    fn flush_rejects_partial_frame_storage_without_disarming_tail(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 8192;
 
         let mut engine = prepared_backend(backend, FRAMES, FRAMES);
         let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
-        let source = interleaved_signal(FRAMES);
+        let source = interleaved_signal(stretch_pcm, FRAMES);
         let mut output = vec![0.0; FRAMES * CHANNELS];
         engine
             .process(request, &source, &mut output)
@@ -1093,12 +1069,15 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
+    fn reset_engine_has_no_terminal_tail(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 8192;
 
         let mut engine = prepared_backend(backend, FRAMES, FRAMES);
         let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
-        let source = interleaved_signal(FRAMES);
+        let source = interleaved_signal(stretch_pcm, FRAMES);
         let mut output = vec![0.0; FRAMES * CHANNELS];
         engine
             .process(request, &source, &mut output)
@@ -1118,7 +1097,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_clears_stream_history_without_changing_capabilities(#[case] backend: StretchKind) {
+    fn reset_clears_stream_history_without_changing_capabilities(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const LONG_FRAMES: usize = 16_384;
         const SHORT_FRAMES: usize = 4096;
 
@@ -1126,7 +1108,7 @@ mod facade {
         let mut fresh = prepared_backend(backend, LONG_FRAMES, LONG_FRAMES);
         let capabilities = engine.capabilities();
         assert_eq!(fresh.capabilities(), capabilities);
-        let source = interleaved_signal(LONG_FRAMES);
+        let source = interleaved_signal(stretch_pcm, LONG_FRAMES);
         let mut output = vec![0.0; LONG_FRAMES * CHANNELS];
         engine
             .process(
@@ -1159,7 +1141,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn preserves_tone_pitch_when_source_advance_changes(#[case] backend: StretchKind) {
+    fn preserves_tone_pitch_when_source_advance_changes(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const SOURCE_FRAMES: usize = 19_200;
         const OUTPUT_FRAMES: usize = 16_000;
 
@@ -1175,15 +1160,7 @@ mod facade {
             .expect("the test configuration is valid");
         let mut engine = build_engine(config).expect("the selected engine prepares");
         let request = ElasticRequest::new(SOURCE_FRAMES, OUTPUT_FRAMES).expect("non-empty request");
-        let phase_step = TAU * 440.0 / 48_000.0;
-        let mut phase: f32 = 0.0;
-        let source = (0..SOURCE_FRAMES)
-            .map(|_| {
-                let sample = phase.sin();
-                phase += phase_step;
-                sample
-            })
-            .collect::<Vec<_>>();
+        let source = &stretch_pcm.mono[..SOURCE_FRAMES];
         let mut output = vec![0.0; OUTPUT_FRAMES];
 
         engine
@@ -1231,10 +1208,13 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rejects_buffers_that_do_not_match_the_request(#[case] backend: StretchKind) {
+    fn rejects_buffers_that_do_not_match_the_request(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         let mut engine = prepared_backend(backend, 8192, 8192);
         let request = ElasticRequest::new(4800, 4000).expect("non-empty request");
-        let source = interleaved_signal(request.source_frames());
+        let source = interleaved_signal(stretch_pcm, request.source_frames());
         let mut output = vec![0.0; request.output_frames() * CHANNELS];
 
         assert_eq!(
@@ -1261,13 +1241,16 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn rejects_spans_beyond_the_prepared_block_limits(#[case] backend: StretchKind) {
+    fn rejects_spans_beyond_the_prepared_block_limits(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const MAX_SOURCE_FRAMES: usize = 2048;
         const MAX_OUTPUT_FRAMES: usize = 2048;
 
         let mut engine = prepared_backend(backend, MAX_SOURCE_FRAMES, MAX_OUTPUT_FRAMES);
         let mut output = vec![0.0; MAX_OUTPUT_FRAMES * CHANNELS];
-        let source = interleaved_signal(MAX_SOURCE_FRAMES + 1);
+        let source = interleaved_signal(stretch_pcm, MAX_SOURCE_FRAMES + 1);
 
         let request = ElasticRequest::new(MAX_SOURCE_FRAMES + 1, MAX_OUTPUT_FRAMES)
             .expect("non-empty request");
@@ -1314,7 +1297,10 @@ mod facade {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn plans_and_renders_one_block_of_continuous_source_spans(#[case] backend: StretchKind) {
+    fn plans_and_renders_one_block_of_continuous_source_spans(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         use kithara_stretch::{ElasticSpan, ElasticSpanPlan};
 
         const OUTPUT_FRAMES: usize = 512;
@@ -1340,7 +1326,7 @@ mod facade {
         )
         .expect("a unity path is inside every declared envelope");
 
-        let source = interleaved_signal(OUTPUT_FRAMES);
+        let source = interleaved_signal(stretch_pcm, OUTPUT_FRAMES);
         let mut consumed = 0;
         for segment in plan.segments() {
             let request = segment.request();
@@ -1371,12 +1357,8 @@ mod priming {
         usize,
     );
 
-    fn indexed_markers(frames: usize, offset: usize) -> Vec<f32> {
-        marker_signal(frames, offset, |index| {
-            let marker_index = u16::try_from(index.wrapping_mul(73) % 997)
-                .expect("invariant: marker index is bounded below 997");
-            (f32::from(marker_index) / 997.0) * 1.5 - 0.75
-        })
+    fn indexed_markers(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
+        pcm.indexed[offset * CHANNELS..(offset + frames) * CHANNELS].to_vec()
     }
 
     fn mean(samples: &[f32]) -> f32 {
@@ -1403,7 +1385,7 @@ mod priming {
             .expect("invariant: warmup request is valid")
     }
 
-    fn primed_playing_pair(backend: StretchKind) -> PrimedPair {
+    fn primed_playing_pair(stretch_pcm: &StretchPcm, backend: StretchKind) -> PrimedPair {
         const MAX_FRAMES: usize = 65_536;
 
         let mut reference = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
@@ -1412,9 +1394,14 @@ mod priming {
         assert_eq!(changed.capabilities(), capabilities);
         let latency = capabilities.latency();
         let warmup = warmup_request(capabilities, 1.0);
-        let history = indexed_markers(latency.source_frames(), 0);
-        let lookahead = indexed_markers(latency.source_frames(), latency.source_frames());
+        let history = indexed_markers(stretch_pcm, latency.source_frames(), 0);
+        let lookahead = indexed_markers(
+            stretch_pcm,
+            latency.source_frames(),
+            latency.source_frames(),
+        );
         let warm_source = indexed_markers(
+            stretch_pcm,
             warmup.source_frames(),
             latency.source_frames().saturating_mul(2),
         );
@@ -1443,7 +1430,7 @@ mod priming {
             .source_frames()
             .saturating_mul(2)
             .saturating_add(warmup.source_frames());
-        let source = indexed_markers(CONTROL_QUANTUM, continuation);
+        let source = indexed_markers(stretch_pcm, CONTROL_QUANTUM, continuation);
         let request = ElasticRequest::new(CONTROL_QUANTUM, CONTROL_QUANTUM)
             .expect("lead quantum is non-empty");
         let mut reference_output = vec![f32::NAN; CONTROL_QUANTUM * CHANNELS];
@@ -1465,6 +1452,7 @@ mod priming {
     }
 
     fn assert_control_response(
+        stretch_pcm: &StretchPcm,
         reference: &mut dyn ElasticEngine,
         changed: &mut dyn ElasticEngine,
         capabilities: ElasticCapabilities,
@@ -1485,8 +1473,9 @@ mod priming {
             let changed_source_frames = source_frames_at(changed_rate, output_frames, false);
             let changed_request = ElasticRequest::new(changed_source_frames, output_frames)
                 .expect("changed quantum is non-empty");
-            let reference_source = indexed_markers(output_frames, reference_position);
-            let changed_source = indexed_markers(changed_source_frames, changed_position);
+            let reference_source = indexed_markers(stretch_pcm, output_frames, reference_position);
+            let changed_source =
+                indexed_markers(stretch_pcm, changed_source_frames, changed_position);
             let mut reference_output = vec![f32::NAN; output_frames * CHANNELS];
             let mut changed_output = vec![f32::NAN; output_frames * CHANNELS];
             reference
@@ -1514,21 +1503,24 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn history_and_output_warmup_remove_the_initial_gap(#[case] backend: StretchKind) {
+    fn history_and_output_warmup_remove_the_initial_gap(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 512;
 
         let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
         let capabilities = engine.capabilities();
         let history_frames = capabilities.latency().source_frames();
-        let history = vec![0.25; history_frames * CHANNELS];
-        let lookahead = vec![0.25; history.len()];
+        let history = stretch_pcm.quarter[..history_frames * CHANNELS].to_vec();
+        let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
         let warmup = warmup_request(capabilities, 1.0);
-        let warm_source = vec![0.25; warmup.source_frames() * CHANNELS];
+        let warm_source = stretch_pcm.quarter[..warmup.source_frames() * CHANNELS].to_vec();
         let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
         engine
             .prime(warmup, &history, &lookahead, &warm_source, &mut discarded)
             .expect("history and output latency warmup");
-        let source = vec![0.25; FRAMES * CHANNELS];
+        let source = stretch_pcm.quarter[..FRAMES * CHANNELS].to_vec();
         let mut output = vec![0.0; FRAMES * CHANNELS];
 
         engine
@@ -1548,10 +1540,15 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn post_prime_pitch_change_responds_within_declared_latency(#[case] backend: StretchKind) {
-        let (mut reference, mut changed, capabilities, continuation) = primed_playing_pair(backend);
+    fn post_prime_pitch_change_responds_within_declared_latency(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
+        let (mut reference, mut changed, capabilities, continuation) =
+            primed_playing_pair(stretch_pcm, backend);
 
         assert_control_response(
+            stretch_pcm,
             reference.as_mut(),
             changed.as_mut(),
             capabilities,
@@ -1567,10 +1564,15 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn post_prime_rate_change_responds_within_declared_latency(#[case] backend: StretchKind) {
-        let (mut reference, mut changed, capabilities, continuation) = primed_playing_pair(backend);
+    fn post_prime_rate_change_responds_within_declared_latency(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
+        let (mut reference, mut changed, capabilities, continuation) =
+            primed_playing_pair(stretch_pcm, backend);
 
         assert_control_response(
+            stretch_pcm,
             reference.as_mut(),
             changed.as_mut(),
             capabilities,
@@ -1588,6 +1590,7 @@ mod priming {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn repeated_adjacent_rate_and_pitch_corrections_remain_continuous(
         #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
     ) {
         const MAX_FRAMES: usize = 65_536;
         const TRANSITIONS: usize = 32;
@@ -1596,10 +1599,14 @@ mod priming {
         let capabilities = engine.capabilities();
         let latency = capabilities.latency();
         let warmup = warmup_request(capabilities, 1.0);
-        let history = continuous_tone(latency.source_frames(), 0);
-        let lookahead = continuous_tone(latency.source_frames(), latency.source_frames());
+        let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
+        let lookahead = continuous_tone(
+            stretch_pcm,
+            latency.source_frames(),
+            latency.source_frames(),
+        );
         let warm_offset = latency.source_frames().saturating_mul(2);
-        let warm_source = continuous_tone(warmup.source_frames(), warm_offset);
+        let warm_source = continuous_tone(stretch_pcm, warmup.source_frames(), warm_offset);
         let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
         engine
             .prime(warmup, &history, &lookahead, &warm_source, &mut discarded)
@@ -1618,7 +1625,7 @@ mod priming {
             engine
                 .set_pitch(pitch)
                 .expect("every correction stays inside the common pitch range");
-            let source = continuous_tone(source_frames, source_position);
+            let source = continuous_tone(stretch_pcm, source_frames, source_position);
             let mut output = vec![f32::NAN; CONTROL_QUANTUM * CHANNELS];
             engine
                 .process(
@@ -1660,7 +1667,10 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn source_history_conditions_the_cue_boundary(#[case] backend: StretchKind) {
+    fn source_history_conditions_the_cue_boundary(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const MAX_FRAMES: usize = 65_536;
 
         let mut conditioned = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
@@ -1669,10 +1679,15 @@ mod priming {
         assert_eq!(zero_padded.capabilities(), capabilities);
         let latency = capabilities.latency();
         let warmup = warmup_request(capabilities, 1.0);
-        let history = continuous_tone(latency.source_frames(), 0);
-        let empty_history = vec![0.0; history.len()];
-        let lookahead = continuous_tone(latency.source_frames(), latency.source_frames());
+        let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
+        let empty_history = stretch_pcm.silence[..history.len()].to_vec();
+        let lookahead = continuous_tone(
+            stretch_pcm,
+            latency.source_frames(),
+            latency.source_frames(),
+        );
         let warm_source = continuous_tone(
+            stretch_pcm,
             warmup.source_frames(),
             latency.source_frames().saturating_mul(2),
         );
@@ -1699,6 +1714,7 @@ mod priming {
 
         let quantum = latency.output_frames();
         let source = continuous_tone(
+            stretch_pcm,
             quantum,
             latency
                 .source_frames()
@@ -1740,7 +1756,11 @@ mod priming {
         feature = "stretch-bungee",
         case::bungee_fast(StretchKind::Bungee, 4.0)
     )]
-    fn prime_accepts_declared_rate_edges(#[case] backend: StretchKind, #[case] rate: f64) {
+    fn prime_accepts_declared_rate_edges(
+        #[case] backend: StretchKind,
+        #[case] rate: f64,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 512;
 
         let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
@@ -1750,9 +1770,9 @@ mod priming {
         let source_frames = source_frames_at(rate, output_frames, rate < 1.0);
         let request = ElasticRequest::new(source_frames, output_frames)
             .expect("the declared edge request is non-empty");
-        let history = vec![0.25; history_frames * CHANNELS];
-        let lookahead = vec![0.25; history.len()];
-        let source = vec![0.25; source_frames * CHANNELS];
+        let history = stretch_pcm.quarter[..history_frames * CHANNELS].to_vec();
+        let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
+        let source = stretch_pcm.quarter[..source_frames * CHANNELS].to_vec();
         let mut discarded = vec![f32::NAN; output_frames * CHANNELS];
 
         engine
@@ -1782,6 +1802,7 @@ mod priming {
     fn priming_hides_history_and_preserves_source_order(
         #[case] backend: StretchKind,
         #[case] source_frames_per_output: f64,
+        stretch_pcm: &'static StretchPcm,
     ) {
         const MAX_FRAMES: usize = 65_536;
         const FOLLOWING_FRAMES: usize = 4096;
@@ -1790,9 +1811,9 @@ mod priming {
         let capabilities = engine.capabilities();
         let history_frames = capabilities.latency().source_frames();
         let warmup = warmup_request(capabilities, source_frames_per_output);
-        let history = vec![0.9; history_frames * CHANNELS];
-        let lookahead = vec![0.2; history.len()];
-        let warm_source = vec![0.5; warmup.source_frames() * CHANNELS];
+        let history = stretch_pcm.nine[..history_frames * CHANNELS].to_vec();
+        let lookahead = stretch_pcm.fifth[..history.len()].to_vec();
+        let warm_source = stretch_pcm.half[..warmup.source_frames() * CHANNELS].to_vec();
         let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
         engine
             .prime(warmup, &history, &lookahead, &warm_source, &mut discarded)
@@ -1807,7 +1828,7 @@ mod priming {
             source_frames_at(source_frames_per_output, render_output_frames, false);
         assert!(render_source_frames <= MAX_FRAMES);
         assert!(render_output_frames <= MAX_FRAMES);
-        let source = vec![0.8; render_source_frames * CHANNELS];
+        let source = stretch_pcm.four_fifths[..render_source_frames * CHANNELS].to_vec();
         let mut output = vec![f32::NAN; render_output_frames * CHANNELS];
         engine
             .process(
@@ -1852,13 +1873,17 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn prime_rejects_every_ambiguous_buffer_count(#[case] backend: StretchKind) {
+    fn prime_rejects_every_ambiguous_buffer_count(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         let mut engine = prepared_backend(backend, 1024, 512);
         let capabilities = engine.capabilities();
         let warmup = warmup_request(capabilities, 1.0);
-        let history = vec![0.25; capabilities.latency().source_frames() * CHANNELS];
-        let lookahead = vec![0.25; history.len()];
-        let source = vec![0.25; warmup.source_frames() * CHANNELS];
+        let history =
+            stretch_pcm.quarter[..capabilities.latency().source_frames() * CHANNELS].to_vec();
+        let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
+        let source = stretch_pcm.quarter[..warmup.source_frames() * CHANNELS].to_vec();
         let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
 
         assert_eq!(
@@ -1931,17 +1956,21 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn reset_reprime_keeps_the_first_frame_aligned(#[case] backend: StretchKind) {
+    fn reset_reprime_keeps_the_first_frame_aligned(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const SOURCE_FRAMES: usize = 600;
         const OUTPUT_FRAMES: usize = 500;
 
         let mut engine = prepared_backend(backend, SOURCE_FRAMES, OUTPUT_FRAMES);
         let capabilities = engine.capabilities();
         let warmup = warmup_request(capabilities, 1.2);
-        let history = vec![0.25; capabilities.latency().source_frames() * CHANNELS];
-        let lookahead = vec![0.25; history.len()];
-        let warm_source = vec![0.25; warmup.source_frames() * CHANNELS];
-        let source = vec![0.25; SOURCE_FRAMES * CHANNELS];
+        let history =
+            stretch_pcm.quarter[..capabilities.latency().source_frames() * CHANNELS].to_vec();
+        let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
+        let warm_source = stretch_pcm.quarter[..warmup.source_frames() * CHANNELS].to_vec();
+        let source = stretch_pcm.quarter[..SOURCE_FRAMES * CHANNELS].to_vec();
         let request = ElasticRequest::new(SOURCE_FRAMES, OUTPUT_FRAMES).expect("non-unity request");
         let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
         let mut output = vec![0.0; OUTPUT_FRAMES * CHANNELS];
@@ -1974,7 +2003,10 @@ mod priming {
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn prime_discards_previous_stream_state(#[case] backend: StretchKind) {
+    fn prime_discards_previous_stream_state(
+        #[case] backend: StretchKind,
+        stretch_pcm: &'static StretchPcm,
+    ) {
         const FRAMES: usize = 4096;
 
         let mut fresh = prepared_backend(backend, FRAMES, FRAMES);
@@ -1982,11 +2014,15 @@ mod priming {
         let capabilities = fresh.capabilities();
         let warmup = warmup_request(capabilities, 1.0);
         let history_frames = capabilities.latency().source_frames();
-        let history = indexed_markers(history_frames, 0);
-        let lookahead = indexed_markers(history_frames, history_frames);
-        let warm_source = indexed_markers(warmup.source_frames(), history_frames * 2);
-        let source = indexed_markers(FRAMES, history_frames * 2 + warmup.source_frames());
-        let dirty_source = interleaved_signal(FRAMES);
+        let history = indexed_markers(stretch_pcm, history_frames, 0);
+        let lookahead = indexed_markers(stretch_pcm, history_frames, history_frames);
+        let warm_source = indexed_markers(stretch_pcm, warmup.source_frames(), history_frames * 2);
+        let source = indexed_markers(
+            stretch_pcm,
+            FRAMES,
+            history_frames * 2 + warmup.source_frames(),
+        );
+        let dirty_source = interleaved_signal(stretch_pcm, FRAMES);
         let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
         let mut dirty_output = vec![0.0; FRAMES * CHANNELS];
         reused
@@ -2071,7 +2107,10 @@ fn backend_declares_its_prepared_domain_and_latency(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKind) {
+fn unprimed_render_exposes_the_declared_total_latency(
+    #[case] backend: StretchKind,
+    stretch_pcm: &'static StretchPcm,
+) {
     const FRAMES: usize = 65_536;
 
     let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -2080,7 +2119,7 @@ fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKi
         latency.source_frames() + latency.output_frames() < FRAMES,
         "the fixture must outlast the complete declared latency"
     );
-    let source = impulse_markers(FRAMES, 0);
+    let source = impulse_markers(stretch_pcm, FRAMES, 0);
     let mut output = vec![f32::NAN; FRAMES * CHANNELS];
 
     engine

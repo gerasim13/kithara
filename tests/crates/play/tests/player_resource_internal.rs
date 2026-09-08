@@ -26,11 +26,12 @@ use kithara_integration_tests::{
     audio_mock::{Fault, MockReader, TestPcmReader},
     test_defaults::Consts,
 };
+use kithara_test_fixtures::integration_fixtures::constant_half;
 
 use crate::bufpool_ext::pools;
 
-fn make_player_resource(seconds: f64) -> PlayerResource {
-    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, seconds);
+fn make_player_resource(constant_half: &'static [u8], seconds: f64) -> PlayerResource {
+    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, seconds, constant_half);
     let resource = Resource::from_reader(reader, None);
     PlayerResource::new(resource, Arc::from("test.mp3"), &pools())
         .expect("player resource fits the test pool budget")
@@ -222,14 +223,14 @@ impl AudioControl for PositionReader {
 }
 
 #[kithara::test(tokio)]
-async fn duration_reflects_underlying_reader() {
-    let pr = make_player_resource(1.0);
+async fn duration_reflects_underlying_reader(constant_half: &'static [u8]) {
+    let pr = make_player_resource(constant_half, 1.0);
     assert!((pr.duration() - 1.0).abs() < 0.01);
 }
 
 #[kithara::test(tokio)]
-async fn read_returns_constant_samples_full() {
-    let mut pr = make_player_resource(1.0);
+async fn read_returns_constant_samples_full(constant_half: &'static [u8]) {
+    let mut pr = make_player_resource(constant_half, 1.0);
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
@@ -332,8 +333,8 @@ async fn read_zeroes_output_when_no_data_available() {
 }
 
 #[kithara::test(tokio)]
-async fn full_read_prefetches_buffered_eof() {
-    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 900.0 / 44100.0);
+async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
+    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, 900.0 / 44100.0, constant_half);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");
@@ -352,8 +353,8 @@ async fn full_read_prefetches_buffered_eof() {
 }
 
 #[kithara::test(tokio)]
-async fn read_returns_partial_when_eof_inside_buffer() {
-    let reader = TestPcmReader::new(Consts::AUDIO_SPEC, 0.01);
+async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8]) {
+    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, 0.01, constant_half);
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");

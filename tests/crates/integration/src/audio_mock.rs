@@ -16,14 +16,14 @@ use std::{
 
 use kithara::{
     audio::{
-        AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+        AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome,
+        SeekBegin, SeekOutcome,
     },
     decode::{DecodeError, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
     signal::AudioSpec,
 };
-use kithara_test_fixtures::signal::Wave;
 
 /// A stateful fixed-rate `AudioReader` for testing playback facades.
 pub struct TestPcmReader {
@@ -36,32 +36,34 @@ pub struct TestPcmReader {
 }
 
 enum Source {
-    Constant(f32),
-    Signal(Wave),
+    Samples(Vec<f32>),
+    Bytes(&'static [u8]),
 }
 
-/// Default sample value emitted by [`TestPcmReader::new`].
+/// Expected amplitude of the default prepared PCM fixture.
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
-    /// Create a new test reader with the given spec and duration.
-    /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
-    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
-        Self::with_value(spec, duration_secs, TEST_PCM_DEFAULT_VALUE)
-    }
-
-    /// Create a test reader emitting the given constant `value` for every
-    /// sample. Distinguishable per-track values let integration tests
-    /// verify which track a rendered PCM window belongs to.
-    #[must_use]
-    pub fn with_value(spec: AudioSpec, duration_secs: f64, value: f32) -> Self {
-        Self::with_source(spec, duration_secs, Source::Constant(value))
+    pub fn from_samples(spec: AudioSpec, samples: Vec<f32>) -> Self {
+        let total_frames = samples.len() as u64;
+        let mut reader = Self::with_source(spec, 0.0, Source::Samples(samples));
+        reader.total_frames = total_frames;
+        reader
     }
 
     #[must_use]
-    pub fn with_signal(spec: AudioSpec, duration_secs: f64, wave: Wave) -> Self {
-        Self::with_source(spec, duration_secs, Source::Signal(wave))
+    pub fn from_pcm(spec: AudioSpec, duration_secs: f64, bytes: &'static [u8]) -> Self {
+        assert!(
+            bytes.len().is_multiple_of(size_of::<f32>()),
+            "prepared PCM must contain whole samples"
+        );
+        let reader = Self::with_source(spec, duration_secs, Source::Bytes(bytes));
+        assert!(
+            reader.total_frames <= (bytes.len() / size_of::<f32>()) as u64,
+            "prepared PCM is shorter than the requested track"
+        );
+        reader
     }
 
     fn with_source(spec: AudioSpec, duration_secs: f64, source: Source) -> Self {
@@ -80,13 +82,9 @@ impl TestPcmReader {
     }
 
     fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
-        match self.source {
-            Source::Constant(value) => value,
-            Source::Signal(wave) => {
-                let frame = start.saturating_add(output_frame);
-                f32::from(wave.sample(frame as usize, self.spec.sample_rate.get()))
-                    / f32::from(i16::MAX)
-            }
+        match &self.source {
+            Source::Samples(samples) => samples[(start + output_frame) as usize],
+            Source::Bytes(bytes) => prepared_sample(bytes, (start + output_frame) as usize),
         }
     }
 
@@ -250,8 +248,10 @@ pub struct MockReader {
 }
 
 enum MockBehavior {
-    SampleRateTracking {
+    /// Records the session-owned capabilities an owner applies to the reader.
+    AdoptionTracking {
         recorded_host_rate: Arc<AtomicU32>,
+        recorded_wake_mode: Arc<Mutex<Option<ConsumerWakeMode>>>,
         duration: Duration,
     },
     SeekTracking {
@@ -260,12 +260,21 @@ enum MockBehavior {
     MisreportedDuration {
         position_frames: usize,
         remaining_frames: usize,
+        samples: &'static [u8],
     },
     LiveFrontier {
         frontier_ns: Arc<AtomicU64>,
     },
     Faulty(Fault),
     SeekSplit(SeekSplitCounts),
+}
+
+fn adoption_tracking(recorded_host_rate: Arc<AtomicU32>, duration: Duration) -> MockBehavior {
+    MockBehavior::AdoptionTracking {
+        recorded_host_rate,
+        recorded_wake_mode: Arc::new(Mutex::new(None)),
+        duration,
+    }
 }
 
 impl MockReader {
@@ -289,14 +298,23 @@ impl MockReader {
         duration: Duration,
     ) -> (Self, Arc<AtomicU32>) {
         let recorded = Arc::new(AtomicU32::new(0));
-        let reader = Self::with_behavior(
-            spec,
-            MockBehavior::SampleRateTracking {
-                recorded_host_rate: Arc::clone(&recorded),
-                duration,
-            },
-        );
+        let reader = Self::with_behavior(spec, adoption_tracking(Arc::clone(&recorded), duration));
         (reader, recorded)
+    }
+
+    /// Reader recording the consumer wake mode its owner applies to it.
+    #[must_use]
+    pub fn wake_mode_tracking(spec: AudioSpec) -> (Self, Arc<Mutex<Option<ConsumerWakeMode>>>) {
+        let behavior = adoption_tracking(Arc::new(AtomicU32::new(0)), Duration::from_secs(60));
+        let MockBehavior::AdoptionTracking {
+            ref recorded_wake_mode,
+            ..
+        } = behavior
+        else {
+            unreachable!("adoption tracking builds one variant")
+        };
+        let recorded = Arc::clone(recorded_wake_mode);
+        (Self::with_behavior(spec, behavior), recorded)
     }
 
     #[must_use]
@@ -308,12 +326,17 @@ impl MockReader {
     }
 
     #[must_use]
-    pub fn misreported_duration(spec: AudioSpec, actual_frames: usize) -> Self {
+    pub fn misreported_duration(
+        spec: AudioSpec,
+        actual_frames: usize,
+        samples: &'static [u8],
+    ) -> Self {
         Self::with_behavior(
             spec,
             MockBehavior::MisreportedDuration {
                 position_frames: 0,
                 remaining_frames: actual_frames,
+                samples,
             },
         )
     }
@@ -344,7 +367,7 @@ impl MockReader {
                 source: std::io::Error::other("mock decode failure"),
             }),
             MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
-            | MockBehavior::SampleRateTracking { .. }
+            | MockBehavior::AdoptionTracking { .. }
             | MockBehavior::SeekTracking { .. }
             | MockBehavior::SeekSplit(_) => Ok(ReadOutcome::Pending {
                 position: Duration::ZERO,
@@ -363,7 +386,7 @@ impl MockReader {
 impl AudioSession for MockReader {
     fn duration(&self) -> Option<Duration> {
         match &self.behavior {
-            MockBehavior::SampleRateTracking { duration, .. } => Some(*duration),
+            MockBehavior::AdoptionTracking { duration, .. } => Some(*duration),
             MockBehavior::SeekTracking { .. } => None,
             MockBehavior::MisreportedDuration { .. } => Some(Duration::from_secs(10)),
             MockBehavior::LiveFrontier { .. } => Some(Duration::from_secs(180)),
@@ -403,6 +426,7 @@ impl AudioRead for MockReader {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
+            samples,
         } = &mut self.behavior
         else {
             return self.fixed_outcome();
@@ -414,7 +438,12 @@ impl AudioRead for MockReader {
                 position: Self::position_for(self.spec, *position_frames),
             });
         }
-        buf[..frames.saturating_mul(channels)].fill(0.5);
+        for (index, sample) in buf[..frames.saturating_mul(channels)]
+            .iter_mut()
+            .enumerate()
+        {
+            *sample = prepared_sample(samples, *position_frames + index / channels);
+        }
         *remaining_frames -= frames;
         *position_frames += frames;
         Ok(ReadOutcome::Frames {
@@ -431,6 +460,7 @@ impl AudioRead for MockReader {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
+            samples,
         } = &mut self.behavior
         else {
             return self.fixed_outcome();
@@ -447,7 +477,9 @@ impl AudioRead for MockReader {
             });
         }
         for channel in output {
-            channel[..frames].fill(0.5);
+            for (frame, sample) in channel[..frames].iter_mut().enumerate() {
+                *sample = prepared_sample(samples, *position_frames + frame);
+            }
         }
         *remaining_frames -= frames;
         *position_frames += frames;
@@ -489,8 +521,19 @@ impl AudioControl for MockReader {
         })
     }
 
+    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        if let MockBehavior::AdoptionTracking {
+            recorded_wake_mode, ..
+        } = &self.behavior
+        {
+            *recorded_wake_mode
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(mode);
+        }
+    }
+
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        if let MockBehavior::SampleRateTracking {
+        if let MockBehavior::AdoptionTracking {
             recorded_host_rate, ..
         } = &self.behavior
         {
@@ -560,4 +603,13 @@ impl SeekBegin for SeekSpy {
             landed_at: position,
         }
     }
+}
+
+fn prepared_sample(bytes: &[u8], frame: usize) -> f32 {
+    let index = frame * size_of::<f32>();
+    f32::from_le_bytes(
+        bytes[index..index + size_of::<f32>()]
+            .try_into()
+            .expect("prepared PCM sample"),
+    )
 }

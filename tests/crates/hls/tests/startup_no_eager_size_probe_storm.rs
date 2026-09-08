@@ -8,7 +8,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
 };
@@ -68,15 +68,14 @@ fn variant_size_probe_count(helper: &TestServerHelper, token: &str, variant: usi
 /// segment-aware fMP4. Exact sizes are resolved only when a seek/read path
 /// actually needs them.
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
-#[case::wav_file_like(StartupFixture::WavFileLike)]
-#[case::flac_fmp4(StartupFixture::FlacFmp4)]
+#[case::wav_file_like(StartupFixture::WavFileLike, wav_startup().await)]
+#[case::flac_fmp4(StartupFixture::FlacFmp4, flac_startup().await)]
 #[cfg(not(target_arch = "wasm32"))]
-async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixture) {
-    let helper = TestServerHelper::new().await;
-    let created = helper
-        .create_hls(fixture.build())
-        .await
-        .expect("create HLS fixture");
+async fn startup_issues_no_eager_size_probe_storm(
+    #[case] fixture: StartupFixture,
+    #[case] prepared: (TestServerHelper, CreatedHls),
+) {
+    let (helper, created) = prepared;
     let url = created.master_url();
     info!(
         ?fixture,
@@ -193,4 +192,23 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
          (per-variant = {non_active:?}); expected 0 — only the active variant's prefix \
          should resolve. The startup estimator is probing inactive variants.",
     );
+}
+
+async fn startup(fixture: StartupFixture) -> (TestServerHelper, CreatedHls) {
+    let helper = TestServerHelper::new().await;
+    let created = helper
+        .create_hls(fixture.build())
+        .await
+        .expect("create HLS fixture");
+    (helper, created)
+}
+
+#[kithara::fixture]
+async fn wav_startup() -> (TestServerHelper, CreatedHls) {
+    startup(StartupFixture::WavFileLike).await
+}
+
+#[kithara::fixture]
+async fn flac_startup() -> (TestServerHelper, CreatedHls) {
+    startup(StartupFixture::FlacFmp4).await
 }

@@ -16,8 +16,8 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
-use kithara_integration_tests::TestServerHelper;
-use kithara_test_fixtures::SignalAsset;
+use kithara_integration_tests::{TestServerHelper, served_silence};
+use url::Url;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
@@ -57,9 +57,10 @@ async fn run_analysis(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
-async fn runner_silent_wav_yields_all_zero_envelope() {
-    let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::WAV_SILENCE_1S);
+async fn runner_silent_wav_yields_all_zero_envelope(
+    #[future(awt)] served_silence: (TestServerHelper, Url),
+) {
+    let (_server, url) = served_silence;
     let pools = build(&PoolsSection::default()).expect("app pools");
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
@@ -92,9 +93,10 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
-async fn runner_returns_nothing_when_cancelled_upfront() {
-    let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::WAV_SILENCE_1S);
+async fn runner_returns_nothing_when_cancelled_upfront(
+    #[future(awt)] served_silence: (TestServerHelper, Url),
+) {
+    let (_server, url) = served_silence;
     let pools = build(&PoolsSection::default()).expect("app pools");
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),

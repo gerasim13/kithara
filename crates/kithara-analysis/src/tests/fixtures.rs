@@ -15,7 +15,6 @@ use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
-use num_traits::cast::{AsPrimitive, ToPrimitive};
 #[cfg(feature = "analysis-beat")]
 use unimock::Unimock;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -130,21 +129,13 @@ pub(super) fn spec() -> AudioSpec {
     }
 }
 
-pub(super) fn sine(frames: usize) -> Vec<f32> {
-    sine_from(0, frames)
+pub(super) fn sine(pcm: &[f32], frames: usize) -> &[f32] {
+    sine_from(pcm, 0, frames)
 }
 
-pub(super) fn sine_from(at: u64, frames: usize) -> Vec<f32> {
-    let inc = std::f64::consts::TAU * 440.0 / f64::from(SR);
-    let mut out = Vec::with_capacity(frames * usize::from(CH));
-    for index in 0..frames {
-        let frame = at.saturating_add(index.to_u64().unwrap_or(0));
-        let sample_f64 = 0.5 * (inc * frame.to_f64().unwrap_or(0.0)).sin();
-        let sample: f32 = sample_f64.as_();
-        out.push(sample);
-        out.push(sample);
-    }
-    out
+pub(super) fn sine_from(pcm: &[f32], at: u64, frames: usize) -> &[f32] {
+    let start = usize::try_from(at).expect("prepared frame offset fits usize");
+    &pcm[start * usize::from(CH)..(start + frames) * usize::from(CH)]
 }
 
 pub(super) fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {

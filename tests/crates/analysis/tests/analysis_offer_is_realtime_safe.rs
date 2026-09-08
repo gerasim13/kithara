@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     kithara,
 };
+use kithara_test_fixtures::play_fixtures::quarter;
 use kithara_test_utils::kithara::rtsan_forbid_blocking;
 
 const RATE: u32 = 44_100;
@@ -34,7 +35,7 @@ fn offer_under_rt(
 }
 
 #[kithara::test]
-fn offering_a_decoded_range_neither_blocks_nor_allocates() {
+fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
     let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
@@ -48,7 +49,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
         worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate, 0);
 
     // Allocated before the realtime region opens, the way a decoded chunk is.
-    let pcm = vec![0.25_f32; SAMPLES];
+    let pcm = &quarter[..SAMPLES];
     let foreign = spec(NonZeroU32::new(48_000).expect("test rate is non-zero"));
 
     assert_eq!(

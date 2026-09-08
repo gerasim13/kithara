@@ -4,7 +4,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
-    TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
+    TestTempDir,
+    hls_fixture::HlsStreamBuilder,
+    hls_server::{TestServer, test_server},
+    rt_cancel, temp_dir,
 };
 
 #[derive(Clone, Copy)]
@@ -72,11 +75,12 @@ fn run_seek_scenario(mut stream: impl Read + Seek, scenario: SeekScenario) {
 #[case::read_all_then_back(SeekScenario::ReadAllThenBack)]
 #[case::across_all(SeekScenario::AcrossAll)]
 async fn hls_stream_seek(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
     #[case] scenario: SeekScenario,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
     let stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
         .await;
@@ -87,8 +91,12 @@ async fn hls_stream_seek(
 }
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn hls_with_manual_abr_uses_fixed_variant(temp_dir: TestTempDir, rt_cancel: CancelToken) {
-    let server = TestServer::new().await;
+async fn hls_with_manual_abr_uses_fixed_variant(
+    #[future(awt)] test_server: TestServer,
+    temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+) {
+    let server = test_server;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
         .build(&server, temp_dir.path(), rt_cancel)
@@ -107,10 +115,11 @@ async fn hls_with_manual_abr_uses_fixed_variant(temp_dir: TestTempDir, rt_cancel
 /// which is the foundation for ABR switch + seek correctness.
 #[kithara::test(tokio, native, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn hls_seek_different_variants_return_different_data(
+    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
 ) {
-    let server = TestServer::new().await;
+    let server = test_server;
 
     let mut stream_v0 = HlsStreamBuilder::new()
         .variant(0)

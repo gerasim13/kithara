@@ -308,20 +308,10 @@ fn mk_cfg(
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-async fn supersede_while_loading_cancels_slow_track() {
-    let helper = TestServerHelper::new().await;
-    let fast = build_hls(
-        &helper,
-        Consts::FAST_SEGMENT_COUNT,
-        Consts::FAST_SEGMENT_DURATION_S,
-    )
-    .await;
-    let slow = build_hls(
-        &helper,
-        Consts::SLOW_SEGMENT_COUNT,
-        Consts::SLOW_SEGMENT_DURATION_S,
-    )
-    .await;
+async fn supersede_while_loading_cancels_slow_track(
+    #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
+) {
+    let (helper, fast, slow) = race_tracks;
     // Withhold slow's active-variant init body: holds its loader in `Loading`.
     let slow_init = helper.register_init_gate(slow.token(), Consts::VARIANT);
     let fast_url = fast.master_url();
@@ -482,20 +472,10 @@ fn drain_event_backlog(rx: &mut EventReceiver) {
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn concurrent_completion_race_does_not_barge_in() {
-    let helper = TestServerHelper::new().await;
-    let fast = build_hls(
-        &helper,
-        Consts::FAST_SEGMENT_COUNT,
-        Consts::FAST_SEGMENT_DURATION_S,
-    )
-    .await;
-    let slow = build_hls(
-        &helper,
-        Consts::SLOW_SEGMENT_COUNT,
-        Consts::SLOW_SEGMENT_DURATION_S,
-    )
-    .await;
+async fn concurrent_completion_race_does_not_barge_in(
+    #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
+) {
+    let (_helper, fast, slow) = race_tracks;
     let fast_url = fast.master_url();
     let slow_url = slow.master_url();
 
@@ -585,4 +565,22 @@ async fn concurrent_completion_race_does_not_barge_in() {
         n = barge_ins.len(),
         iters = Consts::STRESS_ITERATIONS,
     );
+}
+
+#[kithara::fixture]
+async fn race_tracks() -> (TestServerHelper, CreatedHls, CreatedHls) {
+    let helper = TestServerHelper::new().await;
+    let fast = build_hls(
+        &helper,
+        Consts::FAST_SEGMENT_COUNT,
+        Consts::FAST_SEGMENT_DURATION_S,
+    )
+    .await;
+    let slow = build_hls(
+        &helper,
+        Consts::SLOW_SEGMENT_COUNT,
+        Consts::SLOW_SEGMENT_DURATION_S,
+    )
+    .await;
+    (helper, fast, slow)
 }

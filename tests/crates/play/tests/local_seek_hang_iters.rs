@@ -242,22 +242,15 @@ async fn build_resource(
     target_os = "android",
     case::android(DecoderBackend::Android, AbrMode::Auto(None))
 )]
-async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] abr: AbrMode) {
+async fn local_seek_middle_hang_iters(
+    #[future(awt)] seek_source: (TestServerHelper, Url),
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_SECS)
-        .variant_bandwidths(vec![640_000, 1_280_000, 2_560_000])
-        .packaged_audio_aac_lc(Consts::SAMPLE_RATE, 2);
-    let master = helper
-        .create_hls(builder)
-        .await
-        .expect("create local HLS fixture")
-        .master_url();
+    let (_helper, master) = seek_source;
 
     let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
@@ -398,4 +391,22 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         drop(downloader);
         drop(temp);
     }
+}
+
+#[kithara::fixture]
+async fn seek_source() -> (TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let builder = HlsFixtureBuilder::new()
+        .variant_count(3)
+        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
+        .segment_duration_secs(Consts::SEGMENT_DURATION_SECS)
+        .variant_bandwidths(vec![640_000, 1_280_000, 2_560_000])
+        .packaged_audio_aac_lc(Consts::SAMPLE_RATE, 2);
+    let master = helper
+        .create_hls(builder)
+        .await
+        .expect("create local HLS fixture")
+        .master_url();
+
+    (helper, master)
 }

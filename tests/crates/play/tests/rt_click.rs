@@ -17,6 +17,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
+use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
 use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
@@ -44,10 +45,10 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
     (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
-fn track(src: &str, level: f32) -> Box<PlayerResource> {
+fn track(src: &str, input: &'static [u8]) -> Box<PlayerResource> {
     Box::new(
         PlayerResource::new(
-            Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
+            Resource::from_reader(TestPcmReader::from_pcm(spec(), TRACK_SECS, input), None),
             Arc::from(src),
             &pools(),
         )
@@ -55,12 +56,12 @@ fn track(src: &str, level: f32) -> Box<PlayerResource> {
     )
 }
 
-fn load(control: &mut SlotControl, src: &str, level: f32) -> TrackId {
+fn load(control: &mut SlotControl, src: &str, input: &'static [u8]) -> TrackId {
     let item_id = TrackId::allocate();
     push(
         control,
         PlayerCmd::LoadTrack {
-            resource: track(src, level),
+            resource: track(src, input),
             item_id,
         },
     );
@@ -119,9 +120,9 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 }
 
 #[kithara::test]
-fn pausing_fades_the_output_out() {
+fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
     start(&mut processor, item_id);
@@ -155,9 +156,9 @@ fn pausing_fades_the_output_out() {
 }
 
 #[kithara::test]
-fn resuming_fades_the_output_in() {
+fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
     start(&mut processor, item_id);
@@ -182,9 +183,9 @@ fn resuming_fades_the_output_in() {
     );
 }
 
-fn fading_in() -> (PlayerNodeProcessor, SlotControl, Vec<f32>) {
+fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl, Vec<f32>) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
     push(&mut control, PlayerCmd::SetPaused(false));
     push(
@@ -203,8 +204,8 @@ fn fading_in() -> (PlayerNodeProcessor, SlotControl, Vec<f32>) {
 }
 
 #[kithara::test]
-fn seeking_a_fading_track_does_not_snap_the_mix() {
-    let (mut processor, mut control, fading) = fading_in();
+fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
+    let (mut processor, mut control, fading) = fading_in(constant_half);
 
     let seek_epoch = processor.playback().next_seek_epoch();
     push(
@@ -224,8 +225,8 @@ fn seeking_a_fading_track_does_not_snap_the_mix() {
 }
 
 #[kithara::test]
-fn resending_the_crossfade_duration_does_not_snap_the_mix() {
-    let (mut processor, mut control, fading) = fading_in();
+fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'static [u8]) {
+    let (mut processor, mut control, fading) = fading_in(constant_half);
 
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
     let resent = pump(&mut processor, WARMUP_BLOCKS);
@@ -238,9 +239,12 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 }
 
 #[kithara::test]
-fn a_track_started_without_a_crossfade_is_instant() {
+fn a_track_started_without_a_crossfade_is_instant(
+    constant_quarter: &'static [u8],
+    constant_half: &'static [u8],
+) {
     let (mut processor, mut control) = processor();
-    let first_id = load(&mut control, "a.mp3", TEST_PCM_DEFAULT_VALUE);
+    let first_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetFadeDuration(0.0));
     push(&mut control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
@@ -253,7 +257,7 @@ fn a_track_started_without_a_crossfade_is_instant() {
         last(&playing)
     );
 
-    let second_id = load(&mut control, "b.mp3", SECOND_LEVEL);
+    let second_id = load(&mut control, "b.mp3", constant_quarter);
     processor.drain_commands();
     start(&mut processor, second_id);
     let handover = pump(&mut processor, 1);

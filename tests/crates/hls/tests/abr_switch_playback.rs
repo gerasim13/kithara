@@ -26,12 +26,12 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
-    mixed_codec_ladder_url,
+    mixed_encrypted, mixed_plain,
     offline::{OfflinePlayer, resource_from_reader},
-    temp_dir,
+    served_mp3, temp_dir,
 };
-use kithara_test_fixtures::SignalAsset;
 use tracing::info;
+use url::Url;
 
 use crate::continuity::{
     CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
@@ -68,7 +68,8 @@ fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilde
     }
 }
 
-async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
+#[kithara::fixture]
+async fn create_packaged_abr_fixture() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let created = server
         .create_hls(packaged_identical_content_abr_builder(AudioCodec::AacLc))
@@ -80,7 +81,7 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
 async fn open_packaged_hls_audio(
     worker: &PlayWorker<TestPools>,
     pools: &Pools,
-    url: &url::Url,
+    url: &Url,
     store: AssetStore<TestPools>,
     abr: AbrMode,
     bus: Option<EventBus>,
@@ -155,9 +156,11 @@ async fn read_audio_some(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(3)
 )]
-async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+async fn abr_switch_on_production_ladder_does_not_hang(
+    temp_dir: TestTempDir,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
+    let (_server, url) = mixed_plain;
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -227,8 +230,11 @@ async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
-async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
-    let (_server, url) = create_packaged_abr_fixture().await;
+async fn packaged_abr_switch_keeps_player_continuity(
+    temp_dir: TestTempDir,
+    #[future(awt)] create_packaged_abr_fixture: (TestServerHelper, Url),
+) {
+    let (_server, url) = create_packaged_abr_fixture;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let store = AssetStore::builder(pools.clone())
@@ -459,37 +465,37 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia)]
+#[case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_abr_auto_hw(true, true, DecoderBackend::Apple)
+    case::drm_abr_auto_hw(true, true, DecoderBackend::Apple, mixed_encrypted().await)
 )]
-#[case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia)]
+#[case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia, mixed_plain().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_abr_auto_hw(false, true, DecoderBackend::Apple)
+    case::hls_abr_auto_hw(false, true, DecoderBackend::Apple, mixed_plain().await)
 )]
-#[case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia)]
+#[case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia, mixed_encrypted().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_manual_v0_hw(true, false, DecoderBackend::Apple)
+    case::drm_manual_v0_hw(true, false, DecoderBackend::Apple, mixed_encrypted().await)
 )]
-#[case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia)]
+#[case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia, mixed_plain().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_manual_v0_hw(false, false, DecoderBackend::Apple)
+    case::hls_manual_v0_hw(false, false, DecoderBackend::Apple, mixed_plain().await)
 )]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] encrypted: bool,
     #[case] abr_auto: bool,
     #[case] backend: DecoderBackend,
+    #[case] prepared: (TestServerHelper, Url),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let (_server, url) = prepared;
     let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
@@ -599,9 +605,11 @@ async fn stream_continues_after_seek(
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(3)
 )]
-async fn fixed_variant_on_production_ladder_plays_without_hang(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+async fn fixed_variant_on_production_ladder_plays_without_hang(
+    temp_dir: TestTempDir,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
+    let (_server, url) = mixed_plain;
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -670,11 +678,14 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(temp_dir: TestTem
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
-#[case::drm(true)]
-#[case::hls(false)]
-async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] encrypted: bool) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, encrypted).await;
+#[case::drm(true, mixed_encrypted().await)]
+#[case::hls(false, mixed_plain().await)]
+async fn seek_after_eof_mmap_produces_samples(
+    temp_dir: TestTempDir,
+    #[case] encrypted: bool,
+    #[case] prepared: (TestServerHelper, Url),
+) {
+    let (_server, url) = prepared;
     let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
@@ -764,9 +775,11 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] enc
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
+async fn mp3_stream_continues_after_seek(
+    temp_dir: TestTempDir,
+    #[future(awt)] served_mp3: (TestServerHelper, Url),
+) {
+    let (_server, url) = served_mp3;
 
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -860,11 +873,13 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
-async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
+async fn abr_frozen_during_seek_resumes_after(
+    temp_dir: TestTempDir,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
     use kithara::{audio::AudioRead, signal::AudioChunk};
 
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+    let (_server, url) = mixed_plain;
 
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -1079,9 +1094,11 @@ fn read_manual_cross_codec_phase(
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
-async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let url = mixed_codec_ladder_url(&server, false).await;
+async fn manual_cross_codec_switch_sustains_post_switch_playback(
+    temp_dir: TestTempDir,
+    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+) {
+    let (_server, url) = mixed_plain;
 
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);

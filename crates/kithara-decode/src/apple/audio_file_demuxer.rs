@@ -485,8 +485,9 @@ mod tests {
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };
-    use kithara_test_fixtures::assets::{
-        flac_unknown_length_saw_6s, signal_mp3_track_sine440_187s, signal_wav_sine440_1s,
+    use kithara_test_fixtures::{
+        fixtures::{tone_mp3, tone_wav},
+        unit_fixtures::flac_saw,
     };
     use kithara_test_utils::kithara;
 
@@ -497,8 +498,8 @@ mod tests {
     };
 
     #[kithara::test]
-    fn open_wav_demuxer_track_info_and_first_frame() {
-        let bytes = signal_wav_sine440_1s().bytes().to_vec();
+    fn open_wav_demuxer_track_info_and_first_frame(tone_wav: &'static [u8]) {
+        let bytes = tone_wav.to_vec();
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
             AudioCodec::Pcm,
@@ -645,8 +646,8 @@ mod tests {
     /// immediately — a hot spin that burns a core for as long as the
     /// stall lasts instead of parking the worker.
     #[kithara::test]
-    fn next_frame_surfaces_not_ready_as_pending_not_err() {
-        let bytes = signal_wav_sine440_1s().bytes().to_vec();
+    fn next_frame_surfaces_not_ready_as_pending_not_err(tone_wav: &'static [u8]) {
+        let bytes = tone_wav.to_vec();
         let ready = u64::try_from(bytes.len() / 2).expect("fixture length fits in u64");
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(NotReadySource::new(bytes, ready, None)),
@@ -668,8 +669,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn open_mp3_demuxer_does_not_require_tail_bytes() {
-        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
+    fn open_mp3_demuxer_does_not_require_tail_bytes(tone_mp3: &'static [u8]) {
+        let bytes = tone_mp3.to_vec();
         let ready = 16_u64 * 1024;
         let tail_read_attempted = Arc::new(AtomicBool::new(false));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -752,8 +753,8 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
-        let plain = signal_mp3_track_sine440_187s().bytes().to_vec();
+    fn size_less_mp3_with_id3v1_tail_reaches_eof(tone_mp3: &'static [u8]) {
+        let plain = tone_mp3.to_vec();
         let mut tagged = plain.clone();
         let mut id3v1 = [0_u8; 128];
         id3v1[..3].copy_from_slice(b"TAG");
@@ -787,8 +788,8 @@ mod tests {
 
     /// Opens the generated full-length MP3 clip in `mode`, returning the
     /// demuxer and the fixture's total byte length.
-    fn open_mp3(mode: SourceOpenMode) -> (AppleAudioFileDemuxer, u64) {
-        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
+    fn open_mp3(tone_mp3: &[u8], mode: SourceOpenMode) -> (AppleAudioFileDemuxer, u64) {
+        let bytes = tone_mp3.to_vec();
         let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
         let dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
@@ -814,8 +815,8 @@ mod tests {
     /// handle carries the answer. Pinned separately from the exact path in
     /// [`sized_mp3_seek_reports_landed_byte_without_a_length_handle`].
     #[kithara::test]
-    fn size_less_mp3_seek_reports_landed_byte_from_the_length_handle() {
-        let (mut dx, total) = open_mp3(SourceOpenMode::Streaming);
+    fn size_less_mp3_seek_reports_landed_byte_from_the_length_handle(tone_mp3: &'static [u8]) {
+        let (mut dx, total) = open_mp3(tone_mp3, SourceOpenMode::Streaming);
         dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
 
         let byte =
@@ -828,8 +829,8 @@ mod tests {
     /// the end would move the stream cursor to a false EOF — the very failure
     /// the reported offset exists to prevent.
     #[kithara::test]
-    fn size_less_mp3_landed_byte_stays_inside_the_file() {
-        let (mut dx, total) = open_mp3(SourceOpenMode::Streaming);
+    fn size_less_mp3_landed_byte_stays_inside_the_file(tone_mp3: &'static [u8]) {
+        let (mut dx, total) = open_mp3(tone_mp3, SourceOpenMode::Streaming);
         dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
 
         let byte =
@@ -847,8 +848,8 @@ mod tests {
     /// contribute here, which is what makes this a pin on Apple's own mapping
     /// rather than on the degraded fallback.
     #[kithara::test]
-    fn sized_mp3_seek_reports_landed_byte_without_a_length_handle() {
-        let (mut dx, _total) = open_mp3(SourceOpenMode::Complete);
+    fn sized_mp3_seek_reports_landed_byte_without_a_length_handle(tone_mp3: &'static [u8]) {
+        let (mut dx, _total) = open_mp3(tone_mp3, SourceOpenMode::Complete);
 
         let byte = landed_byte_at_3s(&mut dx)
             .expect("a sized open must map packet→byte through AudioFile itself");
@@ -862,8 +863,8 @@ mod tests {
     /// reads to EOF — 3–37 s of startup latency on device and a full
     /// download wait on a streamed source. Mirrors the MP3 contract above.
     #[kithara::test]
-    fn open_flac_demuxer_does_not_require_tail_bytes() {
-        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
+    fn open_flac_demuxer_does_not_require_tail_bytes(flac_saw: &'static [u8]) {
+        let bytes = flac_saw.to_vec();
         // A bounded streaming open reads the header + first frame (~27 KiB)
         // regardless of file size; this prefix covers that.
         let ready = 64_u64 * 1024;
@@ -901,8 +902,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn open_mp3_demuxer_complete_source_reports_duration() {
-        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
+    fn open_mp3_demuxer_complete_source_reports_duration(tone_mp3: &'static [u8]) {
+        let bytes = tone_mp3.to_vec();
         let dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
             AudioCodec::Mp3,
@@ -931,8 +932,8 @@ mod tests {
     /// track). The fix needs both the sized streaming open (`AudioFile` knows
     /// more data exists) and `read_packet` consulting the stashed error.
     #[kithara::test]
-    fn flac_streaming_not_ready_surfaces_pending_not_eof() {
-        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
+    fn flac_streaming_not_ready_surfaces_pending_not_eof(flac_saw: &'static [u8]) {
+        let bytes = flac_saw.to_vec();
         // Header + several frames are ready; the rest is "not downloaded".
         let ready = 64_u64 * 1024;
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -978,8 +979,8 @@ mod tests {
     /// carries the header and several frames; everything past it is the
     /// part that has not been downloaded.
     #[kithara::test]
-    fn mp3_streaming_not_ready_surfaces_pending_not_eof() {
-        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
+    fn mp3_streaming_not_ready_surfaces_pending_not_eof(tone_mp3: &'static [u8]) {
+        let bytes = tone_mp3.to_vec();
         let ready = 64_u64 * 1024;
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(NotReadySource::new(bytes, ready, None)),
@@ -1047,8 +1048,8 @@ mod tests {
     /// (`step_track took too long`), i.e. a fresh stall. With the full length
     /// known at open, the decoder must resolve the size O(1), not O(packets).
     #[kithara::test]
-    fn flac_streaming_size_query_is_bounded() {
-        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
+    fn flac_streaming_size_query_is_bounded(flac_saw: &'static [u8]) {
+        let bytes = flac_saw.to_vec();
         let end_seeks = Arc::new(AtomicUsize::new(0));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(CountingSource {

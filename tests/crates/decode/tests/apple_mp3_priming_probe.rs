@@ -108,25 +108,21 @@ fn measure_leading_silence(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1)
 )]
-#[case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S)]
-#[case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K)]
-#[case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K)]
+#[case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S, saw().await)]
+#[case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K, saw_320k().await)]
+#[case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K, saw_64k().await)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_default(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S),
-    case::apple_320k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_320K),
-    case::apple_64k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_64K)
+    case::apple_default(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S, saw().await),
+    case::apple_320k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_320K, saw_320k().await),
+    case::apple_64k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_64K, saw_64k().await)
 )]
 async fn mp3_raw_decoder_shift_vs_reference(
     #[case] backend: DecoderBackend,
     #[case] asset: SignalAsset,
+    #[case] audio: (TestServerHelper, Vec<u8>),
 ) {
-    let server = TestServerHelper::new().await;
-    let client = Client::new();
-    let url = server.signal(asset);
-    let response = client.get(url).send().await.expect("fetch sawtooth mp3");
-    assert_eq!(response.status(), 200);
-    let bytes = response.bytes().await.expect("mp3 body").to_vec();
+    let (_server, bytes) = audio;
 
     let lame_off = find_lame_tag_offset(&bytes);
     let lame_tag = lame_off.and_then(|off| read_enc_delay_padding(&bytes, off));
@@ -160,12 +156,11 @@ async fn mp3_raw_decoder_shift_vs_reference(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-async fn mp3_decoder_reads_lame_enc_delay_or_not(#[case] backend: DecoderBackend) {
-    let server = TestServerHelper::new().await;
-    let client = Client::new();
-    let url = server.signal(SignalAsset::MP3_SAW_2S);
-    let response = client.get(url).send().await.expect("fetch sawtooth mp3");
-    let original = response.bytes().await.expect("mp3 body").to_vec();
+async fn mp3_decoder_reads_lame_enc_delay_or_not(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] saw: (TestServerHelper, Vec<u8>),
+) {
+    let (_server, original) = saw;
     let lame_off = find_lame_tag_offset(&original).expect("LAME tag must exist");
     let (orig_enc_delay, orig_padding) =
         read_enc_delay_padding(&original, lame_off).expect("read enc_delay/padding");
@@ -224,4 +219,31 @@ async fn mp3_decoder_reads_lame_enc_delay_or_not(#[case] backend: DecoderBackend
         \tif leading_silence == override → decoder READS LAME tag and trims accordingly\n\
         \tif leading_silence stays constant (== actual encoder priming) → decoder IGNORES tag, emits raw priming"
     );
+}
+
+async fn fetch_saw(asset: SignalAsset) -> (TestServerHelper, Vec<u8>) {
+    let server = TestServerHelper::new().await;
+    let response = Client::new()
+        .get(server.signal(asset))
+        .send()
+        .await
+        .expect("fetch sawtooth mp3");
+    assert_eq!(response.status(), 200);
+    let bytes = response.bytes().await.expect("mp3 body").to_vec();
+    (server, bytes)
+}
+
+#[kithara::fixture]
+async fn saw() -> (TestServerHelper, Vec<u8>) {
+    fetch_saw(SignalAsset::MP3_SAW_2S).await
+}
+
+#[kithara::fixture]
+async fn saw_320k() -> (TestServerHelper, Vec<u8>) {
+    fetch_saw(SignalAsset::MP3_SAW_2S_320K).await
+}
+
+#[kithara::fixture]
+async fn saw_64k() -> (TestServerHelper, Vec<u8>) {
+    fetch_saw(SignalAsset::MP3_SAW_2S_64K).await
 }

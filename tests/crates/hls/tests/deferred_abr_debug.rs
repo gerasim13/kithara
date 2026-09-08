@@ -12,7 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
-    hls_server::TestServer,
+    hls_server::{TestServer, test_server},
     rt_cancel, temp_dir,
 };
 use tracing::info;
@@ -61,10 +61,14 @@ fn read_to_eof_with_progress(stream: &mut Stream<Hls<TestPools>>) -> (Vec<u8>, i
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
-async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
+async fn debug_sequential_read(
+    #[future(awt)] test_server: TestServer,
+    temp_dir: TestTempDir,
+    rt_cancel: CancelToken,
+) {
     info!("=== Starting debug_sequential_read test ===");
 
-    let server = TestServer::new().await;
+    let server = test_server;
     let url = server.url("/master.m3u8");
     info!("Test server URL: {}", url);
 

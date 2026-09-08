@@ -10,6 +10,7 @@ use kithara::{
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
+use kithara_test_fixtures::integration_fixtures::constant_half;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -21,16 +22,19 @@ const CLOCK_BLOCKS: usize = 32;
 const MEASURE_BLOCKS: usize = 200;
 const FAST_RATE: f32 = 2.0;
 
-fn make_resource(duration_secs: f64) -> Resource {
-    resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
-        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-        duration_secs,
-    ))
+fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
+    resource_from_reader(
+        kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
+            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            duration_secs,
+            constant_half,
+        ),
+    )
 }
 
 #[kithara::test(tokio)]
-async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
-    let oracle = loaded_harness().await;
+async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half: &'static [u8]) {
+    let oracle = loaded_harness(constant_half).await;
     assert_eq!(oracle.player().rate(), 1.0);
     oracle.player().pause();
     assert_eq!(
@@ -56,10 +60,10 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
     assert_eq!(resumed_rates, [1.0]);
     assert_eq!(oracle.player().rate(), 1.0);
 
-    let baseline = blocks_until_silence(1.0).await;
-    let requested_fast = blocks_until_silence(FAST_RATE).await;
-    let baseline_advance = media_advance(1.0).await;
-    let requested_fast_advance = media_advance(FAST_RATE).await;
+    let baseline = blocks_until_silence(constant_half, 1.0).await;
+    let requested_fast = blocks_until_silence(constant_half, FAST_RATE).await;
+    let baseline_advance = media_advance(constant_half, 1.0).await;
+    let requested_fast_advance = media_advance(constant_half, FAST_RATE).await;
 
     assert!(
         baseline < MEASURE_BLOCKS,
@@ -90,7 +94,7 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
         .collect()
 }
 
-async fn loaded_harness() -> OfflinePlayerHarness {
+async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
@@ -98,7 +102,7 @@ async fn loaded_harness() -> OfflinePlayerHarness {
     .await;
     harness
         .with_player(move |player| {
-            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
             player
                 .select_item(0, true)
                 .expect("select first queue item");
@@ -112,8 +116,8 @@ async fn loaded_harness() -> OfflinePlayerHarness {
     harness
 }
 
-async fn blocks_until_silence(rate: f32) -> usize {
-    let harness = loaded_harness().await;
+async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize {
+    let harness = loaded_harness(constant_half).await;
     harness.player().set_default_rate(rate);
 
     let mut blocks = 0usize;
@@ -129,8 +133,8 @@ async fn blocks_until_silence(rate: f32) -> usize {
     blocks
 }
 
-async fn media_advance(rate: f32) -> f64 {
-    let harness = loaded_harness().await;
+async fn media_advance(constant_half: &'static [u8], rate: f32) -> f64 {
+    let harness = loaded_harness(constant_half).await;
     let start = harness.player().position_seconds().unwrap_or(0.0);
     harness.player().set_default_rate(rate);
     for _ in 0..CLOCK_BLOCKS {

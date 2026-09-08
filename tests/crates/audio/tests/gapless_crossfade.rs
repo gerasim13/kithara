@@ -6,17 +6,22 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::integration_fixtures::{
+    gapless_sine_first, gapless_sine_second, gapless_sine_whole,
+};
 
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
 };
 
 const TRACK_FRAMES: usize = 48_000;
-const SINE_FREQ_HZ: f64 = 1_000.0;
 
 #[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
+fn synthetic_gapless_tracks_have_no_boundary_energy_dip(
+    gapless_sine_first: Vec<f32>,
+    gapless_sine_second: Vec<f32>,
+    gapless_sine_whole: Vec<f32>,
+) {
     let pools = pools();
     let spec = AudioSpec::new(
         GAPLESS_CHANNELS,
@@ -28,20 +33,14 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
 
     let first = trim_track(
         &pools,
-        padded_sine_track(0, TRACK_FRAMES, leading_frames, trailing_frames, spec),
+        gapless_sine_first,
         spec,
         leading_frames,
         trailing_frames,
     );
     let second = trim_track(
         &pools,
-        padded_sine_track(
-            TRACK_FRAMES,
-            TRACK_FRAMES,
-            leading_frames,
-            trailing_frames,
-            spec,
-        ),
+        gapless_sine_second,
         spec,
         leading_frames,
         trailing_frames,
@@ -50,7 +49,7 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
     let mut joined = first;
     joined.extend_from_slice(&second);
 
-    let expected = sine_samples(0, TRACK_FRAMES * 2, spec);
+    let expected = gapless_sine_whole;
     assert_samples_close(&joined, &expected);
 
     let max_dip_db = boundary_energy_dip_db(
@@ -65,31 +64,6 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
         max_dip_db < 1.5,
         "gapless boundary energy dip must stay below 1.5 dB, got {max_dip_db:.3} dB"
     );
-}
-
-fn padded_sine_track(
-    start_frame: usize,
-    visible_frames: usize,
-    leading_frames: usize,
-    trailing_frames: usize,
-    spec: AudioSpec,
-) -> Vec<f32> {
-    let channels = usize::from(spec.channels);
-    let mut samples = Vec::with_capacity(
-        leading_frames
-            .saturating_add(visible_frames)
-            .saturating_add(trailing_frames)
-            .saturating_mul(channels),
-    );
-    samples.resize(leading_frames.saturating_mul(channels), 0.0);
-    samples.extend(sine_samples(start_frame, visible_frames, spec));
-    samples.resize(
-        samples
-            .len()
-            .saturating_add(trailing_frames.saturating_mul(channels)),
-        0.0,
-    );
-    samples
 }
 
 fn trim_track(
@@ -123,19 +97,6 @@ fn trim_track(
         output.extend_from_slice(&chunk.samples[..]);
     }
     output
-}
-
-fn sine_samples(start_frame: usize, frames: usize, spec: AudioSpec) -> Vec<f32> {
-    let channels = usize::from(spec.channels);
-    let mut samples = Vec::with_capacity(frames.saturating_mul(channels));
-    let signal = Wave::sine(SINE_FREQ_HZ);
-    for frame in start_frame..start_frame.saturating_add(frames) {
-        let sample = f32::from(signal.sample(frame, spec.sample_rate.get())) / f32::from(i16::MAX);
-        for _ in 0..channels {
-            samples.push(sample);
-        }
-    }
-    samples
 }
 
 fn assert_samples_close(actual: &[f32], expected: &[f32]) {

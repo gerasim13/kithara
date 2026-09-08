@@ -164,11 +164,13 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     timeout(Duration::from_secs(90)),
     hang_timeout_secs(5)
 )]
-async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
+async fn test_hls_playback_rss_within_budget(
+    temp_dir: TestTempDir,
+    #[future(awt)] rss_source: (TestServerHelper, Url),
+) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
-    let server = TestServerHelper::new().await;
-    let url = ladder_url(&server);
+    let (_server, url) = rss_source;
 
     for run in 0..Consts::BUDGET_RUNS {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
@@ -239,10 +241,12 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
+async fn test_hls_playback_no_rss_leak(
+    temp_dir: TestTempDir,
+    #[future(awt)] rss_source: (TestServerHelper, Url),
+) {
     let _guard = HotpathGuardBuilder::new("rss_leak").build();
-    let server = TestServerHelper::new().await;
-    let url = ladder_url(&server);
+    let (_server, url) = rss_source;
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -291,4 +295,11 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         warmup_rss as f64 / Consts::MB as f64,
         final_rss as f64 / Consts::MB as f64,
     );
+}
+
+#[kithara::fixture]
+async fn rss_source() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
+    let url = ladder_url(&server);
+    (server, url)
 }

@@ -14,13 +14,13 @@ use kithara_integration_tests::{
 };
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::fixtures::{decoder_wav, seek_decoder_wav, short_decoder_wav, tone_wav};
 
 #[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
 #[case(None)]
-fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
-    let wav_data = signal::wav(44100, 2, 100, signal::TONE);
+fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>, decoder_wav: &'static [u8]) {
+    let wav_data = decoder_wav;
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -42,8 +42,8 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
 }
 
 #[kithara::test]
-fn test_next_chunk_returns_data() {
-    let wav_data = signal::wav(44100, 2, 100, signal::TONE);
+fn test_next_chunk_returns_data(decoder_wav: &'static [u8]) {
+    let wav_data = decoder_wav;
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -66,8 +66,8 @@ fn test_next_chunk_returns_data() {
 }
 
 #[kithara::test]
-fn test_next_chunk_eof() {
-    let wav_data = signal::wav(44100, 2, 10, signal::TONE);
+fn test_next_chunk_eof(short_decoder_wav: &'static [u8]) {
+    let wav_data = short_decoder_wav;
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -87,8 +87,8 @@ fn test_next_chunk_eof() {
 }
 
 #[kithara::test]
-fn test_seek_to_beginning() {
-    let wav_data = signal::wav(44100, 2, 10000, signal::TONE);
+fn test_seek_to_beginning(seek_decoder_wav: &'static [u8]) {
+    let wav_data = seek_decoder_wav;
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -111,8 +111,8 @@ fn test_seek_to_beginning() {
 }
 
 #[kithara::test]
-fn test_duration_available() {
-    let wav_data = signal::wav(44100, 2, 44100, signal::TONE);
+fn test_duration_available(tone_wav: &'static [u8]) {
+    let wav_data = tone_wav;
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))

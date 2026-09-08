@@ -11,8 +11,9 @@ use kithara_integration_tests::{
 
 use super::sync_product_matrix::{
     AMBIENT_TRIP_HOP_PROVIDER, AMBIENT_TRIP_HOP_SYNC, BLOCK_FRAMES, CHANNELS, CROSS_STYLE_PROVIDER,
-    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, ProductHarness, Provider,
-    SEQUENTIAL_SYNC, SyncCase, TECHNO_BREAKBEAT_PROVIDER, TECHNO_BREAKBEAT_SYNC,
+    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, PreparedSources,
+    ProductHarness, Provider, SEQUENTIAL_SYNC, SyncCase, TECHNO_BREAKBEAT_PROVIDER,
+    TECHNO_BREAKBEAT_SYNC, listening_sources, prepared_sources,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
@@ -24,7 +25,7 @@ struct Capture {
     failures: Vec<String>,
 }
 
-async fn render_solo(case: SyncCase, provider: Provider, audible_deck: usize) -> Capture {
+async fn render_solo(case: SyncCase, provider: &PreparedSources, audible_deck: usize) -> Capture {
     let mut harness = ProductHarness::new(case, provider, audible_deck).await;
     let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
     Capture {
@@ -33,7 +34,11 @@ async fn render_solo(case: SyncCase, provider: Provider, audible_deck: usize) ->
     }
 }
 
-async fn render_mix(case: SyncCase, provider: Provider, target_bpm: Option<f64>) -> Capture {
+async fn render_mix(
+    case: SyncCase,
+    provider: &PreparedSources,
+    target_bpm: Option<f64>,
+) -> Capture {
     let mut harness = ProductHarness::new(case, provider, 0).await;
     for deck in &harness.decks {
         let control = deck.control().clone();
@@ -102,19 +107,21 @@ fn write_capture(artifacts: &AudioArtifactSet, label: &str, pcm: &[f32]) -> Path
     flash(false),
     timeout(Duration::from_secs(60))
 )]
-async fn sync_listening_mix_is_not_quieter_than_a_solo_deck() {
+async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
+    #[future(awt)] listening_sources: PreparedSources,
+) {
     let case = DOWNTEMPO_HOUSE_SYNC;
-    let provider = DOWNTEMPO_HOUSE_PROVIDER;
+    let provider = listening_sources;
     let mut decks = Vec::with_capacity(case.decks());
     for deck in 0..case.decks() {
-        let capture = render_solo(case, provider, deck).await;
+        let capture = render_solo(case, &provider, deck).await;
         decks.push(CochleaReport::measure(
             &capture.pcm,
             CHANNELS,
             case.sample_rate,
         ));
     }
-    let mix = render_mix(case, provider, None).await;
+    let mix = render_mix(case, &provider, None).await;
     let mix = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
     let mut failures = mix_loudness_failures(case.id(), &mix, &decks, LOUDNESS_TOLERANCE_LU);
     if mix.clipped_samples > 0 || mix.true_peak_over_0dbtp {
@@ -136,37 +143,37 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck() {
     timeout(Duration::from_secs(300))
 )]
 #[ignore = "writes opt-in listening WAVs; ignored-red until Warp alignment is implemented"]
-#[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, Provider::Synthetic, None)]
-#[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, Provider::Synthetic, Some(127.0))]
-#[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, Provider::Sweep, Some(145.0))]
+#[case::synthetic_120("synthetic-120", SEQUENTIAL_SYNC, source_synthetic().await, None)]
+#[case::synthetic_127("synthetic-127", SEQUENTIAL_SYNC, source_synthetic().await, Some(127.0))]
+#[case::sweep_145("sweep-145", SEQUENTIAL_SYNC, source_sweep().await, Some(145.0))]
 #[case::ambient_trip_hop(
     "ambient-dub-62-trip-hop-74",
     AMBIENT_TRIP_HOP_SYNC,
-    AMBIENT_TRIP_HOP_PROVIDER,
+    source_ambient_trip_hop_provider().await,
     None
 )]
 #[case::downtempo_house(
     "downtempo-96-house-124",
     DOWNTEMPO_HOUSE_SYNC,
-    DOWNTEMPO_HOUSE_PROVIDER,
+    source_downtempo_house_provider().await,
     None
 )]
 #[case::techno_breakbeat(
     "techno-132-breakbeat-140",
     TECHNO_BREAKBEAT_SYNC,
-    TECHNO_BREAKBEAT_PROVIDER,
+    source_techno_breakbeat_provider().await,
     None
 )]
 #[case::cross_style_four_deck(
     "ambient-62-downtempo-96-house-124-breakbeat-140",
     CROSS_STYLE_SYNC,
-    CROSS_STYLE_PROVIDER,
+    source_cross_style_provider().await,
     None
 )]
 async fn record_sync_listening_wavs(
     #[case] artifact_case: &str,
     #[case] case: SyncCase,
-    #[case] provider: Provider,
+    #[case] provider: PreparedSources,
     #[case] target_bpm: Option<f64>,
 ) {
     let artifacts = AudioArtifactSet::from_env(artifact_case, case.sample_rate, CHANNELS)
@@ -179,7 +186,7 @@ async fn record_sync_listening_wavs(
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
         let label = format!("deck-{}", deck + 1);
-        let capture = render_solo(case, provider, deck).await;
+        let capture = render_solo(case, &provider, deck).await;
         let path = write_capture(&artifacts, &label, &capture.pcm);
         deck_reports.push(CochleaReport::measure(
             &capture.pcm,
@@ -189,7 +196,7 @@ async fn record_sync_listening_wavs(
         paths.push((label, path));
         failures.extend(capture.failures);
     }
-    let mix = render_mix(case, provider, target_bpm).await;
+    let mix = render_mix(case, &provider, target_bpm).await;
     let mix_path = write_capture(&artifacts, "mix", &mix.pcm);
     let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
     paths.push(("mix".to_owned(), mix_path));
@@ -238,4 +245,34 @@ async fn record_sync_listening_wavs(
         case.id(),
         failures.join("\n"),
     );
+}
+
+#[kithara::fixture]
+async fn source_synthetic() -> PreparedSources {
+    prepared_sources(Provider::Synthetic).await
+}
+
+#[kithara::fixture]
+async fn source_sweep() -> PreparedSources {
+    prepared_sources(Provider::Sweep).await
+}
+
+#[kithara::fixture]
+async fn source_ambient_trip_hop_provider() -> PreparedSources {
+    prepared_sources(AMBIENT_TRIP_HOP_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_downtempo_house_provider() -> PreparedSources {
+    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_techno_breakbeat_provider() -> PreparedSources {
+    prepared_sources(TECHNO_BREAKBEAT_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_cross_style_provider() -> PreparedSources {
+    prepared_sources(CROSS_STYLE_PROVIDER).await
 }

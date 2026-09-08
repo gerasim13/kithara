@@ -9,24 +9,23 @@ use kithara::{
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
+        maybe_send::MaybeSend,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
-            mpsc::{self, RecvTimeoutError},
         },
-        thread::{JoinHandle, spawn_named},
-        time::{Duration, Instant},
-        tokio::{runtime::Handle, task::spawn_blocking},
+        time::Duration,
     },
     play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
-    queue::{Queue, QueueControl},
+    queue::Queue,
     signal::AudioSpec,
 };
-use kithara_test_utils::off_thread::OffThread;
 use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Observer, Split},
 };
+
+use super::owner::HostOwner;
 
 const CHANNELS: u16 = 2;
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
@@ -46,7 +45,7 @@ struct HostState<S> {
 
 /// Test owner for the product offline Host and its monotonic render cursor.
 pub struct OfflineHostHarness<S> {
-    off: OffThread<HostState<S>>,
+    off: HostOwner<HostState<S>>,
     position: Arc<AtomicU64>,
     spec: AudioSpec,
     max_block_frames: NonZeroU32,
@@ -64,8 +63,8 @@ where
 
 impl<P, S> OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S> + Send + 'static,
-    P::Control: Send,
+    P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+    P::Control: MaybeSend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub async fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
@@ -83,10 +82,10 @@ where
     }
 
     /// Issues a control call from the host owner thread, as the app would.
-    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + Send + 'static) -> R
+    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + MaybeSend + 'static) -> R
     where
-        P::Control: Clone + Send + 'static,
-        R: Send + 'static,
+        P::Control: Clone + MaybeSend + 'static,
+        R: MaybeSend + 'static,
     {
         let control = self.control();
         self.host.run(move || f(&control)).await
@@ -117,75 +116,6 @@ where
 
 pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
 
-/// Drives `QueueControl::tick` from a dedicated thread, the way the FFI
-/// bridge and the app update loop do, until the queue closes or `stop`.
-pub struct QueueTicker {
-    stop: Option<mpsc::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl QueueTicker {
-    /// Spawns the ticker; the thread enters the caller's runtime like the
-    /// product app thread, so a tick may spawn loads.
-    pub fn spawn<S>(queue: QueueControl<S>, interval: Duration) -> Self
-    where
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        let (stop, stop_receiver) = mpsc::channel::<()>();
-        let runtime = Handle::current();
-        let thread = spawn_named("queue-ticks", move || {
-            let _runtime = runtime.enter();
-            while let Err(RecvTimeoutError::Timeout) =
-                stop_receiver.recv_timeout(Instant::now() + interval)
-            {
-                if queue.tick().is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            stop: Some(stop),
-            thread: Some(thread),
-        }
-    }
-
-    /// Whether the thread exited: the queue closed or a tick panicked.
-    pub fn is_finished(&self) -> bool {
-        self.thread.as_ref().is_some_and(JoinHandle::is_finished)
-    }
-
-    /// Stops ticking and joins the thread; `Err` is the message of a tick panic.
-    pub async fn join(&mut self) -> Result<(), String> {
-        drop(self.stop.take());
-        let Some(thread) = self.thread.take() else {
-            return Ok(());
-        };
-        spawn_blocking(move || thread.join())
-            .await
-            .expect("join the queue ticker")
-            .map_err(|payload| {
-                payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                    .unwrap_or_else(|| "non-string panic payload".to_owned())
-            })
-    }
-
-    /// Stops ticking and waits for the thread; a tick panic fails the caller.
-    pub async fn stop(&mut self) {
-        if let Err(panic) = self.join().await {
-            panic!("queue ticker panicked: {panic}");
-        }
-    }
-}
-
-impl Drop for QueueTicker {
-    fn drop(&mut self) {
-        drop(self.stop.take());
-    }
-}
-
 impl<S> OfflineHostHarness<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -199,7 +129,7 @@ where
         let pacing = config.pacing();
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
-        let off = OffThread::spawn("offline-host", move || {
+        let off = HostOwner::spawn("offline-host", move || {
             Host::new(config).map(|host| HostState {
                 host,
                 position: owned,
@@ -221,18 +151,18 @@ where
     }
 
     /// Runs an arbitrary Host operation on the owner thread.
-    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + Send + 'static) -> R
+    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + MaybeSend + 'static) -> R
     where
-        R: Send + 'static,
+        R: MaybeSend + 'static,
     {
         self.off.call(move |state| f(&mut state.host)).await
     }
 
     /// Runs a control call on the owner thread, the way product callers issue
     /// it from the app thread rather than from a runtime worker.
-    pub async fn run<R>(&self, f: impl FnOnce() -> R + Send + 'static) -> R
+    pub async fn run<R>(&self, f: impl FnOnce() -> R + MaybeSend + 'static) -> R
     where
-        R: Send + 'static,
+        R: MaybeSend + 'static,
     {
         self.off.call(move |_| f()).await
     }
@@ -240,16 +170,16 @@ where
     /// Transfer one configured player facade into the product Host.
     pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + Send + 'static,
-        P::Control: Send,
+        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
     {
         self.off.call(move |state| state.host.insert(player)).await
     }
 
     pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + Send + 'static,
-        P::Control: Send,
+        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
     {
         self.insert(player)
             .await

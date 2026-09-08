@@ -13,11 +13,9 @@ use kithara_integration_tests::{
     TestTempDir, Xorshift64,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::fixtures::stress_wav;
 use tempfile::NamedTempFile;
 use tracing::info;
-
-use crate::common::test_defaults::SawWav;
 
 #[derive(Default)]
 struct SeekStats {
@@ -150,31 +148,14 @@ fn read_final_tail(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-async fn stress_random_seek_read_synthetic_wav() {
+async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTempFile) {
     const DURATION_SECS_INT: u32 = 10;
     const DURATION_SECS: f64 = DURATION_SECS_INT as f64;
-    const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS_INT as usize;
     const SEEK_ITERATIONS: usize = 1000;
-
-    let wav_data = signal::wav(44100, 2, SAMPLE_COUNT, signal::TONE);
-    let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
-    info!(
-        samples = SAMPLE_COUNT,
-        duration_secs = DURATION_SECS,
-        size_mb = format!("{wav_size_mb:.2}"),
-        "Generated test WAV"
-    );
-
-    let tmp = NamedTempFile::new().expect("create temp file");
-    Write::write_all(
-        &mut FsFile::create(tmp.path()).expect("open temp file"),
-        &wav_data,
-    )
-    .expect("write WAV data");
 
     let cache = TestTempDir::new();
     let pools = pools();
-    let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
+    let file_config = FileConfig::for_src(FileSrc::Local(wav_file.path().to_path_buf()))
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -282,4 +263,19 @@ async fn stress_random_seek_read_synthetic_wav() {
 
     result.expect("spawn_blocking failed");
     info!("Stress test passed");
+}
+
+#[kithara::fixture]
+async fn wav_file() -> NamedTempFile {
+    spawn_blocking(|| {
+        let file = NamedTempFile::new().expect("create temp file");
+        Write::write_all(
+            &mut FsFile::create(file.path()).expect("open temp file"),
+            stress_wav(),
+        )
+        .expect("write prepared WAV data");
+        file
+    })
+    .await
+    .expect("prepare WAV file")
 }

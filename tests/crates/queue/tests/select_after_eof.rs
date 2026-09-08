@@ -16,6 +16,7 @@ use kithara_integration_tests::{
         OfflinePlayerHarness, mean_abs, offline_queue_fixture, resource_from_reader_with_src,
     },
 };
+use kithara_test_fixtures::integration_fixtures::{constant_loud, constant_quiet, constant_three};
 
 use crate::bufpool_ext::TestPools;
 
@@ -31,13 +32,13 @@ enum InitialStart {
     Select,
 }
 
-fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
+fn make_resource(label: &str, secs: f64, samples: &'static [u8]) -> Resource {
     let spec = AudioSpec {
         channels: CHANNELS,
         sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };
     resource_from_reader_with_src(
-        TestPcmReader::with_value(spec, secs, value),
+        TestPcmReader::from_pcm(spec, secs, samples),
         Arc::from(format!("memory://{label}")),
     )
 }
@@ -63,11 +64,11 @@ async fn render_loop(
 }
 
 #[kithara::test(tokio)]
-async fn seek_updates_cached_position_optimistically() {
+async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let id = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("seek", 120.0, 0.10))
+            q.insert_loaded_for_test(make_resource("seek", 120.0, constant_quiet))
         })
         .await;
     harness
@@ -86,15 +87,16 @@ async fn seek_updates_cached_position_optimistically() {
 /// only stashes a pending select. Re-selecting A must restart it: the old
 /// `rate() > 0` guard kept reporting "playing" after EOF and swallowed it.
 #[kithara::test(tokio)]
-async fn reselect_finished_track_restarts_when_next_track_never_loads() {
+async fn reselect_finished_track_restarts_when_next_track_never_loads(
+    constant_three: &'static [u8],
+) {
     const TRACK_SECS: f64 = 0.4;
-    const TRACK_VALUE: f32 = 0.30;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_three))
         })
         .await;
     // Registered but never completed: stands in for a stalled loader.
@@ -110,7 +112,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
         "track A must play through on the first pass"
     );
 
-    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_VALUE));
+    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, constant_three));
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -137,22 +139,24 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 #[kithara::test(tokio)]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
-async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
+async fn switch_back_to_consumed_track_switches_audio(
+    #[case] initial_start: InitialStart,
+    constant_loud: &'static [u8],
+    constant_quiet: &'static [u8],
+) {
     const TRACK_SECS: f64 = 8.0;
-    const QUIET: f32 = 0.10;
-    const LOUD: f32 = 0.80;
     const WARMUP_BLOCKS: usize = 64;
 
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_quiet))
         })
         .await;
     let id_b = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD))
+            q.insert_loaded_for_test(make_resource("b", TRACK_SECS, constant_loud))
         })
         .await;
 
@@ -178,7 +182,7 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
-    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, QUIET));
+    queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, constant_quiet));
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -205,16 +209,16 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
 /// queue must mirror that: the current `Loaded` track becomes `Consumed`,
 /// keeping the status truthful for later re-selects.
 #[kithara::test(tokio)]
-async fn play_button_marks_current_loaded_track_consumed() {
+async fn play_button_marks_current_loaded_track_consumed(constant_three: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", 8.0, 0.3))
+            q.insert_loaded_for_test(make_resource("a", 8.0, constant_three))
         })
         .await;
     let _id_b = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("b", 8.0, 0.3))
+            q.insert_loaded_for_test(make_resource("b", 8.0, constant_three))
         })
         .await;
 
@@ -239,9 +243,8 @@ async fn play_button_marks_current_loaded_track_consumed() {
 /// Re-selecting the playing track must cancel a pending switch so a
 /// stalled load finishing later cannot barge in on top of it.
 #[kithara::test(tokio)]
-async fn reselect_playing_track_cancels_pending_switch() {
+async fn reselect_playing_track_cancels_pending_switch(constant_three: &'static [u8]) {
     const TRACK_SECS: f64 = 5.0;
-    const TRACK_VALUE: f32 = 0.30;
     /// Enough blocks to confirm audible playback without reaching EOF.
     const WARMUP_BLOCKS: usize = 64;
 
@@ -249,7 +252,7 @@ async fn reselect_playing_track_cancels_pending_switch() {
 
     let id_a = harness
         .run(&queue, move |q| {
-            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE))
+            q.insert_loaded_for_test(make_resource("a", TRACK_SECS, constant_three))
         })
         .await;
     let id_b = queue.register_for_test();

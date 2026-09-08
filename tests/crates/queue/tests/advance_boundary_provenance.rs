@@ -24,6 +24,7 @@ use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, goertzel_magnitude,
     phase,
 };
+use url::Url;
 
 use crate::bufpool_ext::TestPools;
 
@@ -205,10 +206,74 @@ impl CrossfadeFlavor {
     }
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
+async fn served_pair(builders: [HlsFixtureBuilder; 2]) -> (TestServerHelper, [Url; 2]) {
     let server = TestServerHelper::new().await;
-    let setup = setup_queue(&server, &temp_dir, true).await;
+    let [a, b] = builders;
+    let a = server
+        .create_hls(a)
+        .await
+        .expect("prepare track A")
+        .master_url();
+    let b = server
+        .create_hls(b)
+        .await
+        .expect("prepare track B")
+        .master_url();
+    (server, [a, b])
+}
+
+async fn flac_pair(variants: usize, segments: usize, seconds: f64) -> (TestServerHelper, [Url; 2]) {
+    served_pair(
+        [PcmPattern::Ascending, PcmPattern::Descending].map(|pattern| {
+            HlsFixtureBuilder::new()
+                .variant_count(variants)
+                .segments_per_variant(segments)
+                .segment_duration_secs(seconds)
+                .packaged_audio_per_variant_pcm_flac(SAMPLE_RATE, CHANNELS, vec![pattern; variants])
+        }),
+    )
+    .await
+}
+
+#[kithara::fixture]
+async fn flac_tracks() -> (TestServerHelper, [Url; 2]) {
+    flac_pair(1, SEGMENTS, SEGMENT_SECS).await
+}
+
+#[kithara::fixture]
+async fn multivariant_tracks() -> (TestServerHelper, [Url; 2]) {
+    flac_pair(3, SEGMENTS, SEGMENT_SECS).await
+}
+
+#[kithara::fixture]
+async fn crossfade_tracks() -> (TestServerHelper, [Url; 2]) {
+    flac_pair(1, CROSSFADE_SEGMENTS, SEGMENT_SECS).await
+}
+
+#[kithara::fixture]
+async fn real_geometry_tracks() -> (TestServerHelper, [Url; 2]) {
+    flac_pair(1, REAL_GEOMETRY_SEGMENTS, REAL_GEOMETRY_SEGMENT_SECS).await
+}
+
+#[kithara::fixture]
+async fn aac_tracks() -> (TestServerHelper, [Url; 2]) {
+    served_pair([TONE_A_FREQ_HZ, TONE_B_FREQ_HZ].map(|hz| {
+        HlsFixtureBuilder::new()
+            .variant_count(1)
+            .segments_per_variant(SEGMENTS)
+            .segment_duration_secs(SEGMENT_SECS)
+            .packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, hz)
+    }))
+    .await
+}
+
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
+async fn natural_eof_advance_emits_only_b_after_a_flac(
+    #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = flac_tracks;
+    let setup = setup_queue(&sources, &temp_dir).await;
 
     let (rendered, expected_a_frames) =
         render_until_b_with_postroll(&setup.queue, &setup.harness, ASCENDING_TOL, SAMPLE_RATE)
@@ -318,9 +383,12 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let setup = setup_multivariant_flac_queue(&server, &temp_dir).await;
+async fn natural_eof_advance_with_late_variant_switch_flac(
+    #[future(awt)] multivariant_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = multivariant_tracks;
+    let setup = setup_multivariant_flac_queue(&sources, &temp_dir).await;
 
     let (rendered, expected_a_frames, switch_issue_frame, committed_variant) =
         render_until_b_with_late_variant_switch(&setup.queue, &setup.harness).await;
@@ -459,14 +527,16 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(
+    #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
     let setup = setup_flac_queue_with_player_config_autoplay(
-        &server,
+        &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
-        CROSSFADE_SEGMENTS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
         true,
@@ -502,16 +572,15 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(240)), hang_timeout_secs(5))]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real_geometry(
+    #[future(awt)] real_geometry_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
 ) {
-    let server = TestServerHelper::new().await;
+    let (_server, sources) = real_geometry_tracks;
     let timestretch = StretchControls::new(1.0);
-    let setup = setup_flac_queue_with_player_config_autoplay_geometry(
-        &server,
+    let setup = setup_flac_queue_with_player_config_autoplay(
+        &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
-        REAL_GEOMETRY_SEGMENTS,
-        REAL_GEOMETRY_SEGMENT_SECS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
         true,
@@ -554,9 +623,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let setup = setup_queue_with_sample_rate(&server, &temp_dir, true, RESAMPLED_RENDER_RATE).await;
+async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
+    #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = flac_tracks;
+    let setup = setup_queue_with_sample_rate(&sources, &temp_dir, RESAMPLED_RENDER_RATE).await;
 
     let (rendered, expected_a_frames) = render_until_b_with_postroll(
         &setup.queue,
@@ -700,12 +772,13 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
 #[case::eq_stretch(false, "crossfade FLAC eq stretch", CrossfadeFlavor::EqStretch)]
 #[case::resampled(true, "crossfade resampled FLAC", CrossfadeFlavor::Plain)]
 async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
+    #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
     #[case] resampled: bool,
     #[case] label: &str,
     #[case] flavor: CrossfadeFlavor,
 ) {
-    let server = TestServerHelper::new().await;
+    let (_server, sources) = crossfade_tracks;
     let (sample_rate, collapse_runs, provenance_headroom) = if resampled {
         (
             RESAMPLED_RENDER_RATE,
@@ -720,7 +793,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
         )
     };
     run_crossfade_flac_case(
-        &server,
+        &sources,
         &temp_dir,
         sample_rate,
         collapse_runs,
@@ -732,14 +805,16 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+async fn natural_eof_advance_app_layer_crossfade_advance_flac(
+    #[future(awt)] crossfade_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = crossfade_tracks;
     let timestretch = StretchControls::new(1.0);
     let setup = setup_flac_queue_with_player_config_autoplay(
-        &server,
+        &sources,
         &temp_dir,
         SAMPLE_RATE,
-        CROSSFADE_SEGMENTS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
         false,
@@ -770,9 +845,12 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let setup = setup_queue(&server, &temp_dir, true).await;
+async fn seek_near_end_then_eof_advance_emits_only_b_flac(
+    #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = flac_tracks;
+    let setup = setup_queue(&sources, &temp_dir).await;
 
     let (rendered, seek_issue_frame, seek_complete_frame, duration) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
@@ -887,9 +965,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
 /// this case uses 440 Hz vs 880 Hz tone provenance to keep the same replay
 /// contract on the lossy codec.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
-async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let setup = setup_sine_aac_queue(&server, &temp_dir).await;
+async fn natural_eof_advance_emits_only_b_aac(
+    #[future(awt)] aac_tracks: (TestServerHelper, [Url; 2]),
+    temp_dir: TestTempDir,
+) {
+    let (_server, sources) = aac_tracks;
+    let setup = setup_sine_aac_queue(&sources, &temp_dir).await;
 
     let (rendered, duration) =
         render_until_tone_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
@@ -1018,7 +1099,7 @@ fn with_autoplay(
 }
 
 async fn run_crossfade_flac_case(
-    server: &TestServerHelper,
+    sources: &[Url; 2],
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
@@ -1027,10 +1108,9 @@ async fn run_crossfade_flac_case(
     build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
-        server,
+        sources,
         temp_dir,
         render_sample_rate,
-        CROSSFADE_SEGMENTS,
         build_player_config(),
         provenance_headroom,
     )
@@ -1066,14 +1146,13 @@ fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> Off
         .build()
 }
 
-async fn setup_queue(server: &TestServerHelper, temp_dir: &TestTempDir, flac: bool) -> QueueSetup {
-    setup_queue_with_sample_rate(server, temp_dir, flac, SAMPLE_RATE).await
+async fn setup_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
+    setup_queue_with_sample_rate(sources, temp_dir, SAMPLE_RATE).await
 }
 
 async fn setup_queue_with_sample_rate(
-    server: &TestServerHelper,
+    sources: &[Url; 2],
     temp_dir: &TestTempDir,
-    flac: bool,
     render_sample_rate: u32,
 ) -> QueueSetup {
     let harness = with_provenance_headroom(
@@ -1092,22 +1171,8 @@ async fn setup_queue_with_sample_rate(
         )))
         .await;
 
-    let resource_a = hls_resource(
-        &harness,
-        server,
-        &temp_dir.path().join("a"),
-        PcmPattern::Ascending,
-        flac,
-    )
-    .await;
-    let resource_b = hls_resource(
-        &harness,
-        server,
-        &temp_dir.path().join("b"),
-        PcmPattern::Descending,
-        flac,
-    )
-    .await;
+    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
+    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
 
     let id_a = harness
         .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
@@ -1123,10 +1188,7 @@ async fn setup_queue_with_sample_rate(
     QueueSetup { harness, queue }
 }
 
-async fn setup_multivariant_flac_queue(
-    server: &TestServerHelper,
-    temp_dir: &TestTempDir,
-) -> QueueSetup {
+async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
     let harness = with_provenance_headroom(
         OfflinePlayerHarness::with_sample_rate(
             OfflinePlayerOptions::builder()
@@ -1143,20 +1205,8 @@ async fn setup_multivariant_flac_queue(
         )))
         .await;
 
-    let resource_a = hls_multivariant_flac_resource(
-        &harness,
-        server,
-        &temp_dir.path().join("a"),
-        PcmPattern::Ascending,
-    )
-    .await;
-    let resource_b = hls_multivariant_flac_resource(
-        &harness,
-        server,
-        &temp_dir.path().join("b"),
-        PcmPattern::Descending,
-    )
-    .await;
+    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
+    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
 
     let id_a = harness
         .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
@@ -1173,18 +1223,16 @@ async fn setup_multivariant_flac_queue(
 }
 
 async fn setup_flac_queue_with_player_config(
-    server: &TestServerHelper,
+    sources: &[Url; 2],
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
-    segments: usize,
     player_config: OfflinePlayerOptions,
     provenance_headroom: bool,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay(
-        server,
+        sources,
         temp_dir,
         render_sample_rate,
-        segments,
         player_config,
         false,
         provenance_headroom,
@@ -1193,33 +1241,9 @@ async fn setup_flac_queue_with_player_config(
 }
 
 async fn setup_flac_queue_with_player_config_autoplay(
-    server: &TestServerHelper,
+    sources: &[Url; 2],
     temp_dir: &TestTempDir,
     render_sample_rate: u32,
-    segments: usize,
-    player_config: OfflinePlayerOptions,
-    should_autoplay: bool,
-    provenance_headroom: bool,
-) -> QueueSetup {
-    setup_flac_queue_with_player_config_autoplay_geometry(
-        server,
-        temp_dir,
-        render_sample_rate,
-        segments,
-        SEGMENT_SECS,
-        player_config,
-        should_autoplay,
-        provenance_headroom,
-    )
-    .await
-}
-
-async fn setup_flac_queue_with_player_config_autoplay_geometry(
-    server: &TestServerHelper,
-    temp_dir: &TestTempDir,
-    render_sample_rate: u32,
-    segments: usize,
-    segment_duration_secs: f64,
     player_config: OfflinePlayerOptions,
     should_autoplay: bool,
     provenance_headroom: bool,
@@ -1237,26 +1261,8 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
         )))
         .await;
 
-    let resource_a = hls_resource_with_segments_and_duration(
-        &harness,
-        server,
-        &temp_dir.path().join("a"),
-        PcmPattern::Ascending,
-        true,
-        segments,
-        segment_duration_secs,
-    )
-    .await;
-    let resource_b = hls_resource_with_segments_and_duration(
-        &harness,
-        server,
-        &temp_dir.path().join("b"),
-        PcmPattern::Descending,
-        true,
-        segments,
-        segment_duration_secs,
-    )
-    .await;
+    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
+    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
 
     if should_autoplay {
         let id_a = queue.register_for_test();
@@ -1283,7 +1289,7 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     QueueSetup { harness, queue }
 }
 
-async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir) -> QueueSetup {
+async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -1298,10 +1304,8 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
         )))
         .await;
 
-    let resource_a =
-        hls_sine_aac_resource(&harness, server, &temp_dir.path().join("a"), TONE_A_FREQ_HZ).await;
-    let resource_b =
-        hls_sine_aac_resource(&harness, server, &temp_dir.path().join("b"), TONE_B_FREQ_HZ).await;
+    let resource_a = hls_resource(&harness, &sources[0], &temp_dir.path().join("a")).await;
+    let resource_b = hls_resource(&harness, &sources[1], &temp_dir.path().join("b")).await;
 
     let id_a = harness
         .run(&queue, move |q| q.insert_loaded_for_test(resource_a))
@@ -1317,61 +1321,10 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
     QueueSetup { harness, queue }
 }
 
-async fn hls_resource(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &Path,
-    pattern: PcmPattern,
-    flac: bool,
-) -> Resource {
-    hls_resource_with_segments(harness, server, cache_dir, pattern, flac, SEGMENTS).await
-}
-
-async fn hls_resource_with_segments(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &Path,
-    pattern: PcmPattern,
-    flac: bool,
-    segments: usize,
-) -> Resource {
-    hls_resource_with_segments_and_duration(
-        harness,
-        server,
-        cache_dir,
-        pattern,
-        flac,
-        segments,
-        SEGMENT_SECS,
-    )
-    .await
-}
-
-async fn hls_resource_with_segments_and_duration(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &Path,
-    pattern: PcmPattern,
-    flac: bool,
-    segments: usize,
-    segment_duration_secs: f64,
-) -> Resource {
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(1)
-        .segments_per_variant(segments)
-        .segment_duration_secs(segment_duration_secs);
-    let builder = if flac {
-        builder.packaged_audio_per_variant_pcm_flac(SAMPLE_RATE, CHANNELS, vec![pattern])
-    } else {
-        builder.packaged_audio_per_variant_pcm_aac_lc(SAMPLE_RATE, CHANNELS, vec![pattern])
-    };
-    let created = server
-        .create_hls(builder)
-        .await
-        .expect("create advance-boundary HLS fixture");
+async fn hls_resource(harness: &OfflinePlayerHarness, url: &Url, cache_dir: &Path) -> Resource {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
+        ResourceSrc::parse(url.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -1382,76 +1335,6 @@ async fn hls_resource_with_segments_and_duration(
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for advance-boundary fixture");
-    let _ = resource.preload().await;
-    resource
-}
-
-async fn hls_multivariant_flac_resource(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &Path,
-    pattern: PcmPattern,
-) -> Resource {
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(3)
-                .segments_per_variant(SEGMENTS)
-                .segment_duration_secs(SEGMENT_SECS)
-                .packaged_audio_per_variant_pcm_flac(
-                    SAMPLE_RATE,
-                    CHANNELS,
-                    vec![pattern, pattern, pattern],
-                ),
-        )
-        .await
-        .expect("create advance-boundary multivariant FLAC HLS fixture");
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
-    )
-    .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare advance-boundary multivariant FLAC resource");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS multivariant FLAC resource for advance-boundary fixture");
-    let _ = resource.preload().await;
-    resource
-}
-
-async fn hls_sine_aac_resource(
-    harness: &OfflinePlayerHarness,
-    server: &TestServerHelper,
-    cache_dir: &Path,
-    freq_hz: f64,
-) -> Resource {
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(SEGMENTS)
-                .segment_duration_secs(SEGMENT_SECS)
-                .packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, freq_hz),
-        )
-        .await
-        .expect("create advance-boundary sine AAC HLS fixture");
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
-        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
-    )
-    .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare advance-boundary sine AAC resource");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS sine AAC resource for advance-boundary fixture");
     let _ = resource.preload().await;
     resource
 }
@@ -1930,12 +1813,8 @@ fn frames_from_secs(secs: f64, sample_rate: u32) -> usize {
 }
 
 fn render_block_duration(sample_rate: u32) -> Duration {
-    if cfg!(feature = "flash") {
-        let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(sample_rate))
-    } else {
-        Duration::from_millis(1)
-    }
+    let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
+    Duration::from_secs_f64(f64::from(frames) / f64::from(sample_rate))
 }
 
 fn classify_tone_windows(left: &[f32], window: usize, sample_rate: u32) -> Vec<ToneClass> {

@@ -14,23 +14,25 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+use url::Url;
 
 #[kithara::fixture]
-async fn server() -> TestServerHelper {
-    TestServerHelper::new().await
+async fn mp3() -> (TestServerHelper, Url) {
+    let server = TestServerHelper::new().await;
+    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
+    (server, url)
 }
 
 /// Open a remote test.mp3 as `Audio<Stream<File>>` with optional hw/sw backend
 /// and optional event bus. Centralises the setup shared by every seek test.
 async fn open_test_mp3(
-    server: &TestServerHelper,
+    url: &Url,
     temp_dir: &TestTempDir,
     backend: DecoderBackend,
     events: Option<EventBus>,
 ) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
-    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
     let pools = pools();
-    let file_config = FileConfig::for_src(url.into())
+    let file_config = FileConfig::for_src(url.clone().into())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -78,9 +80,12 @@ async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPoo
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
-    let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
+async fn decoder_file_reads_samples(
+    #[future(awt)] mp3: (TestServerHelper, Url),
+    temp_dir: TestTempDir,
+) {
+    let (_server, url) = mp3;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 }
@@ -94,12 +99,12 @@ async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir
 #[case::to_zero(Duration::from_secs(0))]
 #[case::forward(Duration::from_secs(2))]
 async fn decoder_file_single_seek(
-    #[future] server: TestServerHelper,
+    #[future(awt)] mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,
     #[case] target: Duration,
 ) {
-    let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
+    let (_server, url) = mp3;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
@@ -117,9 +122,12 @@ async fn decoder_file_single_seek(
 
 /// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
-    let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
+async fn decoder_file_seek_backward(
+    #[future(awt)] mp3: (TestServerHelper, Url),
+    temp_dir: TestTempDir,
+) {
+    let (_server, url) = mp3;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -140,15 +148,15 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
     case::hw(DecoderBackend::Apple)
 )]
 async fn decoder_file_seek_multiple(
-    #[future] server: TestServerHelper,
+    #[future(awt)] mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,
     #[case] backend: DecoderBackend,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = server.await;
-    let mut decoder = open_test_mp3(&server, &temp_dir, backend, None).await;
+    let (_server, url) = mp3;
+    let mut decoder = open_test_mp3(&url, &temp_dir, backend, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 
@@ -160,12 +168,15 @@ async fn decoder_file_seek_multiple(
 
 /// Decoder<Stream<File>> events are emitted on seek.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
-    let server = server.await;
+async fn decoder_file_seek_emits_events(
+    #[future(awt)] mp3: (TestServerHelper, Url),
+    temp_dir: TestTempDir,
+) {
+    let (_server, url) = mp3;
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, Some(bus)).await;
+    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::Symphonia, Some(bus)).await;
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();

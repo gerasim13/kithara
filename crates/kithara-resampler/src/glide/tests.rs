@@ -1,5 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_test_fixtures::unit_fixtures::{
+    glide_alias, glide_quadratic, glide_transition, glide_unity,
+};
 use kithara_test_utils::kithara;
 
 use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
@@ -60,9 +63,9 @@ fn fixed_ratio_output_contract_uses_glide_ratio() {
 }
 
 #[kithara::test(native, flash(false))]
-fn unity_fast_path_copies_input() {
+fn unity_fast_path_copies_input(glide_unity: Vec<f32>) {
     let mut resampler = build_glide(44_100, 44_100);
-    let input = [0.0, 0.25, -0.5, 0.75];
+    let input = glide_unity;
     let mut output = [0.0; 4];
     let process = resampler
         .process_into_buffer(&[&input], &mut [&mut output])
@@ -74,9 +77,9 @@ fn unity_fast_path_copies_input() {
 }
 
 #[kithara::test(native, flash(false))]
-fn quadratic_interpolates_between_input_frames() {
+fn quadratic_interpolates_between_input_frames(glide_quadratic: Vec<f32>) {
     let mut resampler = build_glide(44_100, 88_200);
-    let input = [0.0, 1.0, 0.0, -1.0, 0.0, 1.0];
+    let input = glide_quadratic;
     let mut output = [0.0; 12];
     let process = resampler
         .process_into_buffer(&[&input], &mut [&mut output])
@@ -90,7 +93,7 @@ fn quadratic_interpolates_between_input_frames() {
 }
 
 #[kithara::test(native, flash(false))]
-fn glide_ratio_reaches_target_without_discontinuity() {
+fn glide_ratio_reaches_target_without_discontinuity(glide_transition: Vec<f32>) {
     let mode = ResamplerMode::VariableRatio {
         sample_rate: rate(48_000),
         initial_ratio: 1.0,
@@ -110,7 +113,7 @@ fn glide_ratio_reaches_target_without_discontinuity() {
         },
     )
     .unwrap_or_else(|err| panic!("glide should be accepted: {err}"));
-    let input = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 0.8, 0.6, 0.4, 0.2, 0.0, -0.2];
+    let input = glide_transition;
     let mut output = [0.0; 24];
     let process = resampler
         .process_into_buffer(&[&input], &mut [&mut output])
@@ -164,8 +167,8 @@ fn linear_mode_can_be_selected_by_config() {
 }
 
 #[kithara::test(native, flash(false))]
-fn anti_alias_smooths_fast_glide() {
-    let input = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+fn anti_alias_smooths_fast_glide(glide_alias: Vec<f32>) {
+    let input = glide_alias;
     let mut plain = GlideResampler::new(
         "glide",
         GlideConfig::builder().anti_alias(false).build(),
