@@ -279,7 +279,7 @@ where
                     }
                     continue;
                 }
-                // WHY: frame straddles target — trim leading samples ([crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) "Seek pre-roll and trim").
+                // WHY: frame straddles target — trim leading samples.
                 if frames > 0 && chunk_pts < target {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 =
@@ -487,7 +487,7 @@ mod default_priming_tests {
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay() {
         let decoder = build_mp3_decoder();
-        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay ([crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) "Two independent silence layers").
+        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay.
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);

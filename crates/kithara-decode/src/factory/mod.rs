@@ -1,10 +1,9 @@
 //! Factory for creating decoders with runtime backend selection.
 //!
-//! Exactly one decoder path is taken per call — no fallback. The caller
-//! selects the backend via [`DecoderConfig::backend`]; a backend not
-//! compiled in returns `DecodeError::BackendUnavailable`, one that rejects
-//! the codec/container returns `DecodeError::UnsupportedCodec`, both
-//! terminal. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) "Backend selection" and "Reader profile".
+//! Exactly one decoder path is taken per call — no fallback. The caller selects the
+//! backend via [`DecoderConfig::backend`]; a backend not compiled in returns
+//! `DecodeError::BackendUnavailable`, one that rejects the codec/container returns
+//! `DecodeError::UnsupportedCodec`, both terminal.
 
 mod inner;
 mod probe;

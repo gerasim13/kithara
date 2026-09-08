@@ -70,8 +70,8 @@ type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
-/// See crate [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-assets) for the lease/pin contract. Absolute keys bypass
-/// pinning (no asset to pin under). The capability gate also bypasses.
+/// Absolute keys bypass pinning (no asset to pin under). The capability gate also
+/// bypasses.
 #[derive(Clone)]
 pub struct LeaseAssets<A> {
     inner: Arc<A>,

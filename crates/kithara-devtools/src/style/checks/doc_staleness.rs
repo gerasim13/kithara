@@ -251,7 +251,7 @@ mod tests {
     fn skips_documents_outside_the_included_globs() {
         let src = "The `MissingType` owns the queue.\n";
 
-        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/ARCHITECTURE.md", src, &|_| false);
 
         assert!(violations.is_empty());
     }

@@ -166,10 +166,10 @@ guardrails.)
 
 ### 8. Code -> docs reference direction
 
-Code and doc comments explain their local API and safety requirements. Link to
-the owning crate wiki page for cross-file rationale instead of copying it into
-the source. Such a link must not replace information required to use the item
-safely. Keep task status and implementation plans in issues and the Project.
+Code and doc comments explain their local API and safety requirements without
+links to wiki pages or repository documentation. Keep documentation routing in
+README and agent instructions. Do not copy cross-file rationale into source.
+Keep task status and implementation plans in issues and the Project.
 
 ### 9. Opaque abbreviations in names
 

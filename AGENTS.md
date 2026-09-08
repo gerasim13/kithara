@@ -41,6 +41,9 @@ Every fact below has one owner. Link to the owner; do not restate it.
   contracts and decision rationale; do not copy implementation inventories or
   task status there. Comments document their local item, and README files
   provide a brief overview, usage, and a link to the owning wiki page.
+- Keep source code and doc comments self-contained. Do not link to wiki pages
+  or repository documentation from source; route readers through README and
+  agent instructions.
 
 ## Non-Negotiables
 
