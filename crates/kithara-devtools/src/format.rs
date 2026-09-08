@@ -309,7 +309,6 @@ fn run_markdown_format(check: bool, ctx: &Ctx) -> Result<()> {
     let mut args = vec![
         "AGENTS.md",
         "README.md",
-        "CONTEXT.md",
         "CONTRIBUTING.md",
         "CHANGELOG.md",
         "TESTING.md",

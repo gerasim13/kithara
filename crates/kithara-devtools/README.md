@@ -19,7 +19,7 @@ through `just tooling xtask`. It holds the project-agnostic commands so several
 workspaces can share one implementation and keep only their own project-specific
 commands in a thin `xtask` binary.
 
-Contracts and invariants live in [`CONTEXT.md`](CONTEXT.md); this file is the
+Contracts and invariants live in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-devtools); this file is the
 overview.
 
 ## Usage
@@ -56,7 +56,7 @@ project that installs them elsewhere sets a path instead of patching the core.
 Quality Lab intentionally keeps a separate, **required**
 `.config/quality-lab.toml` so heavyweight analyzers never reach the fast lint
 path. The ownership rules, the schema's strictness, and what each section is
-allowed to declare are in [`CONTEXT.md`](CONTEXT.md).
+allowed to declare are in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-devtools).
 
 ## Key Types
 

@@ -5,21 +5,19 @@ use std::{
 
 use super::seqlock::AnchorEntry;
 
-/// A generation-tagged MULTI-writer seqlock cell holding `{segment, anchor}`
-/// plus a present/absent generation. Unlike [`SeqAnchorCell`](super::seqlock::SeqAnchorCell)
-/// (a single on-core body writer), the exact-seek demand is body-written from
-/// BOTH the produce-core seek path (`seek_time_anchor`) and the off-RT
-/// profiled reader preparation, with no lock shared between them. The version
-/// is therefore acquired with a CAS (even -> odd): the two writers serialize,
-/// the loser retries — writes are short (five atomic stores, no alloc/lock/log)
-/// and rare. The RT read path never spins on a
-/// write-in-flight: an odd or changed version returns `None` (not-ready) for
-/// this poll and relies on the existing level-triggered re-poll
-/// (`SchedulerWake` / `WAITING_TIMEOUT` / next `read_at`) to observe the demand
-/// a tick later — the non-blocking analog of the original `Mutex`'s blocking
-/// wait. `active` is the present generation (0 = `None`), published *inside* the
-/// version critical section so two writers' publishes can never lost-update
-/// each other. See the crate `CONTEXT.md` "Seek-state primitives".
+/// A generation-tagged MULTI-writer seqlock cell holding `{segment, anchor}` plus a
+/// present/absent generation. Unlike [`SeqAnchorCell`](super::seqlock::SeqAnchorCell)
+/// (a single on-core body writer), the exact-seek demand is body-written from BOTH the
+/// produce-core seek path (`seek_time_anchor`) and the off-RT profiled reader
+/// preparation, with no lock shared between them. The version is therefore acquired
+/// with a CAS (even -> odd): the two writers serialize, the loser retries — writes are
+/// short (five atomic stores, no alloc/lock/log) and rare. The RT read path never spins
+/// on a write-in-flight: an odd or changed version returns `None` (not-ready) for this
+/// poll and relies on the existing level-triggered re-poll (`SchedulerWake` /
+/// `WAITING_TIMEOUT` / next `read_at`) to observe the demand a tick later — the
+/// non-blocking analog of the original `Mutex`'s blocking wait. `active` is the present
+/// generation (0 = `None`), published *inside* the version critical section so two
+/// writers' publishes can never lost-update each other.
 pub(super) struct CasAnchorCell {
     segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired

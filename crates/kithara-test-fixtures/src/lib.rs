@@ -2,11 +2,10 @@
 
 //! Build-time generated audio test assets.
 //!
-//! Asset declarations live in `src/defs/`, compile only into this crate's build
-//! script, and never enter the library. The signal primitives they render with
-//! do enter it: `signal` is the workspace's one way to make a waveform, a PCM
-//! buffer, or a RIFF body, whether at build time or at run time. See
-//! `CONTEXT.md` for the store layout and the invalidation contract.
+//! Asset declarations live in `src/defs/`, compile only into this crate's build script,
+//! and never enter the library. The signal primitives they render with do enter it:
+//! `signal` is the workspace's one way to make a waveform, a PCM buffer, or a RIFF
+//! body, whether at build time or at run time.
 
 /// Every accessor that reads the store carries its own `cfg`, because the store
 /// is a host filesystem the browser cannot reach; an `embed` accessor carries
@@ -16,19 +15,21 @@ pub mod asset;
 pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use hls::hydrate as hls_hydrate;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hls::manifest as hls_manifest;
 /// Read by this crate's build script through `#[path]`, and still by the
 /// integration suite's; declared here so its own tests keep running.
 #[cfg(test)]
 mod context;
-#[cfg(test)]
-mod encoders;
 /// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
 /// gated inside the module with the encoder types it consumes.
 pub mod fmp4;
 #[cfg(test)]
 mod graph;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod remote_file;
 pub mod signal;
 pub mod signal_asset;
 #[cfg(not(target_arch = "wasm32"))]

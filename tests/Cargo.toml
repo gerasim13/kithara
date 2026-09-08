@@ -263,12 +263,6 @@ web-sys = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 kithara = { workspace = true, features = ["android", "client-wreq"] }
 
-[build-dependencies]
-# Reads the resolved encoder versions out of the workspace lockfile; see
-# `build.rs`. Hashing the whole lockfile invalidated the fixture cache on every
-# unrelated dependency bump.
-toml = { workspace = true }
-
 [dev-dependencies]
 toml = { workspace = true }
 

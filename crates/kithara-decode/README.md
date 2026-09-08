@@ -78,4 +78,4 @@ decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<Fil
 cursors, or plain files. Shared `AudioSpec`, `AudioChunkInfo`, `AudioChunk`, frame/sample units, and
 pure sample/time math are owned by `kithara-signal`; decoder-specific profiles and errors remain here.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) for detailed contracts, invariants, and internals.

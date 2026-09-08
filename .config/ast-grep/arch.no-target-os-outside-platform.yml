@@ -11,7 +11,7 @@ message: |
 
   Suppress with `// ast-grep-ignore: arch.no-target-os-outside-platform`
   only when the gate is on a `mod` that is itself a thin platform shim
-  (document the why in the owning crate's README.md).
+  (document the why on the owning crate wiki page).
 severity: warning
 language: Rust
 files:
@@ -25,22 +25,17 @@ ignores:
   # `kithara-ffi/src/lib.rs` is the structural boundary for the
   # browser/wasm split (`mod native;` / `pub mod web;` target_arch gates).
   # Android JNI gates live one level down in `src/native/mod.rs`, alongside
-  # the native platform shims. Documented in `crates/kithara-ffi/CONTEXT.md`.
+  # the native platform shims. Documented in [kithara-ffi contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi).
   - "crates/kithara-ffi/src/lib.rs"
-  # `kithara-play` hosts the audio session, which has unavoidable platform
-  # asymmetry: native runs a dedicated engine thread with a ringbuf+park
-  # wake-up, while wasm32 splits state between the main thread (where the
-  # AudioContext must live) and Workers (which proxy commands via mpsc).
-  # `session/mod.rs` is the single structural boundary — the `#[cfg]`
-  # declarations on `mod native;` / `mod web;` and their re-exports. Inside
-  # each host file there are zero inline cfg gates. Documented in
-  # `crates/kithara-play/CONTEXT.md` "Session Hosting".
+  # Legacy session-boundary exemption; this module now exposes the lower
+  # player-to-host protocol. Host execution belongs to `kithara-host`.
+  # See https://github.com/zvuk/kithara/wiki/kithara-host.
   - "crates/kithara-play/src/session/mod.rs"
   # `kithara-ffi` hosts native-only platform shims one level below the
   # `native`/`web` split in `src/lib.rs` (already exempted above): Android
   # JNI module wiring lives in `src/native/mod.rs` alongside the other
   # native shims, gated on `target_os = "android"`. Documented in
-  # `crates/kithara-ffi/CONTEXT.md`.
+  # [kithara-ffi contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi).
   - "crates/kithara-ffi/src/native/mod.rs"
 rule:
   any:

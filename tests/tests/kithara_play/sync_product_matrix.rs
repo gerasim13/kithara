@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{env, io, num::NonZeroU32, path::Path};
+use std::{env, io, num::NonZeroU32};
 
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
@@ -282,13 +282,14 @@ const CROSS_STYLE: &[&str] = &[
     "rhythm_wav_house_124_aligned",
     "rhythm_wav_breakbeat_140_aligned",
 ];
+pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowtechno"];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
     Synthetic,
     Rhythm(&'static [&'static str]),
     HlsSame(HlsProtection),
-    Library,
+    Library(&'static [&'static str]),
     Mp3Same,
     Mp3Distinct,
     HlsMp3(HlsProtection),
@@ -301,6 +302,19 @@ pub(super) const TECHNO_BREAKBEAT_PROVIDER: Provider = Provider::Rhythm(TECHNO_B
 pub(super) const CROSS_STYLE_PROVIDER: Provider = Provider::Rhythm(CROSS_STYLE);
 
 impl Provider {
+    pub(super) const ALL: &[Provider] = &[
+        Self::Synthetic,
+        Self::Rhythm(CROSS_STYLE),
+        Self::HlsSame(HlsProtection::Plain),
+        Self::HlsSame(HlsProtection::Drm),
+        Self::Library(LIBRARY),
+        Self::Mp3Same,
+        Self::Mp3Distinct,
+        Self::HlsMp3(HlsProtection::Plain),
+        Self::HlsMp3(HlsProtection::Drm),
+        Self::Sweep,
+    ];
+
     const fn has_score_markers(self) -> bool {
         matches!(self, Self::Rhythm(_))
     }
@@ -846,7 +860,11 @@ fn offline_renderer_publishes_only_complete_recordings() {
     );
 }
 
-async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) -> Vec<String> {
+pub(super) async fn sources(
+    provider: Provider,
+    decks: usize,
+    server: &TestServerHelper,
+) -> Vec<String> {
     match provider {
         Provider::Synthetic => cycle_paths(
             &[
@@ -867,7 +885,22 @@ async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) ->
                 )
             })
             .collect(),
-        Provider::Library => cycle_paths_from_strings(&library_paths(), decks),
+        Provider::Library(names) => names
+            .iter()
+            .cycle()
+            .take(decks)
+            .map(|name| {
+                let asset = by_name(name).unwrap_or_else(|| {
+                    panic!(
+                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build with KITHARA_REMOTE_FIXTURES=1"
+                    )
+                });
+                asset
+                    .try_bytes()
+                    .unwrap_or_else(|error| panic!("BLOCKED_FIXTURE: {error}"));
+                asset_path(asset)
+            })
+            .collect(),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
         Provider::Sweep => cycle_paths(&[signal_mp3_sweep_up_60s()], decks),
         Provider::Mp3Distinct => cycle_paths(
@@ -923,33 +956,6 @@ fn cycle_paths(assets: &[Asset], count: usize) -> Vec<String> {
                 .to_owned()
         })
         .collect()
-}
-
-fn cycle_paths_from_strings(paths: &[String], count: usize) -> Vec<String> {
-    paths.iter().cycle().take(count).cloned().collect()
-}
-
-fn library_paths() -> [String; 2] {
-    let root = env::var_os("KITHARA_SYNC_LIBRARY").unwrap_or_else(|| {
-        panic!("BLOCKED_FIXTURE: KITHARA_SYNC_LIBRARY must name the opt-in music library root")
-    });
-    let root = Path::new(&root);
-    let track = |name: &str| {
-        let relative = env::var_os(name).unwrap_or_else(|| {
-            panic!("BLOCKED_FIXTURE: {name} must name a track under KITHARA_SYNC_LIBRARY")
-        });
-        let path = root.join(relative);
-        assert!(
-            path.is_file(),
-            "BLOCKED_FIXTURE: {name} does not resolve to a file under KITHARA_SYNC_LIBRARY: {}",
-            path.display(),
-        );
-        path.to_string_lossy().into_owned()
-    };
-    [
-        track("KITHARA_SYNC_LIBRARY_TRACK_A"),
-        track("KITHARA_SYNC_LIBRARY_TRACK_B"),
-    ]
 }
 
 fn asset_path(asset: Asset) -> String {
@@ -1183,7 +1189,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires KITHARA_SYNC_LIBRARY and product Warp alignment"]
+#[ignore = "ignored-red: requires KITHARA_REMOTE_FIXTURES at build time and product Warp alignment, 2026-09-07"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC)]
@@ -1196,5 +1202,5 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
 #[case::tempo_up_120hz(TEMPO_UP_120)]
 #[case::tempo_down_30hz(TEMPO_DOWN_30)]
 async fn opt_in_library_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
-    run(case, Provider::Library).await;
+    run(case, Provider::Library(LIBRARY)).await;
 }

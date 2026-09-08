@@ -55,11 +55,10 @@ pub struct PlayerTrack {
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
     ///
-    /// The control thread publishes the next epoch before it sends the
-    /// matching `PlayerCmd::Seek`, so a render block that sees a newer
-    /// published epoch is rendering a position the user has already left.
-    /// [`read`](Self::read) uses the gap to refuse natural-EOF finalization
-    /// until the re-base arrives; see the crate `CONTEXT.md`.
+    /// The control thread publishes the next epoch before it sends the matching
+    /// `PlayerCmd::Seek`, so a render block that sees a newer published epoch is
+    /// rendering a position the user has already left. [`read`](Self::read) uses the
+    /// gap to refuse natural-EOF finalization until the re-base arrives.
     pub(super) seek_epoch: u64,
 }
 

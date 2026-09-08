@@ -3,7 +3,7 @@
 How the workspace is tested, what the `flash` virtual clock is for, and an
 honest read on whether it earns its keep. This is a guide, not a contract — the
 authoritative commands live in the `justfile` and `.config/nextest.toml`; the
-per-crate behavior contracts live in each crate's `CONTEXT.md`.
+per-crate behavior contracts live in each crate's wiki page.
 
 ## Running tests
 
@@ -112,7 +112,7 @@ production code, large fixtures belong under `tests/`.
   spawns (sync: an RAII guard; async: a per-poll combinator). A no-op when the
   `flash` feature is off. Used to mark the few production async helpers whose
   virtual `sleep` must participate in the sim (see the cancel/flash contracts in
-  `kithara-platform/CONTEXT.md`).
+  [kithara-platform contracts](https://github.com/zvuk/kithara/wiki/kithara-platform)).
 - `#[kithara::hang_watchdog]` — wraps a function with a `HangDetector`.
 - `#[kithara::fixture]`, `#[kithara::mock]`, `#[kithara::probe]` — rstest /
   unimock / USDT replacements gated to `cfg(any(test, feature = …))` so they are
