@@ -8,11 +8,8 @@ use syn::{
     visit::{self, Visit},
 };
 
+use super::source::{Source, join, methods};
 use crate::Ctx;
-
-mod source;
-
-use source::{Source, join, methods};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Report {
