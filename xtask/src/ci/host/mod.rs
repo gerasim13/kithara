@@ -11,3 +11,4 @@ mod toolchain;
 mod windows;
 
 pub(crate) use command::{HostArgs, run};
+pub(crate) use runners::{read_secret, write_secure};

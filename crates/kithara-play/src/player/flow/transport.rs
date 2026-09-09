@@ -37,6 +37,19 @@ where
         }
     }
 
+    /// Place the freshly-loaded track at the position handed over before it
+    /// existed. Must follow [`Self::start_playback`]: a fade-in re-bases a
+    /// track that is past its head, which would undo the seek.
+    fn apply_start_position(&self) {
+        let Some(target) = self.core.start_position.lock().take() else {
+            return;
+        };
+        let seconds = target.as_secs_f64();
+        if let Err(e) = self.seek_seconds(seconds) {
+            warn!(?e, seconds, "start position rejected by the loaded track");
+        }
+    }
+
     /// Ensure the audio engine is started.
     pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
         if self.core.engine.is_running() {
@@ -62,6 +75,7 @@ where
         };
         self.publish_current_track_snapshot(duration_seconds);
         self.start_playback(item_id);
+        self.apply_start_position();
         Ok(true)
     }
 
@@ -118,17 +132,31 @@ where
     /// thread can render a block off the rebased source in that window and
     /// republish a shorter `PlaybackShared::duration`, turning an in-range
     /// target into a spurious `PastEof`.
+    ///
+    /// A seek that arrives before the player holds a slot is kept as the
+    /// current item's start position and applied by the load that starts it,
+    /// so a position handed over at queue-seeding time is where playback
+    /// begins.
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+        let target_secs = seconds.max(0.0);
+        let target = Duration::from_secs_f64(target_secs);
+
         let Some(slot_id) = self.slot() else {
-            return Err(PlayError::NotReady);
+            // No slot means no processor to carry the re-base, and refusing
+            // here drops a real target: a host restores its stored position
+            // while seeding the queue. Keep it — the load that starts the
+            // current item places the track there instead of at its head.
+            *self.core.start_position.lock() = Some(target);
+            debug!(target_secs, "seek held until a track is loaded");
+            return Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            });
         };
 
         let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return Err(PlayError::SlotNotFound(slot_id));
         };
-
-        let target_secs = seconds.max(0.0);
-        let target = Duration::from_secs_f64(target_secs);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,

@@ -4,6 +4,7 @@ use kithara_devtools::Ctx;
 
 use super::{
     bridge::BridgeArgs,
+    cache::CacheArgs,
     host::HostArgs,
     image::ImageArgs,
     lane::{direct::LaneArgs, select::LanesArgs},
@@ -20,6 +21,8 @@ pub(crate) struct CiArgs {
 
 #[derive(Debug, Subcommand)]
 enum CiCommand {
+    /// Provision and verify the shared compiler cache.
+    Cache(CacheArgs),
     /// Reconcile the public GitHub and private `GitLab` repositories.
     Bridge(BridgeArgs),
     /// Provision and maintain the dedicated CI host.
@@ -41,7 +44,8 @@ enum CiCommand {
 pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
     matches!(
         args.command,
-        CiCommand::Bridge(_)
+        CiCommand::Cache(_)
+            | CiCommand::Bridge(_)
             | CiCommand::Host(_)
             | CiCommand::Image(_)
             | CiCommand::Linux(_)
@@ -51,6 +55,7 @@ pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
 
 pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
     match &args.command {
+        CiCommand::Cache(args) => super::cache::run(args),
         CiCommand::Bridge(args) => super::bridge::run(args),
         CiCommand::Host(args) => super::host::run(args),
         CiCommand::Image(args) => super::image::run(args),
@@ -64,7 +69,8 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
 
 pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
-        CiCommand::Bridge(_)
+        CiCommand::Cache(_)
+        | CiCommand::Bridge(_)
         | CiCommand::Host(_)
         | CiCommand::Image(_)
         | CiCommand::Linux(_)

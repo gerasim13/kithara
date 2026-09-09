@@ -85,6 +85,7 @@ impl<S> PlayerImpl<S> {
             gapless_mode: config.gapless_mode,
             block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),
+            start_position: Mutex::default(),
             items: ItemQueue::new(bus),
         };
         Self {

@@ -1,0 +1,12 @@
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/**
+!tests/
+!tests/**
+!xtask/
+!xtask/**
+**/target
+**/.git
+xtask/.xtask-cache

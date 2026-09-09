@@ -1,0 +1,72 @@
+name: kithara-ci-cache
+
+x-cache-image: &cache-image
+  image: kithara-ci-cache:local
+  pull_policy: never
+
+services:
+  credentials:
+    <<: *cache-image
+    build:
+      context: ..
+      dockerfile: docker/ci-cache.Dockerfile
+      args:
+        CACHE_IMAGE: ${KITHARA_CACHE_IMAGE:?use just ci cache to load ci-pins.toml}
+        RUST_VERSION: ${KITHARA_RUST_VERSION:?use just ci cache to load ci-pins.toml}
+        RUST_BASE_DIGEST: ${KITHARA_RUST_DIGEST:?use just ci cache to load ci-pins.toml}
+    entrypoint: ["xtask", "ci", "cache", "credentials"]
+    network_mode: none
+    volumes:
+      - ${CACHE_CONFIG_VOLUME:-cache-config}:/config
+    restart: "no"
+
+  cache:
+    <<: *cache-image
+    container_name: kithara-ci-cache
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER_FILE: /config/admin-user
+      MINIO_ROOT_PASSWORD_FILE: /config/admin-password
+      MINIO_BROWSER: "off"
+    depends_on:
+      credentials:
+        condition: service_completed_successfully
+    volumes:
+      - ${CACHE_CONFIG_VOLUME:-cache-config}:/config:ro
+      - ${CACHE_DATA_VOLUME:-cache-data}:/data
+    ports:
+      - "127.0.0.1:${CACHE_PORT:-19000}:9000"
+    networks: [ci]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  initialize:
+    <<: *cache-image
+    entrypoint: ["xtask", "ci", "cache", "initialize"]
+    environment:
+      CACHE_SCOPES: ${CACHE_SCOPES:?set trust scopes}
+      CACHE_BUCKET_QUOTA: ${CACHE_BUCKET_QUOTA:?set per-scope disk quota}
+      CACHE_CLIENT_ENDPOINT: ${CACHE_CLIENT_ENDPOINT:?set endpoint seen by jobs}
+      CACHE_CLIENT_UID: ${CACHE_CLIENT_UID:?set job user id}
+    depends_on:
+      cache:
+        condition: service_healthy
+    volumes:
+      - ${CACHE_CONFIG_VOLUME:-cache-config}:/config:ro
+      - ${CACHE_CLIENTS_VOLUME:-cache-clients}:/clients
+    networks: [ci]
+    restart: "no"
+
+networks:
+  ci:
+    external: true
+    name: ${CACHE_NETWORK:?set existing CI network}
+
+volumes:
+  cache-config:
+  cache-data:
+  cache-clients:

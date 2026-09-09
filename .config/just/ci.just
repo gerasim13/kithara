@@ -94,3 +94,13 @@ full OUTPUT:
     run_stage mutants just test mutants run-all --output "{{ OUTPUT }}/mutants"
 
     echo "=== ci full $RUN_ID done at $(date -u -Iseconds) ==="
+
+# Operate the host-local shared compiler cache with reviewed pins.
+[positional-arguments]
+cache ENV_FILE *ARGS:
+    just _xtask ci cache compose "$@"
+
+# Prove reuse between two independent compiler-cache daemons.
+[positional-arguments]
+cache-verify ENV_FILE:
+    just _xtask ci cache verify "$@"
