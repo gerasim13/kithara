@@ -1,9 +1,9 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::{num::NonZeroUsize, ops::Range, sync::atomic::Ordering};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
-use kithara_stream::{PendingReason, ReadOutcome, StreamError, StreamResult};
+use kithara_stream::{NotReadyCause, PendingReason, ReadOutcome, StreamError, StreamResult};
 use kithara_test_utils::kithara;
 use tracing::trace;
 
@@ -48,7 +48,7 @@ where
                 variant = self.variant,
                 offset, "read_at: gated by exact-size metadata demand"
             );
-            return Ok(Self::wrap(0));
+            return Ok(self.wrap(0));
         }
 
         let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
@@ -70,11 +70,11 @@ where
                 written += n;
                 cursor += n as u64;
                 if n < take || cursor >= read_end {
-                    return Ok(Self::wrap(written));
+                    return Ok(self.wrap(written));
                 }
             } else {
                 self.request_read(cursor);
-                return Ok(Self::wrap(written));
+                return Ok(self.wrap(written));
             }
         }
 
@@ -85,7 +85,7 @@ where
             && self.served_from() == 0
             && !self.init_failed()
         {
-            return Ok(Self::wrap(written));
+            return Ok(self.wrap(written));
         }
 
         while cursor < read_end {
@@ -125,7 +125,7 @@ where
             }
         }
 
-        Ok(Self::wrap(written))
+        Ok(self.wrap(written))
     }
 
     /// Asked only for a segment a wait found no bytes for, so the probe names
@@ -191,9 +191,16 @@ where
         Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
     }
 
-    fn wrap(written: usize) -> ReadOutcome {
-        NonZeroUsize::new(written).map_or(
-            ReadOutcome::Pending(PendingReason::Retry),
+    fn wrap(&self, written: usize) -> ReadOutcome {
+        NonZeroUsize::new(written).map_or_else(
+            || {
+                let reason = if self.segments.prepared.load(Ordering::Acquire) {
+                    PendingReason::NotReady(NotReadyCause::SourcePending)
+                } else {
+                    PendingReason::Retry
+                };
+                ReadOutcome::Pending(reason)
+            },
             ReadOutcome::Bytes,
         )
     }

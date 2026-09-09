@@ -18,9 +18,9 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, ReadOutcome, ReaderInput, ReaderProfile, ReaderWarmup,
-    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError, VariantTransition,
-    VariantTransitionId,
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, ReadOutcome, ReaderInput,
+    ReaderProfile, ReaderWarmup, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase,
+    StreamError, VariantTransition, VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -2907,7 +2907,7 @@ fn prepared_reads_defer_segment_replacement_until_preparation() {
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
     assert!(matches!(
         v.read_at(64, &mut bytes).expect("segment boundary"),
-        ReadOutcome::Pending(_)
+        ReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending))
     ));
     assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens);
     v.prepare_requested_read(0)

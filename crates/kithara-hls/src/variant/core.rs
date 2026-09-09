@@ -186,7 +186,7 @@ where
     /// that handle, and it is the home for the `WS5d` held-resource lease.
     pub(super) scope: kithara_assets::AssetScope<S>,
     held: HeldReaders<S>,
-    prepared: AtomicBool,
+    pub(super) prepared: AtomicBool,
     requested: AtomicOptU64,
     /// Store opens the read path performed.
     #[cfg(test)]

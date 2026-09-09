@@ -79,10 +79,13 @@ impl TryFrom<&[u8]> for AacStreamConfig {
         }
         let mut bs = BitReaderLtr::new(extra);
         let mut object_type = read_object_type(&mut bs)?;
-        let mut sample_rate = read_sample_rate(&mut bs)?;
+        let sample_rate = read_sample_rate(&mut bs)?;
         let mut channels = read_channel_config(&mut bs)?;
         if object_type == 5 || object_type == 29 {
-            sample_rate = read_sample_rate(&mut bs)?;
+            if object_type == 29 {
+                channels = 2;
+            }
+            read_sample_rate(&mut bs)?;
             object_type = read_object_type(&mut bs)?;
             if object_type == 22 {
                 channels = read_channel_config(&mut bs)?;
@@ -260,12 +263,31 @@ impl AacDecoder {
         decoder
             .config_raw(extra)
             .map_err(|error| Error::DecodeError(error.message()))?;
-        let buf = audio_buffer(config.channels, config.sample_rate, 1024)?;
+        let info = decoder.stream_info();
+        let core_rate = u32::try_from(info.aacSampleRate)
+            .map_err(|_| Error::DecodeError("aac: invalid configured core rate"))?;
+        let output_rate = if info.extSamplingRate > 0 {
+            u32::try_from(info.extSamplingRate)
+                .map_err(|_| Error::DecodeError("aac: invalid configured output rate"))?
+        } else {
+            core_rate
+        };
+        let frames = u64::try_from(info.aacSamplesPerFrame)
+            .ok()
+            .and_then(|frames| frames.checked_mul(u64::from(output_rate)))
+            .and_then(|frames| frames.checked_div(u64::from(core_rate)))
+            .filter(|frames| *frames > 0)
+            .ok_or(Error::DecodeError("aac: invalid configured frame size"))?;
+        let capacity = usize::try_from(frames)
+            .map_err(|_| Error::DecodeError("aac: configured frame size overflow"))?;
+        let buf = audio_buffer(config.channels, output_rate, capacity)?;
+        let mut codec_params = params.clone();
+        codec_params.max_frames_per_packet = Some(frames);
         Ok(Self {
             decoder,
             config,
             buf,
-            codec_params: params.clone(),
+            codec_params,
             pcm: [0; Consts::MAX_SAMPLES],
             delay_remaining: 0,
             metadata_validated: false,
@@ -376,5 +398,32 @@ impl RegisterableAudioDecoder for AacDecoder {
         Self: Sized,
     {
         Ok(Box::new(Self::try_new(params, *opts)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use symphonia::core::{
+        audio::Audio,
+        codecs::audio::{AudioCodecParameters, AudioDecoderOptions},
+    };
+
+    use super::{AacDecoder, AacStreamConfig};
+
+    #[kithara::test]
+    fn explicit_he_v2_prepares_stereo_output_at_extension_rate() {
+        let extra = [0xeb, 0x8a, 0x08, 0x00];
+        let config = AacStreamConfig::try_from(extra.as_slice()).expect("HE-AAC v2 config");
+        assert_eq!(config.sample_rate, 22_050);
+        assert_eq!(config.channels, 2);
+        let mut params = AudioCodecParameters::new();
+        params.extra_data = Some(Box::from(extra));
+        let decoder = AacDecoder::try_new(&params, AudioDecoderOptions::default())
+            .expect("prepare HE-AAC v2");
+        assert_eq!(decoder.buf.spec().rate(), 44_100);
+        assert_eq!(decoder.buf.spec().channels().count(), 2);
+        assert_eq!(decoder.buf.capacity(), 2048);
+        assert_eq!(decoder.codec_params.max_frames_per_packet, Some(2048));
     }
 }

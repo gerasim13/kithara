@@ -2749,7 +2749,7 @@ dependencies = [
 [[package]]
 name = "fdk-aac"
 version = "0.8.0"
-source = "git+https://github.com/gerasim13/fdk-aac-rs?rev=9c8a91a395eb156645183f27be0ba84b607332b3#9c8a91a395eb156645183f27be0ba84b607332b3"
+source = "git+https://github.com/gerasim13/fdk-aac-rs?rev=4a833b8f1b32bc489db9174c9fb0b8656b69b409#4a833b8f1b32bc489db9174c9fb0b8656b69b409"
 dependencies = [
  "fdk-aac-sys",
 ]
@@ -2757,7 +2757,7 @@ dependencies = [
 [[package]]
 name = "fdk-aac-sys"
 version = "0.5.0"
-source = "git+https://github.com/gerasim13/fdk-aac-rs?rev=9c8a91a395eb156645183f27be0ba84b607332b3#9c8a91a395eb156645183f27be0ba84b607332b3"
+source = "git+https://github.com/gerasim13/fdk-aac-rs?rev=4a833b8f1b32bc489db9174c9fb0b8656b69b409#4a833b8f1b32bc489db9174c9fb0b8656b69b409"
 dependencies = [
  "cc",
 ]
@@ -9649,8 +9649,7 @@ dependencies = [
 [[package]]
 name = "symphonia"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1758d6c853020a7244de03cc3e0185eaea3f58715122422dd3cc7452e6d4c16a"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
@@ -9672,8 +9671,7 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-flac"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee69ad01236a67260b82fd1ff9790dd75ead29f2f46af145e63b7e72273e0e03"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9705,8 +9703,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-adpcm"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ebbdfd76d6cc5a601c6292a44357c5b7c82f2cd7cdc0f171421f5c5cff0ea1f"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-core 0.6.0",
@@ -9715,8 +9712,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-alac"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a149cbfc7fb5c405d123a273227d31de17138419552112bf1aa7b73e65827b8"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9735,8 +9731,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-vorbis"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45b07b4423cd8e0fc472575909a5554b12c2f58e3c190b38c24f042e732fd8de"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9783,8 +9778,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-caf"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cde3ca76633d3400ab57195456c09f8a58d775ff5452329f3f212b6efc8622f5"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9794,8 +9788,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-isomp4"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d179a01305b3505940135a9f0180d6ef4b487912748fe97554756f120fbd05e"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9806,8 +9799,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-mkv"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb17713e134f5ad316c2690fa3104590ccc85842cdbcf82c3cd1a845cb08aa74"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "lazy_static",
  "log",
@@ -9818,8 +9810,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-ogg"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b05a67e02b1e4fca1a261ba4fe06910a9357489ad8c36aafdd2960e9c6559433"
+source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
 dependencies = [
  "log",
  "symphonia-common",
