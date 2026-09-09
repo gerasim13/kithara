@@ -17,7 +17,7 @@ use kithara::{
     stream::dl::Downloader,
     worker::{DispatcherConfigPatch, Worker},
 };
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use url::Url;
 
 #[cfg(feature = "broadcast")]

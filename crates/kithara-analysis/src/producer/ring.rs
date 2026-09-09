@@ -92,19 +92,25 @@ impl Reader {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::{
+        fixtures::pcm_ramp,
+        unit_fixtures::{
+            limiter_peak as twos, trim_codec_priming_drops_leading_frames_and_fades_in as ones,
+        },
+    };
     use kithara_test_utils::kithara;
 
     use super::open;
     use crate::test_pools::pools;
 
     #[kithara::test]
-    fn a_range_comes_out_the_way_it_went_in() {
+    fn a_range_comes_out_the_way_it_went_in(pcm_ramp: Vec<f32>) {
         let (mut tx, mut rx) = open(64, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(100, 4, [1.0, 2.0, 3.0, 4.0].into_iter()));
-        assert!(tx.push(200, 2, [5.0, 6.0].into_iter()));
+        assert!(tx.push(100, 4, pcm_ramp[..4].iter().copied()));
+        assert!(tx.push(200, 2, pcm_ramp[4..6].iter().copied()));
 
         assert_eq!(rx.pop(&mut out), Some(100));
         assert_eq!(&out[..], &[1.0, 2.0, 3.0, 4.0]);
@@ -114,14 +120,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_full_ring_refuses_whole_ranges() {
+    fn a_full_ring_refuses_whole_ranges(ones: Vec<f32>, pcm_ramp: Vec<f32>) {
         let (mut tx, mut rx) = open(8, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(0, 8, core::iter::repeat_n(1.0, 8)));
+        assert!(tx.push(0, 8, ones[..8].iter().copied()));
         assert!(
-            !tx.push(8, 1, core::iter::once(2.0)),
+            !tx.push(8, 1, pcm_ramp[1..2].iter().copied()),
             "no room left for a single frame"
         );
 
@@ -131,15 +137,15 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_full_descriptor_ring_refuses_even_with_room_for_samples() {
+    fn a_full_descriptor_ring_refuses_even_with_room_for_samples(pcm_ramp: Vec<f32>) {
         let (mut tx, mut rx) = open(64, 2);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(0, 1, core::iter::once(1.0)));
-        assert!(tx.push(1, 1, core::iter::once(2.0)));
+        assert!(tx.push(0, 1, pcm_ramp[0..1].iter().copied()));
+        assert!(tx.push(1, 1, pcm_ramp[1..2].iter().copied()));
         assert!(
-            !tx.push(2, 1, core::iter::once(3.0)),
+            !tx.push(2, 1, pcm_ramp[2..3].iter().copied()),
             "there are only two range slots"
         );
 
@@ -149,16 +155,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn draining_frees_the_room_it_read() {
+    fn draining_frees_the_room_it_read(ones: Vec<f32>, twos: Vec<f32>) {
         let (mut tx, mut rx) = open(8, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(0, 8, core::iter::repeat_n(1.0, 8)));
-        assert!(!tx.push(8, 4, core::iter::repeat_n(2.0, 4)));
+        assert!(tx.push(0, 8, ones[..8].iter().copied()));
+        assert!(!tx.push(8, 4, twos[..4].iter().copied()));
         assert_eq!(rx.pop(&mut out), Some(0));
         assert!(
-            tx.push(8, 4, core::iter::repeat_n(2.0, 4)),
+            tx.push(8, 4, twos[..4].iter().copied()),
             "a drained ring takes the range it refused"
         );
 

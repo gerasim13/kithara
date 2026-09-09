@@ -6,16 +6,26 @@ use std::{
 
 use anyhow::{Context, Result};
 
-/// Every file some `mod` declaration under `src` names, whatever gates it.
+/// Every file some `mod` declaration names, whatever gates it.
 ///
 /// `cargo modules orphans` answers from one resolved configuration and pairs a
 /// file with its parent by directory convention, so a module behind a `cfg`
 /// this build does not set, or one reached through `#[path]` from a sibling
 /// file, reads as unreferenced to it. Both are declared in the source, and this
 /// walk reads the declaration instead of the resolution.
-pub(super) fn declared_files(src: &Path) -> Result<HashSet<PathBuf>> {
+///
+/// The build script is read alongside `src` because `cargo modules` selects
+/// only a library or a binary: a file the build script alone names is
+/// declared in the source, yet invisible to every target a sweep can ask
+/// about.
+pub(super) fn declared_files(src: &Path, build_script: Option<&Path>) -> Result<HashSet<PathBuf>> {
     let mut declared = HashSet::new();
     walk(src, &mut declared)?;
+    if let Some(script) = build_script {
+        let text =
+            fs::read_to_string(script).with_context(|| format!("read {}", script.display()))?;
+        collect(script, &text, &mut declared);
+    }
     Ok(declared)
 }
 
@@ -137,7 +147,7 @@ mod tests {
             }
             fs::write(&path, contents).expect("write source");
         }
-        let found = declared_files(temp.path()).expect("declared files");
+        let found = declared_files(temp.path(), None).expect("declared files");
         found
             .into_iter()
             .map(|path| {
@@ -152,6 +162,33 @@ mod tests {
         declared(files)
             .into_iter()
             .map(|path| path.display().to_string())
+            .collect()
+    }
+
+    fn names_at_package_root(files: &[(&str, &str)], script: Option<&str>) -> HashSet<String> {
+        let temp = tempdir().expect("tempdir");
+        for (name, contents) in files {
+            let path = temp.path().join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create source directory");
+            }
+            fs::write(&path, contents).expect("write source");
+        }
+        let build_script = script.map(|text| {
+            let path = temp.path().join("build.rs");
+            fs::write(&path, text).expect("write build script");
+            path
+        });
+        let found = declared_files(&temp.path().join("src"), build_script.as_deref())
+            .expect("declared files");
+        found
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(temp.path())
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -243,5 +280,25 @@ mod tests {
         let found = names(&[("mod.rs", "fn probe() {\n    let path = \"stray.rs\";\n}\n")]);
 
         assert!(!found.contains("stray.rs"));
+    }
+
+    /// `cargo modules` selects only a library or a binary, so a file the build
+    /// script alone names is invisible to every target a sweep can ask about
+    /// while still being declared in the source.
+    #[test]
+    fn a_declaration_the_build_script_alone_names_counts_as_declared() {
+        let found = names_at_package_root(
+            &[("src/lib.rs", "")],
+            Some("#[path = \"src/defs/mod.rs\"]\nmod defs;\n"),
+        );
+
+        assert!(found.contains("src/defs/mod.rs"));
+    }
+
+    #[test]
+    fn the_same_file_stays_undeclared_without_the_build_script() {
+        let found = names_at_package_root(&[("src/lib.rs", "")], None);
+
+        assert!(!found.contains("src/defs/mod.rs"));
     }
 }

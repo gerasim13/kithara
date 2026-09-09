@@ -274,13 +274,14 @@ unsafe fn copy_planar(
 mod tests {
     use std::mem::MaybeUninit;
 
+    use kithara_test_fixtures::mock_fixtures::planar_pcm;
     use kithara_test_utils::kithara;
 
     use super::*;
 
     #[kithara::test]
-    fn planar_copy_respects_native_channel_stride() {
-        let mut native = [1.0, 2.0, f32::NAN, 3.0, 4.0, f32::NAN];
+    fn planar_copy_respects_native_channel_stride(planar_pcm: Vec<f32>) {
+        let mut native = planar_pcm;
         let mut copied = [0.0; 4];
         let source = NonNull::new(native.as_mut_ptr()).expect("array pointer is non-null");
 

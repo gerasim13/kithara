@@ -3,7 +3,7 @@ use std::{fmt, num::NonZeroUsize};
 use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 

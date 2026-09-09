@@ -48,6 +48,7 @@ impl Track {
     }
 
     pub(super) fn claiming(
+        prepared: &[f32],
         pools: Pools,
         spec: AudioSpec,
         chunk_frames: u64,
@@ -55,7 +56,7 @@ impl Track {
         claimed: f64,
     ) -> Self {
         let rate = f64::from(spec.sample_rate.get());
-        let mut track = Self::silence(pools, spec, chunk_frames, seconds);
+        let mut track = Self::silence(prepared, pools, spec, chunk_frames, seconds);
         track.claimed = (claimed * rate).round().to_u64().unwrap_or(0);
         track
     }
@@ -65,22 +66,29 @@ impl Track {
     }
 
     pub(super) fn priming(
+        prepared: &[f32],
         pools: Pools,
         spec: AudioSpec,
         chunk_frames: u64,
         seconds: f64,
         priming: u64,
     ) -> Self {
-        let mut track = Self::silence(pools, spec, chunk_frames, seconds);
+        let mut track = Self::silence(prepared, pools, spec, chunk_frames, seconds);
         track.first = priming;
         track.at = priming;
         track
     }
 
-    pub(super) fn silence(pools: Pools, spec: AudioSpec, chunk_frames: u64, seconds: f64) -> Self {
+    pub(super) fn silence(
+        prepared: &[f32],
+        pools: Pools,
+        spec: AudioSpec,
+        chunk_frames: u64,
+        seconds: f64,
+    ) -> Self {
         let rate = f64::from(spec.sample_rate.get());
         let frames = (seconds * rate).round().to_usize().unwrap_or(0);
-        let pcm = vec![0.0; frames * usize::from(spec.channels)];
+        let pcm = prepared[..frames * usize::from(spec.channels)].to_vec();
         Self::new(pools, spec, chunk_frames, pcm)
     }
 }

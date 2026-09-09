@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashSet;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 #[cfg(test)]
 use kithara_platform::thread;
 use kithara_platform::{

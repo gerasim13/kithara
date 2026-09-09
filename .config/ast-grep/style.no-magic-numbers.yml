@@ -29,7 +29,7 @@ rule:
         - not:
             inside:
               kind: attribute_item
-              regex: '^#\[(?:builder|serde)\('
+              regex: '^#\[(?:builder|serde|ranged)\('
               stopBy: end
         - not:
             inside:
@@ -93,12 +93,7 @@ rule:
         - not:
             inside:
               kind: attribute_item
-              regex: '^#\[(?:builder|serde)\('
-              stopBy: end
-        - not:
-            inside:
-              kind: macro_invocation
-              regex: '^ranged!'
+              regex: '^#\[(?:builder|serde|ranged)\('
               stopBy: end
         - not:
             inside:

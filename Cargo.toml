@@ -12,6 +12,7 @@ members = [
     "crates/kithara-broadcast",
     "crates/kithara-bufpool",
     "crates/kithara-decode",
+    "crates/kithara-derive",
     "crates/kithara-devtools",
     "crates/kithara-drm",
     "crates/kithara-encode",
@@ -20,7 +21,6 @@ members = [
     "crates/kithara-file",
     "crates/kithara-hls",
     "crates/kithara-host",
-    "crates/kithara-macros",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -40,7 +40,7 @@ members = [
     "crates/kithara-warp",
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
-    "tests",
+    "tests/crates/*",
     "tests/fuzz",
     "xtask",
 ]
@@ -60,7 +60,7 @@ default-members = [
     "crates/kithara-file",
     "crates/kithara-hls",
     "crates/kithara-host",
-    "crates/kithara-macros",
+    "crates/kithara-derive",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-output",
@@ -78,7 +78,7 @@ default-members = [
     "crates/kithara-ui",
     "crates/kithara-warp",
     "crates/kithara-worker",
-    "tests",
+    "tests/crates/*",
 ]
 
 [workspace.lints.rust]
@@ -213,15 +213,16 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha4", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
+kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4" }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
-kithara-ffi = { path = "crates/kithara-ffi" }
+kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
-kithara-macros = { path = "crates/kithara-macros", version = "0.0.1-alpha4" }
+kithara-integration-tests = { path = "tests/crates/integration" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }
@@ -281,7 +282,6 @@ clap = { version = "4.6", features = ["derive", "env"] }
 cochlea-features = "0.1.0"
 cochlea-render = "0.7.0"
 cochlea-score = "0.7.0"
-console_error_panic_hook = "0.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 cpal = { version = "0.18", default-features = false }
@@ -539,7 +539,7 @@ opt-level = 3
 [profile.test-release]
 inherits = "release"
 opt-level = 3
-debug = "line-tables-only"
+debug = false
 debug-assertions = true
 overflow-checks = true
 lto = false
@@ -547,9 +547,73 @@ codegen-units = 16
 panic = "unwind"
 strip = "none"
 
-# Product dependencies stay optimized; the integration harness itself spends
-# most of its build in LLVM and does not contain the runtime being measured.
+# Product dependencies stay optimized; test packages spend their build in LLVM
+# and do not contain the runtime being measured. Cargo profile overrides require
+# exact workspace package names, so each test package is listed here.
+[profile.test-release.package.kithara-abr-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-app-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-assets-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-audio-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-broadcast-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-decode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-encode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-events-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-analysis-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-ffi-web-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-file-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-harness-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-hls-tests]
+opt-level = 1
+
 [profile.test-release.package.kithara-integration-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-net-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-platform-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-play-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-storage-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-stream-tests]
 opt-level = 1
 
 [profile.wasm-release]

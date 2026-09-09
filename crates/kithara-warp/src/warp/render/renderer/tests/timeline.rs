@@ -1,12 +1,13 @@
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
+use kithara_test_fixtures::unit_fixtures::{warp_constant, warp_sine};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced,
-    renderer, sine, spec,
+    renderer, spec,
 };
 use crate::{GridSegment, RegionPlan, Warp, WarpConfig};
 
@@ -92,7 +93,10 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: StretchKind) {
+fn one_frame_regions_accumulate_into_one_portable_request(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -107,7 +111,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
     )));
     let mut fx = renderer(controls);
     let pools = fx.pools.clone();
-    let source = sine(4);
+    let source = warp_sine[..(4) * 2].to_vec();
 
     for frame in 0..3_u64 {
         let start = usize::try_from(frame).unwrap_or_default() * usize::from(Consts::CH);
@@ -141,7 +145,10 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: StretchKind) {
+fn pending_span_uses_earliest_start_and_latest_frontier(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -155,7 +162,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     )));
     let mut fx = renderer(controls);
     let pools = fx.pools.clone();
-    let source = sine(3);
+    let source = warp_sine[..(3) * 2].to_vec();
     let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
@@ -197,7 +204,10 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind) {
+fn rendered_source_frontier_excludes_pending_source(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -220,7 +230,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
         .expect("fixture region is valid"),
     )));
 
-    let source = sine(source_latency + 2);
+    let source = warp_sine[..(source_latency + 2) * 2].to_vec();
     let split = source_latency * usize::from(Consts::CH);
     render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
 
@@ -243,7 +253,10 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: StretchKind) {
+fn pending_span_is_committed_before_live_unity_passthrough(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -252,7 +265,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     )));
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
-    let source = sine(3);
+    let source = warp_sine[..(3) * 2].to_vec();
     let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
@@ -301,11 +314,14 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind) {
+fn live_unity_transition_drains_active_backend_tail(
+    #[case] backend: StretchKind,
+    warp_constant: Vec<f32>,
+) {
     const ACTIVE_FRAMES: usize = 4096;
     const UNITY_FRAMES: usize = 1024;
 
-    let source = vec![0.25; (ACTIVE_FRAMES + UNITY_FRAMES) * usize::from(Consts::CH)];
+    let source = warp_constant;
     let split = ACTIVE_FRAMES * usize::from(Consts::CH);
 
     let reference_controls = StretchControls::new(0.5);
@@ -441,8 +457,11 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: StretchKind) {
-    let source = sine(3);
+fn negative_rounding_debt_adds_no_frame_at_unity_transition(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
+    let source = warp_sine[..(3) * 2].to_vec();
     let reference_controls = StretchControls::new(1.0);
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
@@ -516,7 +535,10 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind) {
+fn reset_discards_pending_span_before_new_timeline(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -525,7 +547,7 @@ fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind)
     )));
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
-    let source = sine(2);
+    let source = warp_sine[..(2) * 2].to_vec();
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());
 
     fx.reset();

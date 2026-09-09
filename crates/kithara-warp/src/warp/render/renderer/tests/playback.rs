@@ -6,11 +6,12 @@ use std::{
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
+use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
-    render_serviced, renderer, sine, spec,
+    render_serviced, renderer, spec,
 };
 use crate::{Warp, WarpConfig, test_pools::pools};
 
@@ -66,7 +67,10 @@ fn source_span_is_planned_from_the_output_quantum(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind) {
+fn live_activation_primes_from_passthrough_history(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let controls = StretchControls::new(1.0);
     controls.set_backend(backend);
     let config = WarpConfig::builder()
@@ -85,7 +89,7 @@ fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind)
     assert!(cue > 0, "activation needs backend history");
 
     let pools = renderer.pools.clone();
-    let source = sine(cue);
+    let source = warp_sine[..(cue) * 2].to_vec();
     let unity = render_serviced(&mut renderer, chunk(&pools, &source))
         .expect("unity history remains byte-exact");
     assert_eq!(&unity.samples[..], &source);
@@ -107,7 +111,7 @@ fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind)
         input_frames > 128,
         "activation includes lookahead and warmup"
     );
-    let active = sine(input_frames);
+    let active = warp_sine[..(input_frames) * 2].to_vec();
     meta.frames = u32::try_from(input_frames).expect("input frames fit u32");
     meta.end_timestamp = meta
         .timestamp
@@ -133,13 +137,13 @@ fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind)
 }
 
 #[kithara::test]
-fn rendered_quantum_keeps_the_rate_revision_selected_during_planning() {
+fn rendered_quantum_keeps_the_rate_revision_selected_during_planning(warp_sine: Vec<f32>) {
     let controls = StretchControls::new(1.0);
     let expected_revision = controls.set_speed(1.0);
     let mut renderer = renderer(Arc::clone(&controls));
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
-    let input = chunk(&pools, &sine(128));
+    let input = chunk(&pools, &warp_sine[..128 * 2]);
 
     let frames = renderer
         .prepare_quantum(input.meta, input.frames())
@@ -203,22 +207,27 @@ fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
     render_with_tail(fx, input).0
 }
 
-fn run_keylocked_with_tail(kind: StretchKind, speed: f32, in_frames: usize) -> (Vec<f32>, usize) {
-    let input = sine(in_frames);
+fn run_keylocked_with_tail(
+    warp_sine: &[f32],
+    kind: StretchKind,
+    speed: f32,
+    in_frames: usize,
+) -> (Vec<f32>, usize) {
+    let input = warp_sine[..(in_frames) * 2].to_vec();
     render_with_tail(&mut keylocked(kind, speed), &input)
 }
 
-fn run_vinyl(kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
-    let input = sine(in_frames);
+fn run_vinyl(warp_sine: &[f32], kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
+    let input = warp_sine[..(in_frames) * 2].to_vec();
     render(&mut vinyl(kind, speed), &input)
 }
 
 /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
 /// Shared across every compiled-in backend.
-fn assert_half_speed_contract(kind: StretchKind) {
+fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
-    let (out, tail_frames) = run_keylocked_with_tail(kind, 0.5, in_frames);
+    let (out, tail_frames) = run_keylocked_with_tail(warp_sine, kind, 0.5, in_frames);
     let out_frames = out.len() / channels;
     let timeline_frames = out_frames - tail_frames;
     let expected_timeline = in_frames * 2;
@@ -251,9 +260,9 @@ fn assert_half_speed_contract(kind: StretchKind) {
     );
 }
 
-fn assert_unity_contract(kind: StretchKind) {
+fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-    let input = sine(in_frames);
+    let input = warp_sine[..(in_frames) * 2].to_vec();
     let out = render(&mut keylocked(kind, 1.0), &input);
     assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
 }
@@ -264,9 +273,9 @@ fn assert_unity_contract(kind: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
-    assert_half_speed_contract(backend);
-    assert_unity_contract(backend);
+fn half_speed_and_unity_contracts(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    assert_half_speed_contract(&warp_sine, backend);
+    assert_unity_contract(&warp_sine, backend);
 }
 
 #[kithara::test]
@@ -275,13 +284,16 @@ fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchKind) {
+fn rendered_source_frontier_excludes_backend_lookahead(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     const SOURCE_START: u64 = 10_000;
     const SOURCE_FRAMES: usize = 4096;
 
     let mut renderer = keylocked(backend, 0.5);
     let pools = renderer.pools.clone();
-    let source = sine(SOURCE_FRAMES);
+    let source = warp_sine[..(SOURCE_FRAMES) * 2].to_vec();
     let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     input.meta.timestamp = spec()
@@ -331,13 +343,16 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
+fn rendered_source_frontier_reaches_end_only_on_completed_drain(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     const SOURCE_START: u64 = 10_000;
 
     let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
     let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
-    let source = sine(source_frames);
+    let source = warp_sine[..(source_frames) * 2].to_vec();
     let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     let admitted = SOURCE_START
@@ -389,12 +404,12 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
+fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let channels = usize::from(Consts::CH);
     let mut fx = keylocked(backend, 0.5);
     let pools = fx.pools.clone();
     let cf = 1024usize;
-    let block = sine(cf);
+    let block = warp_sine[..(cf) * 2].to_vec();
     let mut fed_ends = HashSet::new();
     let mut emitted = Vec::new();
     for i in 0..40u64 {
@@ -441,10 +456,10 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind) {
+fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let channels = usize::from(Consts::CH);
     let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
-    let out = run_vinyl(backend, 2.0, in_frames);
+    let out = run_vinyl(&warp_sine, backend, 2.0, in_frames);
     let out_frames = out.len() / channels;
     assert!(
         out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
@@ -469,13 +484,13 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
+fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
-    let block = sine(4096);
+    let block = warp_sine[..(4096) * 2].to_vec();
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
@@ -503,13 +518,13 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
+fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(false);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
-    let block = sine(4096);
+    let block = warp_sine[..(4096) * 2].to_vec();
 
     let mut vinyl_out: Vec<f32> = Vec::new();
     for _ in 0..24 {

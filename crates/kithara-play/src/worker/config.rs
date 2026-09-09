@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_worker::Worker;
 

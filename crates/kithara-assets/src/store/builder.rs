@@ -7,8 +7,8 @@ use std::{num::NonZeroUsize, path::PathBuf};
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
+use kithara_derive::Patch;
 use kithara_events::EventBus;
-use kithara_macros::Patch;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use serde::{Deserialize, Deserializer};
 

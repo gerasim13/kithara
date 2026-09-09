@@ -63,7 +63,9 @@ include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
 opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
 without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
-fixture injection. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
+fixture injection. `#[future]` injects an unpolled async fixture;
+`#[future(awt)]` awaits the fixture before the test body and retains its value
+until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
 
 ### `#[kithara::probe(...)]` arguments

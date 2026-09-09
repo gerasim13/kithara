@@ -39,8 +39,8 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-events = { workspace = true }
-kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

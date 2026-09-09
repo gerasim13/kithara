@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use sha2::{Digest, Sha256};
 
-use super::process::Process;
+use super::{process::Process, run::PipelineKind};
 use crate::{
-    config::{KitharaExt, PackageProfile, PublishStep, ReleaseConfig},
+    config::{KitharaExt, PublishStep, ReleaseConfig},
     publish, release,
 };
 
@@ -23,10 +23,12 @@ pub(crate) fn xcframework(
     ext: &KitharaExt,
     temp: &Path,
     package: &str,
+    kind: PipelineKind,
 ) -> Result<()> {
     process.require_os("macos", "Apple release")?;
     let profile = ext.release.package(package)?;
-    let expected = expected_checksum(profile, &ctx.root.join(&ext.release.manifest))?;
+    let version = version_variable(kind).map(required_env).transpose()?;
+    let expected = expected_checksum(version.as_deref(), &ctx.root.join(&ext.release.manifest))?;
 
     process.run(
         ctx.config.tools.program("just"),
@@ -111,16 +113,29 @@ fn write_provenance(
     fs::write(&path, body).with_context(|| format!("writing {}", path.display()))
 }
 
-/// The checksum the built framework has to match, or `None` when the profile
-/// carries no version. The manifest pins what a released version resolves to,
-/// so the two must agree before that version is published; packaging a commit
-/// for someone to install by hand answers a different question and names no
-/// version to check against.
-fn expected_checksum(profile: &PackageProfile, manifest_path: &Path) -> Result<Option<String>> {
-    if !profile.version_gate {
-        return Ok(None);
+/// The variable naming the version this pipeline publishes, or `None` when it
+/// publishes none. A release is a version: someone names it, and the framework
+/// built here has to match what the Swift manifest records for that version.
+/// The rolling nightly channel names no version by design, and neither does
+/// the door that asks only whether the build lanes still work - one job builds
+/// for all three, so a gate the job carries unconditionally fails the two that
+/// have no value to give it.
+const fn version_variable(kind: PipelineKind) -> Option<&'static str> {
+    match kind {
+        PipelineKind::Release => Some("KITHARA_RELEASE_VERSION"),
+        _ => None,
     }
-    let version = required_env("KITHARA_RELEASE_VERSION")?;
+}
+
+/// The checksum the built framework has to match, or `None` when no version is
+/// being published. The manifest pins what a released version resolves to, so
+/// the two must agree before that version is published; packaging a commit for
+/// someone to install by hand answers a different question and names no
+/// version to check against.
+fn expected_checksum(version: Option<&str>, manifest_path: &Path) -> Result<Option<String>> {
+    let Some(version) = version else {
+        return Ok(None);
+    };
     let manifest = fs::read_to_string(manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let manifest_version = manifest_field(&manifest, "version")?;
@@ -405,7 +420,6 @@ fn required_env(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AssetKey;
 
     #[test]
     fn provenance_names_the_commit_and_every_asset() {
@@ -455,14 +469,22 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_free_profile_asks_for_no_version() {
-        let profile = PackageProfile {
-            version_gate: false,
-            assets: vec![AssetKey::Merged],
-        };
+    fn a_release_pipeline_publishes_the_version_it_was_given() {
+        assert_eq!(
+            version_variable(PipelineKind::Release),
+            Some("KITHARA_RELEASE_VERSION")
+        );
+    }
 
-        let expected = expected_checksum(&profile, Path::new("Package.swift"))
-            .expect("a gate-free profile reads no manifest");
+    #[test]
+    fn the_rolling_nightly_publishes_no_version() {
+        assert_eq!(version_variable(PipelineKind::Nightly), None);
+    }
+
+    #[test]
+    fn a_pipeline_without_a_version_reads_no_manifest() {
+        let expected = expected_checksum(None, Path::new("Package.swift"))
+            .expect("no version reads no manifest");
 
         assert!(expected.is_none());
     }

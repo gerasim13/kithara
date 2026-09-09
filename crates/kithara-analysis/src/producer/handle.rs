@@ -80,6 +80,10 @@ mod tests {
 
     use kithara_audio::AudioObserveError;
     use kithara_signal::AudioSpec;
+    use kithara_test_fixtures::{
+        analysis_beat_fixtures::{producer_mono, producer_stereo, producer_unity},
+        analysis_fixtures::analysis_silence,
+    };
     use kithara_test_utils::kithara;
 
     use super::AnalysisProducer;
@@ -99,13 +103,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mono_written_is_the_channel_mean() {
+    fn the_mono_written_is_the_channel_mean(producer_stereo: Vec<f32>) {
         let (mut producer, mut reader) = producer(64, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
         // Interleaved stereo: L, R, L, R.
-        let pcm = [1.0_f32, 3.0, -2.0, 0.0];
+        let pcm = producer_stereo;
         assert_eq!(
             producer.offer(&pcm, spec(44_100, 2), 512),
             Ok(()),
@@ -121,13 +125,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_foreign_axis_is_refused_without_writing() {
+    fn a_foreign_axis_is_refused_without_writing(producer_unity: Vec<f32>) {
         let (mut producer, mut reader) = producer(64, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
         assert_eq!(
-            producer.offer(&[1.0, 1.0], spec(48_000, 2), 0),
+            producer.offer(&producer_unity[..2], spec(48_000, 2), 0),
             Err(AudioObserveError::UnsupportedSampleRate {
                 expected: NonZeroU32::new(44_100).expect("test rate is non-zero"),
                 actual: NonZeroU32::new(48_000).expect("test rate is non-zero"),
@@ -137,24 +141,28 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_full_transport_reports_the_range_untaken() {
+    fn a_full_transport_reports_the_range_untaken(producer_unity: Vec<f32>) {
         let (mut producer, _reader) = producer(2, 4);
 
-        assert_eq!(producer.offer(&[1.0, 1.0], spec(44_100, 2), 0), Ok(()));
         assert_eq!(
-            producer.offer(&[1.0, 1.0, 1.0, 1.0], spec(44_100, 2), 1),
+            producer.offer(&producer_unity[..2], spec(44_100, 2), 0),
+            Ok(())
+        );
+        assert_eq!(
+            producer.offer(&producer_unity, spec(44_100, 2), 1),
             Err(AudioObserveError::Full),
             "a range that does not fit is refused whole"
         );
     }
 
     #[kithara::test]
-    fn an_offer_copies_the_source_buffer() {
+    fn an_offer_copies_the_source_buffer(analysis_silence: Vec<f32>) {
         let (mut producer, mut reader) = producer(64, 4);
         let pools = pools();
 
         let mut chunk = pools.get::<f32>();
         chunk.ensure_len(16).expect("the test pool grows to 16");
+        chunk.copy_from_slice(&analysis_silence[..16]);
 
         assert_eq!(producer.offer(&chunk, spec(44_100, 2), 0), Ok(()));
         drop(chunk);
@@ -172,25 +180,28 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_pass_that_ended_refuses_as_closed() {
+    fn a_pass_that_ended_refuses_as_closed(producer_unity: Vec<f32>) {
         let (mut producer, reader) = producer(64, 4);
-        assert_eq!(producer.offer(&[1.0, 1.0], spec(44_100, 2), 0), Ok(()));
+        assert_eq!(
+            producer.offer(&producer_unity[..2], spec(44_100, 2), 0),
+            Ok(())
+        );
 
         drop(reader);
         assert_eq!(
-            producer.offer(&[1.0, 1.0], spec(44_100, 2), 1),
+            producer.offer(&producer_unity[..2], spec(44_100, 2), 1),
             Err(AudioObserveError::Closed),
             "a pass that dropped its half cannot be written to"
         );
     }
 
     #[kithara::test]
-    fn a_mono_source_passes_through_unchanged() {
+    fn a_mono_source_passes_through_unchanged(producer_mono: Vec<f32>) {
         let (mut producer, mut reader) = producer(64, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        let pcm = [0.25_f32, -0.5, 0.75];
+        let pcm = producer_mono;
         assert_eq!(producer.offer(&pcm, spec(44_100, 1), 0), Ok(()));
 
         assert_eq!(reader.pop(&mut out), Some(0));

@@ -545,7 +545,7 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::{Duration, Instant};
-    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+    use kithara_test_fixtures::fixtures::tone_mp3;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -563,7 +563,7 @@ mod tests {
     }
 
     #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-    async fn composed_mp3_reaches_eof_with_pcm() {
+    async fn composed_mp3_reaches_eof_with_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
                 formats::{FormatOptions, probe::Hint},
@@ -583,7 +583,7 @@ mod tests {
         let pools = pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
+        let cursor = std::io::Cursor::new(tone_mp3.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
-    async fn real_mp3_frames_produce_pcm() {
+    async fn real_mp3_frames_produce_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
                 formats::{FormatOptions, probe::Hint},
@@ -642,7 +642,7 @@ mod tests {
         let pools = pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
+        let cursor = std::io::Cursor::new(tone_mp3.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");

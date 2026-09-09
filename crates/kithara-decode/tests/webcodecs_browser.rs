@@ -13,9 +13,7 @@ use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_fixtures::{
-    assets::{
-        aac_lc, flac_unknown_length_saw_6s, he_aac_v1, he_aac_v2, signal_mp3_track_sine440_187s,
-    },
+    assets,
     signal::{SignalDirection, detect_direction},
 };
 use kithara_test_utils::kithara;
@@ -48,17 +46,17 @@ struct DecodeSummary {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn mp3_parity() {
-    prepare_webcodecs("mp3").await;
+async fn mp3_parity(signal_mp3_track_sine440_187s: &'static [u8]) {
+    prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let webcodecs = decode_file(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::WebCodecs,
     )
     .await;
     let symphonia = decode_file(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::Symphonia,
     )
@@ -74,17 +72,17 @@ async fn mp3_parity() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn flac_parity_direction() {
-    prepare_webcodecs("flac").await;
+async fn flac_parity_direction(flac_unknown_length_saw_6s: &'static [u8]) {
+    prepare_webcodecs("flac", flac_unknown_length_saw_6s).await;
 
     let webcodecs = decode_file(
-        flac_unknown_length_saw_6s().bytes(),
+        flac_unknown_length_saw_6s,
         "flac",
         DecoderBackend::WebCodecs,
     )
     .await;
     let symphonia = decode_file(
-        flac_unknown_length_saw_6s().bytes(),
+        flac_unknown_length_saw_6s,
         "flac",
         DecoderBackend::Symphonia,
     )
@@ -106,11 +104,11 @@ async fn flac_parity_direction() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn seek_generation() {
-    prepare_webcodecs("mp3").await;
+async fn seek_generation(signal_mp3_track_sine440_187s: &'static [u8]) {
+    prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let mut decoder = create_file_decoder(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::WebCodecs,
     );
@@ -166,11 +164,11 @@ async fn seek_generation() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn seek_trim_no_preroll_leak() {
-    prepare_webcodecs("mp3").await;
+async fn seek_trim_no_preroll_leak(signal_mp3_track_sine440_187s: &'static [u8]) {
+    prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let mut decoder = create_file_decoder(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::WebCodecs,
     );
@@ -222,17 +220,17 @@ async fn seek_trim_no_preroll_leak() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn eof_tail_drain() {
-    prepare_webcodecs("mp3").await;
+async fn eof_tail_drain(signal_mp3_track_sine440_187s: &'static [u8]) {
+    prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
     let webcodecs = decode_file(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::WebCodecs,
     )
     .await;
     let symphonia = decode_file(
-        signal_mp3_track_sine440_187s().bytes(),
+        signal_mp3_track_sine440_187s,
         "mp3",
         DecoderBackend::Symphonia,
     )
@@ -254,10 +252,10 @@ async fn eof_tail_drain() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn aac_parity() {
-    prepare_webcodecs("mp4a.40.2").await;
+async fn aac_parity(aac_lc: &'static [u8]) {
+    prepare_webcodecs("mp4a.40.2", aac_lc).await;
 
-    let bytes = aac_lc().bytes();
+    let bytes = aac_lc;
     let webcodecs = decode_aac(bytes, DecoderBackend::WebCodecs).await;
     let symphonia = decode_aac(bytes, DecoderBackend::Symphonia).await;
 
@@ -271,10 +269,10 @@ async fn aac_parity() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn he_aac_v1_decode() {
-    prepare_webcodecs("mp4a.40.5").await;
+async fn he_aac_v1_decode(he_aac_v1: &'static [u8]) {
+    prepare_webcodecs("mp4a.40.5", he_aac_v1).await;
 
-    let decoded = decode_he_aac_v1(he_aac_v1().bytes()).await;
+    let decoded = decode_he_aac_v1(he_aac_v1).await;
 
     assert!(decoded.eof, "WebCodecs HE-AAC v1 must reach explicit EOF");
     assert!(
@@ -297,10 +295,10 @@ async fn he_aac_v1_decode() {
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
-async fn he_aac_v2_decode() {
-    prepare_webcodecs("mp4a.40.29").await;
+async fn he_aac_v2_decode(he_aac_v2: &'static [u8]) {
+    prepare_webcodecs("mp4a.40.29", he_aac_v2).await;
 
-    let decoded = decode_he_aac_v2(he_aac_v2().bytes()).await;
+    let decoded = decode_he_aac_v2(he_aac_v2).await;
 
     assert!(decoded.eof, "WebCodecs HE-AAC v2 must reach explicit EOF");
     assert!(
@@ -322,11 +320,11 @@ async fn he_aac_v2_decode() {
     );
 }
 
-async fn prepare_webcodecs(codec: &str) {
+async fn prepare_webcodecs(codec: &str, bytes: &'static [u8]) {
     PROBE_STARTED.call_once(|| spawn_webcodecs_probe(default_pools()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
-        if webcodecs_runtime_ready(codec) {
+        if webcodecs_runtime_ready(codec, bytes) {
             return;
         }
         time::sleep(Duration::from_millis(50)).await;
@@ -334,22 +332,22 @@ async fn prepare_webcodecs(codec: &str) {
     panic!("WebCodecs capability probe did not publish within 5 seconds");
 }
 
-fn webcodecs_runtime_ready(codec: &str) -> bool {
+fn webcodecs_runtime_ready(codec: &str, bytes: &'static [u8]) -> bool {
     match codec {
         "mp3" => DecoderFactory::create_with_probe(
-            Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+            Cursor::new(bytes.to_vec()),
             Some("mp3"),
             decoder_config(DecoderBackend::WebCodecs),
         )
         .is_ok(),
         "flac" => DecoderFactory::create_with_probe(
-            Cursor::new(flac_unknown_length_saw_6s().bytes().to_vec()),
+            Cursor::new(bytes.to_vec()),
             Some("flac"),
             decoder_config(DecoderBackend::WebCodecs),
         )
         .is_ok(),
         "mp4a.40.2" => DecoderFactory::create_from_media_info(
-            Cursor::new(aac_lc().bytes()),
+            Cursor::new(bytes),
             &MediaInfo::builder()
                 .codec(AudioCodec::AacLc)
                 .container(ContainerFormat::Fmp4)
@@ -360,13 +358,13 @@ fn webcodecs_runtime_ready(codec: &str) -> bool {
         )
         .is_ok(),
         "mp4a.40.5" => DecoderFactory::create_from_media_info(
-            Cursor::new(he_aac_v1().bytes()),
+            Cursor::new(bytes),
             &aac_media_info(AudioCodec::AacHe),
             decoder_config(DecoderBackend::WebCodecs),
         )
         .is_ok(),
         "mp4a.40.29" => DecoderFactory::create_from_media_info(
-            Cursor::new(he_aac_v2().bytes()),
+            Cursor::new(bytes),
             &aac_media_info(AudioCodec::AacHeV2),
             decoder_config(DecoderBackend::WebCodecs),
         )
@@ -582,4 +580,29 @@ fn assert_common_parity(
         webcodecs.frames,
         symphonia.frames
     );
+}
+
+#[kithara::fixture]
+fn aac_lc() -> &'static [u8] {
+    assets::aac_lc().bytes()
+}
+
+#[kithara::fixture]
+fn flac_unknown_length_saw_6s() -> &'static [u8] {
+    assets::flac_unknown_length_saw_6s().bytes()
+}
+
+#[kithara::fixture]
+fn he_aac_v1() -> &'static [u8] {
+    assets::he_aac_v1().bytes()
+}
+
+#[kithara::fixture]
+fn he_aac_v2() -> &'static [u8] {
+    assets::he_aac_v2().bytes()
+}
+
+#[kithara::fixture]
+fn signal_mp3_track_sine440_187s() -> &'static [u8] {
+    assets::signal_mp3_track_sine440_187s().bytes()
 }

@@ -17,7 +17,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = ["dep:tracing", "kithara-test-utils/probe"]
 
 [dependencies]
-kithara-macros = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }

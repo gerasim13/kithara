@@ -1,12 +1,12 @@
 use kithara_bufpool::HasPool;
-use kithara_platform::ranged;
+use kithara_derive::Ranged;
 
 use super::{ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticError, ElasticRequest};
 
-ranged!(
-    /// Valid native pitch factor shared by every elastic backend.
-    pub(crate) struct PitchScale(f64, 0.25, 4.0, 1.0)
-);
+/// Valid native pitch factor shared by every elastic backend.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
+#[ranged(min = 0.25, max = 4.0, default = 1.0)]
+pub(crate) struct PitchScale(f64);
 
 /// Exact-span time-stretch engine.
 ///
