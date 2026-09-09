@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 
 #[cfg(any(feature = "render", feature = "vello"))]
 use crate::draw::DrawBuffers;

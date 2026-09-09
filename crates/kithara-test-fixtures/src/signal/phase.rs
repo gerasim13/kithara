@@ -65,17 +65,14 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{SAW_PERIOD, delta, distance, units};
-
-    fn sample(value: i16) -> f32 {
-        f32::from(value) / 32_768.0
-    }
+    use crate::fixtures::phase_endpoints;
 
     #[kithara::test(native, flash(false))]
-    fn units_round_trip_the_i16_sawtooth_range() {
-        assert_eq!(units(sample(-32_768)), 0);
-        assert_eq!(units(sample(-32_767)), 1);
-        assert_eq!(units(sample(0)), 32_768);
-        assert_eq!(units(sample(32_767)), SAW_PERIOD - 1);
+    fn units_round_trip_the_i16_sawtooth_range(phase_endpoints: Vec<f32>) {
+        assert_eq!(units(phase_endpoints[0]), 0);
+        assert_eq!(units(phase_endpoints[1]), 1);
+        assert_eq!(units(phase_endpoints[2]), 32_768);
+        assert_eq!(units(phase_endpoints[3]), SAW_PERIOD - 1);
     }
 
     #[kithara::test(native, flash(false))]

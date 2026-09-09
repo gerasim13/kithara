@@ -132,7 +132,7 @@ where
         config: PoolConfig,
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
-        let limit = context.pool_limit(config.max_share)?;
+        let limit = context.pool_limit(config.max_share);
         context
             .core::<SHARDS, Vec<T>, true>(config, limit)
             .map(VecCore)
@@ -181,7 +181,7 @@ impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
         config: PoolConfig,
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
-        let limit = context.pool_limit(config.max_share)?;
+        let limit = context.pool_limit(config.max_share);
         context
             .core::<SHARDS, String, true>(config, limit)
             .map(StringCore)
@@ -216,7 +216,7 @@ impl PoolKey for u8 {
         config: PoolConfig,
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
-        let limit = context.pool_limit(config.max_share)?;
+        let limit = context.pool_limit(config.max_share);
         context
             .core::<32, Vec<Self>, false>(config, limit)
             .map(ByteCore)
@@ -255,7 +255,7 @@ impl PoolKey for f32 {
         config: PoolConfig,
         _access: PoolAccess,
     ) -> Result<Self::Core, PoolError> {
-        let limit = context.pool_limit(config.max_share)?;
+        let limit = context.pool_limit(config.max_share);
         context
             .core::<8, Vec<Self>, false>(config, limit)
             .map(SampleCore)

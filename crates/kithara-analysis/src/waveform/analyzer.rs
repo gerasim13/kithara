@@ -353,8 +353,11 @@ fn normalize_bands(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::analysis_fixtures::{
+        analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,
+        waveform_opposed, waveform_square, waveform_tiny, waveform_tone,
+    };
     use kithara_test_utils::kithara;
-    use num_traits::cast::ToPrimitive;
 
     use super::WaveformAnalyzer;
     use crate::{
@@ -412,13 +415,6 @@ mod tests {
         AnalysisParams::builder().band_gain([1.0; 3]).build()
     }
 
-    fn sine(freq: f32, samples: usize) -> Vec<f32> {
-        let step = std::f32::consts::TAU * freq / Consts::SR.to_f32().unwrap_or(1.0);
-        (0..samples)
-            .map(|n| (step * n.to_f32().unwrap_or(0.0)).sin())
-            .collect()
-    }
-
     #[kithara::test]
     fn no_frames_snapshots_empty() {
         assert!(
@@ -430,18 +426,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn zero_buckets_snapshots_empty() {
+    fn zero_buckets_snapshots_empty(waveform_half: Vec<f32>) {
         let mut pass = Pass::new(AnalysisParams::default());
-        assert!(pass.whole(&[0.5; 8192], 1, 0).is_empty());
+        assert!(pass.whole(&waveform_half, 1, 0).is_empty());
     }
 
     #[kithara::test]
-    fn loudest_band_normalises_to_one() {
+    fn loudest_band_normalises_to_one(waveform_square: Vec<f32>) {
         // Broadband square wave: after shared normalization the single loudest
         // band-bucket reaches exactly 1.0.
-        let pcm: Vec<f32> = (0..16_384)
-            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
-            .collect();
+        let pcm = waveform_square;
         let wave = Pass::new(flat()).whole(&pcm, 1, 10);
         assert_eq!(wave.len(), 10);
         let max = wave.iter().map(peak).fold(0.0_f32, f32::max);
@@ -452,8 +446,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn silence_is_all_zero() {
-        let wave = Pass::new(AnalysisParams::default()).whole(&[0.0; 16_384], 1, 8);
+    fn silence_is_all_zero(analysis_silence: Vec<f32>) {
+        let wave = Pass::new(AnalysisParams::default()).whole(&analysis_silence[..16_384], 1, 8);
         assert_eq!(wave.len(), 8);
         for b in &wave {
             assert_eq!(*b, Bucket::default(), "silence -> all-zero bucket: {b:?}");
@@ -461,8 +455,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn fewer_frames_than_buckets_stays_finite() {
-        let wave = Pass::new(AnalysisParams::default()).whole(&[0.5, -0.5, 0.25], 1, 5);
+    fn fewer_frames_than_buckets_stays_finite(waveform_tiny: Vec<f32>) {
+        let wave = Pass::new(AnalysisParams::default()).whole(&waveform_tiny, 1, 5);
         assert!(!wave.is_empty() && wave.len() <= 5, "len {}", wave.len());
         for b in &wave {
             for v in [b.low(), b.mid(), b.high()] {
@@ -475,10 +469,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn output_is_native_window_resolution_capped() {
+    fn output_is_native_window_resolution_capped(waveform_tone: Vec<f32>) {
         // Ten full FFT windows (4096 + 9 hops of 1024).
         let samples = 4096 + 1024 * 9;
-        let pcm = sine(440.0, samples);
+        let pcm = &waveform_tone[..samples];
 
         // Above the window count: native resolution, never fabricated.
         assert_eq!(
@@ -495,13 +489,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn stereo_downmix_is_channel_mean() {
+    fn stereo_downmix_is_channel_mean(waveform_opposed: Vec<f32>) {
         // L=1, R=-1 cancels to mono 0 -> silence.
-        let mut pcm = Vec::with_capacity(16_384 * 2);
-        for _ in 0..16_384 {
-            pcm.push(1.0);
-            pcm.push(-1.0);
-        }
+        let pcm = waveform_opposed;
         let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 2, 4);
         for b in &wave {
             assert_eq!(*b, Bucket::default(), "cancelling stereo -> silence: {b:?}");
@@ -509,15 +499,15 @@ mod tests {
     }
 
     #[kithara::test]
-    fn deterministic_for_same_input() {
-        let pcm = sine(440.0, 16_384);
+    fn deterministic_for_same_input(waveform_tone: Vec<f32>) {
+        let pcm = waveform_tone;
         let run = || Pass::new(AnalysisParams::default()).whole(&pcm, 1, 64);
         assert_eq!(run(), run(), "same PCM must produce the same waveform");
     }
 
     #[kithara::test]
-    fn window_split_across_chunks_matches_unsplit() {
-        let pcm = sine(440.0, 16_384);
+    fn window_split_across_chunks_matches_unsplit(waveform_tone: Vec<f32>) {
+        let pcm = waveform_tone;
         let whole = Pass::new(flat()).whole(&pcm, 1, 12);
 
         // Split at 1500 frames: no boundary lands on a window edge, so every
@@ -536,8 +526,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn shuffled_and_duplicated_blocks_match_ascending() {
-        let pcm = sine(440.0, 16_384);
+    fn shuffled_and_duplicated_blocks_match_ascending(waveform_tone: Vec<f32>) {
+        let pcm = waveform_tone;
         let ascending = Pass::new(flat()).whole(&pcm, 1, 12);
 
         let blocks: Vec<(u64, &[f32])> = pcm
@@ -561,8 +551,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_gap_leaves_its_windows_out_until_it_is_filled() {
-        let pcm = sine(440.0, 16_384);
+    fn a_gap_leaves_its_windows_out_until_it_is_filled(waveform_tone: Vec<f32>) {
+        let pcm = waveform_tone;
         let complete = Pass::new(flat()).whole(&pcm, 1, 12);
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
 
@@ -585,12 +575,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn partial_windows_are_capped() {
+    fn partial_windows_are_capped(waveform_half: Vec<f32>) {
         // Isolated single-frame blocks complete no window, so each one only
         // opens the windows that contain it.
         let mut pass = Pass::new(flat());
         for block in 0..90_u64 {
-            pass.push(&[0.5], 1, block * 100_000);
+            pass.push(&waveform_half[..1], 1, block * 100_000);
         }
         assert!(
             pass.analyzer.partial_len() <= 256,
@@ -600,16 +590,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn an_evicted_window_is_not_reduced_from_what_survived() {
+    fn an_evicted_window_is_not_reduced_from_what_survived(
+        waveform_tone: Vec<f32>,
+        waveform_half: Vec<f32>,
+    ) {
         // Half a window arrives, the cap evicts it, then the other half
         // arrives. The window's span is covered, but this analyzer no longer
         // holds the first half: reducing it now would publish a half-silent
         // window instead of leaving the span unanalysed.
-        let pcm = sine(440.0, 4096);
+        let pcm = &waveform_tone[..4096];
         let mut pass = Pass::new(flat());
         pass.push(&pcm[..2048], 1, 0);
         for block in 1..90_u64 {
-            pass.push(&[0.5], 1, block * 100_000);
+            pass.push(&waveform_half[..1], 1, block * 100_000);
         }
         pass.push(&pcm[2048..], 1, 2048);
 
@@ -620,8 +613,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn snapshot_leaves_the_pass_usable() {
-        let pcm = sine(440.0, 16_384);
+    fn snapshot_leaves_the_pass_usable(waveform_tone: Vec<f32>) {
+        let pcm = waveform_tone;
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
         let mut pass = Pass::new(flat());
 
@@ -643,7 +636,7 @@ mod tests {
         );
     }
 
-    fn dominant(freq: f32) -> Bucket {
+    fn dominant(pcm: &[f32]) -> Bucket {
         // Floor disabled so routing isn't coupled to the gate; unity gain so it
         // isn't coupled to the perceptual balance.
         let params = AnalysisParams::builder()
@@ -651,15 +644,15 @@ mod tests {
             .energy_floor(0.0)
             .build();
         Pass::new(params)
-            .whole(&sine(freq, 16_384), 1, 4)
+            .whole(pcm, 1, 4)
             .into_iter()
             .find(|b| peak(b) > 0.0)
             .unwrap_or_default()
     }
 
     #[kithara::test]
-    fn low_frequency_lands_in_low_band() {
-        let b = dominant(80.0);
+    fn low_frequency_lands_in_low_band(waveform_low: Vec<f32>) {
+        let b = dominant(&waveform_low);
         assert!(
             b.low() > b.mid() && b.low() > b.high(),
             "80 Hz must be low-dominant: {b:?}"
@@ -667,8 +660,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn mid_frequency_lands_in_mid_band() {
-        let b = dominant(1_000.0);
+    fn mid_frequency_lands_in_mid_band(waveform_mid: Vec<f32>) {
+        let b = dominant(&waveform_mid);
         assert!(
             b.mid() > b.low() && b.mid() > b.high(),
             "1 kHz must be mid-dominant: {b:?}"
@@ -676,8 +669,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn high_frequency_lands_in_high_band() {
-        let b = dominant(10_000.0);
+    fn high_frequency_lands_in_high_band(waveform_high: Vec<f32>) {
+        let b = dominant(&waveform_high);
         assert!(
             b.high() > b.low() && b.high() > b.mid(),
             "10 kHz must be high-dominant: {b:?}"
@@ -685,20 +678,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn full_spectrum_track_has_no_color_gaps() {
+    fn full_spectrum_track_has_no_color_gaps(waveform_mix: Vec<f32>) {
         // Regression for a band series coarser than the bucket count, which left
         // columns with no bar. Every column of a full-spectrum track must carry
-        let sr = Consts::SR.to_f32().unwrap_or(1.0);
-        let frames = 45 * Consts::SR.to_usize().unwrap_or(0);
-        let l = std::f32::consts::TAU * 80.0 / sr;
-        let m = std::f32::consts::TAU * 1_000.0 / sr;
-        let h = std::f32::consts::TAU * 10_000.0 / sr;
-        let pcm: Vec<f32> = (0..frames)
-            .map(|n| {
-                let t = n.to_f32().unwrap_or(0.0);
-                0.3 * ((l * t).sin() + (m * t).sin() + (h * t).sin())
-            })
-            .collect();
+        let pcm = waveform_mix;
         let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1500);
         let gaps = wave.iter().filter(|b| peak(b) <= 0.0).count();
         assert_eq!(gaps, 0, "every column must carry a bar");

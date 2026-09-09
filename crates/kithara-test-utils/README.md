@@ -41,7 +41,7 @@ trait Service {
 Probe sites compile to no-ops unless the emitting crate's `probe` feature is
 enabled in the test build. The capture helper records every probe
 `tracing::event!` into a process-wide recorder so a test can snapshot and assert
-on the full sequence. See [CONTEXT.md](CONTEXT.md) for the tracing-layer
+on the full sequence. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-utils) for the tracing-layer
 rationale, the process-wide subscriber contract, and the `#[serial]`
 requirement.
 
@@ -105,4 +105,4 @@ The integration-test domain (synthetic HLS servers, `TestHttpServer`, `TestServe
 
 See `tests/README.md` for the integration-test suite layout, the standalone `test_server` binary, the WASM flow, and the available fixture builders.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-utils) for detailed contracts, invariants, and internals.

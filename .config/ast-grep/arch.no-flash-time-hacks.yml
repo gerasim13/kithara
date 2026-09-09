@@ -18,7 +18,7 @@ message: |
   If you reach for one of these, STOP: the primitive you want already exists
   (real-by-default timeout, the credit bracket, `flash(false)` for real I/O).
   Fix the state contract, do not resurrect the hack. See
-  `crates/kithara-platform/CONTEXT.md` "Virtual time (`flash`)" section.
+  [kithara-platform contracts](https://github.com/zvuk/kithara/wiki/kithara-platform) "Virtual time (`flash`)" section.
 
   This is an ERROR gate covering ALL workspace Rust - production AND tests.
 severity: error

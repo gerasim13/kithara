@@ -50,6 +50,7 @@ objc2-foundation = { workspace = true, optional = true, features = [
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 [lints]

@@ -69,7 +69,7 @@ impl Kind {
 pub(crate) struct RedactedUrl(String);
 
 impl RedactedUrl {
-    fn new(url: &Url) -> Self {
+    pub(crate) fn new(url: &Url) -> Self {
         Self(format!(
             "{}{}",
             url.origin().ascii_serialization(),
@@ -152,12 +152,12 @@ pub(crate) enum HydrateError {
 }
 
 #[derive(Clone, Copy)]
-struct Deadline {
+pub(crate) struct Deadline {
     end: Instant,
 }
 
 impl Deadline {
-    fn new(timeout: Duration) -> Self {
+    pub(crate) fn new(timeout: Duration) -> Self {
         Self {
             end: Instant::now() + timeout,
         }
@@ -177,7 +177,7 @@ fn refresh_names(names: &[&str]) -> String {
     names.join(", ")
 }
 
-fn fetch(
+pub(crate) fn fetch(
     client: &Client,
     url: &Url,
     headers: &HeaderMap,
@@ -512,7 +512,53 @@ mod tests {
     use url::Url;
 
     use super::{HydrateError, Options, hydrate};
-    use crate::{context::BuildContext, hls_manifest::Manifest};
+    use crate::{
+        context::BuildContext,
+        hls_manifest::Manifest,
+        remote_file::{RemoteFileError, fetch_verified},
+    };
+
+    #[kithara::test(native, flash(false))]
+    fn remote_file_rejects_truncation_corruption_and_missing_content() {
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let server = TestServer::new(
+            HashMap::from([
+                ("/valid", (200, b"abc".as_slice())),
+                ("/short", (200, b"ab".as_slice())),
+                ("/corrupt", (200, b"bad".as_slice())),
+                ("/missing", (404, b"missing".as_slice())),
+            ]),
+            4,
+        );
+        let fetch = |path| {
+            let url = server.url.join(path).expect("fixture URL");
+            fetch_verified(&url, digest, 3, Duration::from_secs(2))
+        };
+        assert_eq!(fetch("valid").expect("verified bytes"), b"abc");
+        assert!(matches!(
+            fetch("short"),
+            Err(RemoteFileError::Length {
+                expected: 3,
+                received: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fetch("corrupt"),
+            Err(RemoteFileError::Digest { .. })
+        ));
+        assert!(matches!(fetch("missing"), Err(RemoteFileError::Fetch(_))));
+        assert_eq!(server.finish().values().sum::<usize>(), 4);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn missing_remote_configuration_names_the_required_input() {
+        let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
+        assert_eq!(
+            error.to_string(),
+            "repository variable KITHARA_REMOTE_FIXTURES is missing"
+        );
+    }
 
     struct TestServer {
         handle: JoinHandle<HashMap<String, usize>>,

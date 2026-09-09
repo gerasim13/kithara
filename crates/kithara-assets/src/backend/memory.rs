@@ -25,10 +25,9 @@ use crate::{
 
 /// Composite cache key for mem-backed active resources.
 ///
-/// Identity is part of the key so distinct request identities under the
-/// same resource key yield distinct inflight handles. The `ResourceKey`
-/// already carries the asset namespace. See the inflight sharing
-/// contract in `CONTEXT.md`.
+/// Identity is part of the key so distinct request identities under the same resource
+/// key yield distinct inflight handles. The `ResourceKey` already carries the asset
+/// namespace.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MemCacheKey {
     identity: Option<RequestIdentity>,

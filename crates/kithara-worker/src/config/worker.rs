@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::sync::Arc;
 use kithara_platform::{CancelToken, tokio::runtime::Handle};

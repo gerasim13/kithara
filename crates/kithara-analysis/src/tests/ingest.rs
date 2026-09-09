@@ -1,4 +1,5 @@
 use kithara_resampler::rubato::RubatoBackend;
+use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -27,7 +28,7 @@ fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
 }
 
 #[kithara::test]
-fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has() {
+fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has(analysis_pcm: &'static [f32]) {
     let second = usize::try_from(SR).unwrap_or(1);
     let step = u64::try_from(second).unwrap_or(1);
     let pools = pools();
@@ -40,7 +41,8 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has() {
 
     // Offering a range twice tells the outcomes apart, since the second offer
     // is new to nobody.
-    let read = |at: u64, seconds: usize| chunk(&pools, &sine_from(at, seconds * second), at);
+    let read =
+        |at: u64, seconds: usize| chunk(&pools, &sine_from(analysis_pcm, at, seconds * second), at);
     assert_eq!(
         pass.push(&read(0, 2), &mut extent, detector.as_mut()),
         Ingest::Accepted

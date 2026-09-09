@@ -78,4 +78,4 @@ ABR decisions are pull-driven from peer activity through the downloader's existi
 
 Used by `kithara-hls` for variant selection. Fully independent of HLS specifics — can be used with any adaptive streaming protocol.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-abr) for detailed contracts, invariants, and internals.

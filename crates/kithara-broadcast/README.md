@@ -69,4 +69,4 @@ let snapshot = window.snapshot();
 Takes access units from `kithara-encode`. The packaging core builds on wasm32;
 the encoder, worker intake, and HTTP origin are native-only.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-broadcast) for detailed contracts, invariants, and internals.

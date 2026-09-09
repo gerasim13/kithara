@@ -85,7 +85,7 @@ fn the_accessor_serves_what_the_store_holds() {
 }
 
 #[kithara::test(native, flash(false))]
-fn the_namespace_carries_a_build_fingerprint() {
+fn the_namespace_uses_the_explicit_cache_revision() {
     let asset = assets::sine_wav_a440_6s();
     let path = asset.path().expect("BUG: the pilot asset lives on disk");
     let namespace = path.parent().expect("an entry lives inside a namespace");
@@ -94,8 +94,7 @@ fn the_namespace_carries_a_build_fingerprint() {
         .and_then(|name| name.to_str())
         .expect("the namespace is named by the fingerprint");
 
-    assert_eq!(fingerprint.len(), store::FINGERPRINT_HEX_LEN);
-    assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(fingerprint, store::CACHE_VERSION.trim());
 }
 
 #[kithara::test(native, flash(false))]

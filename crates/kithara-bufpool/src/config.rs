@@ -1,5 +1,5 @@
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 
 use crate::Percent;
 
@@ -7,7 +7,7 @@ use crate::Percent;
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 pub struct PoolConfig {
     /// Maximum share of the region budget this pool may hold.
-    #[builder(default = Percent::FULL)]
+    #[builder(default)]
     pub(crate) max_share: Percent,
     /// Number of reusable payloads allocated during region construction.
     #[builder(default)]
@@ -28,6 +28,7 @@ pub struct PoolConfig {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
+    use serde::Deserialize;
 
     use super::{Percent, PoolConfig, PoolConfigPatch};
 
@@ -38,8 +39,10 @@ mod tests {
             .trim_capacity(4_096)
             .build();
 
-        let patch: PoolConfigPatch =
-            serde_yaml_ng::from_str("max_buffers: 32\n").expect("a valid patch document parses");
+        let patch = PoolConfigPatch::deserialize(serde_yaml_ng::Deserializer::from_str(
+            "max_buffers: 32\n",
+        ))
+        .expect("a valid patch document parses");
         config.apply(patch);
 
         assert_eq!(config.max_buffers, 32, "the named field is written");
@@ -54,7 +57,7 @@ mod tests {
         let patch: PoolConfigPatch = serde_yaml_ng::from_str("max_share: 100\n")
             .expect("100 percent is inside the invariant");
 
-        assert_eq!(patch.max_share, Some(Percent::FULL));
+        assert_eq!(patch.max_share, Some(Percent::MAX));
     }
 
     #[kithara::test(native, flash(false))]

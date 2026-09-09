@@ -379,6 +379,7 @@ mod tests {
     use kithara_platform::time::Duration;
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::PrerollHint;
+    use kithara_test_fixtures::unit_fixtures::decode_quarter;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -489,6 +490,7 @@ mod tests {
 
     fn chunk(
         pools: &Pools,
+        pcm: &[f32],
         spec: AudioSpec,
         offset: u64,
         frames: u32,
@@ -501,10 +503,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            sample_buffer(
-                pools,
-                &vec![0.25; sample_frames * usize::from(spec.channels)],
-            ),
+            sample_buffer(pools, &pcm[..sample_frames * usize::from(spec.channels)]),
         )
     }
 
@@ -524,6 +523,7 @@ mod tests {
         #[case] codec: Option<kithara_stream::AudioCodec>,
         #[case] expected_frames: u64,
         #[case] label: &str,
+        decode_quarter: Vec<f32>,
     ) {
         let pools = pools();
         let pushed_frames = 5_u64;
@@ -546,7 +546,7 @@ mod tests {
         );
 
         for frame in 0..pushed_frames {
-            generation.stage(chunk(&pools, spec, frame, 1, 1));
+            generation.stage(chunk(&pools, &decode_quarter, spec, frame, 1, 1));
         }
         generation.finish_staging();
 
@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata() {
+    fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata(decode_quarter: Vec<f32>) {
         let pools = pools();
         let active = spec(2, 44_100);
 
@@ -580,10 +580,11 @@ mod tests {
             StageResult::NeedMore
         ));
         assert!(matches!(
-            gap.push_holdback(chunk(&pools, active, 0, 4, 4)),
+            gap.push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4)),
             StageResult::NeedMore
         ));
-        let StageResult::Invalid(gap_failure) = gap.push_holdback(chunk(&pools, active, 5, 4, 4))
+        let StageResult::Invalid(gap_failure) =
+            gap.push_holdback(chunk(&pools, &decode_quarter, active, 5, 4, 4))
         else {
             panic!("a discontinuity must return its offending chunk");
         };
@@ -597,9 +598,9 @@ mod tests {
 
         let mut mixed = generation(active);
         let _ = mixed.prepare_holdback(active, 4);
-        let _ = mixed.push_holdback(chunk(&pools, active, 0, 4, 4));
+        let _ = mixed.push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4));
         let StageResult::Invalid(mixed_failure) =
-            mixed.push_holdback(chunk(&pools, spec(2, 48_000), 4, 4, 4))
+            mixed.push_holdback(chunk(&pools, &decode_quarter, spec(2, 48_000), 4, 4, 4))
         else {
             panic!("mixed PCM must return its offending chunk");
         };
@@ -609,7 +610,7 @@ mod tests {
         let mut bad_meta = generation(active);
         let _ = bad_meta.prepare_holdback(active, 4);
         let StageResult::Invalid(meta_failure) =
-            bad_meta.push_holdback(chunk(&pools, active, 0, 3, 4))
+            bad_meta.push_holdback(chunk(&pools, &decode_quarter, active, 0, 3, 4))
         else {
             panic!("bad metadata must return its offending chunk");
         };
@@ -618,7 +619,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn staged_holdback_never_grows_past_prepared_capacity() {
+    fn staged_holdback_never_grows_past_prepared_capacity(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
         let mut generation = generation(spec);
@@ -627,6 +628,7 @@ mod tests {
         for frame in 0..capacity {
             let result = generation.push_holdback(chunk(
                 &pools,
+                &decode_quarter,
                 spec,
                 u64::try_from(frame).unwrap_or(u64::MAX),
                 1,
@@ -638,6 +640,7 @@ mod tests {
         }
         let StageResult::Invalid(failure) = generation.push_holdback(chunk(
             &pools,
+            &decode_quarter,
             spec,
             u64::try_from(capacity).unwrap_or(u64::MAX),
             1,
@@ -655,12 +658,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_holdback_reserves_from_staged_len_to_logical_limit() {
+    fn prepare_holdback_reserves_from_staged_len_to_logical_limit(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
         let mut generation = generation(spec);
         let _ = generation.prepare_holdback(spec, 1);
-        let _ = generation.push_holdback(chunk(&pools, spec, 0, 1, 1));
+        let _ = generation.push_holdback(chunk(&pools, &decode_quarter, spec, 0, 1, 1));
         let old_capacity = generation.staged.capacity();
         let slots = old_capacity.checked_add(1).expect("test slot limit");
         let join_frames = u64::try_from(slots - 1).expect("test join frame count");
@@ -679,6 +682,7 @@ mod tests {
         for frame in generation.staged.len()..slots {
             let result = generation.push_holdback(chunk(
                 &pools,
+                &decode_quarter,
                 spec,
                 u64::try_from(frame).expect("test frame offset"),
                 1,
@@ -696,7 +700,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn holdback_pumps_surplus_gapless_pending_without_decoder_input() {
+    fn holdback_pumps_surplus_gapless_pending_without_decoder_input(decode_quarter: Vec<f32>) {
         const TRAILING_FRAMES: u64 = 10;
         const JOIN_FRAMES: u64 = 2;
 
@@ -711,12 +715,13 @@ mod tests {
 
         for frame in 0..TRAILING_FRAMES {
             assert!(matches!(
-                generation.push_holdback(chunk(&pools, spec, frame, 1, 1)),
+                generation.push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1)),
                 StageResult::NeedMore
             ));
         }
         let release = generation.push_holdback(chunk(
             &pools,
+            &decode_quarter,
             spec,
             TRAILING_FRAMES,
             u32::try_from(TRAILING_FRAMES).expect("test release frame count"),
@@ -748,7 +753,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn checked_holdback_scans_the_preexisting_span_once() {
+    fn checked_holdback_scans_the_preexisting_span_once(decode_quarter: Vec<f32>) {
         const JOIN_FRAMES: u64 = 7_680;
 
         let pools = pools();
@@ -761,7 +766,8 @@ mod tests {
         let capacity = generation.staged.capacity();
 
         for frame in 0..=JOIN_FRAMES {
-            let result = generation.push_holdback(chunk(&pools, spec, frame, 1, 1));
+            let result =
+                generation.push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1));
             if frame == JOIN_FRAMES {
                 assert!(matches!(result, StageResult::Ready));
             } else {
@@ -785,7 +791,14 @@ mod tests {
             };
             assert_eq!(next.meta.frame_offset, frame);
             assert!(matches!(
-                generation.push_holdback(chunk(&pools, spec, JOIN_FRAMES + frame + 1, 1, 1,)),
+                generation.push_holdback(chunk(
+                    &pools,
+                    &decode_quarter,
+                    spec,
+                    JOIN_FRAMES + frame + 1,
+                    1,
+                    1,
+                )),
                 StageResult::Ready
             ));
             assert_eq!(generation.staged.capacity(), capacity);

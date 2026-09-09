@@ -3,6 +3,7 @@ use std::num::NonZero;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
+use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_sine};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -20,8 +21,6 @@ const P2: usize = 24_255;
 const BARS: usize = 8;
 const BOUNDARY: usize = P1 * BARS;
 const TOTAL: usize = BOUNDARY + P2 * BARS;
-/// Hann-windowed click burst length in frames.
-const CLICK_LEN: usize = 256;
 
 fn f32_of(x: f64) -> f32 {
     num_traits::cast(x).unwrap_or_default()
@@ -60,36 +59,6 @@ fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
         },
         sample_buffer(pools, samples),
     )
-}
-
-/// Interleaved stereo sine at 440 Hz, amplitude 0.5, phase-accumulated.
-fn sine(frames: usize) -> Vec<f32> {
-    let inc = std::f64::consts::TAU * 440.0 / f64::from(SR);
-    let mut phase = 0.0_f64;
-    let mut out = Vec::with_capacity(frames * CH);
-    for _ in 0..frames {
-        let s = f32_of(0.5 * phase.sin());
-        out.push(s);
-        out.push(s);
-        phase += inc;
-    }
-    out
-}
-
-fn silence(frames: usize) -> Vec<f32> {
-    vec![0.0; frames * CH]
-}
-
-/// Write a Hann-windowed 1 kHz burst ("click") at `frame`.
-fn add_click(buf: &mut [f32], frame: usize) {
-    for i in 0..CLICK_LEN {
-        let t = f64_of(i);
-        let win = 0.5 * (1.0 - (std::f64::consts::TAU * t / f64_of(CLICK_LEN)).cos());
-        let s = f32_of(0.9 * win * (std::f64::consts::TAU * 1000.0 * t / f64::from(SR)).sin());
-        let idx = (frame + i) * CH;
-        buf[idx] = s;
-        buf[idx + 1] = s;
-    }
 }
 
 /// Render `source` through a key-locked renderer with `plan`, feeding
@@ -251,14 +220,11 @@ fn region_lookup_covers_segments_and_gaps() {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKind) {
-    let mut src = silence(TOTAL);
-    for k in 0..BARS {
-        add_click(&mut src, k * P1 + 8192);
-    }
-    for k in 0..BARS {
-        add_click(&mut src, BOUNDARY + k * P2 + 8192);
-    }
+fn corrections_align_drifting_clicks_to_nominal_grid(
+    #[case] backend: StretchKind,
+    warp_clicks: Vec<f32>,
+) {
+    let src = warp_clicks;
     let plan = RegionPlan::new(vec![
         seg(0, BOUNDARY, f64_of(NOMINAL) / f64_of(P1)),
         seg(BOUNDARY, TOTAL, f64_of(NOMINAL) / f64_of(P2)),
@@ -308,8 +274,8 @@ fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKin
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind) {
-    let src = sine(TOTAL);
+fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    let src = warp_sine[..(TOTAL) * 2].to_vec();
     let plan = RegionPlan::new(vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)])
         .expect("valid plan");
     let out = mono(&render(backend, 1.0, Some(plan), &src));
@@ -336,8 +302,8 @@ fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind) {
-    let src = sine(TOTAL);
+fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    let src = warp_sine[..(TOTAL) * 2].to_vec();
     let merged = RegionPlan::new(vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
     let split = RegionPlan::new(vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)])
         .expect("valid plan");
@@ -364,8 +330,8 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn empty_plan_matches_no_plan(#[case] backend: StretchKind) {
-    let src = sine(TOTAL / 4);
+fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    let src = warp_sine[..(TOTAL / 4) * 2].to_vec();
     let empty = RegionPlan::new(Vec::new()).expect("empty plan is valid");
     let with = render(backend, 0.5, Some(empty), &src);
     let without = render(backend, 0.5, None, &src);

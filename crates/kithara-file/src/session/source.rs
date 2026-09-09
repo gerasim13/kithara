@@ -96,9 +96,8 @@ where
 
     /// Create a source for a local/cached file (no downloads needed).
     ///
-    /// `cancel` is a child of the file config master so a track drop
-    /// pulse interrupts any in-flight reads - see
-    /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
+    /// `cancel` is a child of the file config master so a track drop pulse interrupts
+    /// any in-flight reads.
     pub(crate) fn local(config: FileLocalConfig<S>) -> Self {
         let FileLocalConfig {
             reader,

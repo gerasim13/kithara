@@ -209,11 +209,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{
+        click_silence_half, clicks_75_20s, clicks_90_20s, clicks_120_20s, clicks_150_20s,
+        clicks_change_40s,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        dsp::{clicks, frames, novelty::Novelty},
+        dsp::{frames, novelty::Novelty},
         test_pools::pools,
     };
 
@@ -221,9 +225,8 @@ mod tests {
         60.0 / (lag * frames::frame_seconds())
     }
 
-    fn track_bpm(beats_per_minute: f32) -> SampleBuffer {
+    fn track_bpm(pcm: &[f32]) -> SampleBuffer {
         let pools = pools();
-        let pcm = clicks::track(20.0, 60.0 / beats_per_minute);
         let curve = Novelty::new(pools.clone())
             .expect("a fresh region has room for the window")
             .curve(&pcm)
@@ -237,9 +240,17 @@ mod tests {
     /// past the audio wobbles wider, and one that has run out of clicks
     /// reports no period at all, which is not a tempo reading.
     #[kithara::test(native, flash(false))]
-    fn a_click_track_yields_its_own_tempo() {
-        for want in [90.0, 120.0, 150.0] {
-            let estimates = track_bpm(want);
+    fn a_click_track_yields_its_own_tempo(
+        clicks_120_20s: Vec<f32>,
+        clicks_90_20s: Vec<f32>,
+        clicks_150_20s: Vec<f32>,
+    ) {
+        for (want, pcm) in [
+            (90.0, &clicks_90_20s),
+            (120.0, &clicks_120_20s),
+            (150.0, &clicks_150_20s),
+        ] {
+            let estimates = track_bpm(pcm);
             let mut reported: Vec<f32> =
                 estimates.iter().copied().filter(|&lag| lag > 0.0).collect();
             assert!(
@@ -265,9 +276,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn half_and_double_tempo_are_distinguished() {
-        let slow = track_bpm(75.0);
-        let fast = track_bpm(150.0);
+    fn half_and_double_tempo_are_distinguished(clicks_75_20s: Vec<f32>, clicks_150_20s: Vec<f32>) {
+        let slow = track_bpm(&clicks_75_20s);
+        let fast = track_bpm(&clicks_150_20s);
         let slow_lag = slow[0];
         let fast_lag = fast[0];
         assert!(
@@ -282,11 +293,11 @@ mod tests {
     /// and allocates against it, so a period from outside the searched range
     /// is not a wrong answer but an unbounded allocation.
     #[kithara::test(native, flash(false))]
-    fn every_period_stays_inside_the_searched_range() {
+    fn every_period_stays_inside_the_searched_range(clicks_120_20s: Vec<f32>) {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
             .expect("a fresh region has room for the window")
-            .curve(&clicks::track(20.0, 0.5))
+            .curve(&clicks_120_20s)
             .expect("the curve fits the region");
         let reported =
             periods(&curve, Tempo::default(), &pools).expect("the estimates fit the region");
@@ -301,10 +312,8 @@ mod tests {
         }
     }
 
-    fn tempo_change_lags(drift: f32, seam_seconds: f32) -> SampleBuffer {
+    fn tempo_change_lags(drift: f32, pcm: &[f32]) -> SampleBuffer {
         let pools = pools();
-        let mut pcm = clicks::track(seam_seconds, 60.0 / 100.0);
-        pcm.extend(clicks::track(seam_seconds, 60.0 / 140.0));
         let curve = Novelty::new(pools.clone())
             .expect("a fresh region has room for the window")
             .curve(&pcm)
@@ -333,12 +342,12 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_narrow_drift_holds_the_tempo_a_wide_one_follows_the_change() {
+    fn a_narrow_drift_holds_the_tempo_a_wide_one_follows_the_change(clicks_change_40s: Vec<f32>) {
         let seam = 20.0;
         let held = 60.0 / (100.0 * frames::frame_seconds());
         let taken = 60.0 / (140.0 * frames::frame_seconds());
-        let stiff = tempo_change_lags(3.0, seam);
-        let loose = tempo_change_lags(30.0, seam);
+        let stiff = tempo_change_lags(3.0, &clicks_change_40s);
+        let loose = tempo_change_lags(30.0, &clicks_change_40s);
 
         for lags in [&stiff, &loose] {
             let (before, _) = split_at_seam(lags, seam);
@@ -378,11 +387,11 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn silence_has_no_period_to_report() {
+    fn silence_has_no_period_to_report(click_silence_half: Vec<f32>) {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
             .expect("a fresh region has room for the window")
-            .curve(&clicks::silence(0.5))
+            .curve(&click_silence_half)
             .expect("the curve fits the region");
         assert!(
             periods(&curve, Tempo::default(), &pools)

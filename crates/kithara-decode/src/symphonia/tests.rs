@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_mpa::MpaReader;
+use kithara_test_fixtures::mock_fixtures::{mpeg_eight, mpeg_four};
 use kithara_test_utils::kithara;
 use symphonia::core::{
     errors::Error as SymphoniaError,
@@ -120,16 +121,6 @@ fn lock(state: &Arc<Mutex<SourceState>>) -> MutexGuard<'_, SourceState> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn mpeg_frames(fills: &[u8]) -> Vec<u8> {
-    let mut frames = Vec::with_capacity(fills.len() * MPEG_FRAME_LEN);
-    for &fill in fills {
-        let mut frame = [fill; MPEG_FRAME_LEN];
-        frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
-        frames.extend_from_slice(&frame);
-    }
-    frames
-}
-
 fn mpa_reader(source: InterruptingSource) -> MpaReader<'static> {
     let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
     match MpaReader::try_new(stream, FormatOptions::default()) {
@@ -208,8 +199,8 @@ fn packet_at(reader: &mut MpaReader<'_>, ts: i64) -> Packet {
 }
 
 #[kithara::test]
-fn mpa_packet_read_rolls_back_each_interruption() {
-    let bytes = mpeg_frames(&[0x11, 0x22, 0x33, 0x44]);
+fn mpa_packet_read_rolls_back_each_interruption(mpeg_four: &'static [u8]) {
+    let bytes = mpeg_four.to_vec();
     let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
     let (control_source, _) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
@@ -225,9 +216,8 @@ fn mpa_packet_read_rolls_back_each_interruption() {
 }
 
 #[kithara::test]
-fn mpa_seek_retried_after_interruption_matches_uninterrupted_seek() {
-    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
-    let bytes = mpeg_frames(&fills);
+fn mpa_seek_retried_after_interruption_matches_uninterrupted_seek(mpeg_eight: &'static [u8]) {
+    let bytes = mpeg_eight.to_vec();
     let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
     let (control_source, _) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
@@ -248,9 +238,8 @@ fn mpa_seek_retried_after_interruption_matches_uninterrupted_seek() {
 }
 
 #[kithara::test]
-fn mpa_seek_retry_interrupted_mid_header_matches_uninterrupted_seek() {
-    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
-    let bytes = mpeg_frames(&fills);
+fn mpa_seek_retry_interrupted_mid_header_matches_uninterrupted_seek(mpeg_eight: &'static [u8]) {
+    let bytes = mpeg_eight.to_vec();
     let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
     let (control_source, _) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
@@ -270,9 +259,8 @@ fn mpa_seek_retry_interrupted_mid_header_matches_uninterrupted_seek() {
 }
 
 #[kithara::test]
-fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data() {
-    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
-    let bytes = mpeg_frames(&fills);
+fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eight: &'static [u8]) {
+    let bytes = mpeg_eight.to_vec();
     let (fault_source, fault_control) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
 

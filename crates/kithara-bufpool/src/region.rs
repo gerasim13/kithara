@@ -168,17 +168,11 @@ impl BuildContext {
             })
     }
 
-    pub(crate) fn pool_limit(&self, share: Percent) -> Result<usize, PoolError> {
-        if !share.is_valid() {
-            return Err(PoolError::InvalidConfig {
-                field: "max_share",
-                reason: "must be between 0 and 100 percent",
-            });
-        }
-        let percent = usize::from(share.0);
+    pub(crate) fn pool_limit(&self, share: Percent) -> usize {
+        let percent = usize::from(u8::from(share));
         let quotient = self.budget.limit() / 100;
         let remainder = self.budget.limit() % 100;
-        Ok(quotient * percent + remainder * percent / 100)
+        quotient * percent + remainder * percent / 100
     }
 
     pub(crate) fn region_budget(&self) -> RegionBudget {
@@ -236,8 +230,8 @@ mod tests {
                 )?;
                 let _samples = context.slot::<f32>(
                     PoolConfig::builder()
-                        .max_buffers(32)
-                        .max_share(Percent(101))
+                        .initial_buffers(9)
+                        .max_buffers(8)
                         .build(),
                 )?;
                 Ok(())

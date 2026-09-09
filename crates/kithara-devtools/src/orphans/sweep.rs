@@ -52,6 +52,7 @@ struct Job {
     label: String,
     package: String,
     selector: Vec<String>,
+    build_script: Option<PathBuf>,
 }
 
 /// A module the tool reported, at the file it named.
@@ -313,7 +314,7 @@ fn examine(job: &Job, root: &Path, program: &str) -> Report {
     if found.is_empty() && !output.status.success() {
         return Report::failed(job, failure(program, &output.status.to_string(), &text));
     }
-    let declared = match declared_files(&job.src) {
+    let declared = match declared_files(&job.src, job.build_script.as_deref()) {
         Ok(declared) => declared,
         Err(err) => return Report::failed(job, format!("{err:#}")),
     };
@@ -391,6 +392,11 @@ fn scope(metadata: &Metadata, wanted: &[String], excluded: &[String]) -> (Vec<Jo
             continue;
         };
         let src = dir.as_std_path().join("src");
+        let build_script = package
+            .targets
+            .iter()
+            .find(|target| target.is_custom_build())
+            .map(|target| target.src_path.clone().into_std_path_buf());
         for target in &package.targets {
             let selector = if target.is_bin() {
                 Some((
@@ -410,6 +416,7 @@ fn scope(metadata: &Metadata, wanted: &[String], excluded: &[String]) -> (Vec<Jo
                 selector,
                 package: name.clone(),
                 src: src.clone(),
+                build_script: build_script.clone(),
             });
         }
     }

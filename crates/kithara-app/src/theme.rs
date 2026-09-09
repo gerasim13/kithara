@@ -1,4 +1,4 @@
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use serde::Deserialize;
 
 /// One color, named by a document as the three channel bytes: `[187, 148, 66]`.

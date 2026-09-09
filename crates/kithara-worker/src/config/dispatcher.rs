@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::{CancelGroup, time::Duration};
 
 use crate::{Observer, observer::Event};

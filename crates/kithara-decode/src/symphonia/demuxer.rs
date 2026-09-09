@@ -310,7 +310,8 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: park before target by max(priming warmup, one codec packet) so the trim guard lands on a packet boundary (CONTEXT.md "Seek pre-roll and trim").
+        // WHY: park before target by max(priming warmup, one codec packet) so the trim
+        // guard lands on a packet boundary.
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
@@ -610,7 +611,7 @@ mod tests {
     use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 
     use kithara_stream::{NotReadyCause, PendingReason, StreamSeekPastEof};
-    use kithara_test_fixtures::assets::signal_wav_sine440_1s;
+    use kithara_test_fixtures::fixtures::tone_wav;
     use kithara_test_utils::kithara;
     use symphonia::{
         core::{
@@ -705,8 +706,8 @@ mod tests {
         }
     }
 
-    fn wav_demuxer() -> SymphoniaDemuxer {
-        let mut bytes = signal_wav_sine440_1s().bytes().to_vec();
+    fn wav_demuxer(tone_wav: &[u8]) -> SymphoniaDemuxer {
+        let mut bytes = tone_wav.to_vec();
         bytes.truncate(bytes.len() - WITHHELD_TAIL_BYTES);
         let source = PublishedEndSource::new(bytes);
         let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
@@ -736,8 +737,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_resume_point_past_the_published_end_ends_the_stream() {
-        let mut demuxer = wav_demuxer();
+    fn a_resume_point_past_the_published_end_ends_the_stream(tone_wav: &'static [u8]) {
+        let mut demuxer = wav_demuxer(tone_wav);
         demuxer.resume_ts = track_frames(&demuxer).saturating_sub(1);
         demuxer.resume_pending = Some(PendingReason::NotReady(NotReadyCause::SourcePending));
 

@@ -227,6 +227,9 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use kithara_test_fixtures::mock_fixtures::i16_ramp;
+    use kithara_test_utils::kithara;
+
     use super::pump_pcm_into_encoder;
     use crate::{EncodeError, PcmSource, test_pools};
 
@@ -281,9 +284,9 @@ mod tests {
         pump_pcm_into_encoder(pcm, &test_pools::pools(), 4, |input| feed(input))
     }
 
-    #[test]
-    fn partial_source_reads_fill_complete_frames() {
-        let pcm = ChunkedPcm::new(&[1, 2, 3, 4, 5, 6, 7, 8], 2);
+    #[kithara::test(native, flash(false))]
+    fn partial_source_reads_fill_complete_frames(i16_ramp: Vec<i16>) {
+        let pcm = ChunkedPcm::new(&i16_ramp, 2);
         let mut frames = Vec::new();
 
         run(&pcm, |input| {
@@ -296,18 +299,18 @@ mod tests {
         assert_eq!(pcm.reads.load(Ordering::Relaxed), 8);
     }
 
-    #[test]
-    fn odd_byte_read_is_invalid_input() {
-        let pcm = ChunkedPcm::new(&[1, 2, 3, 4], 3);
+    #[kithara::test(native, flash(false))]
+    fn odd_byte_read_is_invalid_input(i16_ramp: Vec<i16>) {
+        let pcm = ChunkedPcm::new(&i16_ramp[..4], 3);
 
         let error = run(&pcm, |_| Ok(4)).expect_err("odd byte read");
 
         assert!(matches!(error, EncodeError::InvalidInput(_)), "{error}");
     }
 
-    #[test]
-    fn zero_feed_progress_is_an_error() {
-        let pcm = ChunkedPcm::new(&[1, 2, 3, 4], usize::MAX);
+    #[kithara::test(native, flash(false))]
+    fn zero_feed_progress_is_an_error(i16_ramp: Vec<i16>) {
+        let pcm = ChunkedPcm::new(&i16_ramp[..4], usize::MAX);
 
         let error = run(&pcm, |_| Ok(0)).expect_err("zero progress");
 
@@ -317,18 +320,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn feed_cannot_consume_past_the_frame() {
-        let pcm = ChunkedPcm::new(&[1, 2, 3, 4], usize::MAX);
+    #[kithara::test(native, flash(false))]
+    fn feed_cannot_consume_past_the_frame(i16_ramp: Vec<i16>) {
+        let pcm = ChunkedPcm::new(&i16_ramp[..4], usize::MAX);
 
         let error = run(&pcm, |input| Ok(input.len() + 1)).expect_err("over-consumption");
 
         assert!(error.to_string().contains("consumed 5 samples"), "{error}");
     }
 
-    #[test]
-    fn partial_consumption_preserves_remaining_sample_order() {
-        let pcm = ChunkedPcm::new(&[1, 2, 3, 4, 5, 6], usize::MAX);
+    #[kithara::test(native, flash(false))]
+    fn partial_consumption_preserves_remaining_sample_order(i16_ramp: Vec<i16>) {
+        let pcm = ChunkedPcm::new(&i16_ramp[..6], usize::MAX);
         let mut frames = Vec::new();
 
         run(&pcm, |input| {

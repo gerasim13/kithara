@@ -13,8 +13,10 @@ code is written. Everything else is routed to an owner.
   every guide to the trigger that should open it; open nothing else.
 - `docs/rules/*` holds tool-neutral entry rules used through tool shims.
 - On conflict: `AGENTS.md` wins over `docs/*`, which wins over crate
-  `README.md` / `CONTEXT.md`, which wins over tool-specific shims.
+  `README.md` and wiki explanations, which win over tool-specific shims.
 - `docs/guides/rule-placement.md` decides where a new rule belongs.
+- Read a scoped `AGENTS.md` before changing its crate. Add one only for a
+  necessary pre-code prohibition not already enforced or covered here.
 
 ## Sources Of Truth
 
@@ -23,9 +25,8 @@ Every fact below has one owner. Link to the owner; do not restate it.
 | Fact | Owner |
 | --- | --- |
 | Capability status, roadmap, blockers | [GitHub Projects board](https://github.com/users/gerasim13/projects/3) |
-| What is in flight right now | `PROGRESS.md` |
-| Project architecture | `crates/kithara/CONTEXT.md` |
-| Crate contracts, invariants, lifecycle | owning crate `CONTEXT.md` |
+| Project architecture | [Wiki architecture](https://github.com/zvuk/kithara/wiki/kithara) |
+| Crate contracts, invariants, lifecycle | [Owning crate wiki page](https://github.com/zvuk/kithara/wiki/Crates) |
 | Toolchain, image, and tool versions | `.config/ci-pins.toml` |
 | Lint thresholds and baselines | `.config/arch/`, `.config/style/`, `.config/idioms/` |
 | Command surface | root `justfile` and `.config/just/` |
@@ -35,10 +36,13 @@ Every fact below has one owner. Link to the owner; do not restate it.
 
 - Minimal magic and hidden dependencies. Predictability, testability, and
   reproducibility come first, and components stay loosely coupled.
-- Code is the only source of truth. An entry in `CONTEXT.md` is admissible only
-  when it cannot be expressed in the shape of the code or pinned by a test. An
-  explanation that exists because the code is unclear means the code is wrong,
-  and a comment survives only as documentation of the item it sits on.
+- Code and checks define executable behavior. Wiki pages explain cross-file
+  contracts and decision rationale; do not copy implementation inventories or
+  task status there. Comments document their local item, and README files
+  provide a brief overview, usage, and a link to the owning wiki page.
+- Keep source code and doc comments self-contained. Do not link to wiki pages
+  or repository documentation from source; route readers through README and
+  agent instructions.
 
 ## Non-Negotiables
 
@@ -59,7 +63,7 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - No fallback chains (`try A, else B, else C`) to paper over state-resolution
   bugs. If the primary path has no correct answer, the state contract is broken:
   fix the contract. A legitimate fallback (user-facing default, optional config,
-  degraded mode) is justified in the owning crate `CONTEXT.md` or the task
+  degraded mode) is justified in the owning crate wiki page or the task
   packet; a test that codifies one protects a symptom.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
@@ -120,6 +124,8 @@ Reject a design before coding when it:
 - Introduces shared mutable god-state, globals, god objects, callback spirals,
   or unrelated responsibilities in one file, type, trait, or facade.
 - Requires a lint suppress, new baseline entry, or "temporary" bypass to pass.
+- Requires every change to update a repository-wide document. Track active
+  work in issues on the GitHub Projects board instead.
 
 `docs/guides/red-flags.md` expands this gate for non-trivial work.
 
@@ -130,12 +136,14 @@ A change is done only when all of these hold:
 - A test that failed before the change now passes, and it pins the contract
   rather than an incidental detail.
 - `just fmt check` and `just lint fast` are clean, with no new baseline
-  entries and no lint suppressions. `lint fast` runs the `style` ratchet the
-  lint lane denies on, so the commit hook refuses what CI would.
+  entries and no lint suppressions. Both `lint fast` (the commit hook) and
+  `lint full` run `style` through `_shared`. The `linux-lint` gate runs
+  `lint full` on main and branch pushes.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.
-- Documents describing the changed contract are updated in the same change.
-- `PROGRESS.md` names what landed and what is left.
+- Update the owning wiki page only when its described contract changes;
+  unrelated changes require no documentation edit. Track unfinished work in
+  issues, not explanatory pages or repository progress documents.
 
 ## Working Rules
 
@@ -154,4 +162,4 @@ A change is done only when all of these hold:
 
 - If a product requirement conflicts with these rules, discuss the compromise
   first and update `AGENTS.md`.
-- Any forced rule bypass is explained briefly in the owning crate `CONTEXT.md`.
+- Any forced rule bypass is explained briefly in the owning crate wiki page.

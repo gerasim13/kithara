@@ -6,8 +6,8 @@ use std::{
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
+use kithara_derive::Patch;
 use kithara_events::EventBus;
-use kithara_macros::Patch;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
@@ -57,9 +57,8 @@ pub struct PlayerConfig<S> {
     #[builder(default = generate_log_spaced_bands(10))]
     #[patch(skip)]
     pub eq_layout: Vec<EqBandConfig>,
-    /// Built-in auto-advance handler. The queue overwrites this for every
-    /// queue-driven player at construction, so it is not a document key.
-    /// See `crates/kithara-play/CONTEXT.md` for the owning contract.
+    /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
+    /// player at construction, so it is not a document key.
     #[builder(default = true)]
     #[patch(skip)]
     pub auto_advance_enabled: bool,
@@ -79,10 +78,9 @@ pub struct PlayerConfig<S> {
     /// Default playback-rate target (1.0 = normal). Default: 1.0.
     #[builder(default = 1.0)]
     pub default_rate: f32,
-    /// Secondary lead time before EOF at which the next queued item is
-    /// loaded. The queue overwrites this for every queue-driven player at
-    /// construction, so it is not a document key. See
-    /// `crates/kithara-play/CONTEXT.md` for the owning contract.
+    /// Secondary lead time before EOF at which the next queued item is loaded. The
+    /// queue overwrites this for every queue-driven player at construction, so it is
+    /// not a document key.
     #[builder(default = 3.5)]
     #[patch(skip)]
     pub prefetch_duration: f32,

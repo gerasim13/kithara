@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_test_fixtures::unit_fixtures::{rubato_nine, rubato_stereo};
 use kithara_test_utils::kithara;
 use rubato::SincInterpolationParameters;
 
@@ -26,7 +27,7 @@ fn rubato_sinc_keeps_the_explicit_cutoff() {
 }
 
 #[kithara::test(native, flash(false))]
-fn rubato_resamples_borrowed_planar_slices() {
+fn rubato_resamples_borrowed_planar_slices(rubato_stereo: Vec<f32>) {
     let channels = NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()
         .channels(channels)
@@ -45,7 +46,7 @@ fn rubato_resamples_borrowed_planar_slices() {
         .build();
     let mut resampler =
         create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
-    let input = [vec![0.1; 256], vec![0.2; 256]];
+    let input = rubato_stereo.chunks_exact(256).collect::<Vec<_>>();
     let mut output: [Vec<f32>; 2] =
         std::array::from_fn(|_| vec![0.0; resampler.output_frames_next()]);
     let input_refs = [&input[0][..], &input[1][..]];
@@ -60,7 +61,7 @@ fn rubato_resamples_borrowed_planar_slices() {
 }
 
 #[kithara::test(native, flash(false))]
-fn rubato_resamples_nine_channels_without_touching_extra_output() {
+fn rubato_resamples_nine_channels_without_touching_extra_output(rubato_nine: Vec<f32>) {
     let channels = NonZeroUsize::new(9).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()
         .channels(channels)
@@ -79,15 +80,13 @@ fn rubato_resamples_nine_channels_without_touching_extra_output() {
         .build();
     let mut resampler =
         create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
-    let input = (0..channels.get())
-        .map(|channel| vec![channel as f32 / 10.0; 256])
-        .collect::<Vec<_>>();
+    let input = rubato_nine.chunks_exact(256).collect::<Vec<_>>();
     let output_frames = resampler.output_frames_next();
     let mut output = (0..=channels.get())
         .map(|_| vec![0.0; output_frames])
         .collect::<Vec<_>>();
     output[channels.get()].fill(1.0);
-    let input_refs = input.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let input_refs = input.to_vec();
     let mut output_refs = output.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
 
     let process = resampler

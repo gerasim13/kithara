@@ -295,8 +295,9 @@ impl Track<WaitingForSource> {
             return TrackStep::Failed;
         }
 
-        // WHY: Source ready - resume into the phase that initiated the wait. `Eof` resumes like `Ready`: byte-space EOF is not end of PCM,
-        // only the decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
+        // WHY: Source ready - resume into the phase that initiated the wait. `Eof`
+        // resumes like `Ready`: byte-space EOF is not end of PCM, only the decode path
+        // finalizes `AtEof`.
         match context {
             WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),

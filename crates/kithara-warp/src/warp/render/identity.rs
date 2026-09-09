@@ -153,20 +153,21 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::AudioChunkInfo;
+    use kithara_test_fixtures::unit_fixtures::warp_pair;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test]
-    fn renderer_preserves_samples_exactly() {
+    fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let mut meta = AudioChunkInfo::default();
         meta.spec = spec;
         meta.frames = 1;
         meta.frame_offset = 41;
-        let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
         let input_ptr = input.samples.as_ptr();
         let config = WarpConfig::builder()
             .stretch(StretchControls::new(1.5))

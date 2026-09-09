@@ -351,6 +351,7 @@ fn subrange(
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_test_fixtures::fixtures::{negative_pcm_ramp, pcm_ramp};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -363,18 +364,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn reserve_resize_and_front_truncation_preserve_channel_major_data() {
+    fn reserve_resize_and_front_truncation_preserve_channel_major_data(pcm_ramp: Vec<f32>) {
         let pools = pools_with_budget(128 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(3))
             .expect("initial planar storage fits");
         planar
             .channel_mut(0)
             .expect("left channel exists")
-            .copy_from_slice(&[1.0, 2.0, 3.0]);
+            .copy_from_slice(&pcm_ramp[..3]);
         planar
             .channel_mut(1)
             .expect("right channel exists")
-            .copy_from_slice(&[4.0, 5.0, 6.0]);
+            .copy_from_slice(&pcm_ramp[3..6]);
 
         planar
             .reserve_frames(FrameCount::new(8))
@@ -410,7 +411,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn incremental_resize_grows_stride_geometrically() {
+    fn incremental_resize_grows_stride_geometrically(
+        pcm_ramp: Vec<f32>,
+        negative_pcm_ramp: Vec<f32>,
+    ) {
         let pools = pools_with_budget(1_024 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(0))
             .expect("empty planar storage is valid");
@@ -425,9 +429,10 @@ mod tests {
                 growths += 1;
                 previous_stride = planar.stride();
             }
-            let value = f32::from(u16::try_from(frames).expect("fixture frame fits u16"));
+            let value = pcm_ramp[frames - 1];
             planar.channel_mut(0).expect("left channel exists")[frames - 1] = value;
-            planar.channel_mut(1).expect("right channel exists")[frames - 1] = -value;
+            planar.channel_mut(1).expect("right channel exists")[frames - 1] =
+                negative_pcm_ramp[frames - 1];
         }
 
         assert!(growths <= 9, "129 appends required {growths} stride moves");
