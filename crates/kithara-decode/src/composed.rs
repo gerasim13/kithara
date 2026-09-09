@@ -280,6 +280,7 @@ where
                         return Err(error);
                     }
                 };
+            let prior_head_strip = self.head_strip.frames();
             self.head_strip.record(
                 self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
                 u64::from(frames),
@@ -294,7 +295,14 @@ where
             let mut chunk_pts = if frames == 0 {
                 frame_pts
             } else {
-                self.codec.decoded_pts(frame_pts)
+                // A head-trimmed packet keeps its end time; the missing prefix precedes its PCM.
+                let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
+                self.codec.decoded_pts(frame_pts).saturating_add(
+                    self.codec
+                        .spec()
+                        .duration_for(stripped)
+                        .unwrap_or(Duration::MAX),
+                )
             };
             if let Some(target) = self.pending_seek_target {
                 let decoded_end = if chunk_pts == frame_pts {
@@ -372,6 +380,7 @@ where
                 preroll,
             } => {
                 self.codec.flush()?;
+                self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
@@ -386,6 +395,7 @@ where
             }
             DemuxSeekOutcome::PastEof { duration } => {
                 self.codec.flush()?;
+                self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
                 Ok(DecoderSeekOutcome::PastEof { duration })
             }

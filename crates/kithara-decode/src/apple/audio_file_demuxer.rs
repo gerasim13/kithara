@@ -529,8 +529,11 @@ mod tests {
 
     use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
     use crate::{
+        apple::codec::AppleCodec,
         codec::CodecPriming,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
+        traits::{Decoder, DecoderChunkOutcome},
     };
 
     #[kithara::test]
@@ -836,6 +839,34 @@ mod tests {
         )
         .expect("MP3 open");
         (dx, total)
+    }
+
+    #[kithara::test]
+    fn apple_mp3_pcm_has_no_internal_frame_gap(tone_mp3: &'static [u8]) {
+        let (demuxer, _) = open_mp3(tone_mp3, SourceOpenMode::Complete);
+        let codec = AppleCodec::open_with_config(demuxer.track_info(), false, None)
+            .expect("Apple MP3 codec");
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        for seek in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
+            if let Some(position) = seek {
+                decoder.seek(position).expect("seek MP3");
+            }
+            let mut end = None;
+            for _ in 0..4 {
+                let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode MP3")
+                else {
+                    panic!("expected initial MP3 PCM");
+                };
+                if let Some(end) = end {
+                    assert_eq!(
+                        chunk.meta.frame_offset, end,
+                        "PCM must remain contiguous: {:?}",
+                        chunk.meta
+                    );
+                }
+                end = Some(chunk.meta.frame_offset + u64::from(chunk.meta.frames));
+            }
+        }
     }
 
     /// Regression (reopen false-EOF): a size-less MP3 seek must report a
