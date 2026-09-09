@@ -119,9 +119,9 @@ uuid = { workspace = true }
 kithara = { workspace = true, default-features = false, features = [
     "analysis-waveform",
     "audio",
-    "backend-web-audio",
     "beat-dsp",
     "hls",
+    "host",
     "resample-rubato",
     "symphonia",
     "webcodecs",

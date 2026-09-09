@@ -531,6 +531,33 @@ fn optional_transport_fails_open_before_policy_starts() -> Result<()> {
     Ok(())
 }
 
+/// A generation compiled against an older config schema fails on the first
+/// thing every hook route needs, before any route is read. The hook is
+/// non-blocking, so without a guard the failure is noise on every tool call
+/// rather than a stop; the transport it takes has a branch for exactly this,
+/// and the guard has to reach it.
+#[test]
+fn the_optional_transport_refuses_a_config_it_cannot_read() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    fs::write(
+        fixture.root.join(".config/xtask.toml"),
+        "this is not valid TOML\n",
+    )?;
+
+    let hook = fixture.just(&fixture.root, &["_agent-hook"], Some(b"ignored"))?;
+
+    assert_success(&hook);
+    assert!(
+        String::from_utf8_lossy(&hook.stderr).contains("cached xtask transport is unavailable"),
+        "unexpected hook output: stdout={} stderr={}",
+        String::from_utf8_lossy(&hook.stdout),
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    fixture.assert_no_tool_process();
+    Ok(())
+}
+
 #[test]
 fn source_changes_stale_but_hook_routes_do_not() -> Result<()> {
     let fixture = Fixture::new()?;
