@@ -76,6 +76,18 @@ where
         !self.runtime.is_closed() && self.runtime.is_playing()
     }
 
+    /// Prepare the Host graph and slot without starting track playback.
+    ///
+    /// # Errors
+    /// Returns a session startup or slot allocation error.
+    pub fn prepare(&self) -> Result<(), PlayError> {
+        self.runtime.with_open_result(|runtime| {
+            runtime.ensure_engine_started()?;
+            runtime.ensure_slot()?;
+            Ok(())
+        })
+    }
+
     /// Pause playback unless the owning player is closed.
     pub fn pause(&self) {
         self.command(PlayerRuntime::pause);

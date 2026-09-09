@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::dsp::filter::smoothing_filter::DEFAULT_SMOOTH_SECONDS;
 use kithara::{
@@ -8,13 +8,17 @@ use kithara::{
     host::HostConfig,
     platform::time::{self, Duration},
     play::{
-        EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc,
+        EqBandConfig, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        ResourceConfig, ResourceSrc, SessionError,
         effects::eq::{FilterKind, GainDb},
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
+    warp::{SyncGroup, WarpConfig},
 };
-use kithara_integration_tests::{TestServerHelper, kithara, offline::OfflineQueue};
+use kithara_integration_tests::{
+    TestServerHelper, kithara,
+    offline::{OfflineHostHarness, OfflineQueue},
+};
 use kithara_test_fixtures::SignalAsset;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -301,4 +305,99 @@ async fn eq_layout_change_during_crossover_stays_continuous() {
         Consts::EQ_SMOOTH_SECONDS,
     );
     harness.close().await;
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+async fn queue_append_while_playing_does_not_wait_for_host() {
+    let (harness, first_id) = sine_queue(SmoothingCase { eq_layout: None }).await;
+    let server = TestServerHelper::new().await;
+    let url = server.signal(SignalAsset::WAV_SINE440_60S);
+    let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
+    let second = harness
+        .control()
+        .append(TrackSource::Config(Box::new(
+            ResourceConfig::for_src(src)
+                .store(AssetStore::builder(pools()).build())
+                .build(),
+        )))
+        .expect("append while first track is playing");
+    assert_ne!(second.as_u64(), first_id);
+    harness.close().await;
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+async fn prepared_deck_preserves_play_pause_order() {
+    let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
+    let deck = harness.control();
+    deck.pause();
+    deck.play();
+    deck.pause();
+    let (paused, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
+    assert!(
+        silent,
+        "the last pause must reach silence: {}",
+        last_block_peak(&paused)
+    );
+    deck.play();
+    let (resumed, audible) = observe_until(&harness, |block| peak(block) > 0.1).await;
+    assert!(
+        audible,
+        "resume must become audible: {}",
+        last_block_peak(&resumed)
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn failed_deck_preparation_releases_host_membership() {
+    let region = pools();
+    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
+    let config = HostConfig::offline(region.clone())
+        .sample_rate(sample_rate)
+        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
+        .build();
+    let host = OfflineHostHarness::new(config).await.expect("offline host");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
+    let invalid = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(sample_rate)
+            .worker(worker.clone())
+            .warp(
+                WarpConfig::builder()
+                    .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
+                    .build(),
+            )
+            .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
+            .build(),
+    );
+    assert!(matches!(
+        host.insert(invalid).await,
+        Err(PlayError::Session(
+            SessionError::ResponseBudgetExceeded { .. }
+        ))
+    ));
+    host.with(|host| {
+        assert!(host.topology().expect("host topology").members().is_empty());
+        assert!(
+            host.sample_rate()
+                .expect("host sample rate")
+                .measured
+                .is_none(),
+            "failed preparation must close an otherwise idle stream"
+        );
+    })
+    .await;
+    let valid = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(sample_rate)
+            .worker(worker)
+            .build(),
+    );
+    let deck = host
+        .insert(valid)
+        .await
+        .expect("host can prepare the next deck");
+    deck.play();
+    deck.pause();
+    host.close().await;
 }

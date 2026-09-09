@@ -203,7 +203,12 @@ always = ["backend-cpal"]
 # the model kithara-beat cannot produce on a runner.
 [[health.feature_invariants]]
 when_feature = "beat-backend"
-never = ["beat-backend", "beat-nn", "beat-nn-full-int8"]
+never = ["beat-backend"]
+
+# Facades forward the neural model choices without exposing beat-backend.
+[[health.feature_invariants]]
+when_feature = "beat-nn"
+never = ["beat-nn", "beat-nn-full-int8"]
 mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
 
 # kithara-beat embeds one model and says so with compile_error!.

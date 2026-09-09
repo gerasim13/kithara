@@ -9,15 +9,15 @@ use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncStatusSnapshot,
 };
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::{restart_stream, trace_stream_info},
+    dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
     graph::{ducking_gain, tap},
     protocol::{PlayerId, SessionError, StartStreamFn},
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
@@ -154,7 +154,9 @@ pub(super) enum MixTap {
 }
 
 struct RootSnapshot {
-    grid: kithara_warp::BeatGridSnapshot,
+    sample_rate: SessionSampleRate,
+    stream_shape: Option<StreamShape>,
+    grid: BeatGridSnapshot,
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
 }
@@ -163,32 +165,49 @@ struct RootSnapshot {
 pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>) -> Self {
+    pub(crate) fn new(root: &GroupState<PlayerMember>, sample_rate: NonZeroU32) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
             grid: root.snapshot(),
+            stream_shape: None,
+            sample_rate: SessionSampleRate::new(None, sample_rate.get()),
             status: root.status(),
             topology: root.topology(),
         })))
     }
 
-    pub(crate) fn grid(&self) -> kithara_warp::BeatGridSnapshot {
-        self.0.load().grid.clone()
-    }
-
-    fn publish(&self, root: &GroupState<PlayerMember>) {
+    fn publish(
+        &self,
+        root: &GroupState<PlayerMember>,
+        stream_shape: Option<StreamShape>,
+        sample_rate: SessionSampleRate,
+    ) {
         self.0.store(Arc::new(RootSnapshot {
+            stream_shape,
+            sample_rate,
             grid: root.snapshot(),
             status: root.status(),
             topology: root.topology(),
         }));
     }
 
-    pub(crate) fn status(&self) -> SyncStatusSnapshot {
-        self.0.load().status
-    }
-
-    pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.0.load().topology.clone()
+    delegate::delegate! {
+        to self.0 {
+            #[call(load)]
+            #[expr($.grid.clone())]
+            pub(crate) fn grid(&self) -> BeatGridSnapshot;
+            #[call(load)]
+            #[expr($.sample_rate)]
+            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
+            #[call(load)]
+            #[expr($.stream_shape)]
+            pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
+            #[call(load)]
+            #[expr($.status)]
+            pub(crate) fn status(&self) -> SyncStatusSnapshot;
+            #[call(load)]
+            #[expr($.topology.clone())]
+            pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
+        }
     }
 }
 
@@ -231,7 +250,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
-        Self {
+        let state = Self {
             requested_max_block_frames,
             root,
             root_view,
@@ -249,11 +268,14 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
             graph: GraphRegistry::default(),
-        }
+        };
+        state.publish_root();
+        state
     }
 
     pub(super) fn publish_root(&self) {
-        self.root_view.publish(&self.root);
+        self.root_view
+            .publish(&self.root, stream_shape(self), sample_rate(self));
     }
 }
 
@@ -360,6 +382,7 @@ fn create_firewheel_context<B: AudioBackend, S>(
     state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
+    state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");
     Ok(())

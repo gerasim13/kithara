@@ -171,8 +171,7 @@ impl ManualRingSession {
         }
     }
 
-    /// `no_block`: sync command-reply bridge to the dedicated ring-session worker.
-    #[kithara::allow_block]
+    /// Synchronous command-reply bridge; call from a blocking control thread.
     pub fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();

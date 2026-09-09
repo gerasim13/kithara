@@ -10,6 +10,8 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
+#[cfg(feature = "no-block")]
+use kithara::platform::no_block::force_panic_mode;
 use kithara::{
     self,
     events::EventBus,
@@ -374,4 +376,13 @@ impl AudioNodeProcessor for PanickingProcessor {
     ) -> ProcessStatus {
         panic!("ring fixture panic")
     }
+}
+
+#[cfg(feature = "no-block")]
+#[kithara::test(tokio, flash(false))]
+#[should_panic(expected = "[no_block]")]
+async fn session_command_bridge_does_not_suppress_runtime_blocking() {
+    let _mode = force_panic_mode();
+    let session = ManualRingSession::start(config(1)).expect("ring session");
+    let _ = session.exec(Cmd::QuerySampleRate);
 }
