@@ -1,6 +1,8 @@
 //! The lifecycle contract runs through the same Host graph with a cpal backend.
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
+use std::num::NonZeroU32;
+
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara::{
     audio::ConsumerWakeMode,
@@ -100,7 +102,7 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
             .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(session)
+            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
     contract(player.engine());

@@ -285,14 +285,14 @@ fn refresh_snapshots(state: &mut Kithara) {
 
 #[cfg(all(test, not(feature = "broadcast")))]
 mod tests {
-    use std::mem;
+    use std::{convert::Infallible, mem};
 
     use ::kithara::{
         play::effects::eq::GainDb,
         ui::render::{ControlAction, UiEvent, WindowCommand, WindowEdge},
     };
     use iced::{Size, window::Direction};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{kithara, off_thread::OffThread};
 
     use super::*;
     use crate::gui::{test_fixture, ui::cache::DeckLayout};
@@ -339,100 +339,99 @@ mod tests {
 
     #[kithara::test(native, tokio, flash(false))]
     async fn update_routes_messages_and_refreshes_their_state() {
-        let mut state = test_fixture::state();
+        let state = OffThread::spawn("app-host", || Ok::<_, Infallible>(test_fixture::state()))
+            .await
+            .expect("app state fixture is infallible");
+        state
+            .call(|state| {
+                assert_eq!(
+                    update(
+                        state,
+                        Message::Ui(UiEvent::Control {
+                            path: "mixer/xfade".to_string(),
+                            action: ControlAction::SetScalar(1.0),
+                        }),
+                    )
+                    .units(),
+                    0
+                );
+                assert_eq!(state.session.mix().position, 1.0);
 
-        assert_eq!(
-            update(
-                &mut state,
-                Message::Ui(UiEvent::Control {
-                    path: "mixer/xfade".to_string(),
-                    action: ControlAction::SetScalar(1.0),
-                }),
-            )
-            .units(),
-            0
-        );
-        assert_eq!(state.session.mix().position, 1.0);
+                assert_eq!(
+                    update(
+                        state,
+                        Message::Ui(UiEvent::LibraryQuery("local".to_string())),
+                    )
+                    .units(),
+                    0
+                );
+                assert_eq!(state.ui.cache.library.query, "local");
 
-        assert_eq!(
-            update(
-                &mut state,
-                Message::Ui(UiEvent::LibraryQuery("local".to_string())),
-            )
-            .units(),
-            0
-        );
-        assert_eq!(state.ui.cache.library.query, "local");
+                apply(state, Message::SelectCatalogTrack(1));
+                assert_eq!(state.selected_track, Some(1));
 
-        apply(&mut state, Message::SelectCatalogTrack(1));
-        assert_eq!(state.selected_track, Some(1));
+                apply(state, Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0)));
+                let deck = state.decks.get(DeckId(0)).expect("deck A");
+                assert_eq!(deck.view.timestretch.tempo, 50.0);
 
-        apply(
-            &mut state,
-            Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0)),
-        );
-        let deck = state.decks.get(DeckId(0)).expect("deck A");
-        assert_eq!(deck.view.timestretch.tempo, 50.0);
+                apply(state, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
+                let tracks = {
+                    let queue = state
+                        .decks
+                        .get(DeckId(0))
+                        .expect("deck A")
+                        .controller
+                        .queue();
+                    queue.append("https://example.test/pending.mp3").unwrap();
+                    queue.tracks()
+                };
+                let deck = state.decks.get_mut(DeckId(0)).expect("deck A");
+                deck.ui.tracks = tracks;
+                deck.ui.current_track_index = Some(0);
+                apply(state, Message::DeleteFocusedTrack);
+                assert!(
+                    state
+                        .decks
+                        .get(DeckId(0))
+                        .expect("deck A")
+                        .controller
+                        .queue()
+                        .tracks()
+                        .is_empty()
+                );
 
-        apply(&mut state, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
-        let tracks = {
-            let queue = state
-                .decks
-                .get(DeckId(0))
-                .expect("deck A")
-                .controller
-                .queue();
-            queue.append("https://example.test/pending.mp3").unwrap();
-            queue.tracks()
-        };
-        let deck = state.decks.get_mut(DeckId(0)).expect("deck A");
-        deck.ui.tracks = tracks;
-        deck.ui.current_track_index = Some(0);
-        apply(&mut state, Message::DeleteFocusedTrack);
-        assert!(
-            state
-                .decks
-                .get(DeckId(0))
-                .expect("deck A")
-                .controller
-                .queue()
-                .tracks()
-                .is_empty()
-        );
+                state.ui.cache.set_layout(DeckLayout::Single);
+                let hidden = state
+                    .decks
+                    .get(DeckId(1))
+                    .expect("deck B")
+                    .controller
+                    .clone();
+                apply(state, Message::PauseHiddenDecks);
+                assert!(!hidden.queue().is_playing());
 
-        state.ui.cache.set_layout(DeckLayout::Single);
-        let hidden = state
-            .decks
-            .get(DeckId(1))
-            .expect("deck B")
-            .controller
-            .clone();
-        apply(&mut state, Message::PauseHiddenDecks);
-        assert!(!hidden.queue().is_playing());
+                apply(state, Message::WindowResized(Size::new(640.0, 480.0)));
+                assert!(state.ui.cache.window.caption().starts_with("640 × 480"));
 
-        apply(&mut state, Message::WindowResized(Size::new(640.0, 480.0)));
-        assert!(state.ui.cache.window.caption().starts_with("640 × 480"));
-
-        assert_eq!(
-            update(
-                &mut state,
-                Message::Ui(UiEvent::Window(WindowCommand::Minimize)),
-            )
-            .units(),
-            1
-        );
-        assert_eq!(update(&mut state, Message::Tick).units(), 0);
-        assert_eq!(update(&mut state, Message::BroadcastToggle).units(), 0);
-        assert_eq!(update(&mut state, Message::BroadcastToggle).units(), 0);
-        assert_eq!(
-            update(
-                &mut state,
-                Message::BroadcastStopped(Some(Duration::from_millis(10))),
-            )
-            .units(),
-            0
-        );
-        assert_eq!(update(&mut state, Message::WindowCloseRequested).units(), 1);
+                assert_eq!(
+                    update(state, Message::Ui(UiEvent::Window(WindowCommand::Minimize)),).units(),
+                    1
+                );
+                assert_eq!(update(state, Message::Tick).units(), 0);
+                assert_eq!(update(state, Message::BroadcastToggle).units(), 0);
+                assert_eq!(update(state, Message::BroadcastToggle).units(), 0);
+                assert_eq!(
+                    update(
+                        state,
+                        Message::BroadcastStopped(Some(Duration::from_millis(10))),
+                    )
+                    .units(),
+                    0
+                );
+                assert_eq!(update(state, Message::WindowCloseRequested).units(), 1);
+            })
+            .await;
+        state.close().await;
     }
 
     #[kithara::test(native, flash(false))]

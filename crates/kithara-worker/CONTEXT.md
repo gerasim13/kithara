@@ -32,12 +32,20 @@ Higher numeric priority runs first, with stable task ID order as the tie-break.
 Immediate wake may unpark the thread; deferred wake is a coalesced atomic signal
 suitable for real-time callers and publishes writes made before it.
 
-Rayon compute is explicitly disabled, shared from an external owner, or lazily
-owned. A lazy pool is built only after the first job passes both admission
-limits. Compute submission has per-task and worker-wide in-flight limits and no
-hidden queue. Every rejection returns its caller-owned payload unchanged. A
-saturated task may retry on a later scheduler tick after completion wakes the
-dispatcher. WebAssembly exposes only the disabled mode.
+Compute is explicitly disabled, lazily owned, or shared from an external Rayon
+pool; sharing is native-only. One owned-pool configuration carries the thread
+count and thread-name prefix on both targets: natively it builds a Rayon pool of
+that size after the first job passes both admission limits, on WebAssembly it
+spawns one thread per admitted job and the thread count is a native pool size
+that the spawn ignores. A browser starts a spawned thread only once the context
+that spawned it returns to its event loop, so a caller that submits a job and
+then blocks its own thread never sees that job run. Compute submission has
+per-task and worker-wide in-flight limits and no hidden queue; those two limits
+are what bounds the jobs in flight on WebAssembly. Every rejection returns its
+caller-owned payload unchanged. A saturated task may retry on a later scheduler
+tick after completion wakes the dispatcher. A thread the platform refuses to
+spawn aborts the process, as it does for the dispatcher thread itself, and a
+compute job that panics under `panic=abort` aborts with it.
 
 The command channel is unbounded as a primitive, but task capacity bounds its
 producers: one reservation can enqueue one registration and its non-cloneable

@@ -5,7 +5,7 @@ use kithara::{
     events::{AudioEvent, Event},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio},
+    platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::DelayRule,
     kithara,
-    offline::OfflineQueue,
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
@@ -74,17 +74,11 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build(),
         Queue::new(QueueConfig::builder().player(player).build()),
     )
+    .await
     .expect("create product offline queue");
 
     let queue_for_tick = queue.control();
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            time::sleep(Duration::from_millis(16)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(16));
 
     let cfg =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
@@ -98,13 +92,19 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build();
     let source = TrackSource::Config(Box::new(cfg));
 
-    let id = queue.append(source).expect("append synthetic HLS track");
+    let id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append synthetic HLS track");
     wait_for_loader_done(&queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load: {e}"));
 
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+    queue
+        .run(move |q| q.select(id, Transition::None))
+        .await
+        .expect("select");
+    queue.run(move |q| q.play()).await;
 
     let pos_before = wait_for_position_at_least(&queue, 1.5, Duration::from_secs(20))
         .await
@@ -143,7 +143,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     }
 
     if tick_handle.is_finished() {
-        match tick_handle.await {
+        match tick_handle.join().await {
             Ok(()) => panic!("tick task exited without panic"),
             Err(e) => panic!("seek watchdog panicked — HANG REPRODUCED: {e}"),
         }
@@ -156,8 +156,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         queue.position_seconds(),
     );
 
-    tick_handle.abort();
-    drop(queue);
+    tick_handle.stop().await;
+    queue.close().await;
     drop(downloader);
     drop(temp);
 }

@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
 use kithara::{
     abr::AbrMode,
+    analysis::AnalysisToken,
     assets::StorageBackend,
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
@@ -25,7 +26,7 @@ use crate::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
-    web::{commands::WorkerCmd, key_processor_bridge},
+    web::{analysis::runs::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
 struct Consts;
@@ -48,6 +49,7 @@ struct BuildState {
     headers: HashMap<String, String>,
     keys: KeyOptions,
     pools: Pools,
+    worker: FfiWorker,
 }
 
 impl BuildState {
@@ -57,11 +59,13 @@ impl BuildState {
             .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
             .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)
             .build();
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         Self {
             pools,
             store,
             headers: HashMap::new(),
             keys: KeyOptions::default(),
+            worker,
         }
     }
 }
@@ -93,12 +97,11 @@ pub(crate) fn worker_main(
     task_spawn(async move {
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
-        let worker = FfiWorker::new(PlayWorkerConfig::builder(state.pools.clone()).build());
         let queue_store = state.store.clone();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(host.requested_sample_rate())
-                .worker(worker)
+                .worker(state.worker.clone())
                 .build(),
         );
         let queue = FfiQueue::new(
@@ -117,13 +120,15 @@ pub(crate) fn worker_main(
         let queue = owner.control().clone();
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
+        let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
         spawn_tick_loop(queue.clone());
         crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
-            dispatch_cmd(cmd, &queue, &build_state);
+            dispatch_cmd(cmd, &queue, &build_state, &analysis);
         }
+        analysis.borrow_mut().clear();
 
         match host.remove(&owner) {
             Ok(()) | Err(PlayError::SessionGone { .. }) => {}
@@ -157,7 +162,12 @@ fn spawn_tick_loop(queue: FfiQueueControl) {
     });
 }
 
-fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCell<BuildState>>) {
+fn dispatch_cmd(
+    cmd: WorkerCmd,
+    queue: &FfiQueueControl,
+    build_state: &Rc<RefCell<BuildState>>,
+    analysis: &Rc<RefCell<AnalysisRuns>>,
+) {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -199,7 +209,14 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
                 .map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
+        WorkerCmd::Analyze { id, request_id } => {
+            let state = build_state.borrow();
+            if let Err(error) = start_analysis(queue, &state, analysis, id, request_id) {
+                crate::web::interop::send_reply(request_id, Err(error));
+            }
+        }
         WorkerCmd::Remove { id, request_id } => {
+            analysis.borrow_mut().cancel(id);
             let result = queue.remove(id).map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
@@ -213,7 +230,8 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
                 queue,
                 &build_state.borrow(),
                 ReplaceTrackArgs { url, id, index },
-            );
+            )
+            .map(|dropped| analysis.borrow_mut().cancel(dropped));
             crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::SelectQueue {
@@ -224,7 +242,10 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &FfiQueueControl, build_state: &Rc<RefCel
             let result = queue.select(id, transition).map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
-        WorkerCmd::RemoveAll => queue.clear(),
+        WorkerCmd::RemoveAll => {
+            analysis.borrow_mut().clear();
+            queue.clear();
+        }
         WorkerCmd::SetAbrMode { variant_index } => {
             apply_abr_mode(queue, variant_index);
         }
@@ -356,21 +377,26 @@ fn build_source(state: &BuildState, url: String) -> FfiTrackSource {
     if state.keys.key_registry.is_none() && state.headers.is_empty() {
         return FfiTrackSource::Uri(url);
     }
-    match ResourceSrc::parse(&url) {
-        Ok(src) => {
-            let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
-            let config = FfiResourceConfig::for_src(src)
-                .keys(state.keys.clone())
-                .maybe_headers(headers.map(Into::into))
-                .store(state.store.clone())
-                .build();
-            FfiTrackSource::Config(Box::new(config))
-        }
-        Err(err) => {
-            clog!("[WORKER] build_source: invalid url {url}: {err}; using raw URI");
-            FfiTrackSource::Uri(url)
-        }
-    }
+    build_config(state, &url).map_or(FfiTrackSource::Uri(url), |config| {
+        FfiTrackSource::Config(Box::new(config))
+    })
+}
+
+fn build_config(state: &BuildState, url: &str) -> Option<FfiResourceConfig> {
+    let src = ResourceSrc::parse(url)
+        .inspect_err(|err| {
+            clog!("[WORKER] build_config: invalid url {url}: {err}");
+        })
+        .ok()?;
+    let headers = (!state.headers.is_empty()).then(|| state.headers.clone());
+    Some(
+        FfiResourceConfig::for_src(src)
+            .keys(state.keys.clone())
+            .maybe_headers(headers.map(Into::into))
+            .store(state.store.clone())
+            .worker(state.worker.clone())
+            .build(),
+    )
 }
 
 struct ReplaceTrackArgs {
@@ -386,7 +412,7 @@ fn replace_track(
     queue: &FfiQueueControl,
     state: &BuildState,
     args: ReplaceTrackArgs,
-) -> Result<(), String> {
+) -> Result<TrackId, String> {
     let ReplaceTrackArgs { index, id, url } = args;
 
     let idx = index as usize;
@@ -404,6 +430,36 @@ fn replace_track(
         .insert_with_id(id, build_source(state, url), after)
         .map_err(|e| e.to_string())?;
     queue.remove(old_id).map_err(|e| e.to_string())?;
+    Ok(old_id)
+}
+
+fn start_analysis(
+    queue: &FfiQueueControl,
+    state: &BuildState,
+    analysis: &Rc<RefCell<AnalysisRuns>>,
+    id: TrackId,
+    request_id: u32,
+) -> Result<(), String> {
+    let source = queue
+        .track_source(id)
+        .ok_or_else(|| format!("track {id:?} is not queued"))?;
+    let token = source
+        .uri()
+        .map(AnalysisToken::from)
+        .ok_or_else(|| format!("track {id:?} has a source with no readable location"))?;
+    let config = match source {
+        FfiTrackSource::Config(config) => *config,
+        FfiTrackSource::Uri(ref url) => build_config(state, url)
+            .ok_or_else(|| format!("track {id:?} carries a url kithara cannot parse: {url}"))?,
+        _ => {
+            return Err(format!(
+                "track {id:?} carries a source this build cannot open"
+            ));
+        }
+    };
+    analysis
+        .borrow_mut()
+        .start(queue, config, id, token, request_id);
     Ok(())
 }
 

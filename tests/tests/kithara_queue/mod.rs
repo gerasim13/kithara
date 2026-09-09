@@ -4,6 +4,7 @@ mod source_helper;
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 
 mod advance_boundary_provenance;
+mod app_fixture_ticks;
 mod architecture_flow;
 mod auto_advance;
 mod cold_seek_middle;

@@ -94,7 +94,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-        self.validate_session_sample_rate(binding.requested_sample_rate()?.get())?;
+        self.validate_session_sample_rate(binding.requested_sample_rate().get())?;
         self.session.bind(binding)
     }
 

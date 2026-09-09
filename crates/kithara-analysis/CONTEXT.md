@@ -178,14 +178,14 @@ grid-cleanup scratch stay as guards for the pass lifetime; no lower component
 constructs or stores another pool facade.
 
 `AnalysisWorker` owns one `kithara-worker` dispatcher and admits every pass as a
-separate `AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig`
-carries the analyzer builder, parent cancellation, optional shared base `Worker`,
-dispatcher capacity and budgets, per-pass priority, and per-pass compute budget.
-Without a supplied base it creates and retains a standalone base worker. With a
-supplied base, analysis cancellation is OR-composed only onto its dispatcher, so
-it cannot cancel sibling domain dispatchers. The backend and pool-schema types
-are consumed by `new` and stay inside the task factory rather than leaking into
-the handle.
+separate `AnalysisNode<B, S>` task. `AnalysisWorkerConfig` carries the analyzer
+builder, parent cancellation, optional shared base `Worker`, dispatcher capacity
+and budgets, per-pass priority, and per-pass compute budget. Without a supplied
+base it creates and retains a standalone base worker. With a supplied base,
+analysis cancellation is OR-composed only onto its dispatcher, so it cannot
+cancel sibling domain dispatchers. The backend and pool-schema types are
+consumed by `new` and stay inside the task factory rather than leaking into the
+handle.
 
 `open` gives every pass a child of the analysis scope; task admission folds that
 pass token into the dispatcher's derived task token. Callers may clone it for the

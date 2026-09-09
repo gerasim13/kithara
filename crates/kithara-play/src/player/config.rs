@@ -14,7 +14,7 @@ use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 use crate::{
     PlayWorker,
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
-    session::SessionDispatcher,
+    session::SessionBinding,
 };
 
 fn allocate_grid_id() -> BeatGridId {
@@ -110,7 +110,7 @@ pub struct PlayerConfig<S> {
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     #[patch(skip)]
-    pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    pub(crate) session: Option<SessionBinding<S>>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     #[patch(skip)]

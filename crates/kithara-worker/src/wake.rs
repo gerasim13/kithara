@@ -50,20 +50,11 @@ struct WakeInner {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
-    #[cfg(not(target_arch = "wasm32"))]
-    use kithara_platform::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        thread,
-        time::Instant,
-    };
     use kithara_test_utils::kithara;
 
     use super::Wake;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, browser, flash(false))]
     fn deferred_wake_is_level_triggered_and_coalesced() {
         let wake = Wake::default();
         wake.defer();
@@ -73,9 +64,17 @@ mod tests {
         assert!(!wake.wait_timeout(Duration::ZERO));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(native, flash(false))]
     fn deferred_wake_publishes_preceding_work() {
+        use kithara_platform::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            thread,
+            time::Instant,
+        };
+
         let wake = Wake::default();
         let published = Arc::new(AtomicUsize::new(0));
         let producer_wake = wake.clone();

@@ -82,6 +82,7 @@ kithara = { workspace = true, default-features = false, features = ["assets", "q
 # the web-audio backend in the wasm32 target block.
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+num-traits = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -107,7 +108,9 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "analysis-waveform",
     "backend-web-audio",
+    "beat-dsp",
     "hls",
     "resample-rubato",
     "symphonia",
@@ -125,7 +128,6 @@ kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
-num-traits = { workspace = true }
 # Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
 # runtime same-thread assertion) so the JS-backed observer impls satisfy the
 # `core::observer` traits' real `Send + Sync` supertraits on wasm.
@@ -155,11 +157,17 @@ tempfile = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-test-fixtures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [[test]]
 name = "web-observer"
 path = "src/web/observer/tests.rs"
+required-features = ["wasm"]
+
+[[test]]
+name = "web-analysis"
+path = "src/web/analysis/tests.rs"
 required-features = ["wasm"]
 
 [lints]

@@ -7,11 +7,9 @@ mod wake;
 mod worker;
 
 pub use compute::{ComputeContext, ComputeRejected, ComputeSubmitError};
-#[cfg(not(target_arch = "wasm32"))]
-pub use config::RayonConfig;
 pub use config::{
-    ComputePool, DispatcherConfig, DispatcherConfigPatch, TaskConfig, WorkerConfig,
-    WorkerConfigPatch,
+    ComputePool, DispatcherConfig, DispatcherConfigPatch, OwnedPoolConfig, TaskConfig,
+    WorkerConfig, WorkerConfigPatch,
 };
 pub use dispatcher::{Dispatcher, PendingTask, TaskError, TaskHandle};
 pub use observer::{Event, Observer, PassOutcome, PassReport};

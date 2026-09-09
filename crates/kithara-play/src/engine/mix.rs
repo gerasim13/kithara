@@ -80,12 +80,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig, mock,
         player::PlayerConfig,
-        session::{
-            Cmd, Reply, SessionDispatcher, SessionSampleRate,
-            testing::{self, test_session},
-        },
+        session::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
         test_pools::{TestPools, pools},
     };
 
@@ -100,18 +97,18 @@ mod tests {
             match cmd {
                 Cmd::QuerySampleRate => Ok(Reply::SampleRate(SessionSampleRate::new(
                     None,
-                    testing::TEST_SAMPLE_RATE.get(),
+                    mock::SAMPLE_RATE.get(),
                 ))),
                 _ => Ok(Reply::Ok),
             }
         }
     }
 
-    fn player(session: Arc<dyn SessionDispatcher<TestPools>>) -> PlayerImpl<TestPools> {
+    fn player(session: SessionBinding<TestPools>) -> PlayerImpl<TestPools> {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker)
                 .session(session)
                 .build(),
@@ -120,7 +117,7 @@ mod tests {
 
     #[kithara::test]
     fn apply_updates_desired_levels_for_two_players() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         let b = player(session.clone());
         a.core.engine.start().unwrap();
@@ -133,7 +130,7 @@ mod tests {
 
     #[kithara::test]
     fn apply_rejects_duplicate_player_without_mutation() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
 
@@ -144,7 +141,7 @@ mod tests {
 
     #[kithara::test]
     fn apply_rejects_invalid_level_without_mutation() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
 
@@ -157,10 +154,13 @@ mod tests {
 
     #[kithara::test]
     fn apply_rejects_foreign_session() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher<TestPools>>);
+        let foreign = player(SessionBinding::new(
+            Arc::new(ForeignSession),
+            mock::SAMPLE_RATE,
+        ));
 
         let err = apply_mix([(&a, 0.5), (&foreign, 0.5)]).unwrap_err();
         assert!(matches!(err, PlayError::MixForeignSession));
@@ -169,7 +169,7 @@ mod tests {
 
     #[kithara::test]
     fn never_started_player_receives_desired_before_first_start() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         apply_mix([(&a, 0.2)]).unwrap();
         assert_eq!(a.core.engine.master_volume(), 0.2);
@@ -184,7 +184,7 @@ mod tests {
 
     #[kithara::test]
     fn stopped_player_retains_level_on_restart() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[kithara::test]
     fn empty_batch_is_noop() {
-        let session = test_session();
+        let session = mock::session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
         let empty: [(&PlayerImpl<TestPools>, f32); 0] = [];

@@ -11,7 +11,6 @@ use kithara::{
     platform::{
         CancelToken,
         time::{self, Duration, sleep},
-        tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, drive_queue_ticks},
+    offline::{OfflineQueue, QueueTicker},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -104,25 +103,25 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
         .master_url()
 }
 
-fn build_queue_with_tick(
+async fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
-    build_queue_with_tick_cf(temp_dir, 0.0)
+    build_queue_with_tick_cf(temp_dir, 0.0).await
 }
 
-fn build_queue_with_tick_cf(
+async fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
 ) -> (
     OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
-    tokio::task::JoinHandle<()>,
+    QueueTicker,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
@@ -147,11 +146,9 @@ fn build_queue_with_tick_cf(
                 .build(),
         ),
     )
+    .await
     .expect("create product offline queue");
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(
-        queue.control(),
-        Duration::from_millis(50),
-    ));
+    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
@@ -227,7 +224,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let url_b = build_hls(&helper, mode).await;
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -238,10 +235,18 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     };
 
     let id_a = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_a)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track A");
     let id_b = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_b)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track B");
 
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
@@ -253,20 +258,25 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 
     let mut events = queue.subscribe();
     queue
-        .select(id_a, Transition::None)
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
         .expect("select A (first)");
     wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
 
-    queue.select(id_b, Transition::None).expect("select B");
+    queue
+        .run(move |q| q.select(id_b, Transition::None))
+        .await
+        .expect("select B");
     wait_for_current_track(&mut events, id_b, Consts::LOAD_DEADLINE).await;
 
     queue
-        .select(id_a, Transition::None)
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
         .expect("re-select A after B");
 
     let result = wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE).await;
 
-    tick_handle.abort();
+    tick_handle.stop().await;
 
     let status = result.unwrap_or_else(|e| {
         panic!(
@@ -281,6 +291,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         matches!(status, TrackStatus::Loaded | TrackStatus::Consumed),
         "[{mode:?}] track A re-load ended in unexpected terminal status: {status:?}"
     );
+    queue.close().await;
 }
 
 /// Wait until the engine-reported position satisfies `pred`. The position
@@ -336,8 +347,8 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         .master_url();
 
     let temp = temp_dir();
-    let (queue, downloader, store, tick_handle) =
-        build_queue_with_tick_cf(&temp, crossfade_seconds);
+    let (queue, downloader, store, mut tick_handle) =
+        build_queue_with_tick_cf(&temp, crossfade_seconds).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -348,10 +359,18 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     };
 
     let id_a = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_a)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track A");
     let id_b = queue
-        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .run({
+            let arg0 = TrackSource::Config(Box::new(mk_cfg(&url_b)));
+            move |q| q.append(arg0)
+        })
+        .await
         .expect("append track B");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
@@ -373,16 +392,25 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
             .is_some_and(|d| (d - 64.0).abs() < 20.0)
     };
 
-    queue.select(id_a, Transition::None).expect("select A");
+    queue
+        .run(move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select A");
     wait_for_position(&queue, Consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
     assert!(sounds_like_a(&queue), "arena must be sounding the mp3");
 
-    queue.select(id_b, transition).expect("select B");
+    queue
+        .run(move |q| q.select(id_b, transition))
+        .await
+        .expect("select B");
     let switch_deadline = Duration::from_secs(30);
     wait_for(&queue, switch_deadline, "arena sounds B", &sounds_like_b).await;
     wait_for_position(&queue, switch_deadline, "B playing", |p| p >= 2.5).await;
 
-    queue.select(id_a, transition).expect("switch back to A");
+    queue
+        .run(move |q| q.select(id_a, transition))
+        .await
+        .expect("switch back to A");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
         .expect("A reloaded after switch-back");
@@ -410,7 +438,8 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         "queue must report track A as current after the switch-back"
     );
 
-    tick_handle.abort();
+    tick_handle.stop().await;
+    queue.close().await;
 }
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.

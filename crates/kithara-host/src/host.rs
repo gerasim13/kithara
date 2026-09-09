@@ -160,7 +160,10 @@ impl<S> Host<S> {
     {
         let grid_id = player.id();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(dispatcher))?;
+        player.attach_session(SessionBinding::new(
+            dispatcher,
+            self.requested_sample_rate(),
+        ))?;
         Ok((grid_id, player.control()))
     }
 

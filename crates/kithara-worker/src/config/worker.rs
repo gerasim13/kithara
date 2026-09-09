@@ -28,7 +28,6 @@ pub struct WorkerConfig {
 }
 
 impl WorkerConfig {
-    /// Create a standalone worker with no Tokio handle or Rayon pool.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -39,10 +38,9 @@ impl WorkerConfig {
         }
     }
 
-    /// Lazily create an owned Rayon pool on the first admitted compute job.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Lazily create an owned compute pool on the first admitted compute job.
     #[must_use]
-    pub fn with_owned_pool(mut self, config: RayonConfig) -> Self {
+    pub fn with_owned_pool(mut self, config: OwnedPoolConfig) -> Self {
         self.pool = PoolConfig::OwnedLazy(config);
         self
     }
@@ -65,8 +63,7 @@ impl Default for WorkerConfig {
 #[derive(Clone)]
 pub(crate) enum PoolConfig {
     Disabled,
-    #[cfg(not(target_arch = "wasm32"))]
-    OwnedLazy(RayonConfig),
+    OwnedLazy(OwnedPoolConfig),
     #[cfg(not(target_arch = "wasm32"))]
     Shared(Arc<rayon::ThreadPool>),
 }
@@ -75,9 +72,8 @@ impl From<ComputePool> for PoolConfig {
     fn from(pool: ComputePool) -> Self {
         match pool {
             ComputePool::Disabled {} => Self::Disabled,
-            #[cfg(not(target_arch = "wasm32"))]
             ComputePool::Owned { name, threads } => {
-                Self::OwnedLazy(RayonConfig::new(threads, name))
+                Self::OwnedLazy(OwnedPoolConfig::new(threads, name))
             }
         }
     }
@@ -93,21 +89,21 @@ pub enum ComputePool {
     /// `deny_unknown_fields` against a variant's own field list, and a unit
     /// variant has none, so `mode: disabled` would swallow any key beside it.
     Disabled {},
-    #[cfg(not(target_arch = "wasm32"))]
-    Owned { name: String, threads: NonZeroUsize },
+    Owned {
+        name: String,
+        threads: NonZeroUsize,
+    },
 }
 
-/// Configuration for a Rayon pool built on first admitted compute work.
-#[cfg(not(target_arch = "wasm32"))]
+/// Thread count and thread-name prefix for a lazily built compute pool.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RayonConfig {
+pub struct OwnedPoolConfig {
     pub(crate) threads: NonZeroUsize,
     pub(crate) name: String,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl RayonConfig {
+impl OwnedPoolConfig {
     /// Configure the thread count and thread-name prefix.
     #[must_use]
     pub fn new<N: Into<String>>(threads: NonZeroUsize, name: N) -> Self {
@@ -124,11 +120,11 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{ComputePool, PoolConfig, RayonConfig, WorkerConfig, WorkerConfigPatch};
+    use super::{ComputePool, OwnedPoolConfig, PoolConfig, WorkerConfig, WorkerConfigPatch};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
-        let seeded_pool = RayonConfig::new(NonZeroUsize::new(3).expect("nonzero"), "seed");
+        let seeded_pool = OwnedPoolConfig::new(NonZeroUsize::new(3).expect("nonzero"), "seed");
         let mut config = WorkerConfig::new()
             .with_max_compute_tasks(NonZeroUsize::new(2).expect("nonzero"))
             .with_owned_pool(seeded_pool.clone());
@@ -182,7 +178,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_pool_section_carries_the_documents_thread_count_and_name() {
-        let mut config = WorkerConfig::new().with_owned_pool(RayonConfig::new(
+        let mut config = WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
             NonZeroUsize::new(5).expect("nonzero"),
             "seed",
         ));
@@ -205,7 +201,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_disabled_document_replaces_the_pool_the_builder_installed() {
-        let mut config = WorkerConfig::new().with_owned_pool(RayonConfig::new(
+        let mut config = WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
             NonZeroUsize::new(5).expect("nonzero"),
             "seed",
         ));

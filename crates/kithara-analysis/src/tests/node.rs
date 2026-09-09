@@ -11,11 +11,13 @@ use kithara_platform::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_platform::thread;
 use kithara_platform::{
-    thread,
-    time::{Duration, Instant},
+    CancelToken,
+    sync::mpsc,
+    time::{self, Duration, Instant},
+    tokio::sync::watch,
 };
 #[cfg(feature = "analysis-waveform")]
 use kithara_resampler::NoResamplerBackend;
@@ -29,8 +31,8 @@ use kithara_test_utils::kithara;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_worker::TaskContext;
 use kithara_worker::{
-    Dispatcher, DispatcherConfig, PendingTask, RayonConfig, Task, TaskConfig, TickResult, Worker,
-    WorkerConfig,
+    Dispatcher, DispatcherConfig, OwnedPoolConfig, PendingTask, Task, TaskConfig, TickResult,
+    Worker, WorkerConfig,
 };
 #[cfg(feature = "analysis-beat")]
 use num_traits::cast::ToPrimitive;
@@ -118,7 +120,7 @@ where
         let worker = Worker::new(
             WorkerConfig::new()
                 .with_max_compute_tasks(compute_tasks)
-                .with_owned_pool(RayonConfig::new(compute_tasks, "analysis-node-test")),
+                .with_owned_pool(OwnedPoolConfig::new(compute_tasks, "analysis-node-test")),
         );
         let dispatcher = worker.dispatcher(
             DispatcherConfig::builder()
@@ -754,7 +756,7 @@ fn offers_out_of_order_cover_their_union() {
     );
 }
 
-fn stages<B, S>(
+async fn stages<B, S>(
     reader: Box<dyn AudioReader>,
     builder: AnalyzerBuilder<B, S>,
     cancel: &CancelToken,
@@ -778,8 +780,22 @@ where
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(builder, receiver);
     let mut out = Vec::new();
-    for _ in 0..128 {
-        let _ = node.tick();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut remaining = 128;
+    loop {
+        assert!(
+            remaining > 0,
+            "the node spent its whole tick budget without ending"
+        );
+        match node.tick() {
+            TickResult::Backpressured if Instant::now() < deadline => {
+                time::sleep(Duration::ZERO).await;
+            }
+            TickResult::Backpressured => {
+                panic!("the node waits on work of its own past its deadline")
+            }
+            _ => remaining -= 1,
+        }
         match results.has_changed() {
             Ok(true) => {
                 if let Some(analysis) = take_analysis(&mut results) {
@@ -800,7 +816,7 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn matches_direct_waveform_analyzer_over_chunked_stream() {
+async fn matches_direct_waveform_analyzer_over_chunked_stream() {
     let samples = sine(usize::try_from(SR).unwrap());
     let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
     let builder = waveform_only();
@@ -813,7 +829,7 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
     let want = direct.snapshot(BUCKETS, Some(frames));
 
     let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
-    let out = stages(reader, builder, &CancelToken::root());
+    let out = stages(reader, builder, &CancelToken::root()).await;
     let [.., before_last, last] = out.as_slice() else {
         panic!("the end of reading publishes, then the settled final: {out:?}");
     };
@@ -835,27 +851,27 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn cancelled_token_yields_none() {
+async fn cancelled_token_yields_none() {
     let builder = waveform_only();
     let cancel = CancelToken::root();
     cancel.cancel();
     let reader = Box::new(FakeReader::chunked(builder.pools(), &sine(4096), 2));
-    assert!(stages(reader, builder, &cancel).is_empty());
+    assert!(stages(reader, builder, &cancel).await.is_empty());
 }
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn decode_error_yields_none() {
+async fn decode_error_yields_none() {
     let reader = Box::new(FakeReader::failing());
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let out = stages(reader, waveform_only(), &CancelToken::root()).await;
     assert!(out.is_empty());
 }
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn empty_stream_yields_none() {
+async fn empty_stream_yields_none() {
     let reader = Box::new(FakeReader::empty());
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let out = stages(reader, waveform_only(), &CancelToken::root()).await;
     assert!(out.is_empty(), "EOF with no chunks is not an analysis");
 }
 
@@ -1228,7 +1244,7 @@ fn producer_drain_limit_bounds_one_tick() {
 
 #[cfg(feature = "analysis-beat")]
 #[kithara::test]
-fn beat_slot_fills_the_beat_grid() {
+async fn beat_slot_fills_the_beat_grid() {
     let raw = RawBeats {
         beats: Vec::new(),
         downbeats: (0..9u8).map(|n| BeatMark::at(f32::from(n) * 2.0)).collect(),
@@ -1247,7 +1263,7 @@ fn beat_slot_fills_the_beat_grid() {
         &sine(17 * usize::try_from(SR).unwrap()),
         3,
     ));
-    let out = stages(reader, builder, &CancelToken::root());
+    let out = stages(reader, builder, &CancelToken::root()).await;
     assert!(
         out.len() >= 2,
         "17 s of source outlives one publication interval, got {} publication(s)",
@@ -1331,7 +1347,7 @@ fn beat_slot_fills_the_beat_grid() {
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn pending_is_tolerated_mid_stream() {
+async fn pending_is_tolerated_mid_stream() {
     let builder = waveform_only();
     let samples = sine(8192);
     let reader = Box::new(FakeReader::chunked_with_pending(
@@ -1339,7 +1355,7 @@ fn pending_is_tolerated_mid_stream() {
         &samples,
         2,
     ));
-    let out = stages(reader, builder, &CancelToken::root());
+    let out = stages(reader, builder, &CancelToken::root()).await;
     assert!(
         out.last().is_some_and(|last| last.waveform().is_some()),
         "the final publication carries the waveform: {out:?}"

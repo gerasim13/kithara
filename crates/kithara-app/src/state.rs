@@ -672,7 +672,7 @@ mod tests {
     use crate::{
         analysis::{
             AnalysisHandle, Request,
-            fixtures::{answer_subscribe, next_subscribe, queue, track, wait_for_revision},
+            fixtures::{answer_subscribe, next_subscribe, queue_off, track, wait_for_revision},
         },
         pools::AppQueueControl,
         waveform::TrackAnalysis,
@@ -709,11 +709,11 @@ mod tests {
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_observes_a_track_added_to_its_empty_queue() {
-        let (_host, queue) = queue();
+        let (host, queue) = queue_off().await;
         let (state, mut requests, cancel) = deck(&queue);
         assert_eq!(state.lock().current_track_index, None);
 
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let tx = time::timeout(
             Duration::from_secs(2),
             answer_subscribe(&mut requests, track_id),
@@ -726,12 +726,13 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_a_removed_track() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let tx = answer_subscribe(&mut requests, track_id).await;
         tx.send_replace(Some(progress(1)));
@@ -753,13 +754,15 @@ mod tests {
         let st = state.lock();
         assert_eq!(st.current_track_index, None);
         assert!(st.analysis.is_none(), "nothing is shown for no track");
+        drop(st);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio)]
     async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
 
         let first = answer_subscribe(&mut requests, track_id).await;
@@ -779,13 +782,14 @@ mod tests {
 
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
-        let (second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+        let (second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         let (_state, mut requests, cancel) = deck(&queue);
         let first = answer_subscribe(&mut requests, first_id).await;
 
@@ -801,15 +805,16 @@ mod tests {
         );
         drop(reply);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_lagged_deck_resyncs_from_its_queue() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let (_, reply) = next_subscribe(&mut requests).await;
-        let (_second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (_second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
                 .bus()
@@ -831,6 +836,7 @@ mod tests {
         drop(again);
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {

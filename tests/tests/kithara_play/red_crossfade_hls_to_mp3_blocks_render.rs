@@ -78,7 +78,8 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         HostConfig::offline(pools.clone())
             .sample_rate(NonZeroU32::new(Consts::SR).expect("sample rate is non-zero"))
             .build(),
-    );
+    )
+    .await;
 
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
@@ -129,14 +130,15 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        player.load_and_fadein(hls);
+        player.load_and_fadein(hls).await;
         let _hls_warmup = render_offline_window(
             &mut player,
             40,
             &format!("HLS warmup #{iter}"),
             Consts::BLOCK,
             Consts::SR,
-        );
+        )
+        .await;
 
         let mut mp3 = make_mp3(worker.clone()).await;
         time::timeout(Consts::READ_TIMEOUT, mp3.preload())
@@ -144,14 +146,15 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             .expect("MP3 preload")
             .expect("MP3 preload result");
         let before_fade = Instant::now();
-        player.load_and_fadein(mp3);
+        player.load_and_fadein(mp3).await;
         let fade_stats = render_offline_window(
             &mut player,
             60,
             &format!("HLS→MP3 red #{iter}"),
             Consts::BLOCK,
             Consts::SR,
-        );
+        )
+        .await;
         info!(
             "iter {iter}: {fade_stats}, wall={:?}",
             before_fade.elapsed()
@@ -172,4 +175,5 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
          while the shared worker was busy on HLS",
         worst_slow_renders,
     );
+    player.close().await;
 }
