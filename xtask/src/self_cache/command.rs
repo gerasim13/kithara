@@ -20,6 +20,7 @@ use std::{
 use anyhow::bail;
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
+use kithara_devtools::common::project::ProjectConfig;
 #[cfg(unix)]
 use nix::{
     errno::Errno,
@@ -58,6 +59,9 @@ pub(crate) struct SelfCacheArgs {
 
 #[derive(Debug, Subcommand)]
 enum SelfCacheCommand {
+    /// Report whether this cached binary can serve this checkout. The
+    /// `optional` transport in the justfile treats a failure as "no cached
+    /// xtask" and degrades quietly.
     Probe,
     Status,
     Refresh {
@@ -82,7 +86,7 @@ enum SelfCacheCommand {
 pub(crate) fn run(args: &SelfCacheArgs) -> Result<()> {
     let root = layout::root()?;
     match &args.command {
-        SelfCacheCommand::Probe => probe(),
+        SelfCacheCommand::Probe => probe(&root),
         SelfCacheCommand::Status => status(&root),
         SelfCacheCommand::Refresh { force } => refresh(&root, *force),
         SelfCacheCommand::Bootstrap { force } => bootstrap(&root, *force),
@@ -91,8 +95,9 @@ pub(crate) fn run(args: &SelfCacheArgs) -> Result<()> {
     }
 }
 
-fn probe() -> Result<()> {
+fn probe(root: &Path) -> Result<()> {
     let generation = layout::current()?.context("xtask is not running from a cache generation")?;
+    ProjectConfig::load(root).context("cached xtask cannot read this checkout's project config")?;
     println!("{}", generation.binary.display());
     Ok(())
 }
