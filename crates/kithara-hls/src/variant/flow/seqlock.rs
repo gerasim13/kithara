@@ -3,10 +3,9 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering, fence},
 };
 
-/// Single-writer seqlock version counter: even = stable, odd = write in
-/// progress. The produce-core SET path is the only body writer; off-RT
-/// readers (settle) and on-core readers retry on a torn snapshot. See the
-/// crate `CONTEXT.md` "Seek-state primitives".
+/// Single-writer seqlock version counter: even = stable, odd = write in progress. The
+/// produce-core SET path is the only body writer; off-RT readers (settle) and on-core
+/// readers retry on a torn snapshot.
 struct SeqVersion {
     version: AtomicU32,
 }

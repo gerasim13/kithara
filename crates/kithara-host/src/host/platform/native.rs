@@ -30,20 +30,17 @@ pub(in crate::host) struct Platform<S> {
 }
 
 impl<S> Platform<S> {
+    pub(in crate::host) const fn close(_platform: &mut Self, _host_id: BeatGridId) {}
+
+    #[cfg(feature = "offline")]
+    pub(in crate::host) const fn offline() -> Self {
+        Self::owner()
+    }
+
     pub(in crate::host) const fn owner() -> Self {
         Self {
             marker: PhantomData,
         }
-    }
-
-    pub(in crate::host) const fn close(_platform: &mut Self, _host_id: BeatGridId) {}
-
-    pub(in crate::host) fn transact(
-        _platform: &Self,
-        dispatcher: &Arc<dyn HostDispatcher<S>>,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        dispatcher.transact(operation)
     }
 
     pub(in crate::host) fn realtime(
@@ -60,9 +57,12 @@ impl<S> Platform<S> {
         (dispatcher, Self::owner())
     }
 
-    #[cfg(feature = "offline")]
-    pub(in crate::host) const fn offline() -> Self {
-        Self::owner()
+    pub(in crate::host) fn transact(
+        _platform: &Self,
+        dispatcher: &Arc<dyn HostDispatcher<S>>,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        dispatcher.transact(operation)
     }
 }
 

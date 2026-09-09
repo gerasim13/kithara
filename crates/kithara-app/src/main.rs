@@ -11,7 +11,7 @@ use kithara::{
     platform::{CancelToken, thread, tokio},
     play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
-    worker::{RayonConfig, Worker, WorkerConfig},
+    worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
 use kithara_app::{
     config::{AppBroadcastConfig, AppConfig, AppDrm},
@@ -31,6 +31,11 @@ struct Args {
     #[arg(long, value_enum, default_value_t)]
     host: gui::Host,
 
+    /// Configuration document to read. Defaults to `kithara.yaml` beside the
+    /// executable when one is there.
+    #[arg(long)]
+    config: Option<std::path::PathBuf>,
+
     /// Folder holding the UI package to draw from. An override on top of the
     /// document's `app.ui_package`: a path here wins regardless of what the
     /// document says. With neither, the package a release lays out beside the
@@ -38,17 +43,12 @@ struct Args {
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
 
-    /// Configuration document to read. Defaults to `kithara.yaml` beside the
-    /// executable when one is there.
-    #[arg(long)]
-    config: Option<std::path::PathBuf>,
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
 
     /// Print the effective configuration and exit.
     #[arg(long)]
     dump_config: bool,
-
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
 
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
     /// An override on top of the document's `net.is_insecure`: `true` here
@@ -118,7 +118,7 @@ fn main() -> AppResult {
         .with_cancel(shutdown.child())
         .with_runtime(runtime.handle().clone())
         .with_max_compute_tasks(compute_threads)
-        .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
+        .with_owned_pool(OwnedPoolConfig::new(compute_threads, "kithara-compute"));
     worker_config.apply(document.worker());
     let base_worker = Worker::new(worker_config);
     let mut play_worker_config = PlayWorkerConfig::builder(pools.clone())

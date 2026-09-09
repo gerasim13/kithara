@@ -361,9 +361,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing, test_pools::pools,
-    };
+    use crate::{PlayWorker, PlayWorkerConfig, mock, player::PlayerConfig, test_pools::pools};
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -425,9 +423,9 @@ mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker)
-                .session(testing::test_session())
+                .session(mock::session())
                 .build(),
         );
         assert_eq!(

@@ -161,7 +161,7 @@ mod tests {
         DocStalenessConfig {
             allow_terms: Vec::new(),
             exclude_paths: Vec::new(),
-            include_globs: vec!["**/CONTEXT.md".to_string()],
+            include_globs: vec!["**/README.md".to_string()],
         }
     }
 
@@ -169,7 +169,7 @@ mod tests {
     fn denies_a_documented_identifier_absent_from_the_sources() {
         let src = "The `MissingType` owns the queue.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].severity, Severity::Deny);
@@ -179,7 +179,7 @@ mod tests {
     fn stays_silent_when_the_identifier_still_exists() {
         let src = "The `LivingType` owns the queue.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| true);
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| true);
 
         assert!(violations.is_empty());
     }
@@ -188,7 +188,7 @@ mod tests {
     fn ignores_fenced_blocks() {
         let src = "```rust\nlet x = `MissingType`;\n```\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
 
         assert!(violations.is_empty());
     }
@@ -197,7 +197,7 @@ mod tests {
     fn ignores_prose_words_in_backticks() {
         let src = "Set it to `warn` and move on.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
 
         assert!(violations.is_empty());
     }
@@ -206,7 +206,7 @@ mod tests {
     fn reads_a_qualified_path_by_its_last_segment() {
         let src = "See `kithara_stream::MediaInfo` for details.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|ident| {
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|ident| {
             ident == "MediaInfo"
         });
 
@@ -217,7 +217,7 @@ mod tests {
     fn reads_a_call_span_without_its_parentheses() {
         let src = "Call `wait_range()` before reading.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|ident| {
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|ident| {
             ident == "wait_range"
         });
 
@@ -229,11 +229,11 @@ mod tests {
         let cfg = DocStalenessConfig {
             allow_terms: vec!["MissingType".to_string()],
             exclude_paths: Vec::new(),
-            include_globs: vec!["**/CONTEXT.md".to_string()],
+            include_globs: vec!["**/README.md".to_string()],
         };
         let src = "The `MissingType` owns the queue.\n";
 
-        let violations = scan_content(&cfg, "crates/demo/CONTEXT.md", src, &|_| false);
+        let violations = scan_content(&cfg, "crates/demo/README.md", src, &|_| false);
 
         assert!(violations.is_empty());
     }
@@ -242,7 +242,7 @@ mod tests {
     fn reports_a_repeated_identifier_once() {
         let src = "The `MissingType` owns it, and `MissingType` keeps it.\n";
 
-        let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
 
         assert_eq!(violations.len(), 1);
     }
@@ -251,7 +251,7 @@ mod tests {
     fn skips_documents_outside_the_included_globs() {
         let src = "The `MissingType` owns the queue.\n";
 
-        let violations = scan_content(&config(), "crates/demo/README.md", src, &|_| false);
+        let violations = scan_content(&config(), "crates/demo/ARCHITECTURE.md", src, &|_| false);
 
         assert!(violations.is_empty());
     }

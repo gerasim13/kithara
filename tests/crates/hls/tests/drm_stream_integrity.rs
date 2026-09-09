@@ -1,0 +1,365 @@
+use std::{
+    io::{ErrorKind, Read, Seek, SeekFrom},
+    num::NonZeroUsize,
+};
+
+use kithara::{
+    assets::{AssetStore, StorageBackend},
+    hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken, thread,
+        time::{Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
+    stream::{SourcePhase, Stream},
+};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
+    mixed_encrypted, mixed_plain, temp_dir,
+};
+use tracing::{debug, error, info, warn};
+use url::Url;
+
+const fn is_known_box(tag: &[u8; 4]) -> bool {
+    matches!(
+        tag,
+        b"moof" | b"mdat" | b"styp" | b"sidx" | b"free" | b"ftyp" | b"moov" | b"emsg"
+    )
+}
+
+fn parse_box_header(buf: &[u8]) -> Option<(u64, [u8; 4])> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    let tag = [buf[4], buf[5], buf[6], buf[7]];
+    if size == 1 && buf.len() >= 16 {
+        let ext = u64::from_be_bytes(buf[8..16].try_into().ok()?);
+        Some((ext, tag))
+    } else {
+        Some((u64::from(size), tag))
+    }
+}
+
+fn hex_dump(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn read_exact_retry(
+    stream: &mut Stream<Hls<TestPools>>,
+    buf: &mut [u8],
+    timeout: Duration,
+) -> usize {
+    let deadline = Instant::now() + timeout;
+    let mut filled = 0;
+    while filled < buf.len() && Instant::now() < deadline {
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => thread::sleep(Duration::from_millis(5)),
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    filled
+}
+
+fn next_box(
+    stream: &mut Stream<Hls<TestPools>>,
+    pos: u64,
+    label: &str,
+    box_index: usize,
+) -> Option<(u64, u64, String)> {
+    let mut header = [0u8; 16];
+    let n = read_exact_retry(stream, &mut header[..8], Duration::from_secs(5));
+    if n < 8 {
+        debug!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
+        return None;
+    }
+    let (size, tag) = parse_box_header(&header[..n])?;
+    if size < 8 && size != 0 {
+        let hex = hex_dump(&header[..8]);
+        warn!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");
+        return None;
+    }
+    let tag_str = String::from_utf8_lossy(&tag).to_string();
+    if !is_known_box(&tag) {
+        let hex = hex_dump(&header[..8]);
+        warn!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
+        return None;
+    }
+    debug!(
+        "[{label}] scan: box #{:<3} pos={:<10} size={:<10} tag='{tag_str}'",
+        box_index, pos, size
+    );
+    Some((pos, size, tag_str))
+}
+
+/// Scan fMP4 boxes from `start_pos`. Returns `(boxes, last_end)`.
+fn scan_boxes(
+    stream: &mut Stream<Hls<TestPools>>,
+    start_pos: u64,
+    max_end: u64,
+    label: &str,
+) -> (Vec<(u64, u64, String)>, u64) {
+    let mut boxes = Vec::new();
+    let mut pos = start_pos;
+
+    if stream.seek(SeekFrom::Start(pos)).is_err() {
+        return (boxes, pos);
+    }
+
+    while pos < max_end {
+        let Some((offset, size, tag)) = next_box(stream, pos, label, boxes.len()) else {
+            break;
+        };
+        boxes.push((offset, size, tag));
+
+        if size == 0 {
+            break;
+        }
+        pos += size;
+        if stream.seek(SeekFrom::Start(pos)).is_err() {
+            error!("[{label}] scan: seek to {pos} failed");
+            break;
+        }
+    }
+    let last_end = boxes.last().map_or(start_pos, |(o, s, _)| o + s);
+    (boxes, last_end)
+}
+
+struct Phase1Result {
+    total_read: u64,
+    saw_eof: bool,
+    read_error: Option<String>,
+    hit_deadline: bool,
+}
+
+fn read_to_eof_or_deadline(
+    stream: &mut Stream<Hls<TestPools>>,
+    buf: &mut [u8],
+    label: &str,
+) -> Phase1Result {
+    let mut total_read = 0u64;
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut hit_deadline = false;
+    let mut read_error = None;
+    let mut saw_eof = false;
+
+    while Instant::now() < deadline {
+        match stream.read(buf) {
+            Ok(0) => {
+                // Confirm true EOF on source STATE, not a wall-clock second
+                // chance: the source reports `Eof` only once drained
+                // (`pos >= total && sizes_complete()`). A non-terminal phase
+                // means a byte-arrival/WorkerWake is still pending, so
+                // re-poll on a virtual tick instead of recording a premature
+                // `saw_eof` (a fixed sleep collapses to ~0 under flash).
+                if matches!(stream.phase(), SourcePhase::Eof | SourcePhase::Cancelled) {
+                    saw_eof = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(n) => total_read += n as u64,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => {
+                error!("[{label}] read error: {e}");
+                read_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    if !saw_eof && read_error.is_none() && Instant::now() >= deadline {
+        hit_deadline = true;
+    }
+
+    Phase1Result {
+        total_read,
+        saw_eof,
+        read_error,
+        hit_deadline,
+    }
+}
+
+fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
+    let mut expected_pos = 0u64;
+    for (i, (offset, size, tag)) in boxes.iter().enumerate() {
+        if *offset != expected_pos {
+            let gap = (*offset as i64) - (expected_pos as i64);
+            panic!(
+                "[{label}] GAP at box #{i} '{tag}': expected pos {expected_pos}, \
+                 got {offset} (gap={gap})"
+            );
+        }
+        expected_pos = offset + size;
+    }
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(45)),
+    hang_timeout_secs(3)
+)]
+#[case::hls_disk_v0("HLS-disk-v0", false, 0, mixed_plain().await)]
+#[case::hls_disk_v3("HLS-disk-v3", false, 3, mixed_plain().await)]
+#[case::hls_eph_v0("HLS-eph-v0", true, 0, mixed_plain().await)]
+#[case::hls_eph_v3("HLS-eph-v3", true, 3, mixed_plain().await)]
+#[case::drm_disk_v0("DRM-disk-v0", false, 0, mixed_encrypted().await)]
+#[case::drm_disk_v3("DRM-disk-v3", false, 3, mixed_encrypted().await)]
+#[case::drm_eph_v0("DRM-eph-v0", true, 0, mixed_encrypted().await)]
+#[case::drm_eph_v3("DRM-eph-v3", true, 3, mixed_encrypted().await)]
+#[case::hls_disk_auto("HLS-disk-auto", false, 99, mixed_plain().await)]
+#[case::hls_eph_auto("HLS-eph-auto", true, 99, mixed_plain().await)]
+#[case::drm_disk_auto("DRM-disk-auto", false, 99, mixed_encrypted().await)]
+#[case::drm_eph_auto("DRM-eph-auto", true, 99, mixed_encrypted().await)]
+async fn drm_stream_byte_integrity(
+    temp_dir: TestTempDir,
+    #[case] label: &str,
+    #[case] ephemeral: bool,
+    #[case] abr_variant: usize,
+    #[case] prepared: (TestServerHelper, Url),
+) {
+    let (_server, url) = prepared;
+    let cancel = CancelToken::never();
+    let pools = pools();
+
+    let store = if ephemeral {
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Memory)
+            .cache_capacity(NonZeroUsize::new(40).expect("nonzero"))
+            .build()
+    } else {
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
+            .build()
+    };
+
+    let abr_mode = if abr_variant == 99 {
+        auto(0)
+    } else {
+        AbrMode::manual(abr_variant)
+    };
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .pools(pools)
+        .cancel(cancel.clone())
+        .initial_abr_mode(abr_mode)
+        .build();
+
+    let mut stream = Stream::<Hls<TestPools>>::new(hls_config)
+        .await
+        .expect("create HLS stream");
+
+    let label = label.to_string();
+    let is_auto_abr = abr_variant == 99;
+    let result = spawn_blocking(move || {
+        let label = &label;
+
+        info!("[{label}] Phase 1: reading to EOF");
+        let mut buf = vec![0u8; 65536];
+        let Phase1Result {
+            total_read,
+            saw_eof,
+            read_error,
+            hit_deadline,
+        } = read_to_eof_or_deadline(&mut stream, &mut buf, label);
+
+        let stream_len = stream.len().unwrap_or(0);
+        info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
+
+        info!("[{label}] Phase 2: scanning fMP4 from pos 0");
+        let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
+
+        assert_boxes_contiguous(&boxes, label);
+
+        let moof_count = boxes.iter().filter(|(_, _, t)| t == "moof").count();
+        let mdat_count = boxes.iter().filter(|(_, _, t)| t == "mdat").count();
+
+        info!(
+            "[{label}] Phase 2 result: {} boxes, {moof_count} moofs, {mdat_count} mdats, \
+             last_end={last_end}, stream_len={stream_len}",
+            boxes.len()
+        );
+
+        assert!(
+            boxes.len() >= 4,
+            "[{label}] Expected at least 4 fMP4 boxes, found {}",
+            boxes.len()
+        );
+        assert_eq!(moof_count, mdat_count, "[{label}] moof/mdat count mismatch");
+
+        let read_vs_len = (total_read as i64) - (stream_len as i64);
+        debug!("[{label}] total_read - stream_len = {read_vs_len}");
+        assert!(
+            !hit_deadline || read_vs_len.unsigned_abs() < 1024,
+            "[{label}] Phase 1 hit deadline before EOF: total_read={total_read} \
+             stream_len={stream_len} delta={read_vs_len}"
+        );
+        if let Some(error) = read_error {
+            panic!("[{label}] Phase 1 ended with read error before EOF: {error}");
+        }
+        // WHY: For ABR-auto fMP4, a non-byte-continuous variant switch
+        // (`HlsCoord::commit_variant_switch`, `needs_byte_continuity=false`
+        // path) leaves the byte axis discontinuous: the reader physically
+        // streams `pre_switch_v0_bytes + post_switch_v_new_bytes`, while
+        // `stream.len()` only reports the active variant's natural total.
+        // The strict equality contract only holds for byte-continuous
+        // streams (single variant, or WAV ABR via `byte_shift`).
+        if is_auto_abr {
+            assert!(
+                saw_eof,
+                "[{label}] Phase 1 did not reach EOF: total_read={total_read} \
+                 stream_len={stream_len} delta={read_vs_len}"
+            );
+            assert!(
+                total_read >= stream_len.saturating_sub(1024),
+                "[{label}] Phase 1 read less than active variant size: \
+                 total_read={total_read} stream_len={stream_len} delta={read_vs_len}"
+            );
+        } else {
+            assert!(
+                read_vs_len.unsigned_abs() < 1024,
+                "[{label}] Phase 1 did not read full stream: total_read={total_read} \
+                 stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
+            );
+        }
+
+        // For ABR-auto streams Phase 2 re-scans bytes [0..stream_len) from
+        // the post-switch active variant. Phase 1's `total_read` may exceed
+        // that because it accumulated pre-switch v_old bytes too (see Phase
+        // 1 note above), so compare scan coverage against `stream_len`
+        // instead. Single-variant cases keep the strict equality against
+        // `total_read`.
+        let coverage_ref = if is_auto_abr { stream_len } else { total_read };
+        let coverage_delta = (last_end as i64) - (coverage_ref as i64);
+        debug!("[{label}] box coverage delta (last_end - {coverage_ref}) = {coverage_delta}");
+
+        assert!(
+            coverage_delta.unsigned_abs() < 1024,
+            "[{label}] fMP4 box coverage doesn't match active-variant size: \
+             last_end={last_end} coverage_ref={coverage_ref} total_read={total_read} \
+             stream_len={stream_len} delta={coverage_delta}"
+        );
+
+        info!("[{label}] PASSED");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await
+    .expect("join");
+
+    if let Err(e) = result {
+        panic!("{e}");
+    }
+    cancel.cancel();
+}

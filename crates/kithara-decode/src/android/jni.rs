@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use jni::JavaVM;
+use jni::{JavaVM, errors::Error};
 
 use super::error::AndroidBackendError;
 
@@ -13,7 +13,7 @@ pub(crate) fn ensure_current_thread_attached() -> Result<(), AndroidBackendError
     })?;
 
     let vm = unsafe { JavaVM::from_raw(context.vm().cast()) };
-    vm.attach_current_thread(|_env| Ok::<(), jni::errors::Error>(()))
+    vm.attach_current_thread(|_env| Ok::<(), Error>(()))
         .map_err(|error| {
             AndroidBackendError::operation("jni-attach-current-thread", error.to_string())
         })

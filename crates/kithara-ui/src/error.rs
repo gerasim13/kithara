@@ -1,3 +1,4 @@
+use ron::error::SpannedError;
 use thiserror::Error;
 
 use crate::ids::SourceUri;
@@ -9,7 +10,7 @@ pub enum UiDocError {
     Syntax {
         origin: SourceUri,
         #[source]
-        source: Box<ron::error::SpannedError>,
+        source: Box<SpannedError>,
     },
     #[error("{origin}: unknown schema {schema:?}")]
     UnknownSchema { origin: SourceUri, schema: String },

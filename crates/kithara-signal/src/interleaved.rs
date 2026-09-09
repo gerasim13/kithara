@@ -129,6 +129,7 @@ impl<'a> InterleavedView<'a> {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_test_fixtures::fixtures::{channel_signals, pcm_ramp, stereo_pair};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -138,16 +139,6 @@ mod tests {
 
     fn spec(channels: u16) -> AudioSpec {
         AudioSpec::new(channels, RATE)
-    }
-
-    fn signal(channels: usize, frames: usize) -> Vec<f32> {
-        (0..frames)
-            .flat_map(|frame| {
-                (0..channels).map(move |channel| {
-                    f32::from(u16::try_from(frame * 16 + channel).unwrap_or(u16::MAX))
-                })
-            })
-            .collect()
     }
 
     #[kithara::test]
@@ -160,11 +151,11 @@ mod tests {
     #[case::seven_channels(7)]
     #[case::eight_channels(8)]
     #[case::wide_nine_channels(9)]
-    fn planar_round_trip(#[case] channels: u16) {
+    fn planar_round_trip(#[case] channels: u16, channel_signals: [Vec<f32>; 9]) {
         let frames = FrameCount::new(5);
-        let source = signal(usize::from(channels), frames.get());
+        let source = &channel_signals[usize::from(channels) - 1];
         let interleaved =
-            InterleavedView::new(&source, spec(channels), frames).expect("fixture shape is exact");
+            InterleavedView::new(source, spec(channels), frames).expect("fixture shape is exact");
         let pools = pools_with_budget(128 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec(channels), frames).expect("fixture planar storage fits");
@@ -192,12 +183,12 @@ mod tests {
             .interleave_into(&mut output)
             .expect("interleave succeeds");
 
-        assert_eq!(output.samples(), source);
+        assert_eq!(output.samples(), source.as_slice());
     }
 
     #[kithara::test]
-    fn caller_channel_destination_is_checked() {
-        let source = [1.0, 3.0, 2.0, 6.0];
+    fn caller_channel_destination_is_checked(stereo_pair: Vec<f32>) {
+        let source = stereo_pair;
         let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
             .expect("stereo fixture shape is exact");
         let mut left = [0.0; 2];
@@ -221,8 +212,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn caller_channel_destination_receives_each_channel() {
-        let source = [1.0, 3.0, 2.0, 6.0];
+    fn caller_channel_destination_receives_each_channel(stereo_pair: Vec<f32>) {
+        let source = stereo_pair;
         let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
             .expect("stereo fixture shape is exact");
         let mut left = [0.0; 2];
@@ -236,18 +227,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn non_zero_planar_range_interleaves_only_selected_frames() {
+    fn non_zero_planar_range_interleaves_only_selected_frames(pcm_ramp: Vec<f32>) {
         let pools = pools_with_budget(64 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec(2), FrameCount::new(4)).expect("planar storage fits");
         planar
             .channel_mut(0)
             .expect("left channel exists")
-            .copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
+            .copy_from_slice(&pcm_ramp[..4]);
         planar
             .channel_mut(1)
             .expect("right channel exists")
-            .copy_from_slice(&[5.0, 6.0, 7.0, 8.0]);
+            .copy_from_slice(&pcm_ramp[4..8]);
         let mut output = [0.0; 4];
 
         let interleaved = planar
@@ -261,16 +252,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn range_shape_and_capacity_failures_are_typed() {
-        let source = [1.0, 2.0, 3.0, 4.0];
+    fn range_shape_and_capacity_failures_are_typed(pcm_ramp: Vec<f32>) {
+        let source = &pcm_ramp[..4];
         assert_eq!(
-            InterleavedView::new(&source, spec(2), FrameCount::new(3)),
+            InterleavedView::new(source, spec(2), FrameCount::new(3)),
             Err(SignalError::Shape {
                 expected_samples: 6,
                 actual_samples: 4,
             })
         );
-        let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
+        let view = InterleavedView::new(source, spec(2), FrameCount::new(2))
             .expect("fixture shape is exact");
         assert_eq!(
             view.range(1..3),

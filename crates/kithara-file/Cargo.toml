@@ -53,8 +53,8 @@ probe = []
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-events = { workspace = true }
-kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }

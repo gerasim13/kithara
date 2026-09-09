@@ -33,14 +33,6 @@ impl<A> Recording<A> {
 }
 
 impl<A: App> App for Recording<A> {
-    delegate::delegate! {
-        to self.inner {
-            fn document(&self) -> &str;
-            fn skin(&self) -> &Skin;
-            fn tick(&mut self);
-        }
-    }
-
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         self.inner.reads(with)
     }
@@ -48,6 +40,14 @@ impl<A: App> App for Recording<A> {
     fn update(&mut self, event: UiEvent) {
         self.published.push(event.clone());
         self.inner.update(event);
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn document(&self) -> &str;
+            fn skin(&self) -> &Skin;
+            fn tick(&mut self);
+        }
     }
 }
 
@@ -58,66 +58,8 @@ pub(super) struct Scenario<'config, A: App> {
 }
 
 impl<'config, A: App> Scenario<'config, A> {
-    /// Mounts the document and settles its first frame, so every control's
-    /// rect is real before a test acts on one.
-    pub(super) fn mount(app: A, config: Config<'config>, size: (u32, u32), scale: f64) -> Self {
-        let mut ui = Ui::new(Recording::new(app), config, size, scale)
-            .unwrap_or_else(|error| panic!("the scenario must mount: {error}"));
-        ui.frame(Duration::from_millis(16));
-        ui.render()
-            .unwrap_or_else(|error| panic!("the scenario must draw its first frame: {error}"));
-        Self { ui }
-    }
-
-    delegate::delegate! {
-        to self.ui {
-            /// Where a control stands, or nothing when nothing stands at that
-            /// path.
-            pub(super) fn rect_of(&self, path: &str) -> Option<Rect>;
-            /// Reuse counters for the pools this host draws every one of its
-            /// documents from.
-            pub(super) fn draw_pool_stats(&self) -> PoolStats;
-            /// The state the shown screen keeps for itself.
-            pub(super) fn view(&self) -> &ViewState;
-        }
-        to self.ui.app() {
-            /// The application the scenario is driving.
-            #[call(inner)]
-            pub(super) fn app(&self) -> &A;
-            /// Every event the document has published since the scenario mounted.
-            #[call(published)]
-            pub(super) fn published(&self) -> &[UiEvent];
-        }
-    }
-
-    /// Draws the current document.
-    pub(super) fn scene(&mut self) -> Scene {
-        self.ui
-            .scene()
-            .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
-    }
-
     pub(super) fn background(&self) -> Rgba {
         self.ui.background()
-    }
-
-    fn rect(&self, path: &str) -> Rect {
-        self.ui
-            .rect_of(path)
-            .unwrap_or_else(|| panic!("no control mounted at document path {path:?}"))
-    }
-
-    /// Presses at the control's own centre.
-    pub(super) fn press(&mut self, path: &str) {
-        let at = center(self.rect(path));
-        self.ui.input(pointer(at, PointerPhase::Move));
-        self.ui.input(pointer(at, PointerPhase::Down));
-    }
-
-    /// Releases at the control's own centre.
-    pub(super) fn release(&mut self, path: &str) {
-        let at = center(self.rect(path));
-        self.ui.input(pointer(at, PointerPhase::Up));
     }
 
     /// A press immediately followed by a release, at the control's centre.
@@ -157,12 +99,70 @@ impl<'config, A: App> Scenario<'config, A> {
         self.ui.input(pointer(end, PointerPhase::Up));
     }
 
+    /// Mounts the document and settles its first frame, so every control's
+    /// rect is real before a test acts on one.
+    pub(super) fn mount(app: A, config: Config<'config>, size: (u32, u32), scale: f64) -> Self {
+        let mut ui = Ui::new(Recording::new(app), config, size, scale)
+            .unwrap_or_else(|error| panic!("the scenario must mount: {error}"));
+        ui.frame(Duration::from_millis(16));
+        ui.render()
+            .unwrap_or_else(|error| panic!("the scenario must draw its first frame: {error}"));
+        Self { ui }
+    }
+
+    /// Presses at the control's own centre.
+    pub(super) fn press(&mut self, path: &str) {
+        let at = center(self.rect(path));
+        self.ui.input(pointer(at, PointerPhase::Move));
+        self.ui.input(pointer(at, PointerPhase::Down));
+    }
+
+    fn rect(&self, path: &str) -> Rect {
+        self.ui
+            .rect_of(path)
+            .unwrap_or_else(|| panic!("no control mounted at document path {path:?}"))
+    }
+
+    /// Releases at the control's own centre.
+    pub(super) fn release(&mut self, path: &str) {
+        let at = center(self.rect(path));
+        self.ui.input(pointer(at, PointerPhase::Up));
+    }
+
+    /// Draws the current document.
+    pub(super) fn scene(&mut self) -> Scene {
+        self.ui
+            .scene()
+            .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
+    }
+
     /// A wheel notch over the control's centre.
     pub(super) fn wheel(&mut self, path: &str, notches: f32) {
         let at = center(self.rect(path));
         self.ui.input(pointer(at, PointerPhase::Move));
         self.ui
             .input(Input::Wheel(Scroll::Lines { x: 0.0, y: notches }));
+    }
+
+    delegate::delegate! {
+        to self.ui {
+            /// Where a control stands, or nothing when nothing stands at that
+            /// path.
+            pub(super) fn rect_of(&self, path: &str) -> Option<Rect>;
+            /// Reuse counters for the pools this host draws every one of its
+            /// documents from.
+            pub(super) fn draw_pool_stats(&self) -> PoolStats;
+            /// The state the shown screen keeps for itself.
+            pub(super) fn view(&self) -> &ViewState;
+        }
+        to self.ui.app() {
+            /// The application the scenario is driving.
+            #[call(inner)]
+            pub(super) fn app(&self) -> &A;
+            /// Every event the document has published since the scenario mounted.
+            #[call(published)]
+            pub(super) fn published(&self) -> &[UiEvent];
+        }
     }
 }
 

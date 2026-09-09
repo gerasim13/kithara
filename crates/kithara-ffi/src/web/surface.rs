@@ -36,6 +36,20 @@ fn id_to_f64(item: &Arc<AudioPlayerItem>) -> f64 {
 /// track ids, JS callback objects) onto the typed facade methods.
 #[wasm_bindgen]
 impl AudioPlayer {
+    /// Start (or restart) the analysis pass for a queued track.
+    ///
+    /// # Errors
+    /// Returns a JS error if the id is not in the queue.
+    #[wasm_bindgen(js_name = analyze)]
+    pub fn analyze_js(&self, track_id: f64) -> Result<(), JsValue> {
+        let item = self
+            .item_by_id(track_id)
+            .ok_or_else(|| JsValue::from_str("unknown track id"))?;
+        self.inner
+            .analyze(item.track_id())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Append a track to the tail of the queue. Returns the allocated
     /// track id as an `f64`.
     ///
@@ -238,6 +252,20 @@ impl AudioPlayer {
             }
         };
         self.inner.set_abr_mode(mode);
+    }
+
+    /// Register a JS callback receiving one object per analysis publication:
+    /// `{ trackId, revision, settled, sampleRate, sourceFrames, waveform, beats, downbeats, bpm, beatFinal }`.
+    ///
+    /// # Errors
+    /// Returns a JS error if `obj` is not a callable function.
+    #[wasm_bindgen(js_name = setAnalysisObserver)]
+    pub fn set_analysis_observer_js(&self, obj: JsValue) -> Result<(), JsValue> {
+        let func: Function = obj
+            .dyn_into()
+            .map_err(|_| JsValue::from_str("observer must be a function"))?;
+        self.inner.set_analysis_observer(func);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = setCrossfadeSeconds)]

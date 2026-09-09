@@ -6,7 +6,7 @@ use std::{
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
-    thread::{self, JoinHandle},
+    thread::{Builder, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -198,7 +198,7 @@ impl Sampler {
 
         let (cancel, receiver) = mpsc::sync_channel(1);
         let worker_path = path.clone();
-        let worker = match thread::Builder::new()
+        let worker = match Builder::new()
             .name("stress-pressure".to_owned())
             .spawn(move || worker_entry(&worker_path, &receiver, start_timestamp_ms, &context))
         {

@@ -9,7 +9,7 @@ use kithara_platform::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
@@ -37,8 +37,8 @@ impl Consts {
 
 #[derive(Clone, Copy)]
 pub(super) struct FormatChange {
-    pub(super) frame: u64,
     pub(super) spec: AudioSpec,
+    pub(super) frame: u64,
 }
 
 /// Current public state of a broadcast.
@@ -59,13 +59,17 @@ pub struct BroadcastStatus {
 #[derive(Default)]
 pub(super) struct Control {
     accepting: AtomicBool,
-    dropped: AtomicU64,
     finish_requested: AtomicBool,
     generation_overflowed: AtomicBool,
     writing: AtomicBool,
+    dropped: AtomicU64,
 }
 
 impl Control {
+    pub(super) fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Acquire)
+    }
+
     fn finish(&self) {
         self.accepting.store(false, Ordering::Release);
         self.finish_requested.store(true, Ordering::Release);
@@ -75,10 +79,6 @@ impl Control {
         self.finish_requested.load(Ordering::Acquire)
             && !self.writing.load(Ordering::Acquire)
             && pcm_is_empty
-    }
-
-    pub(super) fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Acquire)
     }
 }
 
@@ -91,22 +91,25 @@ pub(super) struct Counters {
 /// RT endpoint installed in the Host master-output group.
 pub struct BroadcastOutput {
     control: Arc<Control>,
+    spec: AudioSpec,
     formats: HeapProd<FormatChange>,
     pcm: HeapProd<f32>,
-    spec: AudioSpec,
-    written_frames: u64,
     wake: Wake,
+    written_frames: u64,
 }
 
 impl BroadcastOutput {
     fn report_drop(&self, dropped: usize) {
         let dropped = u64::try_from(dropped).unwrap_or(u64::MAX);
-        let _ = self
-            .control
-            .dropped
-            .fetch_update(Ordering::Release, Ordering::Relaxed, |total| {
-                Some(total.saturating_add(dropped))
-            });
+        let mut total = self.control.dropped.load(Ordering::Relaxed);
+        while let Err(current) = self.control.dropped.compare_exchange_weak(
+            total,
+            total.saturating_add(dropped),
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            total = current;
+        }
     }
 }
 
@@ -116,8 +119,8 @@ impl LiveOutput for BroadcastOutput {
             return;
         }
         let change = FormatChange {
-            frame: self.written_frames,
             spec,
+            frame: self.written_frames,
         };
         if self.formats.try_push(change).is_err() {
             self.control
@@ -271,7 +274,6 @@ impl Broadcast {
             wake: wake.clone(),
         };
         let handle = BroadcastHandle {
-            completed: Mutex::new(Some(completed_rx)),
             control,
             counters,
             dispatcher,
@@ -279,8 +281,9 @@ impl Broadcast {
             scope,
             stop_timeout,
             task,
-            url: Arc::from(format!("http://{addr}/master.m3u8")),
             wake,
+            completed: Mutex::new(Some(completed_rx)),
+            url: Arc::from(format!("http://{addr}/master.m3u8")),
         };
         Ok((output, handle))
     }
@@ -288,15 +291,15 @@ impl Broadcast {
 
 /// Handle owning a live broadcast and its worker/origin lifecycle.
 pub struct BroadcastHandle {
-    completed: Mutex<Option<mpsc::Receiver<()>>>,
     control: Arc<Control>,
     counters: Arc<Counters>,
-    dispatcher: Dispatcher,
     origin: Arc<Origin>,
-    scope: CancelScope,
-    stop_timeout: kithara_platform::time::Duration,
-    task: TaskHandle,
     url: Arc<str>,
+    scope: CancelScope,
+    dispatcher: Dispatcher,
+    stop_timeout: Duration,
+    completed: Mutex<Option<mpsc::Receiver<()>>>,
+    task: TaskHandle,
     wake: Wake,
 }
 

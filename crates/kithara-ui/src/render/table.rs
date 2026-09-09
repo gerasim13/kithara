@@ -9,6 +9,7 @@ use kithara_platform::time::Instant;
 #[path = "table_paint.rs"]
 mod paint;
 
+use iced::advanced::widget::Id;
 use paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect};
 
 use super::{InputOwner, Skin, UiEvent, controls::RetainedCanvas, drag, index, scalar};
@@ -64,12 +65,7 @@ pub(crate) fn sync_table_scroll(
             operate(self);
         }
 
-        fn custom(
-            &mut self,
-            _id: Option<&iced::advanced::widget::Id>,
-            _bounds: Rectangle,
-            state: &mut dyn std::any::Any,
-        ) {
+        fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
             if let Some(state) = state.downcast_mut::<TableState>() {
                 state.sync(self.path, self.horizontal, self.pressed, self.vertical);
             }

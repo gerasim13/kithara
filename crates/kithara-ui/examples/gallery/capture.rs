@@ -34,15 +34,20 @@ pub(super) struct Shot {
 }
 
 impl Shot {
-    /// Which screen states this shot stands, and where: the page the nav
-    /// turns, and for the modules page the demo it stands at.
-    pub(super) fn stands(&self) -> impl Iterator<Item = (&'static str, Page)> {
-        [
-            (sections::PAGE, Some(self.tab)),
-            (sections::MODULE, self.module),
-        ]
-        .into_iter()
-        .filter_map(|(state, page)| page.map(|page| (state, page)))
+    /// Every gallery page in tab order, with the modules tab expanded per demo.
+    pub(super) fn all() -> Vec<Self> {
+        let mut pages = Vec::new();
+        for tab in sections::pages().iter().copied() {
+            if tab == sections::MODULES {
+                pages.extend(sections::modules().iter().copied().map(|module| Self {
+                    tab,
+                    module: Some(module),
+                }));
+            } else {
+                pages.push(Self { tab, module: None });
+            }
+        }
+        pages
     }
 
     /// Which screen states this shot stands open: the surface the page it
@@ -68,20 +73,15 @@ impl Shot {
         view
     }
 
-    /// Every gallery page in tab order, with the modules tab expanded per demo.
-    pub(super) fn all() -> Vec<Self> {
-        let mut pages = Vec::new();
-        for tab in sections::pages().iter().copied() {
-            if tab == sections::MODULES {
-                pages.extend(sections::modules().iter().copied().map(|module| Self {
-                    tab,
-                    module: Some(module),
-                }));
-            } else {
-                pages.push(Self { tab, module: None });
-            }
-        }
-        pages
+    /// Which screen states this shot stands, and where: the page the nav
+    /// turns, and for the modules page the demo it stands at.
+    pub(super) fn stands(&self) -> impl Iterator<Item = (&'static str, Page)> {
+        [
+            (sections::PAGE, Some(self.tab)),
+            (sections::MODULE, self.module),
+        ]
+        .into_iter()
+        .filter_map(|(state, page)| page.map(|page| (state, page)))
     }
 }
 

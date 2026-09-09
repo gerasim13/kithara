@@ -12,27 +12,48 @@
 
 # kithara-test-fixtures
 
-Audio test assets produced at build time and served from a content-addressed
-store on disk. A test asks for bytes and gets them; nothing is synthesized or
+Audio test assets produced at build time and served from a persistent store
+on disk. A test asks for bytes and gets them; nothing is synthesized or
 encoded inside a test's wall-clock deadline.
+
+Source edits, dependency updates and commits do not invalidate prepared assets.
+The explicit `cache-version` file selects the shared cache revision. Change it
+only when intentionally replacing the cached fixture set; use a new case name
+for an individual replacement. Rebuilds reuse existing entries.
+
+Set `KITHARA_FIXTURE_CACHE` to an absolute persistent directory before building.
+There is no temporary-directory default. For all local worktrees, configure it
+once in your user Cargo configuration (`~/.cargo/config.toml`):
+
+```toml
+[env]
+KITHARA_FIXTURE_CACHE = "/absolute/persistent/path/kithara-fixtures"
+```
+
+The environment can override this value. CI supplies a persistent directory
+shared across branches and platforms within each trust boundary. When changing
+the root, copy the existing version directory to preserve prepared assets.
 
 ## Usage
 
 ```rust
-use kithara_test_fixtures::store;
+use kithara_test_fixtures::fixtures::tone_mp3;
 
-let root = store::root_from_env();
-let namespace = store::namespace(&root, "0123456789abcdef");
-let id = store::asset_id("sine_wav", "a440_6s");
-
-if let Some(bytes) = store::read_entry(&namespace, &id, "wav") {
-    // serve the entry
+#[kithara::test]
+fn decode_prepared_audio(tone_mp3: &'static [u8]) {
+    // Pass the prepared bytes to the decoder under test.
+    assert!(!tone_mp3.is_empty());
 }
 ```
 
+Fixture providers read already-built assets. Signal generation, including tiny
+PCM inputs, belongs in `src/defs/` and runs through `build.rs`. Async providers
+may own local servers and return them with the prepared input; test parameters
+use `#[future(awt)]` to receive those resources after preparation.
+
 ## Key Types
 
-- `store::STORE_ENV` — `KITHARA_FIXTURE_CACHE`, the store root override. CI
+- `store::STORE_ENV` — `KITHARA_FIXTURE_CACHE`, the required store root. CI
   points it at a persisted directory so a fresh job starts warm.
 - `store::asset_id` — stable identity of one case.
 - `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic
@@ -48,10 +69,9 @@ if let Some(bytes) = store::read_entry(&namespace, &id, "wav") {
 - `src/defs/` — generator bodies, one function per asset, each carrying its
   cases. These compile into the build script only, never into the library.
 - `src/signal/` — waveforms, PCM buffers, and the RIFF writer. The workspace's
-  one way to make a signal, at build time or at run time.
+  one waveform implementation for build-time inputs and signal assertions.
 - `src/fmp4/` — the fMP4 mux: an `EncodedTrack` in, init and media segments out.
-  Shared the same way, because the build script packages the bodies it embeds
-  and the integration suite packages its HLS variants while it runs.
+  The build script packages both embedded bodies and registered HLS variants.
 - `build.rs` — resolves every declared case against the store, produces what is
   missing, and writes the accessor module.
 - `src/store.rs` — the store itself: identity, namespace, atomic writes, and the
@@ -61,6 +81,5 @@ An asset declared `#[kithara::asset(..., embed)]` is baked into the binary with
 `include_bytes!` instead of being read from disk at run time. It is still
 generated once, into the store, like every other asset.
 
-See [CONTEXT.md](CONTEXT.md) for the store layout, the invalidation contract,
-and why the generators stay out of the library while the signal primitives do
-not.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-fixtures)
+for the store layout, invalidation, and build-time preparation contracts.

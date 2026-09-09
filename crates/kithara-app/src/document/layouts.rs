@@ -1,5 +1,7 @@
 use kithara::{
     assets::{AssetLayout, AssetLayoutRegistry},
+    file::File,
+    hls::Hls,
     platform::sync::Arc,
     play::policy::{QueryIdentityLayout, QueryIdentityRule},
 };
@@ -18,8 +20,8 @@ pub(crate) fn asset_layouts(assets: &Assets) -> AssetLayoutRegistry {
         ))) as Arc<dyn AssetLayout>;
 
     AssetLayoutRegistry::default()
-        .with::<kithara::file::File<AppPools>>(Arc::clone(&layout))
-        .with::<kithara::hls::Hls<AppPools>>(layout)
+        .with::<File<AppPools>>(Arc::clone(&layout))
+        .with::<Hls<AppPools>>(layout)
 }
 
 #[cfg(test)]

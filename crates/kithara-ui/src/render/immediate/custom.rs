@@ -4,9 +4,12 @@ use iced::{
     Element, Event, Length, Rectangle, Renderer, Size as IcedSize, Theme,
     advanced::{
         Clipboard, Shell, Widget as IcedWidget,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         renderer,
-        widget::{self, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
     mouse::Cursor,
     time::Instant as IcedInstant,
@@ -147,12 +150,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
         );
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let resources = self.skin.text_resources();
         let state = self.state_for(tree);
         let asked = SizeLimits::new(
@@ -168,7 +166,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
                     widget.measure(&mut TextMeasurer::new(text), asked)
                 })
         });
-        layout::Node::new(limits.resolve(
+        Node::new(limits.resolve(
             Length::Fill,
             Length::Fill,
             IcedSize::new(intrinsic.w, intrinsic.h),
@@ -179,12 +177,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
         IcedSize::new(Length::Fill, Length::Fill)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(CustomState::new(self.kind, self.kinds))
+    fn state(&self) -> State {
+        State::new(CustomState::new(self.kind, self.kinds))
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<CustomState>()
+    fn tag(&self) -> Tag {
+        Tag::of::<CustomState>()
     }
 
     fn update(

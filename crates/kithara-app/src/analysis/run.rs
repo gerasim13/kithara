@@ -25,13 +25,81 @@ pub(super) enum Activity {
 }
 
 pub(super) struct Run {
-    pub(super) entry: usize,
     pub(super) axis: NonZeroU32,
     pub(super) rx: watch::Receiver<Option<AnalysisProgress>>,
     pub(super) requeue: bool,
+    pub(super) entry: usize,
 }
 
 impl Owner {
+    pub(super) async fn drive(&mut self) {
+        match &mut self.active {
+            Some(Activity::Running(run)) => {
+                if run.rx.changed().await.is_err() {
+                    self.finish_run();
+                    self.pump();
+                } else {
+                    self.publish();
+                }
+            }
+            Some(Activity::Committing(task)) => {
+                match task.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => warn!(%error, "analysis: final checkpoint commit failed"),
+                    Err(error) => warn!(%error, "analysis: final checkpoint task failed"),
+                }
+                self.active = None;
+                self.pump();
+            }
+            None => std::future::pending().await,
+        }
+    }
+
+    pub(super) fn finish_run(&mut self) {
+        let Some(Activity::Running(run)) = self.active.take() else {
+            return;
+        };
+        let progress = run.rx.borrow().clone();
+        let ran_its_course = progress
+            .as_ref()
+            .is_some_and(|progress| progress.analysis().is_settled());
+        let entry = &mut self.entries[run.entry];
+        let track_id = entry.track_id();
+        if run.requeue {
+            entry.set_stage(Stage::Queued);
+            self.pending.push_back(run.entry);
+        } else if ran_its_course {
+            entry.set_stage(Stage::Ended(run.axis));
+        } else {
+            entry.set_stage(Stage::Idle);
+        }
+        let Some(progress) = progress else {
+            debug!(
+                ?track_id,
+                requeued = run.requeue,
+                "analysis: pass closed without a value"
+            );
+            entry.release();
+            return;
+        };
+        let target = entry.target().clone();
+        self.cache.put(target.clone(), progress.clone());
+        let sent = entry.offer(progress.clone());
+        entry.release();
+        debug!(
+            ?track_id,
+            revision = progress.analysis().revision(),
+            complete = progress.analysis().is_complete(),
+            held = entry.is_held(),
+            sent,
+            requeued = run.requeue,
+            "analysis: final published"
+        );
+        let persistence = self.persistence.clone();
+        let commit = task::spawn(async move { persistence.store(target, progress).await });
+        self.active = Some(Activity::Committing(commit));
+    }
+
     pub(super) fn open_run(&mut self, index: usize, axis: NonZeroU32) -> Option<Run> {
         self.seed(index, axis);
         let fingerprint = self.runner.fingerprint();
@@ -81,34 +149,11 @@ impl Owner {
         );
         entry.set_stage(Stage::Running);
         Some(Run {
-            entry: index,
             axis,
             rx,
+            entry: index,
             requeue: false,
         })
-    }
-
-    pub(super) async fn drive(&mut self) {
-        match &mut self.active {
-            Some(Activity::Running(run)) => {
-                if run.rx.changed().await.is_err() {
-                    self.finish_run();
-                    self.pump();
-                } else {
-                    self.publish();
-                }
-            }
-            Some(Activity::Committing(task)) => {
-                match task.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => warn!(%error, "analysis: final checkpoint commit failed"),
-                    Err(error) => warn!(%error, "analysis: final checkpoint task failed"),
-                }
-                self.active = None;
-                self.pump();
-            }
-            None => std::future::pending().await,
-        }
     }
 
     pub(super) fn publish(&mut self) {
@@ -134,51 +179,6 @@ impl Owner {
             queued,
             "analysis: revision published"
         );
-    }
-
-    pub(super) fn finish_run(&mut self) {
-        let Some(Activity::Running(run)) = self.active.take() else {
-            return;
-        };
-        let progress = run.rx.borrow().clone();
-        let ran_its_course = progress
-            .as_ref()
-            .is_some_and(|progress| progress.analysis().is_settled());
-        let entry = &mut self.entries[run.entry];
-        let track_id = entry.track_id();
-        if run.requeue {
-            entry.set_stage(Stage::Queued);
-            self.pending.push_back(run.entry);
-        } else if ran_its_course {
-            entry.set_stage(Stage::Ended(run.axis));
-        } else {
-            entry.set_stage(Stage::Idle);
-        }
-        let Some(progress) = progress else {
-            debug!(
-                ?track_id,
-                requeued = run.requeue,
-                "analysis: pass closed without a value"
-            );
-            entry.release();
-            return;
-        };
-        let target = entry.target().clone();
-        self.cache.put(target.clone(), progress.clone());
-        let sent = entry.offer(progress.clone());
-        entry.release();
-        debug!(
-            ?track_id,
-            revision = progress.analysis().revision(),
-            complete = progress.analysis().is_complete(),
-            held = entry.is_held(),
-            sent,
-            requeued = run.requeue,
-            "analysis: final published"
-        );
-        let persistence = self.persistence.clone();
-        let commit = task::spawn(async move { persistence.store(target, progress).await });
-        self.active = Some(Activity::Committing(commit));
     }
 }
 

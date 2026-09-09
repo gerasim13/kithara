@@ -46,6 +46,14 @@ impl BeatGrid for PlayerMember {
 impl SyncGroup for PlayerMember {
     type NestedGroup = Self;
 
+    fn status(&self) -> SyncStatusSnapshot {
+        SyncGroup::status(self.inner.as_ref())
+    }
+
+    fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
+        self.inner.topology()
+    }
+
     delegate::delegate! {
         to self.inner.as_mut() {
             fn transact(
@@ -54,13 +62,5 @@ impl SyncGroup for PlayerMember {
             ) -> Result<SyncAdmission, SyncRejected<Self>>;
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
         }
-    }
-
-    fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.inner.topology()
-    }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(self.inner.as_ref())
     }
 }

@@ -153,10 +153,6 @@ impl LoadGeneration {
 pub struct TransportRevision(NonZeroU64);
 
 impl TransportRevision {
-    pub(crate) const fn from_raw(value: NonZeroU64) -> Self {
-        Self(value)
-    }
-
     /// Returns the next committed revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
@@ -167,6 +163,10 @@ impl TransportRevision {
     #[must_use]
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN)
+    }
+
+    pub(crate) const fn from_raw(value: NonZeroU64) -> Self {
+        Self(value)
     }
 }
 

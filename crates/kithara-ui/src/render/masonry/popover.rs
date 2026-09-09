@@ -20,6 +20,7 @@ use crate::{
     module::{PopoverAlign, PopoverAt},
     render::{Skin, place_popover},
     solve,
+    solve::{Limits, Size},
 };
 
 #[derive(Default)]
@@ -81,7 +82,7 @@ pub(crate) struct PopoverLayer {
     background: Rgba,
     border: Rgba,
     cap: Rgba,
-    declared: solve::Size<solve::Length>,
+    declared: Size<solve::Length>,
     child: WidgetPod<Node>,
     border_radius: f32,
     border_width: f32,
@@ -91,7 +92,7 @@ pub(crate) struct PopoverLayer {
 impl PopoverLayer {
     pub(crate) fn new(
         content: NewWidget<Node>,
-        declared: solve::Size<solve::Length>,
+        declared: Size<solve::Length>,
         state: Rc<PopoverState>,
         at: PopoverAt,
         align: PopoverAlign,
@@ -187,19 +188,19 @@ impl Widget for PopoverLayer {
         }
         let frame = f64::from(self.border_width);
         let cap = f64::from(self.cap_height);
-        let inner_max = solve::Size::new(
+        let inner_max = Size::new(
             (viewport.width - frame * 2.0).max(0.0).as_(),
             (viewport.height - frame * 2.0 - cap).max(0.0).as_(),
         );
-        let limits = solve::Limits::new(solve::Size::ZERO, inner_max);
+        let limits = Limits::new(Size::ZERO, inner_max);
         Node::set_child_limits(ctx, &mut self.child, limits);
         let measured = ctx.run_layout(&mut self.child, &box_constraints(limits));
         let content = limits.resolve(
             self.declared.width,
             self.declared.height,
-            solve::Size::new(measured.width.as_(), measured.height.as_()),
+            Size::new(measured.width.as_(), measured.height.as_()),
         );
-        let exact = solve::Limits::new(content, content);
+        let exact = Limits::new(content, content);
         Node::set_child_limits(ctx, &mut self.child, exact);
         ctx.run_layout(
             &mut self.child,
@@ -280,8 +281,8 @@ fn place(
             x: point.x.as_(),
             y: point.y.as_(),
         }),
-        solve::Size::new(surface.width.as_(), surface.height.as_()),
-        solve::Size::new(viewport.width.as_(), viewport.height.as_()),
+        Size::new(surface.width.as_(), surface.height.as_()),
+        Size::new(viewport.width.as_(), viewport.height.as_()),
         align,
     );
     Point::new(f64::from(point.x), f64::from(point.y))

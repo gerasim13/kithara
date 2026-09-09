@@ -6,16 +6,15 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-/// Overrides the store root. The build fingerprint is always appended to it.
+/// Required absolute store root. The cache revision is always appended to it.
 pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
 /// Leading digest bytes kept in an asset id. 128 bits: short enough to read in
 /// a path, wide enough that the build script's collision check never fires.
 const ASSET_ID_BYTES: usize = 16;
 
-/// Hex length of a build fingerprint (`u64`), shared by the build script that
-/// produces it and the contract test that checks the namespace layout.
-pub const FINGERPRINT_HEX_LEN: usize = 16;
+/// Explicit fixture cache revision, shared by build-time and integration assets.
+pub const CACHE_VERSION: &str = include_str!("../cache-version");
 
 /// Stable identity of one asset case: `sha2-256(func || 0x00 || case)`.
 ///
@@ -30,23 +29,22 @@ pub fn asset_id(func: &str, case: &str) -> String {
     hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
 }
 
-/// Store root when [`STORE_ENV`] is unset.
-#[must_use]
-pub fn default_root() -> PathBuf {
-    std::env::temp_dir().join("kithara-fixture-cache")
-}
-
-/// Store root: [`STORE_ENV`] when set, [`default_root`] otherwise.
-#[must_use]
-pub fn root_from_env() -> PathBuf {
-    std::env::var_os(STORE_ENV).map_or_else(default_root, PathBuf::from)
-}
-
-/// Directory holding every entry of one build fingerprint.
+/// Reads the explicitly configured persistent store root.
 ///
-/// The fingerprint is the only thing between a changed generator and the bytes
-/// the previous one produced: entries are content-addressed over the accessor
-/// name alone.
+/// # Errors
+///
+/// Returns an error when the parameter is missing or is not an absolute path.
+pub fn root_from_env() -> std::io::Result<PathBuf> {
+    let root = std::env::var_os(STORE_ENV).map(PathBuf::from);
+    root.filter(|path| path.is_absolute()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("set {STORE_ENV} to an absolute persistent directory shared by worktrees"),
+        )
+    })
+}
+
+/// Directory holding every entry of one explicit cache revision.
 #[must_use]
 pub fn namespace(root: &Path, fingerprint: &str) -> PathBuf {
     root.join(fingerprint)
@@ -228,13 +226,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn explicit_root_wins_over_the_default() {
-        // Read-only probe: assert the default only when nothing overrides it,
-        // because the `cold` profile exports the variable.
-        if std::env::var_os(STORE_ENV).is_some() {
-            return;
-        }
-        assert_eq!(root_from_env(), default_root());
-        assert!(default_root().starts_with(std::env::temp_dir()));
+    fn configured_root_is_absolute() {
+        let root = root_from_env().expect("configured persistent fixture root");
+        assert!(root.is_absolute());
+        assert_eq!(Some(root.into_os_string()), std::env::var_os(STORE_ENV));
     }
 }

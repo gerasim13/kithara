@@ -26,18 +26,18 @@ impl SourceEnd {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceSpan {
-    /// Inclusive decoded source frame.
-    #[field(get, copy)]
-    start: u64,
-    /// Exclusive decoded source frame.
-    #[field(get, copy)]
-    end: u64,
     /// Sample rate of the decoded source coordinate.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Exclusive decoded source frame.
+    #[field(get, copy)]
+    end: u64,
     /// Opaque producer render revision represented by this output span.
     #[field(get, copy, with)]
     render_revision: u64,
+    /// Inclusive decoded source frame.
+    #[field(get, copy)]
+    start: u64,
 }
 
 impl SourceSpan {

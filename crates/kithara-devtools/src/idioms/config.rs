@@ -38,6 +38,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
+    pub(crate) derivable_ranged: DerivableRangedConfig,
+    #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
@@ -88,6 +90,22 @@ pub(crate) enum DerivableSeverity {
     #[default]
     Warn,
     Deny,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct DerivableRangedConfig {
+    pub(crate) enabled: bool,
+    pub(crate) severity: DerivableSeverity,
+}
+
+impl Default for DerivableRangedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: DerivableSeverity::Deny,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

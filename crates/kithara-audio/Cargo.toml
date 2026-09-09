@@ -62,8 +62,8 @@ resample-rubato = ["kithara-resampler/resample-rubato"]
 kithara-abr = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
+kithara-derive = { workspace = true }
 kithara-events = { workspace = true }
-kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }

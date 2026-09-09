@@ -7,7 +7,7 @@ use std::{
 
 use pin_project_lite::pin_project;
 
-use super::system::{self, credit, gate::TaskGate};
+use super::system::{self, credit::AsyncPollGuard, gate::TaskGate};
 use crate::sync::Arc;
 
 pin_project! {
@@ -49,7 +49,7 @@ impl<F: Future> Future for Participating<F> {
         // within it (e.g. a blocking `recv` reaching the engine) is treated as a BRIDGED wait - releasing this task's `active_async` slot
         // while it blocks instead of pinning the clock.
         let outcome = {
-            let _poll_guard = credit::AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
+            let _poll_guard = AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
             this.fut.poll(&mut gate_cx)
         };
         match outcome {

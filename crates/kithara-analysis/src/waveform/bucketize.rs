@@ -28,27 +28,32 @@ pub(crate) fn bucketize<T: Copy>(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::{
+        analysis_fixtures::{bucket_components, bucket_ranges, bucket_short, bucket_sine},
+        fixtures::pcm_ramp,
+    };
     use kithara_test_utils::kithara;
 
     use super::bucketize;
 
     #[kithara::test]
-    fn zero_buckets_is_empty() {
-        let out = bucketize(&[1.0_f32, 2.0, 3.0], 0, 0.0, f32::max);
+    fn zero_buckets_is_empty(pcm_ramp: Vec<f32>) {
+        let out = bucketize(&pcm_ramp[..3], 0, 0.0, f32::max);
         assert!(out.is_empty());
     }
 
     #[kithara::test]
-    fn folds_each_range_with_combine() {
+    fn folds_each_range_with_combine(bucket_ranges: Vec<f32>) {
         // 6 values, 3 buckets -> ranges [0,2), [2,4), [4,6); max per range.
-        let raw = [0.1_f32, 0.9, 0.2, 0.3, 0.8, 0.4];
+        let raw = bucket_ranges;
         let out = bucketize(&raw, 3, 0.0, f32::max);
         assert_eq!(out, vec![0.9, 0.3, 0.8]);
     }
 
     #[kithara::test]
-    fn component_add_combine() {
-        let raw = [[1.0_f32, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]];
+    fn component_add_combine(bucket_components: Vec<f32>) {
+        let (raw, remainder) = bucket_components.as_chunks::<3>();
+        assert!(remainder.is_empty());
         let add = |a: [f32; 3], b: [f32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
         // 3 values into 1 bucket -> the whole range folds together.
         let out = bucketize(&raw, 1, [0.0; 3], add);
@@ -56,17 +61,17 @@ mod tests {
     }
 
     #[kithara::test]
-    fn normalized_mapping_splits_evenly() {
+    fn normalized_mapping_splits_evenly(pcm_ramp: Vec<f32>) {
         // 4 values, 2 buckets -> [0,2) and [2,4): first half vs second half.
-        let raw = [1.0_f32, 2.0, 3.0, 4.0];
+        let raw = &pcm_ramp[..4];
         let out = bucketize(&raw, 2, 0.0, f32::max);
         assert_eq!(out, vec![2.0, 4.0]);
     }
 
     #[kithara::test]
-    fn short_track_empty_ranges_fill_empty() {
+    fn short_track_empty_ranges_fill_empty(bucket_short: Vec<f32>) {
         // 3 values, 5 buckets: some bucket ranges are empty and must use `empty`.
-        let raw = [0.5_f32, 0.25, 0.75];
+        let raw = bucket_short;
         let out = bucketize(&raw, 5, -1.0, f32::max);
         assert_eq!(out.len(), 5);
         // Ranges: [0,0) [0,1) [1,1) [1,2) [2,3) -> empty,0.5,empty,0.25,0.75
@@ -80,8 +85,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn deterministic_for_same_input() {
-        let raw: Vec<f32> = (0..1000_u16).map(|i| (f32::from(i) * 0.01).sin()).collect();
+    fn deterministic_for_same_input(bucket_sine: Vec<f32>) {
+        let raw = bucket_sine;
         assert_eq!(
             bucketize(&raw, 64, 0.0, f32::max),
             bucketize(&raw, 64, 0.0, f32::max),

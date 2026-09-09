@@ -3,6 +3,19 @@ use std::num::NonZeroU32;
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_fixtures::unit_fixtures::{
+    trim_codec_priming_drops_leading_frames_and_fades_in,
+    trim_codec_priming_metadata_takes_precedence_when_combined, trim_ramp, trim_seek, trim_silence,
+    trim_silence_trim_above_threshold_preserves_audio,
+    trim_silence_trim_below_threshold_is_trimmed,
+    trim_silence_trim_does_not_introduce_click_at_boundary,
+    trim_silence_trim_min_frames_boundary_at_min, trim_silence_trim_min_frames_boundary_under_min,
+    trim_silence_trim_no_op_with_immediate_content,
+    trim_silence_trim_preserves_quiet_intro_below_threshold_then_above,
+    trim_silence_trim_scan_window_exhausted_preserves_audio,
+    trim_silence_trim_trailing_disabled_by_default, trim_silence_trim_trailing_enabled,
+    trim_stereo_quiet, trim_stereo_silence, trim_trailing_sine,
+};
 use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
@@ -19,11 +32,9 @@ fn sample_buffer(values: &[f32]) -> SampleBuffer {
     buffer
 }
 
-fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
+fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize, input: &[f32]) -> AudioChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
-    let pcm = (0..samples)
-        .map(|idx| f32::from(u16::try_from(idx).expect("BUG: test sample fits in u16")))
-        .collect::<Vec<_>>();
+    let pcm = &input[..samples];
     AudioChunk::new(
         AudioChunkInfo {
             spec,
@@ -34,7 +45,7 @@ fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
     )
 }
 
-fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
+fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize, input: &[f32]) -> AudioChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
     AudioChunk::new(
         AudioChunkInfo {
@@ -42,7 +53,7 @@ fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk
             frame_offset,
             ..Default::default()
         },
-        sample_buffer(&vec![0.0; samples]),
+        sample_buffer(&input[..samples]),
     )
 }
 
@@ -84,14 +95,14 @@ fn collect_pcm(out: &[AudioChunk]) -> Vec<f32> {
 }
 
 #[kithara::test]
-fn leading_trim_updates_offset_and_timestamp() {
+fn leading_trim_updates_offset_and_timestamp(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 576,
         trailing_frames: 0,
     });
 
-    let mut ready = trimmer.push(chunk(spec, 0, 1024));
+    let mut ready = trimmer.push(chunk(spec, 0, 1024, &trim_ramp));
     assert_eq!(ready.len(), 1);
     let out = ready.remove(0);
     assert_eq!(out.frames(), 448);
@@ -101,17 +112,17 @@ fn leading_trim_updates_offset_and_timestamp() {
 }
 
 #[kithara::test]
-fn leading_trim_can_consume_multiple_chunks() {
+fn leading_trim_can_consume_multiple_chunks(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 2400,
         trailing_frames: 0,
     });
 
-    assert!(trimmer.push(chunk(spec, 0, 1024)).is_empty());
-    assert!(trimmer.push(chunk(spec, 1024, 1024)).is_empty());
+    assert!(trimmer.push(chunk(spec, 0, 1024, &trim_ramp)).is_empty());
+    assert!(trimmer.push(chunk(spec, 1024, 1024, &trim_ramp)).is_empty());
 
-    let mut ready = trimmer.push(chunk(spec, 2048, 1024));
+    let mut ready = trimmer.push(chunk(spec, 2048, 1024, &trim_ramp));
     assert_eq!(ready.len(), 1);
     let out = ready.remove(0);
     assert_eq!(out.frames(), 672);
@@ -120,7 +131,7 @@ fn leading_trim_can_consume_multiple_chunks() {
 }
 
 #[kithara::test]
-fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
+fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
@@ -129,8 +140,8 @@ fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
     .with_tail_compensation(Some(GaplessTailCompensation::new(5)));
 
     let mut output = super::GaplessOutput::new();
-    output.extend(trimmer.push(chunk(spec, 0, 2)));
-    output.extend(trimmer.push(chunk(spec, 2, 2)));
+    output.extend(trimmer.push(chunk(spec, 0, 2, &trim_ramp)));
+    output.extend(trimmer.push(chunk(spec, 2, 2, &trim_ramp)));
     output.extend(trimmer.flush());
 
     assert_eq!(output.len(), 2);
@@ -139,7 +150,7 @@ fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
 }
 
 #[kithara::test]
-fn tail_compensation_is_identity_without_deficit() {
+fn tail_compensation_is_identity_without_deficit(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
@@ -148,8 +159,8 @@ fn tail_compensation_is_identity_without_deficit() {
     .with_tail_compensation(Some(GaplessTailCompensation::new(4)));
 
     let mut output = super::GaplessOutput::new();
-    output.extend(trimmer.push(chunk(spec, 0, 2)));
-    output.extend(trimmer.push(chunk(spec, 2, 2)));
+    output.extend(trimmer.push(chunk(spec, 0, 2, &trim_ramp)));
+    output.extend(trimmer.push(chunk(spec, 2, 2, &trim_ramp)));
     output.extend(trimmer.flush());
 
     assert_eq!(output.len(), 1);
@@ -158,16 +169,16 @@ fn tail_compensation_is_identity_without_deficit() {
 }
 
 #[kithara::test]
-fn trailing_trim_buffers_until_flush() {
+fn trailing_trim_buffers_until_flush(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
         trailing_frames: 64,
     });
 
-    assert!(trimmer.push(chunk(spec, 0, 32)).is_empty());
+    assert!(trimmer.push(chunk(spec, 0, 32, &trim_ramp)).is_empty());
 
-    let mut ready = trimmer.push(chunk(spec, 32, 64));
+    let mut ready = trimmer.push(chunk(spec, 32, 64, &trim_ramp));
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 32);
 
@@ -176,23 +187,27 @@ fn trailing_trim_buffers_until_flush() {
 }
 
 #[kithara::test]
-fn trailing_trim_drops_tail_on_flush() {
+fn trailing_trim_drops_tail_on_flush(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
         trailing_frames: 2_048,
     });
 
-    assert!(trimmer.push(chunk(spec, 0, 1_024)).is_empty());
-    assert!(trimmer.push(chunk(spec, 1_024, 1_024)).is_empty());
-    assert_eq!(trimmer.push(chunk(spec, 2_048, 1_024)).len(), 1);
+    assert!(trimmer.push(chunk(spec, 0, 1_024, &trim_ramp)).is_empty());
+    assert!(
+        trimmer
+            .push(chunk(spec, 1_024, 1_024, &trim_ramp))
+            .is_empty()
+    );
+    assert_eq!(trimmer.push(chunk(spec, 2_048, 1_024, &trim_ramp)).len(), 1);
 
     let ready = trimmer.flush();
     assert!(ready.is_empty());
 }
 
 #[kithara::test]
-fn trailing_trim_handles_more_than_inline_tail_chunks() {
+fn trailing_trim_handles_more_than_inline_tail_chunks(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
@@ -201,10 +216,10 @@ fn trailing_trim_handles_more_than_inline_tail_chunks() {
     let mut output = super::GaplessOutput::new();
 
     for frame in 0..8 {
-        assert!(trimmer.push(chunk(spec, frame, 1)).is_empty());
+        assert!(trimmer.push(chunk(spec, frame, 1, &trim_ramp)).is_empty());
     }
 
-    output.extend(trimmer.push(chunk(spec, 8, 1)));
+    output.extend(trimmer.push(chunk(spec, 8, 1, &trim_ramp)));
     output.extend(trimmer.flush());
 
     assert_eq!(output.len(), 1);
@@ -214,27 +229,27 @@ fn trailing_trim_handles_more_than_inline_tail_chunks() {
 }
 
 #[kithara::test]
-fn disabled_trimmer_passes_through() {
+fn disabled_trimmer_passes_through(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::disabled();
-    let mut ready = trimmer.push(chunk(spec, 0, 128));
+    let mut ready = trimmer.push(chunk(spec, 0, 128, &trim_ramp));
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 128);
     assert!(trimmer.flush().is_empty());
 }
 
 #[kithara::test]
-fn notify_seek_resets_leading_only() {
+fn notify_seek_resets_leading_only(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 128,
         trailing_frames: 64,
     });
 
-    assert!(trimmer.push(chunk(spec, 0, 64)).is_empty());
+    assert!(trimmer.push(chunk(spec, 0, 64, &trim_ramp)).is_empty());
     trimmer.notify_seek(&DropChunks);
 
-    assert!(trimmer.push(chunk(spec, 64, 128)).is_empty());
+    assert!(trimmer.push(chunk(spec, 64, 128, &trim_ramp)).is_empty());
 
     let mut ready = trimmer.flush();
     assert_eq!(ready.len(), 1);
@@ -242,21 +257,23 @@ fn notify_seek_resets_leading_only() {
 }
 
 #[kithara::test]
-fn codec_priming_with_zero_frames_is_disabled() {
+fn codec_priming_with_zero_frames_is_disabled(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::codec_priming(0, spec.sample_rate.get());
-    let mut ready = trimmer.push(chunk(spec, 0, 64));
+    let mut ready = trimmer.push(chunk(spec, 0, 64, &trim_ramp));
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 64);
 }
 
 #[kithara::test]
-fn codec_priming_drops_leading_frames_and_fades_in() {
+fn codec_priming_drops_leading_frames_and_fades_in(
+    trim_codec_priming_drops_leading_frames_and_fades_in: Vec<f32>,
+) {
     let spec = mono_spec();
     let trim = 100u64;
     let trim_len = usize::try_from(trim).expect("BUG: test trim fits in usize");
     let total_frames = trim_len + fade_frames_for(spec) + 32;
-    let pcm = vec![1.0_f32; total_frames];
+    let pcm = trim_codec_priming_drops_leading_frames_and_fades_in;
     let mut trimmer = GaplessTrimmer::codec_priming(trim, spec.sample_rate.get());
 
     let ready = trimmer.push(custom_chunk(spec, 0, pcm));
@@ -285,14 +302,16 @@ fn codec_priming_drops_leading_frames_and_fades_in() {
 }
 
 #[kithara::test]
-fn codec_priming_metadata_takes_precedence_when_combined() {
+fn codec_priming_metadata_takes_precedence_when_combined(
+    trim_codec_priming_metadata_takes_precedence_when_combined: Vec<f32>,
+) {
     let spec = mono_spec();
     let metadata_trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 50,
         trailing_frames: 0,
     });
     let codec_trimmer = GaplessTrimmer::codec_priming(50, spec.sample_rate.get());
-    let pcm = vec![0.5_f32; 200];
+    let pcm = trim_codec_priming_metadata_takes_precedence_when_combined;
 
     let mut from_info = metadata_trimmer;
     let from_info_out = collect_pcm(&from_info.push(custom_chunk(spec, 0, pcm.clone())));
@@ -304,12 +323,11 @@ fn codec_priming_metadata_takes_precedence_when_combined() {
 }
 
 #[kithara::test]
-fn silence_trim_below_threshold_is_trimmed() {
+fn silence_trim_below_threshold_is_trimmed(trim_silence_trim_below_threshold_is_trimmed: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.0003_f32; 300];
-    pcm.extend(std::iter::repeat_n(0.5, 100));
+    let pcm = trim_silence_trim_below_threshold_is_trimmed;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -319,11 +337,13 @@ fn silence_trim_below_threshold_is_trimmed() {
 }
 
 #[kithara::test]
-fn silence_trim_above_threshold_preserves_audio() {
+fn silence_trim_above_threshold_preserves_audio(
+    trim_silence_trim_above_threshold_preserves_audio: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let pcm = vec![3.16e-3_f32; 300];
+    let pcm = trim_silence_trim_above_threshold_preserves_audio;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -333,12 +353,13 @@ fn silence_trim_above_threshold_preserves_audio() {
 }
 
 #[kithara::test]
-fn silence_trim_preserves_quiet_intro_below_threshold_then_above() {
+fn silence_trim_preserves_quiet_intro_below_threshold_then_above(
+    trim_silence_trim_preserves_quiet_intro_below_threshold_then_above: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.0003_f32; 200];
-    pcm.extend(std::iter::repeat_n(0.001_8, 200));
+    let pcm = trim_silence_trim_preserves_quiet_intro_below_threshold_then_above;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -351,12 +372,13 @@ fn silence_trim_preserves_quiet_intro_below_threshold_then_above() {
 }
 
 #[kithara::test]
-fn silence_trim_min_frames_boundary_under_min() {
+fn silence_trim_min_frames_boundary_under_min(
+    trim_silence_trim_min_frames_boundary_under_min: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.0_f32; 31];
-    pcm.extend(std::iter::repeat_n(0.5, 64));
+    let pcm = trim_silence_trim_min_frames_boundary_under_min;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -366,12 +388,11 @@ fn silence_trim_min_frames_boundary_under_min() {
 }
 
 #[kithara::test]
-fn silence_trim_min_frames_boundary_at_min() {
+fn silence_trim_min_frames_boundary_at_min(trim_silence_trim_min_frames_boundary_at_min: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.0_f32; 32];
-    pcm.extend(std::iter::repeat_n(0.5, 64));
+    let pcm = trim_silence_trim_min_frames_boundary_at_min;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -381,7 +402,9 @@ fn silence_trim_min_frames_boundary_at_min() {
 }
 
 #[kithara::test]
-fn silence_trim_scan_window_exhausted_preserves_audio() {
+fn silence_trim_scan_window_exhausted_preserves_audio(
+    trim_silence_trim_scan_window_exhausted_preserves_audio: Vec<f32>,
+) {
     let spec = mono_spec();
     let params = SilenceTrimParams {
         threshold_db: 60.0,
@@ -391,7 +414,7 @@ fn silence_trim_scan_window_exhausted_preserves_audio() {
     };
     let mut trimmer = GaplessTrimmer::silence_trim(params);
 
-    let pcm = vec![0.0_f32; 300];
+    let pcm = trim_silence_trim_scan_window_exhausted_preserves_audio;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -401,11 +424,13 @@ fn silence_trim_scan_window_exhausted_preserves_audio() {
 }
 
 #[kithara::test]
-fn silence_trim_no_op_with_immediate_content() {
+fn silence_trim_no_op_with_immediate_content(
+    trim_silence_trim_no_op_with_immediate_content: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let pcm = vec![0.5_f32; 256];
+    let pcm = trim_silence_trim_no_op_with_immediate_content;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -415,12 +440,13 @@ fn silence_trim_no_op_with_immediate_content() {
 }
 
 #[kithara::test]
-fn silence_trim_trailing_disabled_by_default() {
+fn silence_trim_trailing_disabled_by_default(
+    trim_silence_trim_trailing_disabled_by_default: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.5_f32; 64];
-    pcm.extend(std::iter::repeat_n(0.0, 64));
+    let pcm = trim_silence_trim_trailing_disabled_by_default;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -429,7 +455,7 @@ fn silence_trim_trailing_disabled_by_default() {
 }
 
 #[kithara::test]
-fn silence_trim_trailing_enabled() {
+fn silence_trim_trailing_enabled(trim_silence_trim_trailing_enabled: Vec<f32>) {
     let spec = mono_spec();
     let params = SilenceTrimParams {
         threshold_db: 60.0,
@@ -440,9 +466,7 @@ fn silence_trim_trailing_enabled() {
     let mut trimmer = GaplessTrimmer::silence_trim(params);
 
     let audible_frames = 256;
-    let silent_frames = 480;
-    let mut pcm = vec![0.5_f32; audible_frames];
-    pcm.extend(std::iter::repeat_n(0.0, silent_frames));
+    let pcm = trim_silence_trim_trailing_enabled;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -474,7 +498,9 @@ fn silence_trim_trailing_enabled() {
 }
 
 #[kithara::test]
-fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
+fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal(
+    trim_trailing_sine: Vec<f32>,
+) {
     let spec = mono_spec();
     let params = SilenceTrimParams {
         threshold_db: 60.0,
@@ -485,14 +511,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
     let mut trimmer = GaplessTrimmer::silence_trim(params);
 
     let sine_frames: u32 = 4_800;
-    let silent_frames: u32 = 480;
-    let mut pcm = Vec::with_capacity((sine_frames + silent_frames) as usize);
-    for n in 0..sine_frames {
-        let t = f64::from(n) / f64::from(spec.sample_rate.get());
-        let s: f64 = 0.5 * (2.0 * std::f64::consts::PI * 800.0 * t).sin();
-        pcm.push(num_traits::cast::AsPrimitive::<f32>::as_(s));
-    }
-    pcm.extend(std::iter::repeat_n(0.0, silent_frames as usize));
+    let pcm = trim_trailing_sine;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();
@@ -514,18 +533,18 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
 }
 
 #[kithara::test]
-fn silence_trim_seek_disables_leading_only() {
+fn silence_trim_seek_disables_leading_only(trim_silence: Vec<f32>, trim_seek: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    assert!(trimmer.push(silent_chunk(spec, 0, 128)).is_empty());
-    trimmer.notify_seek(&DropChunks);
-
     assert!(
         trimmer
-            .push(custom_chunk(spec, 128, vec![0.0, 0.0, 3.0, 4.0]))
+            .push(silent_chunk(spec, 0, 128, &trim_silence))
             .is_empty()
     );
+    trimmer.notify_seek(&DropChunks);
+
+    assert!(trimmer.push(custom_chunk(spec, 128, trim_seek)).is_empty());
 
     let mut flushed = trimmer.flush();
     assert_eq!(flushed.len(), 1);
@@ -535,11 +554,15 @@ fn silence_trim_seek_disables_leading_only() {
 }
 
 #[kithara::test]
-fn silence_trim_preserves_all_silence_track() {
+fn silence_trim_preserves_all_silence_track(trim_silence: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    assert!(trimmer.push(silent_chunk(spec, 0, 128)).is_empty());
+    assert!(
+        trimmer
+            .push(silent_chunk(spec, 0, 128, &trim_silence))
+            .is_empty()
+    );
 
     let mut flushed = trimmer.flush();
     assert_eq!(flushed.len(), 1);
@@ -549,22 +572,21 @@ fn silence_trim_preserves_all_silence_track() {
 }
 
 #[kithara::test]
-fn silence_trim_respects_multi_channel_threshold() {
+fn silence_trim_respects_multi_channel_threshold(
+    trim_stereo_silence: Vec<f32>,
+    trim_stereo_quiet: Vec<f32>,
+) {
     let spec = stereo_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     assert!(
         trimmer
-            .push(custom_chunk(
-                spec,
-                0,
-                vec![0.0; 32 * usize::from(spec.channels)]
-            ))
+            .push(custom_chunk(spec, 0, trim_stereo_silence))
             .is_empty()
     );
     assert!(
         trimmer
-            .push(custom_chunk(spec, 32, vec![0.0, 2.0e-3]))
+            .push(custom_chunk(spec, 32, trim_stereo_quiet))
             .is_empty()
     );
 
@@ -577,12 +599,13 @@ fn silence_trim_respects_multi_channel_threshold() {
 }
 
 #[kithara::test]
-fn silence_trim_does_not_introduce_click_at_boundary() {
+fn silence_trim_does_not_introduce_click_at_boundary(
+    trim_silence_trim_does_not_introduce_click_at_boundary: Vec<f32>,
+) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
-    let mut pcm = vec![0.0_f32; 64];
-    pcm.extend(std::iter::repeat_n(1.0, 256));
+    let pcm = trim_silence_trim_does_not_introduce_click_at_boundary;
     assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
     let flushed = trimmer.flush();

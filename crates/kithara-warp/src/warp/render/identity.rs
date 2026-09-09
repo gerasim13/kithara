@@ -10,11 +10,11 @@ use crate::{RenderReader, RenderSnapshot, WarpConfig};
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    context: RenderReader,
     committed: Option<RenderSnapshot>,
     prepared: Option<usize>,
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
+    context: RenderReader,
 }
 
 impl<S> WarpRenderer<S>
@@ -42,6 +42,14 @@ where
         true
     }
 
+    /// Drain one buffered output chunk after source EOF or a transition.
+    pub const fn flush(&mut self) -> Option<AudioChunk> {
+        None
+    }
+
+    /// Prepare deferred renderer state for the current source format.
+    pub const fn prepare(&mut self, _spec: AudioSpec) {}
+
     /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(
         &mut self,
@@ -66,30 +74,10 @@ where
         Some(FrameCount::new(frames))
     }
 
-    /// Whether rendering needs worker-owned staging buffers.
-    #[must_use]
-    pub const fn requires_staging(&self) -> bool {
-        false
-    }
-
-    /// Drain one buffered output chunk after source EOF or a transition.
-    pub const fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-
-    /// Prepare deferred renderer state for the current source format.
-    pub const fn prepare(&mut self, _spec: AudioSpec) {}
-
     /// Render one complete decoded source chunk.
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.prepared = None;
         self.render_prepared(chunk)
-    }
-
-    /// Render the source span selected by [`Self::prepare_quantum`].
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        let frames = self.prepared.take()?;
-        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
     }
 
     fn render_prepared(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
@@ -128,10 +116,22 @@ where
         Some(chunk)
     }
 
+    /// Render the source span selected by [`Self::prepare_quantum`].
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let frames = self.prepared.take()?;
+        (chunk.frames() == frames).then(|| self.render_prepared(chunk))?
+    }
+
     /// Exact decoded-source boundary represented by the latest emitted samples.
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
+    }
+
+    /// Whether rendering needs worker-owned staging buffers.
+    #[must_use]
+    pub const fn requires_staging(&self) -> bool {
+        false
     }
 
     /// Discard renderer state after a source discontinuity.
@@ -153,20 +153,21 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::AudioChunkInfo;
+    use kithara_test_fixtures::unit_fixtures::warp_pair;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test]
-    fn renderer_preserves_samples_exactly() {
+    fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let mut meta = AudioChunkInfo::default();
         meta.spec = spec;
         meta.frames = 1;
         meta.frame_offset = 41;
-        let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
         let input_ptr = input.samples.as_ptr();
         let config = WarpConfig::builder()
             .stretch(StretchControls::new(1.5))

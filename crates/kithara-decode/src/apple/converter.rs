@@ -9,8 +9,8 @@ use crate::GaplessInfo;
 
 pub(crate) type ConverterInputState = AudioConverterPacketInput;
 
-/// Rate the codec's embedded `AudioConverter` should emit at, given the
-/// conversion the caller asked for. See CONTEXT.md "Resampler integration".
+/// Rate the codec's embedded `AudioConverter` should emit at, given the conversion the
+/// caller asked for.
 #[cfg(feature = "apple-codec-embedded-resampler")]
 pub(crate) fn embedded_target_output_rate(requested: Option<NonZeroU32>) -> Option<u32> {
     requested.map(NonZeroU32::get)

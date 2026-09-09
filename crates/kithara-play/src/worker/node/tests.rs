@@ -13,6 +13,7 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{
     PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };
+use kithara_test_fixtures::unit_fixtures::eq_silence as node_silence;
 use kithara_test_utils::kithara;
 use kithara_worker::{Task, TickResult};
 use unimock::{MockFn, Unimock, matching};
@@ -52,9 +53,9 @@ struct PersistentEofSource {
 }
 
 struct CommitSource {
-    chunk: Option<AudioChunk>,
     commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
     seek: Arc<SeekState>,
+    chunk: Option<AudioChunk>,
     source_end: SourceEnd,
 }
 
@@ -172,7 +173,7 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
 }
 
 #[kithara::test]
-fn decoder_node_records_engine_load_on_produced() {
+fn decoder_node_records_engine_load_on_produced(node_silence: Vec<f32>) {
     let pools = pools();
     use std::num::NonZero;
 
@@ -191,7 +192,7 @@ fn decoder_node_records_engine_load_on_produced() {
             frames: 4_410,
             ..Default::default()
         },
-        sample_buffer(&pools, &vec![0.0f32; 4_410 * 2]),
+        sample_buffer(&pools, &node_silence),
     );
     let source = Unimock::new(
         AudioSourceMock::step_track
@@ -401,10 +402,10 @@ fn source_end_commits_only_after_final_port_admission() {
     );
     let commits = Arc::new(Mutex::new(Vec::new()));
     let source = CommitSource {
+        source_end,
         chunk: Some(empty_chunk(&pools)),
         commits: Arc::clone(&commits),
         seek: Arc::new(SeekState::new()),
-        source_end,
     };
     let mut node = test_node(
         source,

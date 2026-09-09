@@ -25,10 +25,9 @@ use crate::{
 
 /// Composite cache key for mem-backed active resources.
 ///
-/// Identity is part of the key so distinct request identities under the
-/// same resource key yield distinct inflight handles. The `ResourceKey`
-/// already carries the asset namespace. See the inflight sharing
-/// contract in `CONTEXT.md`.
+/// Identity is part of the key so distinct request identities under the same resource
+/// key yield distinct inflight handles. The `ResourceKey` already carries the asset
+/// namespace.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MemCacheKey {
     identity: Option<RequestIdentity>,
@@ -57,9 +56,9 @@ pub struct MemAssetStore<S> {
     /// See [`AssetDeleter`].
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
-    pools: PoolRegion<S>,
     cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
+    pools: PoolRegion<S>,
 }
 
 #[derive(Debug)]
@@ -116,9 +115,9 @@ pub(crate) struct MemStoreSetup<S> {
     pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) availability: AvailabilityIndex,
-    pub(crate) pools: PoolRegion<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) mem_resource_capacity: Option<usize>,
+    pub(crate) pools: PoolRegion<S>,
 }
 
 impl<S> Clone for MemAssetStore<S> {
@@ -198,9 +197,9 @@ where
             active_resources,
             deleter,
             availability,
-            pools,
             cancel,
             mem_resource_capacity,
+            pools,
         })
     }
 
@@ -220,9 +219,9 @@ where
             active_resources,
             deleter,
             availability,
-            pools,
             cancel,
             mem_resource_capacity,
+            pools,
         }
     }
 }

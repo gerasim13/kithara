@@ -1,6 +1,6 @@
 use proc_macro2::Span;
 use syn::{
-    Expr, ExprCall, ExprPath, Ident,
+    Expr, ExprCall, ExprPath, Ident, Pat,
     visit_mut::{self, VisitMut},
 };
 
@@ -126,7 +126,7 @@ impl VisitMut for FlashRewrite {
     /// later binding shadows it with anything else.
     fn visit_local_mut(&mut self, local: &mut syn::Local) {
         visit_mut::visit_local_mut(self, local);
-        let syn::Pat::Ident(pat) = &local.pat else {
+        let Pat::Ident(pat) = &local.pat else {
             return;
         };
         if let Some(init) = &local.init

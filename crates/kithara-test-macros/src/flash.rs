@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Ident, ItemFn, LitBool, parse_macro_input, parse_quote};
+use syn::{Error, Ident, ItemFn, LitBool, parse_macro_input, parse_quote};
 
 /// Argument of `#[kithara::flash(..)]`: a dynamic-flash mode flip, or a
 /// real-I/O bracket.
@@ -59,7 +59,7 @@ fn expand_with_flash_path(
         if ident == "io" {
             Mode::Io
         } else {
-            return syn::Error::new_spanned(ident, "expected `true`, `false` or `io`")
+            return Error::new_spanned(ident, "expected `true`, `false` or `io`")
                 .to_compile_error()
                 .into();
         }

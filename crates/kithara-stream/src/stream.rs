@@ -16,6 +16,7 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
@@ -717,6 +718,13 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
+            debug!(
+                current,
+                len,
+                new_pos,
+                ?pos,
+                "refusing a seek past the published end of the stream"
+            );
             self.source.set_position(current);
             return Err(IoError::new(
                 ErrorKind::InvalidInput,

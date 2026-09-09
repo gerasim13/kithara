@@ -36,13 +36,6 @@ impl<S> Deref for PlayerImpl<S> {
 }
 
 impl<S> PlayerImpl<S> {
-    pub(in crate::player) fn make_control(&self) -> PlayerControl<S>
-    where
-        S: HasPool<f32>,
-    {
-        PlayerControl::new(Arc::clone(&self.runtime))
-    }
-
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
@@ -84,9 +77,9 @@ impl<S> PlayerImpl<S> {
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
+            params,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
-            params,
             warp: config.warp,
             response_budget_frames: config.response_budget_frames,
             gapless_mode: config.gapless_mode,
@@ -95,14 +88,21 @@ impl<S> PlayerImpl<S> {
             items: ItemQueue::new(bus),
         };
         Self {
+            sync,
             runtime: Arc::new(PlayerRuntime {
+                core,
                 lifecycle: PlayerLifecycle::open(),
                 operations: Mutex::default(),
-                core,
                 phase: Mutex::new(PlayerPhase::Idle),
             }),
-            sync,
         }
+    }
+
+    pub(in crate::player) fn make_control(&self) -> PlayerControl<S>
+    where
+        S: HasPool<f32>,
+    {
+        PlayerControl::new(Arc::clone(&self.runtime))
     }
 }
 

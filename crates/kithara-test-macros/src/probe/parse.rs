@@ -34,9 +34,8 @@ impl Parse for ProbeEvent {
     }
 }
 
-/// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed
-/// `name = expr` values, and the `caller` / `probe_return` flags. See the
-/// crate `CONTEXT.md` "`#[kithara::probe(...)]` arguments" for the syntax.
+/// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed `name = expr`
+/// values, and the `caller` / `probe_return` flags.
 #[derive(Default, Debug)]
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,

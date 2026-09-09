@@ -17,6 +17,7 @@ use kithara_record::{
     LiveRecordingReport, PartSinkFactory, RecordingConfig, RecordingSink,
 };
 use kithara_signal::AudioSpec;
+use kithara_test_fixtures::unit_fixtures::{record_labels, record_signed};
 use kithara_test_utils::kithara;
 use kithara_worker::{Worker, WorkerConfig};
 
@@ -39,13 +40,24 @@ impl PartSinkFactory for TestFactory {
 }
 
 struct TestSink {
-    bytes: Vec<u8>,
     parts: Parts,
+    bytes: Vec<u8>,
 }
 
 impl RecordingSink for TestSink {
     type Error = io::Error;
     type Output = ();
+
+    fn abort(&mut self) {
+        self.bytes.clear();
+    }
+
+    fn commit(&mut self, final_len: u64) -> Result<Self::Output, Self::Error> {
+        let final_len = usize::try_from(final_len).map_err(io::Error::other)?;
+        self.bytes.truncate(final_len);
+        self.parts.0.lock().push(self.bytes.clone());
+        Ok(())
+    }
 
     fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
         let offset = usize::try_from(offset).map_err(io::Error::other)?;
@@ -56,23 +68,12 @@ impl RecordingSink for TestSink {
         self.bytes[offset..end].copy_from_slice(bytes);
         Ok(())
     }
-
-    fn commit(&mut self, final_len: u64) -> Result<Self::Output, Self::Error> {
-        let final_len = usize::try_from(final_len).map_err(io::Error::other)?;
-        self.bytes.truncate(final_len);
-        self.parts.0.lock().push(self.bytes.clone());
-        Ok(())
-    }
-
-    fn abort(&mut self) {
-        self.bytes.clear();
-    }
 }
 
-fn write(output: &mut impl LiveOutput, frames: &[(f32, f32)]) {
-    let left: Vec<_> = frames.iter().map(|frame| frame.0).collect();
-    let right: Vec<_> = frames.iter().map(|frame| frame.1).collect();
-    output.write_stereo(frames.len(), &left, &right);
+fn write(output: &mut impl LiveOutput, frames: &[f32]) {
+    let left: Vec<_> = frames.chunks_exact(2).map(|frame| frame[0]).collect();
+    let right: Vec<_> = frames.chunks_exact(2).map(|frame| frame[1]).collect();
+    output.write_stereo(frames.len() / 2, &left, &right);
 }
 
 fn wav_samples(bytes: &[u8]) -> Vec<f32> {
@@ -99,7 +100,7 @@ fn wait_result(handle: &LiveRecordingHandle) -> Result<LiveRecordingReport, Live
 }
 
 #[kithara::test(native, flash(false))]
-fn manual_cut_and_rotation_publish_exact_independent_parts() {
+fn manual_cut_and_rotation_publish_exact_independent_parts(record_labels: Vec<f32>) {
     let parts = Parts::default();
     let config = LiveRecordingConfig::builder(
         Worker::new(WorkerConfig::new()),
@@ -115,10 +116,10 @@ fn manual_cut_and_rotation_publish_exact_independent_parts() {
     .build();
     let (mut output, handle) = LiveRecorder::start(config).expect("start live recorder");
 
-    write(&mut output, &[(1.0, 101.0), (2.0, 102.0), (3.0, 103.0)]);
+    write(&mut output, &record_labels[..6]);
     handle.cut();
-    write(&mut output, &[(4.0, 104.0), (5.0, 105.0), (6.0, 106.0)]);
-    write(&mut output, &[(7.0, 107.0), (8.0, 108.0), (9.0, 109.0)]);
+    write(&mut output, &record_labels[6..12]);
+    write(&mut output, &record_labels[12..18]);
     let report = wait_result(&handle).expect("finish live recorder");
 
     assert_eq!(report.frames, 9);
@@ -157,27 +158,27 @@ impl PartSinkFactory for LifecycleFactory {
 }
 
 struct LifecycleSink {
-    fail_write: bool,
     lifecycle: Lifecycle,
+    fail_write: bool,
 }
 
 impl RecordingSink for LifecycleSink {
     type Error = io::Error;
     type Output = ();
 
-    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
-        if self.fail_write {
-            return Err(io::Error::other("injected sink failure"));
-        }
-        Ok(())
+    fn abort(&mut self) {
+        self.lifecycle.aborted.store(true, Ordering::Release);
     }
 
     fn commit(&mut self, _final_len: u64) -> Result<Self::Output, Self::Error> {
         Ok(())
     }
 
-    fn abort(&mut self) {
-        self.lifecycle.aborted.store(true, Ordering::Release);
+    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
+        if self.fail_write {
+            return Err(io::Error::other("injected sink failure"));
+        }
+        Ok(())
     }
 }
 
@@ -197,7 +198,7 @@ fn wait_true(value: &AtomicBool, message: &str) {
 }
 
 #[kithara::test(native, flash(false))]
-fn bounded_overflow_aborts_the_open_part() {
+fn bounded_overflow_aborts_the_open_part(record_signed: Vec<f32>) {
     let lifecycle = lifecycle();
     let config = LiveRecordingConfig::builder(
         Worker::new(WorkerConfig::new()),
@@ -212,9 +213,9 @@ fn bounded_overflow_aborts_the_open_part() {
     .build();
     let (mut output, handle) = LiveRecorder::start(config).expect("start live recorder");
 
-    write(&mut output, &[(1.0, -1.0)]);
+    write(&mut output, &record_signed[..2]);
     wait_true(&lifecycle.opened, "recorder did not open its first part");
-    write(&mut output, &[(2.0, -2.0), (3.0, -3.0)]);
+    write(&mut output, &record_signed[2..6]);
 
     let result = wait_result(&handle);
     assert!(
@@ -238,7 +239,7 @@ impl LiveOutput for FrameProbe {
 }
 
 #[kithara::test(native, flash(false))]
-fn sink_failure_does_not_stop_a_sibling_output() {
+fn sink_failure_does_not_stop_a_sibling_output(record_signed: Vec<f32>) {
     let lifecycle = lifecycle();
     let config = LiveRecordingConfig::builder(
         Worker::new(WorkerConfig::new()),
@@ -268,12 +269,12 @@ fn sink_failure_does_not_stop_a_sibling_output() {
     outputs.push(output);
     outputs.push(FrameProbe(Arc::clone(&sibling_frames)));
 
-    write(&mut outputs, &[(1.0, -1.0)]);
+    write(&mut outputs, &record_signed[..2]);
     assert!(matches!(
         wait_result(&handle),
         Err(LiveRecordingError::Part { part: 1, .. })
     ));
-    write(&mut outputs, &[(2.0, -2.0)]);
+    write(&mut outputs, &record_signed[2..4]);
 
     assert_eq!(sibling_frames.load(Ordering::Relaxed), 2);
     assert!(lifecycle.aborted.load(Ordering::Acquire));

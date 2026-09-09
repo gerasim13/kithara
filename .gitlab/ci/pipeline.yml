@@ -11,6 +11,15 @@ include:
   - local: .gitlab/ci/lanes.yml
   - local: .gitlab/ci/release.yml
 
+workflow:
+  auto_cancel:
+    on_new_commit: none
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch" || $KITHARA_PIPELINE_KIND == "merge-request"
+      auto_cancel:
+        on_new_commit: interruptible
+    - when: always
+
 stages:
   - apple
   - linux

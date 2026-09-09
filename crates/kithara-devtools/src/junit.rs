@@ -1,6 +1,7 @@
 //! Reading a `JUnit` report for performance and stress evidence consumers.
 
 use anyhow::{Context, Result, bail};
+use roxmltree::Document;
 
 const MAX_JUNIT_CASES: usize = 750_000;
 pub(crate) const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
@@ -62,7 +63,7 @@ pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
 ///
 /// Fails under the same conditions as [`parse_junit`].
 pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
-    let doc = roxmltree::Document::parse(xml).context("parse junit xml")?;
+    let doc = Document::parse(xml).context("parse junit xml")?;
     let root = doc
         .descendants()
         .find(|node| node.has_tag_name("testsuites"));

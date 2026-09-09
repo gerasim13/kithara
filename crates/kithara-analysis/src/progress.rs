@@ -221,8 +221,8 @@ impl WaveformResume {
 
 pub(crate) struct BeatResume {
     pub(crate) short: BTreeSet<usize>,
-    pub(crate) taken: Vec<(u64, u64)>,
     pub(crate) runs: Vec<BeatRunResume>,
+    pub(crate) taken: Vec<(u64, u64)>,
     pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
@@ -305,8 +305,8 @@ impl BeatResume {
         }
         let resume = Self {
             short,
-            taken,
             runs,
+            taken,
             windows,
         };
         resume.validate()?;
@@ -339,7 +339,7 @@ impl BeatResume {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
+#[cfg(feature = "analysis-waveform")]
 pub(crate) fn write_coverage(writer: &mut Writer<'_>, coverage: &Coverage) {
     writer.write_len(coverage.runs().len());
     for range in coverage.runs() {
@@ -348,7 +348,7 @@ pub(crate) fn write_coverage(writer: &mut Writer<'_>, coverage: &Coverage) {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
+#[cfg(feature = "analysis-waveform")]
 pub(crate) fn write_samples(writer: &mut Writer<'_>, samples: &[f32]) {
     writer.write_len(samples.len());
     for sample in samples {

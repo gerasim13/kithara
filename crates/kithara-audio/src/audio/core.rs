@@ -21,16 +21,16 @@ use super::{
     ring::{RecvCtx, RingConsumer},
     seek::{SeekHandle, SeekHandleParts},
 };
-use crate::traits::SeekBegin;
+use crate::{ConsumerWakeMode, traits::SeekBegin};
 
 /// Pull-based PCM facade over a bounded producer ring.
 pub struct Audio<S> {
     events: AudioEvents,
+    runtime: AudioRuntime,
     cursor: ChunkCursor,
     controls: Controls,
     _marker: PhantomData<S>,
     ring: RingConsumer,
-    runtime: AudioRuntime,
     session: Session,
 }
 
@@ -39,13 +39,13 @@ pub struct Audio<S> {
 /// `kithara-play::PlayWorker` registers the task before exposing the reader.
 #[doc(hidden)]
 pub struct PreparedAudio<R, P> {
-    reader: R,
     lane: PreparedAudioLane<P>,
+    reader: R,
 }
 
 impl<R, P> PreparedAudio<R, P> {
     pub(super) const fn new(reader: R, lane: PreparedAudioLane<P>) -> Self {
-        Self { reader, lane }
+        Self { lane, reader }
     }
 
     /// Compose the reader facade and its still-concrete producer atomically.
@@ -56,7 +56,7 @@ impl<R, P> PreparedAudio<R, P> {
         F: FnOnce(R, P) -> (R2, P2),
     {
         let (reader, lane) = self.lane.map_source_with(self.reader, map);
-        PreparedAudio { reader, lane }
+        PreparedAudio { lane, reader }
     }
 }
 
@@ -68,11 +68,11 @@ impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
 
 pub(super) struct AudioParts<S> {
     pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
-    pub(super) controls: Controls,
+    pub(super) runtime: AudioRuntime,
     pub(super) cursor: ChunkCursor,
+    pub(super) controls: Controls,
     pub(super) marker: PhantomData<S>,
     pub(super) ring: RingConsumer,
-    pub(super) runtime: AudioRuntime,
     pub(super) session: Session,
 }
 
@@ -92,8 +92,8 @@ pub(super) struct Controls {
 }
 
 pub(super) struct AudioRuntime {
-    pub(super) cancel: CancelToken,
     pub(super) wake: Arc<dyn WorkerWake>,
+    pub(super) cancel: CancelToken,
 }
 
 impl Drop for AudioRuntime {
@@ -130,17 +130,6 @@ impl<S> Audio<S> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 
-    delegate::delegate! {
-        to self.session.playhead {
-            #[must_use]
-            /// Returns the known stream duration.
-            pub fn duration(&self) -> Option<Duration>;
-            #[must_use]
-            /// Returns the committed playback position.
-            pub fn position(&self) -> Duration;
-        }
-    }
-
     pub(crate) fn fill_buffer(&mut self) -> bool {
         let recv = recv_ctx(&self.session, &self.runtime);
         let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
@@ -154,12 +143,6 @@ impl<S> Audio<S> {
         );
         self.wake_for_events();
         filled
-    }
-
-    fn wake_for_events(&mut self) {
-        if self.events.take_wake_pending() {
-            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
-        }
     }
 
     #[must_use]
@@ -245,6 +228,12 @@ impl<S> Audio<S> {
         }))
     }
 
+    #[must_use]
+    /// Returns the current output PCM specification.
+    pub fn spec(&self) -> AudioSpec {
+        self.cursor.spec()
+    }
+
     /// Adopt a seek epoch begun elsewhere, dropping everything buffered before it.
     ///
     /// Lock-free and allocation-free: recycled chunks go to the trash outlet and the cursor is
@@ -262,22 +251,25 @@ impl<S> Audio<S> {
         }
     }
 
-    #[must_use]
-    /// Returns the current output PCM specification.
-    pub fn spec(&self) -> AudioSpec {
-        self.cursor.spec()
-    }
-}
-
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
-    delegate::delegate! {
-        to self.session.playhead {
-            #[call(cached)]
-            fn cached_span(&self) -> Duration;
-            fn decoded_frontier(&self) -> Duration;
+    fn wake_for_events(&mut self) {
+        if self.events.take_wake_pending() {
+            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
         }
     }
 
+    delegate::delegate! {
+        to self.session.playhead {
+            #[must_use]
+            /// Returns the known stream duration.
+            pub fn duration(&self) -> Option<Duration>;
+            #[must_use]
+            /// Returns the committed playback position.
+            pub fn position(&self) -> Duration;
+        }
+    }
+}
+
+impl<S> AudioRead for Audio<S> {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.sync_seek();
         self.ring.preloaded = true;
@@ -339,18 +331,17 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
     fn spec(&self) -> AudioSpec {
         Self::spec(self)
     }
-}
 
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
     delegate::delegate! {
-        to self {
-            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            fn duration(&self) -> Option<Duration>;
-            fn is_preloaded(&self) -> bool;
-            fn metadata(&self) -> &TrackMetadata;
+        to self.session.playhead {
+            #[call(cached)]
+            fn cached_span(&self) -> Duration;
+            fn decoded_frontier(&self) -> Duration;
         }
     }
+}
 
+impl<S> AudioSession for Audio<S> {
     fn event_bus(&self) -> &EventBus {
         self.events.bus()
     }
@@ -362,9 +353,18 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
     fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
         Some(self.session.preload_gate.clone())
     }
+
+    delegate::delegate! {
+        to self {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn is_preloaded(&self) -> bool;
+            fn metadata(&self) -> &TrackMetadata;
+        }
+    }
 }
 
-impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
+impl<S> AudioControl for Audio<S> {
     fn preload(&mut self) -> Result<(), DecodeError> {
         Self::preload(self)
     }
@@ -377,8 +377,9 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
         Some(Self::seek_handle(self))
     }
 
-    fn sync_seek(&mut self) {
-        Self::sync_seek(self);
+    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        self.ring.set_consumer_wake_mode(mode);
+        self.events.set_wake_mode(self.ring.consumer_wake_mode());
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -389,6 +390,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
         if previous != sample_rate.get() {
             self.runtime.wake.defer();
         }
+    }
+
+    fn sync_seek(&mut self) {
+        Self::sync_seek(self);
     }
 }
 
@@ -431,6 +436,7 @@ mod tests {
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{PlayheadState, SeekState, WorkerWake};
+    use kithara_test_fixtures::unit_fixtures::trim_silence;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -443,15 +449,15 @@ mod tests {
     struct TestWorkerWake;
 
     impl WorkerWake for TestWorkerWake {
-        fn wake(&self) {}
-
         fn defer(&self) {}
+
+        fn wake(&self) {}
     }
 
     struct AudioFixture {
+        emit: Arc<kithara_events::DeferredBus<Event>>,
         audio: Audio<()>,
         data_tx: Outlet<Fetch<AudioChunk>>,
-        emit: Arc<kithara_events::DeferredBus<Event>>,
     }
 
     impl Default for AudioFixture {
@@ -468,10 +474,10 @@ mod tests {
             let ring = RingConsumer::new(RingParts {
                 trash_tx,
                 epoch,
+                consumer_wake_mode,
                 audio_rx: data_rx,
                 reader_wake: Arc::new(ThreadWake::default()),
                 block_on_underrun: false,
-                consumer_wake_mode,
             });
             let seek_state = Arc::new(SeekState::new());
             let seek: Arc<dyn SeekControl> = seek_state.clone();
@@ -523,10 +529,11 @@ mod tests {
         assert!(!fixture.audio.session.preload_gate.is_ready());
     }
 
-    fn staged_chunk() -> AudioChunk {
-        let samples = pools()
+    fn staged_chunk(trim_silence: &[f32]) -> AudioChunk {
+        let mut samples = pools()
             .get_with_len::<f32>(8)
             .expect("staged samples fit test pools");
+        samples.copy_from_slice(&trim_silence[..8]);
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate is non-zero"));
         let frames = u32::try_from(samples.len() / usize::from(spec.channels))
             .expect("fixture frame count fits u32");
@@ -559,7 +566,7 @@ mod tests {
 
     /// Begin a seek epoch and stage one chunk at that epoch, so the next read
     /// returns `Frames` and births `SeekComplete` inside `commit_read`.
-    fn seek_and_stage(fixture: &mut AudioFixture) -> u64 {
+    fn seek_and_stage(trim_silence: &[f32], fixture: &mut AudioFixture) -> u64 {
         fixture.audio.ring.preloaded = true;
         fixture
             .audio
@@ -568,16 +575,16 @@ mod tests {
         let epoch = fixture.audio.ring.validator.epoch;
         fixture
             .data_tx
-            .try_push(Fetch::data(staged_chunk(), epoch))
+            .try_push(Fetch::data(staged_chunk(trim_silence), epoch))
             .expect("staged chunk reaches the ring");
         epoch
     }
 
     #[kithara::test]
-    fn off_rt_read_publishes_the_seek_completion_it_births() {
+    fn off_rt_read_publishes_the_seek_completion_it_births(trim_silence: Vec<f32>) {
         let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt);
         let mut receiver = fixture.audio.events.bus().subscribe();
-        let epoch = seek_and_stage(&mut fixture);
+        let epoch = seek_and_stage(&trim_silence, &mut fixture);
 
         let mut buf = [0.0f32; 8];
         let outcome = fixture.audio.read(&mut buf).expect("staged read");
@@ -591,10 +598,33 @@ mod tests {
     }
 
     #[kithara::test]
-    fn realtime_read_leaves_its_seek_completion_for_the_shell() {
+    fn an_adopted_realtime_mode_moves_the_reader_events_with_the_ring(trim_silence: Vec<f32>) {
+        let mut fixture = AudioFixture::with_wake_mode(ConsumerWakeMode::ImmediateOffRt);
+        let mut receiver = fixture.audio.events.bus().subscribe();
+        AudioControl::set_consumer_wake_mode(
+            &mut fixture.audio,
+            ConsumerWakeMode::RealtimeDeferred,
+        );
+        let epoch = seek_and_stage(&trim_silence, &mut fixture);
+
+        let mut buf = [0.0f32; 8];
+        fixture.audio.read(&mut buf).expect("staged read");
+
+        assert_eq!(
+            drain_seek_completions(&mut receiver),
+            Vec::<u64>::new(),
+            "a reader that adopted RealtimeDeferred reads on the audio callback, so it defers what its read births"
+        );
+
+        fixture.emit.flush();
+        assert_eq!(drain_seek_completions(&mut receiver), vec![epoch]);
+    }
+
+    #[kithara::test]
+    fn realtime_read_leaves_its_seek_completion_for_the_shell(trim_silence: Vec<f32>) {
         let mut fixture = AudioFixture::default();
         let mut receiver = fixture.audio.events.bus().subscribe();
-        let epoch = seek_and_stage(&mut fixture);
+        let epoch = seek_and_stage(&trim_silence, &mut fixture);
 
         let mut buf = [0.0f32; 8];
         let outcome = fixture.audio.read(&mut buf).expect("staged read");

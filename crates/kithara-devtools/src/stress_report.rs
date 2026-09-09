@@ -123,10 +123,10 @@ struct RenderedReport {
     /// Repeats [`quarantine_poisoned_iterations`] threw out, kept so the
     /// evidence census can be held to the same set as the rate tables.
     quarantined: BTreeSet<usize>,
-    markdown: String,
     /// What the evidence is missing, or `None` when it accounts for every
     /// requested attempt of every selected test.
     incomplete: Option<String>,
+    markdown: String,
 }
 
 #[derive(Debug)]
@@ -224,8 +224,6 @@ pub(crate) struct LaneReport {
     /// How many of this lane's attempts the command rejected, for a lane whose
     /// verdict is an exit code rather than a set of test results.
     pub(crate) attempts: Option<LaneRate>,
-    pub(crate) verdict: Result<()>,
-    pub(crate) markdown: String,
     /// What bars this lane from the comparison, or `None` when nothing does.
     ///
     /// A readable lane can still fall short of its own request — quarantined
@@ -235,6 +233,8 @@ pub(crate) struct LaneReport {
     /// these: a truncated census or a missing envelope costs the diagnosis, not
     /// the counts, which are read from the `JUnit` report alone.
     pub(crate) incomplete: Option<String>,
+    pub(crate) verdict: Result<()>,
+    pub(crate) markdown: String,
     /// Whether the lane produced valid per-attempt evidence at all. A lane
     /// whose artifact was missing or invalid has nothing to stand in a
     /// comparison — counting it as trustworthy is how a run summary
@@ -1480,8 +1480,8 @@ mod tests {
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             failed,
-            flaky: false,
             secs,
+            flaky: false,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),
@@ -2496,8 +2496,8 @@ seek landed short of the requested frame
             name.to_owned(),
             LaneRate {
                 failed,
-                flaky: 0,
                 attempts,
+                flaky: 0,
             },
         )
     }

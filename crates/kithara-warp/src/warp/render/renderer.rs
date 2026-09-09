@@ -22,17 +22,17 @@ mod tests;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
-    pub(super) active_frames: usize,
     pub(super) activation: Option<PreparedActivation>,
-    pub(super) frames: usize,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
+    pub(super) active_frames: usize,
+    pub(super) frames: usize,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedActivation {
-    pub(super) history_frames: usize,
     pub(super) warm: ElasticRequest,
+    pub(super) history_frames: usize,
 }
 
 impl PreparedActivation {
@@ -47,72 +47,72 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    pub(super) context: RenderReader,
-    pub(super) committed: Option<RenderSnapshot>,
     pub(super) controls: Arc<StretchControls>,
+    pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
+    /// Maximum source frames admitted to one elastic render operation.
+    pub(super) source_block_frames: NonZeroUsize,
+    /// Latency-sized pooled output discarded while priming an inactive engine.
+    pub(super) activation_scratch: Option<SampleBuffer>,
+    /// Renderer-owned applied speed. Shared controls contain only the target.
+    pub(super) applied_speed: Option<SmoothedParam>,
+    pub(super) committed: Option<RenderSnapshot>,
+    /// Consumed input retained until the scheduler shell can resize or recycle
+    /// it outside the checked render core.
+    pub(super) deferred_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
-    /// Engine displaced by a checked render failure. The scheduler shell
-    /// drops it from `prepare`, outside `produce_tick_rt`.
-    pub(super) retired_engine: Option<Box<dyn ElasticEngine>>,
     /// Most recent input meta, carried onto each output chunk.
     pub(super) last_input_meta: Option<AudioChunkInfo>,
     /// Exact source coordinate at which the current output scratch begins.
     pub(super) output_start_meta: Option<AudioChunkInfo>,
+    /// Oldest sample in the rolling unity history stored in `pending_source`.
+    pub(super) passthrough_history_head: Option<usize>,
+    /// Earliest metadata represented by `pending_source`.
+    pub(super) pending_meta: Option<AudioChunkInfo>,
+    /// Source whose cumulative output is still below one representable frame.
+    /// Capacity is reserved from the injected pool before the render loop.
+    pub(super) pending_source: Option<SampleBuffer>,
+    /// Unity chunk retained while the active backend drains its tail.
+    /// Its samples occupy `pending_source` without a copy.
+    pub(super) pending_unity_meta: Option<AudioChunkInfo>,
     /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
     pub(super) plan: Option<Arc<RegionPlan>>,
+    /// Source span and live speed selected by the scheduler for the next render.
+    pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
-    pub(super) pools: PoolRegion<S>,
-    pub(super) spec: AudioSpec,
-    /// Maximum source frames admitted to one elastic render operation.
-    pub(super) source_block_frames: NonZeroUsize,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
-    /// Source span and live speed selected by the scheduler for the next render.
-    pub(super) prepared_quantum: Option<PreparedQuantum>,
-    /// Renderer-owned applied speed. Shared controls contain only the target.
-    pub(super) applied_speed: Option<SmoothedParam>,
-    /// Engine kind currently prepared by the scheduler shell.
-    pub(super) current_kind: StretchKind,
+    /// Exact decoded-source boundary represented by the latest emitted chunk.
+    pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
+    /// Engine displaced by a checked render failure. The scheduler shell
+    /// drops it from `prepare`, outside `produce_tick_rt`.
+    pub(super) retired_engine: Option<Box<dyn ElasticEngine>>,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(super) scratch: Option<SampleBuffer>,
-    /// Latency-sized pooled output discarded while priming an inactive engine.
-    pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Consumed input retained until the scheduler shell can resize or recycle
-    /// it outside the checked render core.
-    pub(super) deferred_scratch: Option<SampleBuffer>,
+    pub(super) pools: PoolRegion<S>,
+    pub(super) context: RenderReader,
+    /// Engine kind currently prepared by the scheduler shell.
+    pub(super) current_kind: StretchKind,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
+    /// One scheduler-shell rebuild requested after a checked engine failure.
+    /// The intent is consumed even when preparation fails.
+    pub(super) rebuild_pending: bool,
+    /// Reset requested by seek or a return to unity passthrough. The scheduler
+    /// shell performs it outside the checked render core.
+    pub(super) reset_pending: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     pub(super) applied_pitch: f64,
     /// Fractional output frames retained across exact-span requests.
     pub(super) output_remainder: f64,
-    /// Source whose cumulative output is still below one representable frame.
-    /// Capacity is reserved from the injected pool before the render loop.
-    pub(super) pending_source: Option<SampleBuffer>,
-    /// Earliest metadata represented by `pending_source`.
-    pub(super) pending_meta: Option<AudioChunkInfo>,
-    /// Oldest sample in the rolling unity history stored in `pending_source`.
-    pub(super) passthrough_history_head: Option<usize>,
-    /// Unity chunk retained while the active backend drains its tail.
-    /// Its samples occupy `pending_source` without a copy.
-    pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Exact decoded-source boundary represented by the latest emitted chunk.
-    pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
-    /// Source frames admitted since the last renderer reset.
-    pub(super) source_frames_admitted: u64,
     /// Warm source consumed while priming but not yet represented by output.
     pub(super) primed_source_debt: u64,
-    /// Reset requested by seek or a return to unity passthrough. The scheduler
-    /// shell performs it outside the checked render core.
-    pub(super) reset_pending: bool,
-    /// One scheduler-shell rebuild requested after a checked engine failure.
-    /// The intent is consumed even when preparation fails.
-    pub(super) rebuild_pending: bool,
+    /// Source frames admitted since the last renderer reset.
+    pub(super) source_frames_admitted: u64,
 }
 
 impl<S> WarpRenderer<S>
@@ -191,10 +191,14 @@ where
         }
     }
 
-    /// Whether this target has elastic DSP and needs worker staging.
+    /// Whether the renderer can accept another source chunk without dropping it.
     #[must_use]
-    pub const fn requires_staging(&self) -> bool {
-        true
+    pub fn accepts_input(&self) -> bool {
+        !self.transition_pending()
+            && (self.unity_passthrough(self.controls.speed())
+                || (self.engine.is_some()
+                    && self.pending_source.is_some()
+                    && self.scratch.is_some()))
     }
 
     /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
@@ -220,12 +224,6 @@ where
         self.pending_unity_meta = None;
     }
 
-    pub(super) fn retire_engine(&mut self) {
-        debug_assert!(self.retired_engine.is_none());
-        self.retired_engine = self.engine.take();
-        self.rebuild_pending = true;
-    }
-
     pub(super) fn clear_render_state(&mut self) {
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
@@ -244,162 +242,6 @@ where
         self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
-    }
-
-    pub(super) fn snap_speed(&mut self) {
-        if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.controls.speed());
-            applied.reset_to_target();
-        }
-        self.prepared_quantum = None;
-    }
-
-    pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
-        if let Some(replacement) = replacement {
-            debug_assert!(self.deferred_scratch.is_none());
-            self.deferred_scratch = Some(replacement);
-        }
-    }
-
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return r;
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        self.region = Some(next);
-        next
-    }
-
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    pub(super) fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
-        let same = match (&self.plan, &want) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
-            self.prepared_quantum = None;
-        }
-    }
-
-    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
-    }
-
-    pub(super) fn pending_frames(&self, channels: usize) -> usize {
-        if self.transition_pending() || self.passthrough_history_head.is_some() {
-            return 0;
-        }
-        self.pending_source
-            .as_deref()
-            .map_or(0, |source| source.len() / channels)
-    }
-
-    /// Whether a live active-to-unity transition still owns queued samples.
-    #[must_use]
-    pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some()
-    }
-
-    /// Whether the renderer can accept another source chunk without dropping it.
-    #[must_use]
-    pub fn accepts_input(&self) -> bool {
-        !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
-                || (self.engine.is_some()
-                    && self.pending_source.is_some()
-                    && self.scratch.is_some()))
-    }
-
-    pub(super) fn held_source_frames(&self) -> u64 {
-        if !self.active {
-            return 0;
-        }
-        let pending = u64::try_from(self.pending_frames(usize::from(self.spec.channels.max(1))))
-            .unwrap_or(u64::MAX);
-        let backend_admitted = self.source_frames_admitted.saturating_sub(pending);
-        let latency = self
-            .engine
-            .as_ref()
-            .map_or(0, |engine| engine.capabilities().latency().source_frames());
-        let backend_held = u64::try_from(latency)
-            .unwrap_or(u64::MAX)
-            .min(backend_admitted);
-        pending
-            .saturating_add(backend_held)
-            .saturating_add(self.primed_source_debt)
-    }
-
-    pub(super) fn record_rendered_source_end(
-        &mut self,
-        meta: AudioChunkInfo,
-        held_source_frames: u64,
-    ) {
-        let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
-        self.rendered_source_end = Some((
-            admitted.saturating_sub(held_source_frames),
-            meta.spec.sample_rate,
-        ));
-    }
-
-    fn next_render_snapshot(
-        &self,
-        snapshot: RenderSnapshot,
-        output_frames: usize,
-    ) -> Option<(RenderSnapshot, i64, u64, u64)> {
-        if !self.context.is_current(&snapshot) {
-            return None;
-        }
-        let (source_end, _) = self.rendered_source_end?;
-        let source_start = self
-            .committed
-            .as_ref()
-            .filter(|previous| {
-                previous.context().session_epoch() == snapshot.context().session_epoch()
-            })
-            .map_or_else(
-                || snapshot.frontier().source(),
-                |previous| previous.frontier().source(),
-            )
-            .max(snapshot.frontier().source());
-        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
-        let output_frames = i64::try_from(output_frames).ok()?;
-        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
-        Some((committed, output_start, source_start, source_end))
-    }
-
-    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
-        let Some(snapshot) = snapshot else {
-            return;
-        };
-        let Some((committed, output_start, source_start, _)) =
-            self.next_render_snapshot(snapshot, output_frames)
-        else {
-            return;
-        };
-        kithara::probe_event!(
-            render_committed,
-            session_epoch = u64::from(committed.context().session_epoch()),
-            transport_revision = committed
-                .context()
-                .transport_revision()
-                .map_or(0, u64::from),
-            output_start,
-            output_end = i64::from(committed.frontier().output()),
-            source_start,
-            source_end = committed.frontier().source()
-        );
-        self.committed = Some(committed);
     }
 
     pub(super) fn commit_rate_render(
@@ -433,10 +275,54 @@ where
         self.committed = Some(committed);
     }
 
-    /// Exact decoded-source boundary represented by the latest emitted samples.
-    #[must_use]
-    pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
-        self.rendered_source_end
+    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output_frames: usize) {
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let Some((committed, output_start, source_start, _)) =
+            self.next_render_snapshot(snapshot, output_frames)
+        else {
+            return;
+        };
+        kithara::probe_event!(
+            render_committed,
+            session_epoch = u64::from(committed.context().session_epoch()),
+            transport_revision = committed
+                .context()
+                .transport_revision()
+                .map_or(0, u64::from),
+            output_start,
+            output_end = i64::from(committed.frontier().output()),
+            source_start,
+            source_end = committed.frontier().source()
+        );
+        self.committed = Some(committed);
+    }
+
+    pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
+        if let Some(replacement) = replacement {
+            debug_assert!(self.deferred_scratch.is_none());
+            self.deferred_scratch = Some(replacement);
+        }
+    }
+
+    pub(super) fn held_source_frames(&self) -> u64 {
+        if !self.active {
+            return 0;
+        }
+        let pending = u64::try_from(self.pending_frames(usize::from(self.spec.channels.max(1))))
+            .unwrap_or(u64::MAX);
+        let backend_admitted = self.source_frames_admitted.saturating_sub(pending);
+        let latency = self
+            .engine
+            .as_ref()
+            .map_or(0, |engine| engine.capabilities().latency().source_frames());
+        let backend_held = u64::try_from(latency)
+            .unwrap_or(u64::MAX)
+            .min(backend_admitted);
+        pending
+            .saturating_add(backend_held)
+            .saturating_add(self.primed_source_debt)
     }
 
     pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {
@@ -453,5 +339,119 @@ where
             start.source_bytes = 0;
         }
         start
+    }
+
+    fn next_render_snapshot(
+        &self,
+        snapshot: RenderSnapshot,
+        output_frames: usize,
+    ) -> Option<(RenderSnapshot, i64, u64, u64)> {
+        if !self.context.is_current(&snapshot) {
+            return None;
+        }
+        let (source_end, _) = self.rendered_source_end?;
+        let source_start = self
+            .committed
+            .as_ref()
+            .filter(|previous| {
+                previous.context().session_epoch() == snapshot.context().session_epoch()
+            })
+            .map_or_else(
+                || snapshot.frontier().source(),
+                |previous| previous.frontier().source(),
+            )
+            .max(snapshot.frontier().source());
+        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
+        let output_frames = i64::try_from(output_frames).ok()?;
+        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
+        Some((committed, output_start, source_start, source_end))
+    }
+
+    pub(super) fn pending_frames(&self, channels: usize) -> usize {
+        if self.transition_pending() || self.passthrough_history_head.is_some() {
+            return 0;
+        }
+        self.pending_source
+            .as_deref()
+            .map_or(0, |source| source.len() / channels)
+    }
+
+    pub(super) fn record_rendered_source_end(
+        &mut self,
+        meta: AudioChunkInfo,
+        held_source_frames: u64,
+    ) {
+        let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
+        self.rendered_source_end = Some((
+            admitted.saturating_sub(held_source_frames),
+            meta.spec.sample_rate,
+        ));
+    }
+
+    /// Region covering `frame`, plus whether the playhead just crossed out
+    /// of a previously resolved region (a plan boundary or a seek).
+    pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
+        if let Some(r) = self.region
+            && r.contains(frame)
+        {
+            return r;
+        }
+        let next = self
+            .plan
+            .as_ref()
+            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
+        self.region = Some(next);
+        next
+    }
+
+    /// Exact decoded-source boundary represented by the latest emitted samples.
+    #[must_use]
+    pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
+        self.rendered_source_end
+    }
+
+    /// Whether this target has elastic DSP and needs worker staging.
+    #[must_use]
+    pub const fn requires_staging(&self) -> bool {
+        true
+    }
+
+    pub(super) fn retire_engine(&mut self) {
+        debug_assert!(self.retired_engine.is_none());
+        self.retired_engine = self.engine.take();
+        self.rebuild_pending = true;
+    }
+
+    pub(super) fn snap_speed(&mut self) {
+        if let Some(applied) = self.applied_speed.as_mut() {
+            applied.set_value(self.controls.speed());
+            applied.reset_to_target();
+        }
+        self.prepared_quantum = None;
+    }
+
+    /// Pull the live region plan handle; on a swap drop the region cursor.
+    pub(super) fn sync_plan(&mut self) {
+        let want = self.controls.region_plan();
+        let same = match (&self.plan, &want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            self.plan = want;
+            self.region = None;
+            self.prepared_quantum = None;
+        }
+    }
+
+    /// Whether a live active-to-unity transition still owns queued samples.
+    #[must_use]
+    pub const fn transition_pending(&self) -> bool {
+        self.pending_unity_meta.is_some()
+    }
+
+    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
+        self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
     }
 }

@@ -18,13 +18,13 @@ pub(crate) struct Core<const SHARDS: usize, B, const OBSERVE: bool>
 where
     B: Storage,
 {
-    budgets: BudgetPair,
-    cold: Option<ArrayQueue<B>>,
-    shards: [PoolShard<B>; SHARDS],
     stat_alloc_misses: AtomicU64,
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
     stat_steal_hits: AtomicU64,
+    budgets: BudgetPair,
+    cold: Option<ArrayQueue<B>>,
+    shards: [PoolShard<B>; SHARDS],
 }
 
 impl<const SHARDS: usize, B, const OBSERVE: bool> Core<SHARDS, B, OBSERVE>
@@ -73,8 +73,8 @@ where
 
         let cold = (config.initial_buffers > 0).then(|| ArrayQueue::new(config.initial_buffers));
         let core = Self {
-            budgets: BudgetPair::new(region_budget, pool_limit),
             cold,
+            budgets: BudgetPair::new(region_budget, pool_limit),
             shards: array::from_fn(|_| {
                 PoolShard::new(
                     buffers_per_shard,
@@ -132,6 +132,52 @@ where
                 },
             );
         OwnedBuffer::new(Arc::clone(self), value, shard_idx)
+    }
+
+    fn allocate(&self, capacity: usize, old_bytes: usize) -> Result<B, PoolError> {
+        let requested_bytes = Self::bytes_for_capacity(capacity)?;
+        let requested_delta =
+            requested_bytes
+                .checked_sub(old_bytes)
+                .ok_or(PoolError::InvalidConfig {
+                    field: "buffer growth",
+                    reason: "new capacity is smaller than the current capacity",
+                })?;
+        let mut reservation = self.reserve(requested_delta)?;
+        let grown = B::try_with_capacity(capacity).map_err(|()| PoolError::AllocationFailed {
+            additional_bytes: requested_delta,
+            allocated_bytes: self.budgets.region_current(),
+            max_bytes: self.budgets.region_limit(),
+        })?;
+        let actual_bytes = Self::byte_size(&grown)?;
+        let actual_delta = actual_bytes
+            .checked_sub(old_bytes)
+            .ok_or(PoolError::InvalidConfig {
+                field: "buffer growth",
+                reason: "allocator returned less capacity than the current buffer",
+            })?;
+        let extra = if actual_delta > requested_delta {
+            Some(self.reserve(actual_delta - requested_delta)?)
+        } else {
+            reservation.reduce(requested_delta - actual_delta);
+            None
+        };
+        if let Some(extra) = extra {
+            extra.commit();
+        }
+        reservation.commit();
+        Ok(grown)
+    }
+
+    fn byte_size(value: &B) -> Result<usize, PoolError> {
+        Self::bytes_for_capacity(value.capacity())
+    }
+
+    fn bytes_for_capacity(capacity: usize) -> Result<usize, PoolError> {
+        B::bytes_for_capacity(capacity).ok_or_else(|| PoolError::CapacityOverflow {
+            elements: capacity,
+            element_size: B::bytes_for_capacity(1).unwrap_or(usize::MAX),
+        })
     }
 
     pub(crate) fn grow(
@@ -203,15 +249,9 @@ where
         Ok(())
     }
 
-    pub(crate) fn put(&self, value: B, shard_idx: usize) {
-        let before = Self::byte_size(&value).unwrap_or(usize::MAX);
-        match self.shards[shard_idx].try_put(value) {
-            Ok(kept) => self.budgets.release(before.saturating_sub(kept)),
-            Err(value) => {
-                drop(value);
-                self.budgets.release(before);
-                Self::increment(&self.stat_put_drops);
-            }
+    fn increment(counter: &AtomicU64) {
+        if OBSERVE {
+            counter.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -226,134 +266,16 @@ where
         }
     }
 
-    pub(crate) fn shrink_to(&self, current: &mut B, min_capacity: usize) {
-        let before = Self::byte_size(current).unwrap_or(usize::MAX);
-        current.shrink_to(min_capacity);
-        let after = Self::byte_size(current).unwrap_or(usize::MAX);
-        self.budgets.release(before.saturating_sub(after));
-    }
-
-    pub(crate) fn stats(&self) -> PoolStats {
-        PoolStats {
-            alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
-            home_hits: self.stat_home_hits.load(Ordering::Relaxed),
-            put_drops: self.stat_put_drops.load(Ordering::Relaxed),
-            steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
-        }
-    }
-
-    fn allocate(&self, capacity: usize, old_bytes: usize) -> Result<B, PoolError> {
-        let requested_bytes = Self::bytes_for_capacity(capacity)?;
-        let requested_delta =
-            requested_bytes
-                .checked_sub(old_bytes)
-                .ok_or(PoolError::InvalidConfig {
-                    field: "buffer growth",
-                    reason: "new capacity is smaller than the current capacity",
-                })?;
-        let mut reservation = self.reserve(requested_delta)?;
-        let grown = B::try_with_capacity(capacity).map_err(|()| PoolError::AllocationFailed {
-            additional_bytes: requested_delta,
-            allocated_bytes: self.budgets.region_current(),
-            max_bytes: self.budgets.region_limit(),
-        })?;
-        let actual_bytes = Self::byte_size(&grown)?;
-        let actual_delta = actual_bytes
-            .checked_sub(old_bytes)
-            .ok_or(PoolError::InvalidConfig {
-                field: "buffer growth",
-                reason: "allocator returned less capacity than the current buffer",
-            })?;
-        let extra = if actual_delta > requested_delta {
-            Some(self.reserve(actual_delta - requested_delta)?)
-        } else {
-            reservation.reduce(requested_delta - actual_delta);
-            None
-        };
-        if let Some(extra) = extra {
-            extra.commit();
-        }
-        reservation.commit();
-        Ok(grown)
-    }
-
-    fn byte_size(value: &B) -> Result<usize, PoolError> {
-        Self::bytes_for_capacity(value.capacity())
-    }
-
-    fn bytes_for_capacity(capacity: usize) -> Result<usize, PoolError> {
-        B::bytes_for_capacity(capacity).ok_or_else(|| PoolError::CapacityOverflow {
-            elements: capacity,
-            element_size: B::bytes_for_capacity(1).unwrap_or(usize::MAX),
-        })
-    }
-
-    fn increment(counter: &AtomicU64) {
-        if OBSERVE {
-            counter.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn reserve(&self, amount: usize) -> Result<crate::budget::Reservation<'_>, PoolError> {
-        self.budgets
-            .reserve(amount)
-            .map_err(|failure| match failure {
-                ReserveFailure::Overall { amount, snapshot } => PoolError::OverallBudgetExceeded {
-                    additional_bytes: amount,
-                    allocated_bytes: snapshot.current,
-                    max_bytes: snapshot.limit,
-                },
-                ReserveFailure::Pool { amount, snapshot } => PoolError::PoolBudgetExceeded {
-                    additional_bytes: amount,
-                    allocated_bytes: snapshot.current,
-                    max_bytes: snapshot.limit,
-                },
-            })
-    }
-
-    fn shard_index() -> usize {
-        let shards = SHARDS as u64;
-        usize::try_from(current_thread_id() % shards).unwrap_or(0)
-    }
-
-    fn try_steal(&self, home: usize) -> Option<B> {
-        let probes = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
-        (1..=probes).find_map(|offset| self.shards[(home + offset) % SHARDS].try_get())
-    }
-
-    fn reuse_for_growth(&self, current: &mut B, new_len: usize, home: usize) -> bool {
-        for offset in 0..SHARDS {
-            let shard_idx = (home + offset) % SHARDS;
-            let candidates = self.shards[shard_idx].len();
-            for _ in 0..candidates {
-                let Some(mut value) = self.shards[shard_idx].try_get() else {
-                    break;
-                };
-                if value.capacity() >= new_len {
-                    value.move_from(current);
-                    self.put(std::mem::replace(current, value), home);
-                    return true;
-                }
-                self.put(value, shard_idx);
+    pub(crate) fn put(&self, value: B, shard_idx: usize) {
+        let before = Self::byte_size(&value).unwrap_or(usize::MAX);
+        match self.shards[shard_idx].try_put(value) {
+            Ok(kept) => self.budgets.release(before.saturating_sub(kept)),
+            Err(value) => {
+                drop(value);
+                self.budgets.release(before);
+                Self::increment(&self.stat_put_drops);
             }
         }
-        if let Some(cold) = &self.cold {
-            let candidates = cold.len();
-            for _ in 0..candidates {
-                let Some(mut value) = cold.pop() else {
-                    break;
-                };
-                if value.capacity() >= new_len {
-                    value.move_from(current);
-                    self.put(std::mem::replace(current, value), home);
-                    return true;
-                }
-                if let Err(value) = cold.push(value) {
-                    self.put(value, home);
-                }
-            }
-        }
-        false
     }
 
     fn reclaim_for(&self, error: &PoolError) -> bool {
@@ -419,6 +341,84 @@ where
         drop(value);
         self.budgets.release(bytes);
         bytes
+    }
+
+    fn reserve(&self, amount: usize) -> Result<crate::budget::Reservation<'_>, PoolError> {
+        self.budgets
+            .reserve(amount)
+            .map_err(|failure| match failure {
+                ReserveFailure::Overall { amount, snapshot } => PoolError::OverallBudgetExceeded {
+                    additional_bytes: amount,
+                    allocated_bytes: snapshot.current,
+                    max_bytes: snapshot.limit,
+                },
+                ReserveFailure::Pool { amount, snapshot } => PoolError::PoolBudgetExceeded {
+                    additional_bytes: amount,
+                    allocated_bytes: snapshot.current,
+                    max_bytes: snapshot.limit,
+                },
+            })
+    }
+
+    fn reuse_for_growth(&self, current: &mut B, new_len: usize, home: usize) -> bool {
+        for offset in 0..SHARDS {
+            let shard_idx = (home + offset) % SHARDS;
+            let candidates = self.shards[shard_idx].len();
+            for _ in 0..candidates {
+                let Some(mut value) = self.shards[shard_idx].try_get() else {
+                    break;
+                };
+                if value.capacity() >= new_len {
+                    value.move_from(current);
+                    self.put(std::mem::replace(current, value), home);
+                    return true;
+                }
+                self.put(value, shard_idx);
+            }
+        }
+        if let Some(cold) = &self.cold {
+            let candidates = cold.len();
+            for _ in 0..candidates {
+                let Some(mut value) = cold.pop() else {
+                    break;
+                };
+                if value.capacity() >= new_len {
+                    value.move_from(current);
+                    self.put(std::mem::replace(current, value), home);
+                    return true;
+                }
+                if let Err(value) = cold.push(value) {
+                    self.put(value, home);
+                }
+            }
+        }
+        false
+    }
+
+    fn shard_index() -> usize {
+        let shards = SHARDS as u64;
+        usize::try_from(current_thread_id() % shards).unwrap_or(0)
+    }
+
+    pub(crate) fn shrink_to(&self, current: &mut B, min_capacity: usize) {
+        let before = Self::byte_size(current).unwrap_or(usize::MAX);
+        current.shrink_to(min_capacity);
+        let after = Self::byte_size(current).unwrap_or(usize::MAX);
+        self.budgets.release(before.saturating_sub(after));
+    }
+
+    pub(crate) fn stats(&self) -> PoolStats {
+        PoolStats {
+            alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
+            home_hits: self.stat_home_hits.load(Ordering::Relaxed),
+            put_drops: self.stat_put_drops.load(Ordering::Relaxed),
+            steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
+        }
+    }
+
+    fn try_steal(&self, home: usize) -> Option<B> {
+        let probes = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
+        (1..=probes).find_map(|offset| self.shards[(home + offset) % SHARDS].try_get())
     }
 }
 

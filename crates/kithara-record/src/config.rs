@@ -73,42 +73,42 @@ where
     /// Factory opening each transactional recording part.
     #[builder(start_fn)]
     pub(crate) factory: F,
-    /// Encoding and container profile for every independently playable part.
-    #[builder(default = RecordingConfig::builder().build())]
-    pub(crate) recording: RecordingConfig,
-    /// Maximum stereo PCM frames waiting between RT and the encoder worker.
-    #[builder(default = Defaults::BUFFER_FRAMES)]
-    pub(crate) buffer_frames: NonZeroUsize,
-    /// Maximum stereo PCM frames encoded during one worker tick.
-    #[builder(default = Defaults::TICK_FRAMES)]
-    pub(crate) tick_frames: NonZeroUsize,
-    /// Maximum queued master-format generations waiting for the worker.
-    #[builder(default = Defaults::GENERATION_CAPACITY)]
-    pub(crate) generation_capacity: NonZeroUsize,
-    /// Optional exact frame count at which each part rotates automatically.
-    pub(crate) rotation_frames: Option<NonZeroU64>,
-    /// Maximum tasks admitted to the recorder dispatcher.
-    #[builder(default = Defaults::DISPATCHER_CAPACITY)]
-    pub(crate) dispatcher_capacity: NonZeroUsize,
-    /// Consecutive progress passes before the dispatcher yields.
-    #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
-    pub(crate) fairness_yield_interval: NonZeroU32,
     /// Dispatcher park duration when the recorder has no work.
     #[builder(default = Duration::from_millis(100))]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow recorder tick.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) slow_tick_threshold: Duration,
-    /// Maximum consecutive recorder ticks in one dispatcher visit.
-    #[builder(default = NonZeroU32::MIN)]
-    pub(crate) task_burst: NonZeroU32,
     /// Dispatcher wait duration between deferred RT wakes.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) wait_timeout: Duration,
-    /// Recorder task priority.
-    #[builder(default = Priority::new(0))]
-    pub(crate) priority: Priority,
+    /// Consecutive progress passes before the dispatcher yields.
+    #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
+    pub(crate) fairness_yield_interval: NonZeroU32,
+    /// Maximum consecutive recorder ticks in one dispatcher visit.
+    #[builder(default = NonZeroU32::MIN)]
+    pub(crate) task_burst: NonZeroU32,
+    /// Maximum stereo PCM frames waiting between RT and the encoder worker.
+    #[builder(default = Defaults::BUFFER_FRAMES)]
+    pub(crate) buffer_frames: NonZeroUsize,
+    /// Maximum tasks admitted to the recorder dispatcher.
+    #[builder(default = Defaults::DISPATCHER_CAPACITY)]
+    pub(crate) dispatcher_capacity: NonZeroUsize,
+    /// Maximum queued master-format generations waiting for the worker.
+    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    pub(crate) generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the recorder task.
     #[builder(default = NonZeroUsize::MIN)]
     pub(crate) max_compute_tasks: NonZeroUsize,
+    /// Maximum stereo PCM frames encoded during one worker tick.
+    #[builder(default = Defaults::TICK_FRAMES)]
+    pub(crate) tick_frames: NonZeroUsize,
+    /// Optional exact frame count at which each part rotates automatically.
+    pub(crate) rotation_frames: Option<NonZeroU64>,
+    /// Recorder task priority.
+    #[builder(default = Priority::new(0))]
+    pub(crate) priority: Priority,
+    /// Encoding and container profile for every independently playable part.
+    #[builder(default = RecordingConfig::builder().build())]
+    pub(crate) recording: RecordingConfig,
 }

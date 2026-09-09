@@ -24,10 +24,10 @@ pub struct AudioChunkInfo {
     pub frames: u32,
     /// Decoder generation, incremented on decoder recreation.
     pub epoch: u64,
-    /// Opaque producer render revision represented by this chunk.
-    pub render_revision: u64,
     /// Absolute frame offset from the start of the track.
     pub frame_offset: u64,
+    /// Opaque producer render revision represented by this chunk.
+    pub render_revision: u64,
     /// Source bytes that produced this chunk, or zero when unknown.
     pub source_bytes: u64,
 }
@@ -91,6 +91,7 @@ impl AsRef<[f32]> for AudioChunk {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_test_fixtures::fixtures::silence_pcm;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -121,19 +122,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn chunk_reports_complete_frames() {
+    fn chunk_reports_complete_frames(silence_pcm: Vec<f32>) {
         let pools = pools();
         assert_eq!(
-            chunk(&pools, audio_spec(2, 44_100), vec![0.0; 6]).frames(),
+            chunk(&pools, audio_spec(2, 44_100), silence_pcm).frames(),
             3
         );
     }
 
     #[kithara::test]
-    fn zero_channels_report_no_frames() {
+    fn zero_channels_report_no_frames(silence_pcm: Vec<f32>) {
         let pools = pools();
         assert_eq!(
-            chunk(&pools, audio_spec(0, 44_100), vec![0.0; 4]).frames(),
+            chunk(&pools, audio_spec(0, 44_100), silence_pcm[..4].to_vec()).frames(),
             0
         );
     }

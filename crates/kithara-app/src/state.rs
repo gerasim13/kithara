@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    analysis::{AnalysisProgress, FrameRange},
+    analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
     events::{
         AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
         PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
@@ -68,6 +68,8 @@ impl UiState {
             tracks,
             current_track_index,
             track_name,
+            beat_marks,
+            downbeat_marks,
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
             selected_variant: None,
@@ -78,8 +80,6 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
@@ -92,6 +92,8 @@ impl UiState {
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
         Self {
+            beat_marks,
+            downbeat_marks,
             current_track_index: None,
             selected_variant: None,
             current_variant: None,
@@ -100,8 +102,6 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
@@ -197,13 +197,13 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct StateController {
-    beat_clock: Mutex<BeatClockState>,
     #[field(get, deref = false)]
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
+    beat_clock: Mutex<BeatClockState>,
 }
 
 impl StateController {
@@ -368,7 +368,7 @@ impl StateController {
 }
 
 fn bpm_info_from_state(
-    beat: &kithara::analysis::BeatSnapshot,
+    beat: &BeatSnapshot,
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {
@@ -414,8 +414,8 @@ pub(crate) async fn listen(
     analysis: AnalysisHandle,
 ) {
     let mut held = HeldAnalysis {
-        queue: queue.clone(),
         analysis,
+        queue: queue.clone(),
         rx: None,
     };
     held.follow(&state).await;
@@ -455,12 +455,27 @@ pub(crate) async fn listen(
 }
 
 struct HeldAnalysis {
-    queue: AppQueueControl,
     analysis: AnalysisHandle,
+    queue: AppQueueControl,
     rx: Option<watch::Receiver<Option<AnalysisProgress>>>,
 }
 
 impl HeldAnalysis {
+    fn axis(&self) -> Option<NonZeroU32> {
+        let axis = NonZeroU32::new(self.queue.sample_rate());
+        if axis.is_none() {
+            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
+        }
+        axis
+    }
+
+    async fn changed(&mut self) -> bool {
+        match &mut self.rx {
+            Some(rx) => rx.changed().await.is_ok(),
+            None => std::future::pending().await,
+        }
+    }
+
     async fn follow(&mut self, state: &Mutex<UiState>) {
         let held = {
             let st = state.lock();
@@ -480,28 +495,6 @@ impl HeldAnalysis {
         self.mirror(state, true);
     }
 
-    async fn warm(&self, state: &Mutex<UiState>) {
-        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
-        if let Some(axis) = self.axis() {
-            self.analysis.warm(self.queue.clone(), ids, axis).await;
-        }
-    }
-
-    fn axis(&self) -> Option<NonZeroU32> {
-        let axis = NonZeroU32::new(self.queue.sample_rate());
-        if axis.is_none() {
-            warn!("analysis: the engine reports no sample rate; the deck observes nothing");
-        }
-        axis
-    }
-
-    async fn changed(&mut self) -> bool {
-        match &mut self.rx {
-            Some(rx) => rx.changed().await.is_ok(),
-            None => std::future::pending().await,
-        }
-    }
-
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
         let next = self
             .rx
@@ -513,6 +506,13 @@ impl HeldAnalysis {
         let mut st = state.lock();
         if !same_revision(st.analysis.as_ref(), next.as_ref()) {
             st.set_analysis(next);
+        }
+    }
+
+    async fn warm(&self, state: &Mutex<UiState>) {
+        let ids: Vec<TrackId> = state.lock().tracks.iter().map(|track| track.id).collect();
+        if let Some(axis) = self.axis() {
+            self.analysis.warm(self.queue.clone(), ids, axis).await;
         }
     }
 }
@@ -672,7 +672,7 @@ mod tests {
     use crate::{
         analysis::{
             AnalysisHandle, Request,
-            fixtures::{answer_subscribe, next_subscribe, queue, track, wait_for_revision},
+            fixtures::{answer_subscribe, next_subscribe, queue_off, track, wait_for_revision},
         },
         pools::AppQueueControl,
         waveform::TrackAnalysis,
@@ -709,11 +709,11 @@ mod tests {
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_observes_a_track_added_to_its_empty_queue() {
-        let (_host, queue) = queue();
+        let (host, queue) = queue_off().await;
         let (state, mut requests, cancel) = deck(&queue);
         assert_eq!(state.lock().current_track_index, None);
 
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let tx = time::timeout(
             Duration::from_secs(2),
             answer_subscribe(&mut requests, track_id),
@@ -726,12 +726,13 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_a_removed_track() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let tx = answer_subscribe(&mut requests, track_id).await;
         tx.send_replace(Some(progress(1)));
@@ -753,13 +754,15 @@ mod tests {
         let st = state.lock();
         assert_eq!(st.current_track_index, None);
         assert!(st.analysis.is_none(), "nothing is shown for no track");
+        drop(st);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio)]
     async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
 
         let first = answer_subscribe(&mut requests, track_id).await;
@@ -779,13 +782,14 @@ mod tests {
 
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
-        let (second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+        let (second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         let (_state, mut requests, cancel) = deck(&queue);
         let first = answer_subscribe(&mut requests, first_id).await;
 
@@ -801,15 +805,16 @@ mod tests {
         );
         drop(reply);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_lagged_deck_resyncs_from_its_queue() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let (_, reply) = next_subscribe(&mut requests).await;
-        let (_second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (_second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
                 .bus()
@@ -831,6 +836,7 @@ mod tests {
         drop(again);
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {

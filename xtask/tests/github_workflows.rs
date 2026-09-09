@@ -1838,6 +1838,11 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
         Some("${{ inputs.lane }}"),
         "the executor's job carries the lane's name"
     );
+    assert_eq!(
+        mapping_field(job, "runs-on").as_str(),
+        Some("${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
+        "a lane runner label overrides only the shared pool selection"
+    );
     let upload = named_step(job, "Upload the lane's report");
     let upload_inputs = mapping_field(upload, "with")
         .as_mapping()
@@ -1957,6 +1962,14 @@ fn a_caller_always_passes_every_input_the_called_workflow_requires() {
 #[test]
 fn the_role_runner_reads_its_matrix_from_the_catalog() {
     let workflow = github_workflow("run.yml");
+    let workflow_env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("the role runner has an environment");
+    assert_eq!(
+        mapping_field(workflow_env, "CARGO_TARGET_DIR").as_str(),
+        Some("/cache/target"),
+        "matrix selection reuses the fleet build cache"
+    );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
         workflow_job_names(jobs),
@@ -1998,6 +2011,16 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         text.contains("uses: ./.github/workflows/lane.yml"),
         "the fan-out runs through the executor"
     );
+    for job in ["run", "dependent"] {
+        let with = mapping_field(workflow_job(jobs, job), "with")
+            .as_mapping()
+            .expect("the lane call passes inputs");
+        assert_eq!(
+            mapping_field(with, "runner").as_str(),
+            Some("${{ matrix.runner || '' }}"),
+            "the fan-out loses the lane's runner affinity"
+        );
+    }
     assert_eq!(
         job_needs(workflow_job(jobs, "dependent")),
         BTreeSet::from(["select".to_owned(), "run".to_owned()]),

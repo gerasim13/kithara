@@ -1,11 +1,17 @@
+use kithara_derive::Ranged;
 use kithara_warp::{
     BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch, TransportRevision,
 };
 
 /// A musical tempo in beats per minute, inside the range the session clock can
 /// carry.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork)]
+///
+/// The upper bound is what keeps the anchor arithmetic finite: an unbounded
+/// tempo overflows the beat span of a single block, and the resulting failure
+/// strands the transport with an active commit and no anchor.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork, Ranged)]
 #[fieldwork(get)]
+#[ranged(min = 1.0, max = 1_000.0)]
 pub struct Tempo(
     /// Returns the tempo in beats per minute.
     #[field(get = beats_per_minute, copy)]
@@ -13,29 +19,16 @@ pub struct Tempo(
 );
 
 impl Tempo {
-    /// The fastest accepted tempo. The upper bound is what keeps the anchor
-    /// arithmetic finite: an unbounded tempo overflows the beat span of a
-    /// single block, and the resulting failure strands the transport with an
-    /// active commit and no anchor.
-    pub const MAX_BEATS_PER_MINUTE: f64 = 1_000.0;
-
-    /// The slowest accepted tempo.
-    pub const MIN_BEATS_PER_MINUTE: f64 = 1.0;
-
     /// Creates a tempo, rejecting non-finite and out-of-range values.
     pub fn new(beats_per_minute: f64) -> Result<Self, TempoError> {
-        if (Self::MIN_BEATS_PER_MINUTE..=Self::MAX_BEATS_PER_MINUTE).contains(&beats_per_minute) {
-            Ok(Self(beats_per_minute))
-        } else {
-            Err(TempoError { beats_per_minute })
-        }
+        Self::checked(beats_per_minute).ok_or(TempoError { beats_per_minute })
     }
 
     #[must_use]
     pub fn beats_per_second(self) -> f64 {
         const SECONDS_PER_MINUTE: f64 = 60.0;
 
-        self.0 / SECONDS_PER_MINUTE
+        f64::from(self) / SECONDS_PER_MINUTE
     }
 }
 
@@ -51,8 +44,8 @@ impl TryFrom<f64> for Tempo {
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
 #[error(
     "tempo must be between {min} and {max} beats per minute, got {beats_per_minute}",
-    min = Tempo::MIN_BEATS_PER_MINUTE,
-    max = Tempo::MAX_BEATS_PER_MINUTE,
+    min = f64::from(Tempo::MIN),
+    max = f64::from(Tempo::MAX),
 )]
 #[non_exhaustive]
 pub struct TempoError {
@@ -143,7 +136,27 @@ mod tests {
         SessionFrame,
     };
 
-    use super::{SessionTransportSnapshot, Tempo, TransportRevision};
+    use super::{SessionTransportSnapshot, Tempo, TempoError, TransportRevision};
+
+    #[kithara::test]
+    #[case::not_a_number(f64::NAN)]
+    #[case::below_the_floor(0.5)]
+    #[case::above_the_ceiling(1_000.5)]
+    fn an_invalid_tempo_is_refused(#[case] beats_per_minute: f64) {
+        assert!(matches!(
+            Tempo::new(beats_per_minute),
+            Err(TempoError { .. })
+        ));
+    }
+
+    #[kithara::test]
+    fn the_refusal_names_both_bounds() {
+        let error = Tempo::new(0.5).expect_err("half a beat per minute is below the floor");
+        let message = error.to_string();
+
+        assert!(message.contains('1'), "the floor is named: {message}");
+        assert!(message.contains("1000"), "the ceiling is named: {message}");
+    }
 
     #[kithara::test]
     fn snapshot_carries_the_anchor_that_places_a_target_on_the_session_clock() {

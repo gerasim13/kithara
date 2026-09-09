@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, PreloadGate, ReadOutcome,
-    SeekBegin, SeekOutcome,
+    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
+    ReadOutcome, SeekBegin, SeekOutcome,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -29,8 +29,8 @@ impl TrackPriority {
 }
 
 pub(crate) struct TrackLease<S> {
-    task: TaskHandle,
     _worker: PlayWorker<S>,
+    task: TaskHandle,
 }
 
 impl<S> TrackLease<S> {
@@ -51,8 +51,8 @@ impl<S> TrackLease<S> {
 /// The reader drops before its registration lease, so its wake handles and
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<T, S> {
-    warp: Warp<Audio<T>>,
     _lease: TrackLease<S>,
+    warp: Warp<Audio<T>>,
 }
 
 impl<T, S> RegisteredAudio<T, S> {
@@ -106,18 +106,19 @@ impl<T: MaybeSend, S> AudioSession for RegisteredAudio<T, S> {
 }
 
 impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
+        AudioControl::seek_handle(self.warp.source())
+    }
+
     delegate::delegate! {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             fn sync_seek(&mut self);
         }
         to self.warp.source() {
             fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
-    }
-
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        AudioControl::seek_handle(self.warp.source())
     }
 }

@@ -8,6 +8,7 @@ use kithara_bufpool::SampleBuffer;
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
+use kithara_test_fixtures::analysis_fixtures::analysis_silence;
 use kithara_test_utils::kithara;
 use kithara_worker::TickResult;
 
@@ -31,13 +32,13 @@ use crate::{
 struct Consts;
 
 impl Consts {
-    const RATE: u32 = 1000;
+    const BUCKETS: usize = 64;
     const CHUNK_FRAMES: u64 = 200;
     const CHUNK_SECONDS: u32 = 16;
-    const TICK_LIMIT: u64 = 1 << 20;
-    const PATIENCE: u32 = 16;
-    const BUCKETS: usize = 64;
     const HOG_FRAMES: usize = 8192;
+    const PATIENCE: u32 = 16;
+    const RATE: u32 = 1000;
+    const TICK_LIMIT: u64 = 1 << 20;
 }
 
 fn rate() -> NonZeroU32 {
@@ -91,13 +92,13 @@ fn run(
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let (_writer, ingest) = ring::open_for(rate());
     let job = Job {
+        ingest,
+        tx,
         reader: Box::new(track),
         cancel: CancelToken::root(),
-        ingest,
         rate: rate(),
         token: "hold".into(),
         revision: 0,
-        tx,
         resume: None,
     };
     let mut task = AnalysisTask::new(
@@ -171,8 +172,9 @@ fn lost(analysis: &TrackAnalysis) -> u64 {
 }
 
 #[kithara::test]
-fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
+fn a_track_the_reader_outruns_the_detector_on_reaches_its_end(analysis_silence: Vec<f32>) {
     let analysis = read_whole(Track::silence(
+        &analysis_silence,
         pools(),
         spec(),
         Consts::CHUNK_FRAMES,
@@ -194,11 +196,17 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end() {
 }
 
 #[kithara::test]
-fn a_gap_at_the_start_is_taken_rather_than_declared_covered() {
-    let analysis = read_whole(Track::silence(pools(), spec(), Consts::CHUNK_FRAMES, 407.2))
-        .unwrap_or_else(|Livelock { ticks }| {
-            panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
-        });
+fn a_gap_at_the_start_is_taken_rather_than_declared_covered(analysis_silence: Vec<f32>) {
+    let analysis = read_whole(Track::silence(
+        &analysis_silence,
+        pools(),
+        spec(),
+        Consts::CHUNK_FRAMES,
+        407.2,
+    ))
+    .unwrap_or_else(|Livelock { ticks }| {
+        panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
+    });
     assert_eq!(
         lost(&analysis),
         0,
@@ -208,9 +216,15 @@ fn a_gap_at_the_start_is_taken_rather_than_declared_covered() {
 }
 
 #[kithara::test]
-fn a_pass_that_cannot_feed_its_detector_reads_on() {
+fn a_pass_that_cannot_feed_its_detector_reads_on(analysis_silence: Vec<f32>) {
     let pools = pools();
-    let track = Track::silence(pools.clone(), spec(), Consts::CHUNK_FRAMES, 330.0);
+    let track = Track::silence(
+        &analysis_silence,
+        pools.clone(),
+        spec(),
+        Consts::CHUNK_FRAMES,
+        330.0,
+    );
     let mut hog = Vec::new();
     let analysis = read_whole_with(pools.clone(), track, &mut |pools| exhaust(pools, &mut hog))
         .unwrap_or_else(|Livelock { ticks }| {
@@ -228,8 +242,15 @@ fn a_pass_that_cannot_feed_its_detector_reads_on() {
 }
 
 #[kithara::test]
-fn a_source_that_ends_before_its_claimed_length_is_complete() {
-    let track = Track::claiming(pools(), spec(), Consts::CHUNK_FRAMES, 40.0, 40.5);
+fn a_source_that_ends_before_its_claimed_length_is_complete(analysis_silence: Vec<f32>) {
+    let track = Track::claiming(
+        &analysis_silence,
+        pools(),
+        spec(),
+        Consts::CHUNK_FRAMES,
+        40.0,
+        40.5,
+    );
     let delivered = track.frames();
     let analysis = read_whole(track).unwrap_or_else(|Livelock { ticks }| {
         panic!("the pass waits on a detector that has nothing to read, after {ticks} ticks")
@@ -253,17 +274,24 @@ fn a_source_that_ends_before_its_claimed_length_is_complete() {
     );
 }
 
-fn claiming(pools: Pools) -> Track {
-    Track::claiming(pools, spec(), Consts::CHUNK_FRAMES, 40.0, 40.5)
+fn claiming(analysis_silence: &[f32], pools: Pools) -> Track {
+    Track::claiming(
+        &analysis_silence,
+        pools,
+        spec(),
+        Consts::CHUNK_FRAMES,
+        40.0,
+        40.5,
+    )
 }
 
 #[kithara::test(tokio)]
-async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
+async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more(analysis_silence: Vec<f32>) {
     let pools = pools();
-    let delivered = claiming(pools.clone()).frames();
+    let delivered = claiming(&analysis_silence, pools.clone()).frames();
     let checkpoint = run(
         pools.clone(),
-        claiming(pools.clone()),
+        claiming(&analysis_silence, pools.clone()),
         &mut |_| {},
         &mut |progress| progress.is_resumable() && progress.analysis().extent() == Some(delivered),
     )
@@ -291,7 +319,7 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
     let (mut rx, _producer, pass) = worker
         .open_resume(checkpoint.clone())
         .expect("a checkpoint past the end is a valid resume");
-    worker.start(pass, Box::new(claiming(pools)));
+    worker.start(pass, Box::new(claiming(&analysis_silence, pools)));
 
     while rx.changed().await.is_ok() {}
     let held = rx.borrow().clone().expect("the resume publishes");
@@ -305,9 +333,10 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more() {
 }
 
 #[kithara::test]
-fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid() {
+fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid(analysis_silence: Vec<f32>) {
     const PRIMING: u64 = 1105;
     let analysis = read_whole(Track::priming(
+        &analysis_silence,
         pools(),
         spec(),
         Consts::CHUNK_FRAMES,

@@ -229,14 +229,12 @@ impl fmt::Debug for AacDecoder {
 impl AacDecoder {
     /// Build a fresh fdk-aac C decoder from the stored codec parameters.
     ///
-    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac
-    /// C handle owns MDCT/QMF/SBR overlap-add state that survives across
-    /// `fill`/`decode_frame` and has no public mid-stream flush, so the only
-    /// way to return it to a cold (zero-overlap) state after a seek is to
-    /// drop and re-create it. Without this, the first access unit decoded
-    /// after a seek inherits the pre-seek overlap-add tail and emits
-    /// contaminated PCM (a ~2-AU phase shift at seek seams). See the
-    /// `kithara-decode` CONTEXT.md "Seek pre-roll and trim".
+    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac C handle
+    /// owns MDCT/QMF/SBR overlap-add state that survives across `fill`/`decode_frame`
+    /// and has no public mid-stream flush, so the only way to return it to a cold
+    /// (zero-overlap) state after a seek is to drop and re-create it. Without this, the
+    /// first access unit decoded after a seek inherits the pre-seek overlap-add tail
+    /// and emits contaminated PCM (a ~2-AU phase shift at seek seams).
     fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
         let mut decoder = Decoder::new(transport);
         if matches!(transport, Transport::Raw)

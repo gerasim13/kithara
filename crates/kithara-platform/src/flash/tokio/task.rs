@@ -5,8 +5,11 @@ pub use crate::backend::tokio::task::{JoinError, JoinHandle};
 // UNDER AMBIENT (a flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual clock advance).
 pub use crate::flash::yield_now;
 use crate::{
-    backend::tokio::{backend, runtime::Handle, task as native_task},
-    flash::system::credit,
+    backend::tokio::{backend::task, runtime::Handle, task as native_task},
+    flash::system::{
+        credit,
+        credit::{DedicatedSlot, Participant},
+    },
     maybe_send::MaybeSend,
 };
 
@@ -33,7 +36,7 @@ where
 {
     let on = crate::flash::ambient_snapshot();
     let loc = Location::caller();
-    backend::task::spawn(crate::flash::with_ambient(
+    task::spawn(crate::flash::with_ambient(
         on,
         crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
     ))
@@ -82,7 +85,7 @@ where
     let ambient = crate::flash::ambient_snapshot();
     // WHY: Reserve the `active` slot BEFORE the pool queues the closure (covering the queue wait). The slot's Drop returns the
     // reservation if the pool never runs the closure.
-    let slot = ambient.then(credit::DedicatedSlot::reserve);
+    let slot = ambient.then(DedicatedSlot::reserve);
     native_task::spawn_blocking(move || {
         // WHY: Held for the closure's lifetime (must outlive `f()`); restores the pool thread's previous ambient on exit.
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
@@ -92,7 +95,7 @@ where
             f()
         } else {
             // WHY: Non-ambient: invisible to the engine; the RAII settle only keeps the exit unwind-safe and consistent with the ambient arm.
-            let _exit = credit::Participant::unreserved();
+            let _exit = Participant::unreserved();
             f()
         }
     })
@@ -119,7 +122,7 @@ where
     let ambient = crate::flash::ambient_snapshot();
     // WHY: Reserve the `active` slot BEFORE the pool queues the closure (covering the queue wait). The slot's Drop returns the
     // reservation if the pool never runs the closure.
-    let slot = ambient.then(credit::DedicatedSlot::reserve);
+    let slot = ambient.then(DedicatedSlot::reserve);
     handle.spawn_blocking(move || {
         // WHY: Held for the closure's lifetime (must outlive `f()`); restores the pool thread's previous ambient on exit.
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
@@ -129,7 +132,7 @@ where
             f()
         } else {
             // WHY: Non-ambient: invisible to the engine; the RAII settle only keeps the exit unwind-safe and consistent with the ambient arm.
-            let _exit = credit::Participant::unreserved();
+            let _exit = Participant::unreserved();
             f()
         }
     })

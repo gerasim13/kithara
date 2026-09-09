@@ -61,6 +61,12 @@ where
         self.0.is_none()
     }
 
+    pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
+        if let Some(config) = &mut self.0 {
+            config.resampler = resampler;
+        }
+    }
+
     pub(crate) fn take_detector<S>(&mut self, pools: &PoolRegion<S>) -> Option<Detector>
     where
         S: HasPool<f32> + Send + Sync + 'static,
@@ -76,12 +82,6 @@ where
             self.0 = None;
         }
         detector
-    }
-
-    pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
-        if let Some(config) = &mut self.0 {
-            config.resampler = resampler;
-        }
     }
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
@@ -133,44 +133,11 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        detector: Option<&mut Detector>,
-        ending: bool,
-        extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
-    where
-        S: HasPool<f32>,
-    {
-        let analyzer = self.0.as_mut()?;
-        match detector {
-            Some(detector) => analyzer.snapshot(pools, detector.as_ref(), ending, extent),
-            None => analyzer.snapshot_deferred(ending, extent),
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        if let Some(analyzer) = &mut self.0 {
+            analyzer.apply_detection(output);
         }
-    }
-
-    pub(crate) fn push<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        pcm: &[f32],
-        channels: usize,
-        at: u64,
-        opens: Opens,
-        detector: Option<&mut Detector>,
-    ) -> bool
-    where
-        S: HasPool<f32>,
-    {
-        let Some(analyzer) = &mut self.0 else {
-            return false;
-        };
-        let took = match detector {
-            Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
-            None => analyzer.push_deferred(pools, pcm, channels, at, opens),
-        };
         self.close_if_failed();
-        took
     }
 
     fn close_if_failed(&mut self) {
@@ -201,19 +168,27 @@ where
         request
     }
 
-    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
-        if let Some(analyzer) = &mut self.0 {
-            analyzer.apply_detection(output);
-        }
+    pub(crate) fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        opens: Opens,
+        detector: Option<&mut Detector>,
+    ) -> bool
+    where
+        S: HasPool<f32>,
+    {
+        let Some(analyzer) = &mut self.0 else {
+            return false;
+        };
+        let took = match detector {
+            Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
+            None => analyzer.push_deferred(pools, pcm, channels, at, opens),
+        };
         self.close_if_failed();
-    }
-
-    pub(crate) fn write_resume(&mut self) -> Option<Vec<u8>> {
-        self.0.as_mut().map(|analyzer| {
-            let mut out = Vec::new();
-            analyzer.write_resume(&mut out);
-            out
-        })
+        took
     }
 
     pub(crate) fn restore<S>(
@@ -229,6 +204,31 @@ where
             (None, None) => Ok(()),
             (Some(_), None) | (None, Some(_)) => Err(BlobError::Corrupt),
         }
+    }
+
+    pub(crate) fn snapshot<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        detector: Option<&mut Detector>,
+        ending: bool,
+        extent: Option<u64>,
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
+        let analyzer = self.0.as_mut()?;
+        match detector {
+            Some(detector) => analyzer.snapshot(pools, detector.as_ref(), ending, extent),
+            None => analyzer.snapshot_deferred(ending, extent),
+        }
+    }
+
+    pub(crate) fn write_resume(&mut self) -> Option<Vec<u8>> {
+        self.0.as_mut().map(|analyzer| {
+            let mut out = Vec::new();
+            analyzer.write_resume(&mut out);
+            out
+        })
     }
 }
 

@@ -59,6 +59,22 @@ where
         start..end.max(start)
     }
 
+    /// Segment the plan must carry so a reader can parse its container header,
+    /// or `None` when the plan owes none.
+    ///
+    /// [`reader_is_ready`](Self::reader_is_ready) gates the handover on the
+    /// header range as well as the forward window, and a variant without an
+    /// `EXT-X-MAP` keeps that header in its first segment — behind the tail the
+    /// plan is aimed at, where nothing else would fetch it. A separate init is
+    /// carried by [`PlannedFetch::Init`](crate::segment::PlannedFetch::Init)
+    /// already, and a self-framing reader waits on no header at all.
+    fn header_segment(&self, input: ReaderInput) -> StreamResult<Option<u32>> {
+        if !matches!(input, ReaderInput::InitOnly) || self.has_init() {
+            return Ok(None);
+        }
+        Ok(self.demand_segment_at_offset(self.header_byte_range()?.start))
+    }
+
     pub(crate) fn prepare_reader(
         &self,
         profile: ReaderProfile,
@@ -125,22 +141,6 @@ where
             warmup: profile.warmup().max_bytes().map_or(0, NonZeroU64::get),
             input: profile.input(),
         })
-    }
-
-    /// Segment the plan must carry so a reader can parse its container header,
-    /// or `None` when the plan owes none.
-    ///
-    /// [`reader_is_ready`](Self::reader_is_ready) gates the handover on the
-    /// header range as well as the forward window, and a variant without an
-    /// `EXT-X-MAP` keeps that header in its first segment — behind the tail the
-    /// plan is aimed at, where nothing else would fetch it. A separate init is
-    /// carried by [`PlannedFetch::Init`](crate::segment::PlannedFetch::Init)
-    /// already, and a self-framing reader waits on no header at all.
-    fn header_segment(&self, input: ReaderInput) -> StreamResult<Option<u32>> {
-        if !matches!(input, ReaderInput::InitOnly) || self.has_init() {
-            return Ok(None);
-        }
-        Ok(self.demand_segment_at_offset(self.header_byte_range()?.start))
     }
 
     pub(crate) fn reader_is_ready(

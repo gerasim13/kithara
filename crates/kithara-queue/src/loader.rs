@@ -30,16 +30,16 @@ pub(crate) struct Loader<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
-    player: PlayerControl<S>,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
     /// so both change under one lock.
     tracks: Arc<Tracks<S>>,
     store: AssetStore<S>,
+    cancel: CancelToken,
+    player: PlayerControl<S>,
 }
 
 impl<S> Loader<S>
@@ -55,11 +55,11 @@ where
     ) -> Self {
         Self {
             cancel,
-            interactive_lane: Arc::new(Semaphore::new(1)),
             player,
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
             store,
+            interactive_lane: Arc::new(Semaphore::new(1)),
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -151,11 +151,6 @@ where
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
-    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
-        cancel.cancelled().await;
-        track_cancel.cancel();
-    }
-
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
@@ -233,6 +228,11 @@ where
         Some(self.spawn_attempt(ticket, config, cancel, class))
     }
 
+    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
+        cancel.cancelled().await;
+        track_cancel.cancel();
+    }
+
     /// Watches the [`EventBus`] for the first
     /// [`DownloaderEvent::LoadSlow`] and flips the track status to
     /// [`TrackStatus::Slow`]. Returns a never-completing future:
@@ -280,8 +280,8 @@ mod tests {
     };
 
     struct CancelDropProbe {
-        cancel: CancelToken,
         state: Arc<AtomicUsize>,
+        cancel: CancelToken,
     }
 
     impl Drop for CancelDropProbe {
@@ -398,9 +398,9 @@ mod tests {
     /// [`EventBus`] (so tests can subscribe for assertions).
     struct LoaderFixture {
         loader: Arc<Loader<TestPools>>,
-        _player: PlayerImpl<TestPools>,
         tracks: Arc<Tracks<TestPools>>,
         bus: EventBus,
+        _player: PlayerImpl<TestPools>,
     }
 
     impl LoaderFixtureSpec {
@@ -425,9 +425,9 @@ mod tests {
             ));
             LoaderFixture {
                 loader,
-                _player: player,
                 tracks,
                 bus,
+                _player: player,
             }
         }
     }

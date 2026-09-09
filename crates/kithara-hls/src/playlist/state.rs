@@ -108,35 +108,18 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
 }
 
 impl PlaylistState {
+    pub(crate) fn init_url(&self, variant: VariantIndex) -> Option<Url> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.read();
+        state.init_url.clone()
+    }
+
     /// Number of segments in a variant's media playlist.
     #[must_use]
     pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
         Some(state.segments.len())
-    }
-
-    /// Total media duration across parsed variants.
-    ///
-    /// Variants are expected to describe the same timeline. We keep the
-    /// maximum duration to tolerate incomplete alternate renditions.
-    #[must_use]
-    pub fn track_duration(&self) -> Option<Duration> {
-        self.variants
-            .iter()
-            .map(|lock| {
-                let state = lock.read();
-                state.segments.iter().fold(Duration::ZERO, |acc, segment| {
-                    acc.saturating_add(segment.duration)
-                })
-            })
-            .max()
-    }
-
-    pub(crate) fn init_url(&self, variant: VariantIndex) -> Option<Url> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.read();
-        state.init_url.clone()
     }
 
     pub(crate) fn segment_byte_range_len(
@@ -177,6 +160,23 @@ impl PlaylistState {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
         state.segments.get(index).map(|s| s.url.clone())
+    }
+
+    /// Total media duration across parsed variants.
+    ///
+    /// Variants are expected to describe the same timeline. We keep the
+    /// maximum duration to tolerate incomplete alternate renditions.
+    #[must_use]
+    pub fn track_duration(&self) -> Option<Duration> {
+        self.variants
+            .iter()
+            .map(|lock| {
+                let state = lock.read();
+                state.segments.iter().fold(Duration::ZERO, |acc, segment| {
+                    acc.saturating_add(segment.duration)
+                })
+            })
+            .max()
     }
 
     /// Advertised variant bandwidth from the master playlist, in bits per

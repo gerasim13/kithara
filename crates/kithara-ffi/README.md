@@ -48,4 +48,4 @@ The same store object can be supplied to multiple player configurations. The
 browser worker instead owns its in-memory `AssetStore`; the native UniFFI store
 and registry are not part of the wasm API.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi) for detailed contracts, invariants, and internals.

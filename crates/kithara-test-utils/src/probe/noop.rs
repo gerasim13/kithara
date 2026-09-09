@@ -1,5 +1,6 @@
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
 use kithara_platform::time::Duration;
+use num_traits::AsPrimitive;
 use url::Url;
 
 pub trait Probe {
@@ -93,7 +94,7 @@ impl IntoProbeArg for CancelReason {
 
 impl IntoProbeArg for AbrMode {
     fn into_probe_arg(self) -> u64 {
-        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
+        AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

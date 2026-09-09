@@ -46,4 +46,4 @@ Architectural waist for bytes entering the decoder: protocol crates implement
 `AudioCodec`, `ContainerFormat`, and `MediaInfo` are defined here and re-exported
 elsewhere.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stream) for detailed contracts, invariants, and internals.

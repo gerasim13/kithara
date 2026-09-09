@@ -2,7 +2,7 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::time::Duration;
 use serde::{Deserialize, Deserializer};
 

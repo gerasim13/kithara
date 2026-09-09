@@ -1,6 +1,6 @@
 use iced::{
     Event, Point, Rectangle,
-    advanced::{InputMethod as IcedInputMethod, input_method},
+    advanced::{InputMethod as IcedInputMethod, input_method, input_method::Purpose},
     keyboard::{
         self, Event as KeyboardEvent,
         key::{Key as IcedKey, Named},
@@ -95,7 +95,7 @@ pub(crate) fn input_method(request: Option<InputMethodRequest<'_>>) -> IcedInput
             x: request.caret.x,
             y: request.caret.y,
         },
-        purpose: input_method::Purpose::Normal,
+        purpose: Purpose::Normal,
         preedit: request.preedit.map(|preedit| input_method::Preedit {
             content: preedit.content,
             selection: preedit.selection,

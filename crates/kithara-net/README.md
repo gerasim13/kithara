@@ -74,4 +74,4 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 
 Used by `kithara-file` and `kithara-hls` for all HTTP operations.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-net) for detailed contracts, invariants, and internals.

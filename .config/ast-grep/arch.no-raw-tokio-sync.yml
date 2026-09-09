@@ -11,7 +11,7 @@ message: |
   - `tokio::sync::{watch, broadcast, OnceCell}` -> `kithara_platform::tokio::sync::{watch, broadcast, OnceCell}`
   - `tokio::sync::{Mutex, RwLock, Barrier}` are not allowed on a flash-relevant
     path; use the platform sync owner or add a `kithara_platform` wrapper first
-    (see `crates/kithara-platform/CONTEXT.md` "Virtual time (`flash`)").
+    (see [kithara-platform contracts](https://github.com/zvuk/kithara/wiki/kithara-platform) "Virtual time (`flash`)").
 
       // bad:  use tokio::sync::Notify;   tokio::sync::mpsc::channel(8);
       // good: use kithara_platform::sync::Notify;

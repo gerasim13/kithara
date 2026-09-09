@@ -31,21 +31,21 @@ where
     Painter: Retained,
 {
     data: Painter::Data,
-    interaction: Option<Interaction<Painter::Data>>,
     index: IndexPress,
-    painter: Painter,
+    interaction: Option<Interaction<Painter::Data>>,
     pools: Option<DrawBuffers>,
-    press: Press,
     refresh: Option<DataRefresh<Painter::Data>>,
-    repaint: bool,
+    painter: Painter,
+    press: Press,
     text: TextContext,
+    repaint: bool,
 }
 
 /// What a control does with the pointer, and where it publishes the answer.
 struct Interaction<Data> {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-    path: String,
     recognize: Recognize<Data>,
+    path: String,
 }
 
 enum Recognize<Data> {
@@ -67,8 +67,8 @@ enum Recognize<Data> {
 /// that, so a hand already dragging is not interrupted by its own answer coming
 /// back from the application.
 struct Dragged {
-    recognizer: Scalar,
     spec: Drag,
+    recognizer: Scalar,
     state: ScalarState,
 }
 
@@ -114,8 +114,8 @@ impl Dragged {
 /// built with, so a new interval re-makes it while the gesture's own state
 /// survives the hand's answer arriving back from the application.
 struct Spanned {
-    recognizer: SpanRecognizer,
     spec: Span,
+    recognizer: SpanRecognizer,
     state: SpanState,
 }
 
@@ -160,65 +160,15 @@ where
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &Skin) -> Self {
         Self {
             data,
+            painter,
             interaction: None,
             index: IndexPress::default(),
-            painter,
             pools: None,
             press: Press::default(),
             refresh: None,
             repaint: false,
             text: TextContext::from(skin.text_resources()),
         }
-    }
-
-    pub(crate) fn pooled(
-        painter: Painter,
-        data: Painter::Data,
-        skin: &Skin,
-        pools: &DrawBuffers,
-    ) -> Self {
-        Self {
-            data,
-            interaction: None,
-            index: IndexPress::default(),
-            painter,
-            pools: Some(pools.clone()),
-            press: Press::default(),
-            refresh: None,
-            repaint: false,
-            text: TextContext::from(skin.text_resources()),
-        }
-    }
-
-    pub(crate) fn interactive(
-        mut self,
-        grip: Grip,
-        path: String,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-        index_event: Option<IndexEvent<Painter::Data>>,
-    ) -> Self {
-        let recognize = match grip {
-            Grip::None => return self,
-            Grip::Press => Recognize::Press,
-            Grip::Command(event) => Recognize::Command(event),
-            Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
-            Grip::Index { count } => Recognize::Index {
-                count,
-                map: index_event,
-            },
-            Grip::Span(span) => Recognize::Span(Box::new(Spanned::new(span))),
-        };
-        self.interaction = Some(Interaction {
-            map_event,
-            path,
-            recognize,
-        });
-        self
-    }
-
-    pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
-        self.refresh = Some(refresh);
-        self
     }
 
     #[cfg(test)]
@@ -243,6 +193,32 @@ where
         Hit::new(hit.at(), self.painter.grip_bounds(&self.data, hit.area()))
     }
 
+    pub(crate) fn interactive(
+        mut self,
+        grip: Grip,
+        path: String,
+        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        index_event: Option<IndexEvent<Painter::Data>>,
+    ) -> Self {
+        let recognize = match grip {
+            Grip::None => return self,
+            Grip::Press => Recognize::Press,
+            Grip::Command(event) => Recognize::Command(event),
+            Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
+            Grip::Index { count } => Recognize::Index {
+                count,
+                map: index_event,
+            },
+            Grip::Span(span) => Recognize::Span(Box::new(Spanned::new(span))),
+        };
+        self.interaction = Some(Interaction {
+            map_event,
+            recognize,
+            path,
+        });
+        self
+    }
+
     /// Takes the value the control now draws into whatever counts from it.
     fn moved_to(&mut self, value: &ReadValue<'_>) {
         let Some(interaction) = &mut self.interaction else {
@@ -256,12 +232,62 @@ where
             _ => {}
         }
     }
+
+    pub(crate) fn pooled(
+        painter: Painter,
+        data: Painter::Data,
+        skin: &Skin,
+        pools: &DrawBuffers,
+    ) -> Self {
+        Self {
+            data,
+            painter,
+            interaction: None,
+            index: IndexPress::default(),
+            pools: Some(pools.clone()),
+            press: Press::default(),
+            refresh: None,
+            repaint: false,
+            text: TextContext::from(skin.text_resources()),
+        }
+    }
+
+    pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
+        self.refresh = Some(refresh);
+        self
+    }
 }
 
 impl<Painter> MasonryControl for Painted<Painter>
 where
     Painter: Retained,
 {
+    fn accepts_input(&self) -> bool {
+        self.interaction.is_some()
+    }
+
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        self.interaction
+            .as_ref()
+            .map_or(CursorShape::None, |interaction| {
+                match &interaction.recognize {
+                    Recognize::Press | Recognize::Command(_) => {
+                        Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
+                    }
+                    Recognize::Drag(drag) => {
+                        drag.recognizer.cursor(&drag.state, &self.gripped(hit))
+                    }
+                    Recognize::Index { count, .. } => self
+                        .painter
+                        .index_at(&self.data, hit, *count)
+                        .map_or(CursorShape::None, |_| CursorShape::Pointer),
+                    Recognize::Span(span) => {
+                        span.recognizer.cursor(&span.state, &self.gripped(hit))
+                    }
+                }
+            })
+    }
+
     fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList {
         self.repaint = false;
         let mut list = self
@@ -295,9 +321,19 @@ where
         });
         list.finish()
     }
-
-    fn measure(&mut self) -> crate::solve::Size {
-        self.painter.measure(&mut self.text, &self.data)
+    fn hover(&mut self, hovered: bool) -> bool {
+        if !Painter::READS_POINTER {
+            return false;
+        }
+        self.repaint |= match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            Some(Recognize::Index { .. }) => self.index.hover(hovered),
+            _ => self.press.hover(hovered),
+        };
+        self.repaint
     }
 
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
@@ -368,18 +404,13 @@ where
             ))
         })
     }
-    fn accepts_input(&self) -> bool {
-        self.interaction.is_some()
+
+    fn measure(&mut self) -> crate::solve::Size {
+        self.painter.measure(&mut self.text, &self.data)
     }
 
     fn reads_pointer(&self) -> bool {
         Painter::READS_POINTER
-    }
-
-    fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
-        self.repaint |= Painter::set_read(&mut self.data, value);
-        self.moved_to(value);
-        self.repaint
     }
 
     fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
@@ -390,49 +421,18 @@ where
         self.repaint
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.interaction
-            .as_ref()
-            .map_or(CursorShape::None, |interaction| {
-                match &interaction.recognize {
-                    Recognize::Press | Recognize::Command(_) => {
-                        Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
-                    }
-                    Recognize::Drag(drag) => {
-                        drag.recognizer.cursor(&drag.state, &self.gripped(hit))
-                    }
-                    Recognize::Index { count, .. } => self
-                        .painter
-                        .index_at(&self.data, hit, *count)
-                        .map_or(CursorShape::None, |_| CursorShape::Pointer),
-                    Recognize::Span(span) => {
-                        span.recognizer.cursor(&span.state, &self.gripped(hit))
-                    }
-                }
-            })
-    }
-
-    fn hover(&mut self, hovered: bool) -> bool {
-        if !Painter::READS_POINTER {
-            return false;
-        }
-        self.repaint |= match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            Some(Recognize::Index { .. }) => self.index.hover(hovered),
-            _ => self.press.hover(hovered),
-        };
-        self.repaint
-    }
-
     fn repaint(&self) -> Repaint {
         if self.repaint {
             Repaint::NextFrame
         } else {
             Repaint::None
         }
+    }
+
+    fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
+        self.repaint |= Painter::set_read(&mut self.data, value);
+        self.moved_to(value);
+        self.repaint
     }
 }
 
@@ -500,20 +500,20 @@ mod indexed {
         let y = selector_y + (bounds().h - selector_y * 2.0) / 2.0;
         Points {
             first: Pt {
-                x: selector_x + chip_width / 2.0,
                 y,
+                x: selector_x + chip_width / 2.0,
             },
             gap: Pt {
-                x: selector_x + chip_width + metrics.chip_gap / 2.0,
                 y,
+                x: selector_x + chip_width + metrics.chip_gap / 2.0,
             },
             second: Pt {
-                x: selector_x + chip_width + metrics.chip_gap + chip_width / 2.0,
                 y,
+                x: selector_x + chip_width + metrics.chip_gap + chip_width / 2.0,
             },
             x_padding: Pt {
-                x: selector_x / 2.0,
                 y,
+                x: selector_x / 2.0,
             },
             y_padding: Pt {
                 x: selector_x + chip_width / 2.0,

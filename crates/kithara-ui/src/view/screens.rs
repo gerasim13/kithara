@@ -24,9 +24,9 @@ fn fits(view: &ViewState, ui: &CompiledUi) -> bool {
 /// shown is one of them: turning to a page already visited costs nothing, and
 /// the least recently shown is dropped once the configured depth is full.
 pub struct Screens {
+    shown: CompiledUi,
     kept: Vec<CompiledUi>,
     limit: usize,
-    shown: CompiledUi,
 }
 
 impl Screens {
@@ -34,16 +34,20 @@ impl Screens {
     #[must_use]
     pub const fn new(limit: usize, shown: CompiledUi) -> Self {
         Self {
-            kept: Vec::new(),
             limit,
             shown,
+            kept: Vec::new(),
         }
     }
 
-    /// The screen a host is showing.
-    #[must_use]
-    pub const fn shown(&self) -> &CompiledUi {
-        &self.shown
+    /// Shows one screen and drops every page kept for the one before it.
+    ///
+    /// A screen kept answers for the document and skin it was compiled
+    /// against. Another document, or another skin, measures its pages
+    /// differently, so what was kept answers for nothing.
+    pub fn reset(&mut self, shown: CompiledUi) {
+        self.kept.clear();
+        self.shown = shown;
     }
 
     /// Shows the screen this view stands at, compiling it only when no screen
@@ -69,13 +73,9 @@ impl Screens {
         Ok(true)
     }
 
-    /// Shows one screen and drops every page kept for the one before it.
-    ///
-    /// A screen kept answers for the document and skin it was compiled
-    /// against. Another document, or another skin, measures its pages
-    /// differently, so what was kept answers for nothing.
-    pub fn reset(&mut self, shown: CompiledUi) {
-        self.kept.clear();
-        self.shown = shown;
+    /// The screen a host is showing.
+    #[must_use]
+    pub const fn shown(&self) -> &CompiledUi {
+        &self.shown
     }
 }

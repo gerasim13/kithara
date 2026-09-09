@@ -13,9 +13,9 @@ pub struct AssetPartSink<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    key: ResourceKey,
     store: AssetStore<S>,
     writer: Option<AssetWriter<S>>,
+    key: ResourceKey,
 }
 
 impl<S> AssetPartSink<S>
@@ -50,15 +50,16 @@ impl<S> RecordingSink for AssetPartSink<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    type Output = AssetReader<S>;
     type Error = AssetPartSinkError;
+    type Output = AssetReader<S>;
 
-    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.writer
-            .as_ref()
-            .ok_or(AssetPartSinkError::Closed)?
-            .write_at(offset, bytes)
-            .map_err(Self::storage)
+    fn abort(&mut self) {
+        if self.writer.take().is_none() {
+            return;
+        }
+        if let Err(error) = self.store.remove_resource(&self.key) {
+            tracing::warn!(%error, key = ?self.key, "recording asset rollback failed");
+        }
     }
 
     fn commit(&mut self, final_len: u64) -> Result<Self::Output, Self::Error> {
@@ -69,13 +70,12 @@ where
             .map_err(Self::storage)
     }
 
-    fn abort(&mut self) {
-        if self.writer.take().is_none() {
-            return;
-        }
-        if let Err(error) = self.store.remove_resource(&self.key) {
-            tracing::warn!(%error, key = ?self.key, "recording asset rollback failed");
-        }
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.writer
+            .as_ref()
+            .ok_or(AssetPartSinkError::Closed)?
+            .write_at(offset, bytes)
+            .map_err(Self::storage)
     }
 }
 
@@ -105,6 +105,7 @@ mod tests {
     use kithara_assets::{AssetResource, AssetSource, AssetStore, ReadSide, StorageBackend};
     use kithara_encode::EncodeConfig;
     use kithara_record::{RecordingConfig, RecordingCore};
+    use kithara_test_fixtures::play_fixtures::recording as recording_pcm;
     use kithara_test_utils::kithara;
 
     use super::AssetPartSink;
@@ -113,7 +114,7 @@ mod tests {
     struct RecordingArtifact;
 
     #[kithara::test]
-    fn recording_core_commits_a_readable_wav_to_memory_assets() {
+    fn recording_core_commits_a_readable_wav_to_memory_assets(recording_pcm: Vec<f32>) {
         let pool = pools::build(&pools::PoolsSection::default())
             .unwrap_or_else(|error| panic!("app pools: {error}"));
         let store = AssetStore::builder(pool)
@@ -145,7 +146,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("recording session: {error}"));
 
         recording
-            .push(&[0.25, -0.25, 0.5, -0.5])
+            .push(&recording_pcm)
             .unwrap_or_else(|error| panic!("record PCM: {error}"));
         let _reader = recording
             .finish()

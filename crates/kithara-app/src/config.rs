@@ -9,6 +9,7 @@ use kithara::{
     drm::KeyProcessorRegistry,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
+    net::Headers,
     platform::{CancelToken, sync::Arc},
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
@@ -16,7 +17,7 @@ use kithara::{
     stream::dl::Downloader,
     worker::{DispatcherConfigPatch, Worker},
 };
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use url::Url;
 
 #[cfg(feature = "broadcast")]
@@ -58,7 +59,7 @@ impl AppDrm {
 
     /// Return resource headers selected by the same registered policy.
     #[must_use]
-    pub fn resource_headers(&self, url: &Url) -> Option<kithara::net::Headers> {
+    pub fn resource_headers(&self, url: &Url) -> Option<Headers> {
         self.policy.resource_headers(url)
     }
 }

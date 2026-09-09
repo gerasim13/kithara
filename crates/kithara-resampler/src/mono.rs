@@ -46,11 +46,11 @@ pub struct MonoStream<B>
 where
     B: ResamplerBackend,
 {
+    resampler: B::Resampler,
     input_block: SampleBuffer,
     output_block: SampleBuffer,
     pending: SampleBuffer,
     ready: SampleBuffer,
-    resampler: B::Resampler,
     ratio: f64,
     total_in: u64,
     emitted: usize,

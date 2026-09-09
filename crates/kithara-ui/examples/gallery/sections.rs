@@ -1,16 +1,10 @@
-//! Which pages the gallery offers, taken from the screen it ships.
-//!
-//! A page is added by writing it into the screen's tabs and giving it a nav
-//! item. Nothing here lists the pages, so the list cannot disagree with the
-//! document that shows them.
-
 use std::sync::LazyLock;
 
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     source::UiConfig,
-    view::ViewState,
+    view::{PageStanding, ViewState},
 };
 
 use crate::fixture;
@@ -113,7 +107,7 @@ fn offered(ui: &CompiledUi, state: &str) -> Vec<Page> {
         .collect()
 }
 
-fn standing<'a>(ui: &'a CompiledUi, state: &str) -> &'a kithara_ui::view::PageStanding {
+fn standing<'a>(ui: &'a CompiledUi, state: &str) -> &'a PageStanding {
     ui.views()
         .pages()
         .get(state)

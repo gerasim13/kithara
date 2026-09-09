@@ -77,8 +77,8 @@ fn remote_hls_bundle(context: &BuildContext<'_>) -> Result<Vec<u8>, RemoteError>
     let options = Options {
         headers,
         key: Some(KeyPolicy {
-            headers: key_headers,
             processor,
+            headers: key_headers,
         }),
         refresh: &[Remote::AUTH_ENV, Remote::SP_ZV_ENV],
         timeout: Remote::TIMEOUT,

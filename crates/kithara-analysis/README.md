@@ -65,5 +65,5 @@ pool. Persisting a `TrackAnalysis` through `AssetStore`, choosing cache keys,
 and eviction policy remain application responsibilities. `write_to` appends to
 caller-owned `Vec<u8>` output.
 
-See [CONTEXT.md](CONTEXT.md) for the scheduling, ingest, waveform, and codec
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-analysis) for the scheduling, ingest, waveform, and codec
 contracts.

@@ -9,7 +9,7 @@ use std::fmt::{self, Display, Formatter};
 
 use kithara_test_utils::kithara;
 use velato::{Composition, Renderer as LottieRenderer};
-use vello::{Scene, kurbo::Affine, peniko::color::palette};
+use vello::{Scene, kurbo::Affine, peniko::color::palette::css::BLACK};
 
 use super::{VelloBackend, conformance::rasterise_at};
 use crate::{
@@ -29,7 +29,7 @@ fn artwork() -> Composition {
 
 fn painted(scene: &Scene) -> Vec<u8> {
     let side = u32::try_from(Apart::CANVAS).unwrap_or(u32::MAX);
-    rasterise_at(scene, (side, side), palette::css::BLACK)
+    rasterise_at(scene, (side, side), BLACK)
         .unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 

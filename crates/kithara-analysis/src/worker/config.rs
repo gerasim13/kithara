@@ -43,41 +43,41 @@ where
     /// Analyzer selection and DSP configuration.
     #[builder(start_fn)]
     pub(crate) builder: AnalyzerBuilder<B, S>,
-    /// Parent cancellation token for the analysis worker lifetime.
-    pub(crate) cancel: Option<CancelToken>,
-    /// Optional base worker shared with other domain workers.
-    pub(crate) worker: Option<Worker>,
-    /// Maximum number of tasks admitted to the analysis dispatcher.
-    #[builder(default = Consts::CAPACITY)]
-    pub(crate) capacity: NonZeroUsize,
-    /// Fixed source duration covered by one progressive schedule chunk.
-    #[builder(default = Consts::CHUNK_SECONDS)]
-    pub(crate) chunk_seconds: NonZeroU32,
-    /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
-    pub(crate) fairness_yield_interval: NonZeroU32,
     /// Park duration when no analysis task expects progress.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow analysis tick.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) slow_tick_threshold: Duration,
-    /// Maximum consecutive ticks for one analysis task visit.
-    #[builder(default = NonZeroU32::MIN)]
-    pub(crate) task_burst: NonZeroU32,
     /// Park duration while analysis is waiting on decoded input.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) wait_timeout: Duration,
-    /// Numeric priority of every analysis pass task.
-    #[builder(default = Priority::new(0))]
-    pub(crate) priority: Priority,
+    /// Fixed source duration covered by one progressive schedule chunk.
+    #[builder(default = Consts::CHUNK_SECONDS)]
+    pub(crate) chunk_seconds: NonZeroU32,
+    /// Consecutive progress passes between cooperative thread yields.
+    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
+    pub(crate) fairness_yield_interval: NonZeroU32,
+    /// Newly covered source duration between progressive publications.
+    #[builder(default = Consts::PUBLISH_SECONDS)]
+    pub(crate) publish_seconds: NonZeroU32,
+    /// Maximum consecutive ticks for one analysis task visit.
+    #[builder(default = NonZeroU32::MIN)]
+    pub(crate) task_burst: NonZeroU32,
+    /// Maximum number of tasks admitted to the analysis dispatcher.
+    #[builder(default = Consts::CAPACITY)]
+    pub(crate) capacity: NonZeroUsize,
     /// Maximum number of in-flight compute jobs owned by one analysis pass.
     #[builder(default = NonZeroUsize::MIN)]
     pub(crate) max_compute_tasks: NonZeroUsize,
     /// Maximum playback-ring descriptors folded during one dispatcher tick.
     #[builder(default = Consts::PRODUCER_DRAIN_LIMIT)]
     pub(crate) producer_drain_limit: NonZeroUsize,
-    /// Newly covered source duration between progressive publications.
-    #[builder(default = Consts::PUBLISH_SECONDS)]
-    pub(crate) publish_seconds: NonZeroU32,
+    /// Parent cancellation token for the analysis worker lifetime.
+    pub(crate) cancel: Option<CancelToken>,
+    /// Optional base worker shared with other domain workers.
+    pub(crate) worker: Option<Worker>,
+    /// Numeric priority of every analysis pass task.
+    #[builder(default = Priority::new(0))]
+    pub(crate) priority: Priority,
 }

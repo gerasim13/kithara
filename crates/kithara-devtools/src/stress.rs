@@ -34,6 +34,8 @@ mod output;
 pub(crate) mod pressure;
 mod system;
 
+use std::fs::{File, OpenOptions};
+
 use environment::RunEnvironment;
 use manifest::{
     BuildSnapshot, ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec,
@@ -316,7 +318,7 @@ fn lane_runner(
 /// told apart from the same finding on a later attempt — and a violation that
 /// fires once in fifty would be indistinguishable from one that fires always.
 fn mark_attempt(log: &Path, attempt: usize) -> Result<()> {
-    let mut file = fs::OpenOptions::new()
+    let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log)
@@ -1168,10 +1170,10 @@ fn prepare_raw_directory(paths: &Paths) -> Result<()> {
         fs::create_dir_all(envelopes)
             .with_context(|| format!("create evidence directory {}", envelopes.display()))?;
     }
-    fs::File::create(&paths.log)
+    File::create(&paths.log)
         .with_context(|| format!("create stress command log {}", paths.log.display()))?;
     if let Some(lines) = &paths.lines {
-        fs::File::create(lines)
+        File::create(lines)
             .with_context(|| format!("create line evidence sink {}", lines.display()))?;
     }
     Ok(())
@@ -1669,7 +1671,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     fn record_repeats() {
         let record = std::env::var_os(REPEATS_RECORD_ENV).expect("record path");
         let value = std::env::var(REPEATS_ENV).unwrap_or_else(|_| "unset".to_owned());
-        let mut file = fs::OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(record)

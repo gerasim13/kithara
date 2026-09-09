@@ -6,7 +6,10 @@ use iced::{
         Clipboard, Shell, Widget as IcedWidget,
         layout::{self, Layout},
         mouse, renderer,
-        widget::{self, Operation, Tree},
+        widget::{
+            self, Operation, Tree,
+            tree::{State, Tag},
+        },
     },
     widget::canvas::{Canvas, Program},
     window,
@@ -141,8 +144,8 @@ where
         );
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(TextInputState::new(
+    fn state(&self) -> State {
+        State::new(TextInputState::new(
             &self.path,
             &self.query,
             self.input_layout.clone(),
@@ -150,8 +153,8 @@ where
         ))
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<TextInputState>()
+    fn tag(&self) -> Tag {
+        Tag::of::<TextInputState>()
     }
 
     fn update(

@@ -99,15 +99,15 @@ pub(crate) struct Drm {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DrmProvider {
-    pub(crate) name: String,
-    pub(crate) domains: Vec<String>,
-    /// Cipher key for this provider. A document references a secret through
-    /// `$KITHARA_...`; expansion has already run by the time this parses.
-    pub(crate) cipher_key: String,
     #[serde(default)]
     pub(crate) headers: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) seed: SeedSpec,
+    /// Cipher key for this provider. A document references a secret through
+    /// `$KITHARA_...`; expansion has already run by the time this parses.
+    pub(crate) cipher_key: String,
+    pub(crate) name: String,
+    pub(crate) domains: Vec<String>,
 }
 
 /// Shape of the per-request `X-Encrypted-Key` salt.

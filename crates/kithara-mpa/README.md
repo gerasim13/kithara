@@ -24,5 +24,5 @@ crate through Symphonia's codec registry, unchanged.
 Only the demuxer is forked, and only to add rollback on a transient read.
 Everything else tracks upstream verbatim so the delta stays reviewable.
 
-See `CONTEXT.md` for the rollback contract, the fork's exact delta, and how to
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-mpa) for the rollback contract, the fork's exact delta, and how to
 rebase it onto a new upstream release.

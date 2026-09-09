@@ -3,8 +3,12 @@ use iced::{
     advanced::{
         Clipboard, Shell, Widget as IcedWidget,
         layout::{self, Layout, Node as LayoutNode},
-        mouse, overlay, renderer,
-        widget::{self, Operation, Tree},
+        mouse,
+        mouse::Interaction,
+        overlay,
+        overlay::Group,
+        renderer,
+        widget::{self, Operation, Tree, tree::Tag},
     },
 };
 
@@ -15,7 +19,7 @@ use crate::{
         UiEvent,
         document::{Band, Measured as Plan},
     },
-    solve::{self, Distribution, Input, Measure},
+    solve::{self, Distribution, Input, Item, Measure},
 };
 
 pub(super) struct Flex<'a> {
@@ -71,14 +75,7 @@ impl<'a> Flex<'a> {
     pub(super) fn column_weighted(
         children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
     ) -> Self {
-        Self::with_children(
-            Axis::Vertical,
-            children
-                .into_iter()
-                .map(|(child, declared, main_weight, band)| {
-                    (child, Some(declared), None, Some(main_weight), band)
-                }),
-        )
+        Self::weighted(Axis::Vertical, children)
     }
 
     pub(super) fn height(mut self, height: Length) -> Self {
@@ -141,8 +138,15 @@ impl<'a> Flex<'a> {
     pub(super) fn row_weighted(
         children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
     ) -> Self {
+        Self::weighted(Axis::Horizontal, children)
+    }
+
+    fn weighted(
+        axis: Axis,
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+    ) -> Self {
         Self::with_children(
-            Axis::Horizontal,
+            axis,
             children
                 .into_iter()
                 .map(|(child, declared, main_weight, band)| {
@@ -353,11 +357,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
                     .declared
                     .unwrap_or_else(|| self.children[*slot].as_widget().size());
                 child.main_weight.map_or_else(
-                    || solve::Item::new(declared.into(), child.main_minimum),
-                    |weight| solve::Item::weighted(declared.into(), weight),
+                    || Item::new(declared.into(), child.main_minimum),
+                    |weight| Item::weighted(declared.into(), weight),
                 )
             })
-            .collect::<Vec<solve::Item>>();
+            .collect::<Vec<Item>>();
         let mut measure = IcedMeasure {
             slots,
             trees,
@@ -398,7 +402,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         self.shown(tree, layout)
             .map(|(child, tree, layout)| {
                 child
@@ -446,7 +450,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
                     .overlay(tree, layout, renderer, viewport, translation)
             })
             .collect();
-        (!floating.is_empty()).then(|| overlay::Group::with_children(floating).overlay())
+        (!floating.is_empty()).then(|| Group::with_children(floating).overlay())
     }
 
     fn size(&self) -> Size<Length> {
@@ -461,8 +465,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         widget::tree::State::new(State::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<State>()
+    fn tag(&self) -> Tag {
+        Tag::of::<State>()
     }
 
     fn update(
@@ -710,12 +714,12 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         let drawn = self.drawn(tree);
         layout
             .children()
             .nth(drawn)
-            .map_or_else(mouse::Interaction::default, |bounds| {
+            .map_or_else(Interaction::default, |bounds| {
                 self.branches[drawn].as_widget().mouse_interaction(
                     &tree.children[drawn],
                     bounds,
@@ -753,8 +757,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
         widget::tree::State::new(Drawn::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<Drawn>()
+    fn tag(&self) -> Tag {
+        Tag::of::<Drawn>()
     }
 
     fn update(

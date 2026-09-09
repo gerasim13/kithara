@@ -2,6 +2,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     bars,
+    bars::Played,
     hero::{self, HeroPalette, HeroWave},
     overlay::{self, Overlay},
 };
@@ -147,7 +148,7 @@ impl WavePaint<'_> {
                 );
             } else {
                 let played = (self.style == WaveStyle::Default).then(|| {
-                    bars::Played::new(
+                    Played::new(
                         bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w,
                         self.metrics.overview_played_alpha,
                         self.palette.trough,
@@ -181,7 +182,7 @@ fn draw_bars(
     buckets: &[WaveBucket],
     metrics: WaveSkin,
     palette: WavePalette,
-    played: Option<bars::Played>,
+    played: Option<Played>,
 ) {
     let step = bars::step(metrics);
     let columns = bars::columns(bounds, metrics).min(buckets.len());
@@ -454,7 +455,7 @@ mod tests {
             let colors = [palette.band_low, palette.band_mid, palette.band_high];
             let expected = if style == WaveStyle::Default {
                 let center_x = bounds.x + metrics.content_inset + metrics.bar_width / 2.0;
-                bars::Played::new(
+                Played::new(
                     bounds.x + paint.progress * bounds.w,
                     metrics.overview_played_alpha,
                     palette.trough,

@@ -2,7 +2,8 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
+    AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
+    SeekOutcome,
 };
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
@@ -70,10 +71,10 @@ pub struct Resource {
     #[field(get = event_bus)]
     bus: EventBus,
     priority: Option<TrackPriority>,
+    render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
     reader: ReaderOwner,
-    render_publisher: Option<RenderPublisher>,
 }
 
 /// Cancels the wrapped per-track token on drop. A `Resource` field rather than
@@ -91,19 +92,19 @@ enum PlaybackRate {
 }
 
 impl PlaybackRate {
+    fn apply(&self, requested: f32) -> f32 {
+        if let Self::Warp(controls) = self {
+            controls.set_speed(requested);
+        }
+        self.into()
+    }
+
     fn for_warp(controls: Arc<StretchControls>) -> Self {
         if supports_playback_rate() {
             Self::Warp(controls)
         } else {
             Self::Fixed
         }
-    }
-
-    fn apply(&self, requested: f32) -> f32 {
-        if let Self::Warp(controls) = self {
-            controls.set_speed(requested);
-        }
-        self.into()
     }
 }
 
@@ -152,60 +153,14 @@ impl Resource {
         Self::open(config, None).await
     }
 
-    /// Create a resource with a bounded observer of decoded audio attached.
-    ///
-    /// This is a narrow cross-crate composition seam used by queue-owned
-    /// orchestration. The ordinary resource API remains [`Self::new`].
-    #[doc(hidden)]
-    pub async fn new_observed<S, B>(
-        config: ResourceConfig<S, B>,
-        observer: Box<dyn AudioObserver>,
-    ) -> DecodeResult<Self>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        Self::open(config, Some(observer)).await
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.playback_rate.apply(rate)
     }
 
-    async fn open<S, B>(
-        config: ResourceConfig<S, B>,
-        observer: Option<Box<dyn AudioObserver>>,
-    ) -> DecodeResult<Self>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        let src: Arc<str> = Arc::from(config.src.to_string());
-        let source_type = SourceType::detect(&config.src)?;
-        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-            detail: "ResourceConfig requires an explicit PlayWorker",
-        })?;
-        let warp = config.warp.clone();
-        let engine_load = config.engine_load.clone();
-        // Capture the per-track cancel before `build_*_config` consumes `config`
-        // (it is cloned by identity into both the inner stream and the Audio).
-        let cancel = config.cancel.clone();
-        let mut resource = match source_type {
-            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config(&worker, observer);
-                let track = TrackConfig::for_audio(audio_config)
-                    .maybe_engine_load(engine_load)
-                    .warp(warp.clone())
-                    .build();
-                Self::from_stream_audio(track, src, &worker).await?
-            }
-            SourceType::HlsStream(_) => {
-                let audio_config = config.build_hls_config(&worker, observer)?;
-                let track = TrackConfig::for_audio(audio_config)
-                    .maybe_engine_load(engine_load)
-                    .warp(warp)
-                    .build();
-                Self::from_stream_audio(track, src, &worker).await?
-            }
-        };
-        resource.reader.0 = CancelGuard(cancel);
-        Ok(resource)
+    pub(crate) fn clear_render(&self) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.clear();
+        }
     }
 
     /// Create a resource from any `AudioReader`.
@@ -270,34 +225,64 @@ impl Resource {
         Ok(resource)
     }
 
-    pub(crate) fn clear_render(&self) {
-        if let Some(publisher) = &self.render_publisher {
-            publisher.clear();
-        }
+    /// Create a resource with a bounded observer of decoded audio attached.
+    ///
+    /// This is a narrow cross-crate composition seam used by queue-owned
+    /// orchestration. The ordinary resource API remains [`Self::new`].
+    #[doc(hidden)]
+    pub async fn new_observed<S, B>(
+        config: ResourceConfig<S, B>,
+        observer: Box<dyn AudioObserver>,
+    ) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
+        Self::open(config, Some(observer)).await
     }
 
-    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
-        if let Some(publisher) = &self.render_publisher {
-            publisher.publish(context, frontier);
-        }
-    }
-
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.render_publisher.as_ref().map(RenderPublisher::reader)
+    async fn open<S, B>(
+        config: ResourceConfig<S, B>,
+        observer: Option<Box<dyn AudioObserver>>,
+    ) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
+        let src: Arc<str> = Arc::from(config.src.to_string());
+        let source_type = SourceType::detect(&config.src)?;
+        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
+            detail: "ResourceConfig requires an explicit PlayWorker",
+        })?;
+        let warp = config.warp.clone();
+        let engine_load = config.engine_load.clone();
+        // Capture the per-track cancel before `build_*_config` consumes `config`
+        // (it is cloned by identity into both the inner stream and the Audio).
+        let cancel = config.cancel.clone();
+        let mut resource = match source_type {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
+                let audio_config = config.build_file_config(&worker, observer);
+                let track = TrackConfig::for_audio(audio_config)
+                    .maybe_engine_load(engine_load)
+                    .warp(warp.clone())
+                    .build();
+                Self::from_stream_audio(track, src, &worker).await?
+            }
+            SourceType::HlsStream(_) => {
+                let audio_config = config.build_hls_config(&worker, observer)?;
+                let track = TrackConfig::for_audio(audio_config)
+                    .maybe_engine_load(engine_load)
+                    .warp(warp)
+                    .build();
+                Self::from_stream_audio(track, src, &worker).await?
+            }
+        };
+        resource.reader.0 = CancelGuard(cancel);
+        Ok(resource)
     }
 
     pub(crate) fn playback_rate(&self) -> f32 {
         (&self.playback_rate).into()
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.playback_rate.apply(rate)
-    }
-
-    pub(crate) fn set_service_class(&self, class: ServiceClass) {
-        if let Some(priority) = &self.priority {
-            priority.set(class);
-        }
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -314,6 +299,22 @@ impl Resource {
             gate.wait_for_epoch(self.reader.1.preload_epoch()).await;
         }
         self.reader.1.preload()
+    }
+
+    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish(context, frontier);
+        }
+    }
+
+    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
+        self.render_publisher.as_ref().map(RenderPublisher::reader)
+    }
+
+    pub(crate) fn set_service_class(&self, class: ServiceClass) {
+        if let Some(priority) = &self.priority {
+            priority.set(class);
+        }
     }
 
     /// Subscribe to unified events.
@@ -362,6 +363,9 @@ impl Resource {
             /// readers with no worker-backed seek.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            /// Adopt the wake capability of the consumer that will read this
+            /// resource.
+            pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
             pub fn sync_seek(&mut self);
             /// Set the target sample rate of the audio host.
@@ -412,6 +416,7 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
+    use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
     use kithara_warp::{SessionEpoch, SessionFrame, Warp, WarpConfig};
     use ringbuf::traits::{Consumer, Producer};
@@ -433,14 +438,14 @@ mod tests {
     struct DropState;
 
     impl DropState {
-        const NOT_DROPPED: u8 = 0;
-        const BEFORE_CANCEL: u8 = 1;
         const AFTER_CANCEL: u8 = 2;
+        const BEFORE_CANCEL: u8 = 1;
+        const NOT_DROPPED: u8 = 0;
     }
 
     struct DropProbe {
-        cancel: CancelToken,
         state: Arc<AtomicU8>,
+        cancel: CancelToken,
     }
 
     impl Drop for DropProbe {
@@ -455,12 +460,13 @@ mod tests {
     }
 
     struct EofReader {
-        bus: EventBus,
         spec: AudioSpec,
+        bus: EventBus,
+        _drop_probe: Option<DropProbe>,
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
-        _drop_probe: Option<DropProbe>,
+        samples: Vec<f32>,
     }
 
     impl Default for EofReader {
@@ -474,23 +480,16 @@ mod tests {
                 ),
                 position_frames: 0,
                 total_frames: 0,
+                samples: Vec::new(),
                 _drop_probe: None,
             }
         }
     }
 
     impl EofReader {
-        fn with_frames(total_frames: usize) -> Self {
-            Self {
-                total_frames,
-                ..Self::default()
-            }
-        }
-
-        fn with_drop_probe(cancel: CancelToken, state: Arc<AtomicU8>) -> Self {
-            Self {
-                _drop_probe: Some(DropProbe { cancel, state }),
-                ..Self::default()
+        fn eof(&self) -> ReadOutcome {
+            ReadOutcome::Eof {
+                position: self.position_duration(),
             }
         }
 
@@ -499,16 +498,25 @@ mod tests {
             Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
         }
 
-        fn eof(&self) -> ReadOutcome {
-            ReadOutcome::Eof {
-                position: self.position_duration(),
-            }
-        }
-
         fn take_frames(&mut self, capacity: usize) -> Option<NonZeroUsize> {
             let frames = capacity.min(self.total_frames - self.position_frames);
             self.position_frames += frames;
             NonZeroUsize::new(frames)
+        }
+
+        fn with_drop_probe(cancel: CancelToken, state: Arc<AtomicU8>) -> Self {
+            Self {
+                _drop_probe: Some(DropProbe { state, cancel }),
+                ..Self::default()
+            }
+        }
+
+        fn with_frames(samples: Vec<f32>) -> Self {
+            Self {
+                total_frames: samples.len() / 2,
+                samples,
+                ..Self::default()
+            }
         }
     }
 
@@ -536,7 +544,8 @@ mod tests {
                 return Ok(self.eof());
             };
             let samples = frames.get() * 2;
-            buf[..samples].fill(0.5);
+            let end = self.position_frames * 2;
+            buf[..samples].copy_from_slice(&self.samples[end - samples..end]);
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
@@ -551,8 +560,11 @@ mod tests {
             let Some(frames) = self.take_frames(capacity) else {
                 return Ok(self.eof());
             };
-            for channel in output {
-                channel[..frames.get()].fill(0.5);
+            let start = self.position_frames - frames.get();
+            for (index, channel) in output.iter_mut().enumerate() {
+                for (offset, sample) in channel[..frames.get()].iter_mut().enumerate() {
+                    *sample = self.samples[(start + offset) * 2 + index];
+                }
             }
             Ok(ReadOutcome::Frames {
                 count: frames,
@@ -579,9 +591,9 @@ mod tests {
         pools: &PoolRegion<TestPools>,
         controls: &Arc<StretchControls>,
         src: &str,
+        samples: Vec<f32>,
     ) -> Box<PlayerResource> {
-        let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
-        let resource = Resource::from_reader(EofReader::with_frames(total_frames), None)
+        let resource = Resource::from_reader(EofReader::with_frames(samples), None)
             .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
         PlayerResource::new(resource, Arc::from(src), pools)
             .map(Box::new)
@@ -653,7 +665,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
+    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(half: Vec<f32>) {
         let controls = StretchControls::new(1.0);
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
@@ -678,7 +690,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &first),
+                resource: warped_player_resource(&pools, &controls, &first, half.clone()),
                 item_id: first_id,
             })
             .expect("load first track");
@@ -724,7 +736,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &next),
+                resource: warped_player_resource(&pools, &controls, &next, half),
                 item_id: next_id,
             })
             .expect("load next track");
@@ -818,13 +830,13 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn seek_withdraws_the_resident_warp_context() {
+    fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
         let mut warp = Warp::new((), &WarpConfig::builder().build());
         let publisher = warp
             .take_publisher()
             .expect("fixture Warp owns its publisher");
         let reader = publisher.reader();
-        let mut resource = Resource::from_reader(EofReader::with_frames(1), None);
+        let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
         let context = RenderContext::new(
             SessionFrame::new(0)..SessionFrame::new(1),
             NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),

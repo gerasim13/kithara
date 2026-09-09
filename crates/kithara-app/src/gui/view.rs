@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use iced::Element;
+use iced::{Element, window::Id};
 use kithara::prelude::ResourceSrc;
 
 use super::{app::Kithara, message::Message};
 use crate::state::UiState;
 
-pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Message> {
+pub(crate) fn view(state: &Kithara, _window: Id) -> Element<'_, Message> {
     super::ui::view(state)
 }
 

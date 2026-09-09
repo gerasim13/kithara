@@ -5,7 +5,8 @@ use glob::Pattern;
 use quote::ToTokens;
 use syn::{
     BinOp, Block, Expr, ExprAssign, ExprBinary, ExprCall, ExprMethodCall, ExprStruct, Fields,
-    ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, visit::Visit,
+    ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, punctuated::Punctuated,
+    token::Comma, visit, visit::Visit,
 };
 
 use super::Context;
@@ -193,7 +194,7 @@ impl AssignedFieldVisitor<'_> {
 impl<'ast> Visit<'ast> for AssignedFieldVisitor<'_> {
     fn visit_expr_assign(&mut self, n: &'ast ExprAssign) {
         self.record_assignment(&n.left);
-        syn::visit::visit_expr_assign(self, n);
+        visit::visit_expr_assign(self, n);
     }
 
     fn visit_expr_binary(&mut self, n: &'ast ExprBinary) {
@@ -212,7 +213,7 @@ impl<'ast> Visit<'ast> for AssignedFieldVisitor<'_> {
         ) {
             self.record_assignment(&n.left);
         }
-        syn::visit::visit_expr_binary(self, n);
+        visit::visit_expr_binary(self, n);
     }
 }
 
@@ -252,11 +253,7 @@ impl LiteralVisitor<'_> {
         self.idx.literals.entry(name).or_default().push(site);
     }
 
-    fn visit_call_args(
-        &mut self,
-        args: &syn::punctuated::Punctuated<Expr, syn::token::Comma>,
-        parent_fn: Option<&str>,
-    ) {
+    fn visit_call_args(&mut self, args: &Punctuated<Expr, Comma>, parent_fn: Option<&str>) {
         for arg in args {
             if let Some(es) = unwrap_argument_struct(arg) {
                 self.record_arg(es, parent_fn);

@@ -40,6 +40,7 @@ use crate::{
         ControlAction, ReadValue, UiEvent, document::Ctx, shader::ShaderDeclaration, vis::VisFrame,
     },
     solve,
+    solve::{Limits, Size},
 };
 
 /// The stepping surface a flow declares over itself: a detent anywhere on it
@@ -121,23 +122,23 @@ pub(crate) struct Node {
     round: FrameCorners,
     layout: NodeLayout,
     background: Option<Rgba>,
-    /// The face this flow shows while the flag it named reads true, beside the
-    /// one it shows otherwise. A flow that named no flag has one face and keeps
-    /// none of this.
-    lit: Option<Faces>,
     /// The stepping surface this flow declares over itself, where it declares
     /// one.
     detent: Option<Detent>,
     engine: Option<Rc<HostedEngine>>,
     frame: Option<(FrameSides, Rgba, f32)>,
-    limits: Option<solve::Limits>,
+    limits: Option<Limits>,
+    /// The face this flow shows while the flag it named reads true, beside the
+    /// one it shows otherwise. A flow that named no flag has one face and keeps
+    /// none of this.
+    lit: Option<Faces>,
     pointer: Option<(Pt, Pt)>,
     primary: Option<Box<dyn Fn() -> HostAction>>,
     secondary: Option<Box<dyn Fn() -> HostAction>>,
     /// Where this node stands in the stage that holds it, when it is one of
     /// its placements.
     spot: Option<Spot>,
-    declared: solve::Size<solve::Length>,
+    declared: Size<solve::Length>,
     transform: Transform,
     children: Vec<WidgetPod<Self>>,
     double_click: bool,
@@ -149,7 +150,7 @@ pub(crate) struct Node {
 impl Node {
     pub(super) fn new(
         layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
+        declared: Size<solve::Length>,
         children: Vec<WidgetPod<Self>>,
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
@@ -174,12 +175,6 @@ impl Node {
             spot: None,
             transform: Transform::IDENTITY,
         }
-    }
-
-    /// Keeps the two faces this flow chooses between, so the flag can be read
-    /// again into a tree already standing.
-    pub(crate) const fn set_faces(&mut self, faces: Faces) {
-        self.lit = Some(faces);
     }
 
     /// Offers the input to the grip a placement carries, answering whether
@@ -212,6 +207,19 @@ impl Node {
             ctx.set_handled();
         }
         captured
+    }
+
+    /// The colour this node writes its text in right now, where it writes any.
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn ink(&self) -> Option<Rgba> {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.ink(),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage => None,
+        }
     }
 
     fn leaf_input(
@@ -291,6 +299,25 @@ impl Node {
             ctx.set_handled();
         }
         captured
+    }
+
+    /// Shows the face the flag now reads for, answering whether the picture
+    /// changed. What a flag lights is a value the document reads, so it is
+    /// swapped in place rather than by building the tree again.
+    pub(crate) fn light(&mut self, on: bool) -> bool {
+        let flow = self.lit.is_some_and(|faces| {
+            let face = if on { faces.lit } else { faces.idle };
+            let moved = face
+                != Face {
+                    background: self.background,
+                    frame: self.frame,
+                };
+            self.background = face.background;
+            self.frame = face.frame;
+            moved
+        });
+        let leaf = self.layout.leaf().is_some_and(|leaf| leaf.light(on));
+        flow || leaf
     }
 
     fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
@@ -447,13 +474,19 @@ impl Node {
     pub(crate) fn set_child_limits(
         ctx: &mut LayoutCtx<'_>,
         child: &mut WidgetPod<Self>,
-        limits: solve::Limits,
+        limits: Limits,
     ) {
         let (node, mut raw) = ctx.get_raw_mut(child);
         if node.limits != Some(limits) {
             node.limits = Some(limits);
             raw.request_layout();
         }
+    }
+
+    /// Keeps the two faces this flow chooses between, so the flag can be read
+    /// again into a tree already standing.
+    pub(crate) const fn set_faces(&mut self, faces: Faces) {
+        self.lit = Some(faces);
     }
 
     pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
@@ -471,38 +504,6 @@ impl Node {
     /// waiting for the rebuild that follows the gesture.
     pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
-    }
-
-    /// The colour this node writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) fn ink(&self) -> Option<Rgba> {
-        match &self.layout {
-            NodeLayout::Leaf(leaf) => leaf.ink(),
-            NodeLayout::Flex(_)
-            | NodeLayout::Measured(_)
-            | NodeLayout::Scroll(_)
-            | NodeLayout::Stack
-            | NodeLayout::Stage => None,
-        }
-    }
-
-    /// Shows the face the flag now reads for, answering whether the picture
-    /// changed. What a flag lights is a value the document reads, so it is
-    /// swapped in place rather than by building the tree again.
-    pub(crate) fn light(&mut self, on: bool) -> bool {
-        let flow = self.lit.is_some_and(|faces| {
-            let face = if on { faces.lit } else { faces.idle };
-            let moved = face
-                != Face {
-                    background: self.background,
-                    frame: self.frame,
-                };
-            self.background = face.background;
-            self.frame = face.frame;
-            moved
-        });
-        let leaf = self.layout.leaf().is_some_and(|leaf| leaf.light(on));
-        flow || leaf
     }
 
     /// Offers the input to the stepping surface this flow declares, answering
@@ -704,12 +705,12 @@ impl Widget for Node {
         constraints: &BoxConstraints,
     ) -> MasonrySize {
         let limits = self.limits.unwrap_or_else(|| {
-            solve::Limits::new(
-                solve::Size::new(
+            Limits::new(
+                Size::new(
                     constraints.min().width.as_(),
                     constraints.min().height.as_(),
                 ),
-                solve::Size::new(
+                Size::new(
                     constraints.max().width.as_(),
                     constraints.max().height.as_(),
                 ),
@@ -908,7 +909,7 @@ mod tests {
     fn framed() -> Node {
         Node::new(
             NodeLayout::Leaf(Leaf::Empty),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
             Some(Fixture::PAPER),
             Some((FrameSides::default(), Fixture::INK, 1.0)),
@@ -1045,7 +1046,7 @@ mod tests {
     fn a_node_with_no_frame_draws_nothing_over_its_children() {
         let node = Node::new(
             NodeLayout::Leaf(Leaf::Empty),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Size::new(solve::Length::Fill, solve::Length::Fill),
             Vec::new(),
             Some(Fixture::PAPER),
             None,

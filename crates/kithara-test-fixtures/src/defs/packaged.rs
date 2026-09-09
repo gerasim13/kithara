@@ -33,10 +33,10 @@ impl Consts {
     const AAC_HE_V2_BIT_RATE: u64 = 32_000;
     const CHANNELS: u16 = 2;
     const ONE_SECOND_FRAMES: usize = 44_100;
-    const SAMPLE_RATE: u32 = 44_100;
     const RHYTHM_BIT_RATE: u64 = 512_000;
     const RHYTHM_FRAMES: usize = 576_000;
     const RHYTHM_SAMPLE_RATE: u32 = 48_000;
+    const SAMPLE_RATE: u32 = 44_100;
 }
 
 static RHYTHM_FMP4: [OnceLock<Fmp4Package>; 2] = [OnceLock::new(), OnceLock::new()];

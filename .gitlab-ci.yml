@@ -38,9 +38,8 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
     - when: never
 
-.serialized:
+.dispatch:
   stage: dispatch
-  resource_group: kithara-mac-mini
   variables:
     # The child pipeline gates its platform includes on this, and it does not
     # see what the run was started with unless the trigger forwards it. Unset
@@ -52,7 +51,7 @@ workflow:
     strategy: depend
 
 dispatch:merge-request:
-  extends: .serialized
+  extends: .dispatch
   interruptible: true
   variables:
     KITHARA_CACHE_TRUST: review
@@ -60,16 +59,9 @@ dispatch:merge-request:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
-# Work in progress reaches the Apple host on its own, before anyone opens a
-# merge request. The child verdict propagates through `strategy: depend`, while
-# a resource group of its own prevents a branch push from making
-# `dispatch:main` or a merge request wait behind an hour of somebody's branch.
-# Measurement stays honest regardless — the suites, the simulator run and
-# every perf lane share `kithara-suite` across pipelines, so one of them still
-# holds the machine at a time.
+# Child jobs own host resources; dispatch must not reserve the entire host.
 dispatch:branch:
   stage: dispatch
-  resource_group: kithara-mac-mini-branch
   interruptible: true
   trigger:
     include:
@@ -85,10 +77,9 @@ dispatch:branch:
 # Started by hand to name platforms a push cannot. Its own kind admits the
 # verify and integration sets so the requested platform lanes exist, while the
 # verdict checks the default-branch journal instead of recording this branch as
-# a new baseline. The branch queue keeps it out of the default branch's way.
+# a new baseline.
 dispatch:platforms:
   stage: dispatch
-  resource_group: kithara-mac-mini-branch
   allow_failure: true
   interruptible: true
   trigger:
@@ -110,7 +101,7 @@ dispatch:platforms:
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
 
 dispatch:main:
-  extends: .serialized
+  extends: .dispatch
   interruptible: false
   variables:
     KITHARA_CACHE_TRUST: trusted
@@ -119,7 +110,7 @@ dispatch:main:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 dispatch:quarantine:
-  extends: .serialized
+  extends: .dispatch
   interruptible: true
   variables:
     KITHARA_CACHE_TRUST: quarantine
@@ -128,7 +119,7 @@ dispatch:quarantine:
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
 
 dispatch:nightly:
-  extends: .serialized
+  extends: .dispatch
   interruptible: false
   variables:
     KITHARA_CACHE_TRUST: trusted
@@ -137,7 +128,7 @@ dispatch:nightly:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $KITHARA_SCHEDULE_KIND == "nightly"
 
 dispatch:weekly:
-  extends: .serialized
+  extends: .dispatch
   interruptible: false
   variables:
     KITHARA_CACHE_TRUST: trusted
@@ -146,7 +137,7 @@ dispatch:weekly:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $KITHARA_SCHEDULE_KIND == "weekly"
 
 dispatch:release:
-  extends: .serialized
+  extends: .dispatch
   interruptible: false
   variables:
     KITHARA_CACHE_TRUST: trusted

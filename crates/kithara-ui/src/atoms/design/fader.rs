@@ -1,3 +1,4 @@
+use lucide_icons::Icon;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -39,7 +40,7 @@ impl Fader {
             background: skin.rgba(metrics.rail_empty),
             handle: skin.rgba(metrics.handle_color),
             handle_border: skin.rgba(metrics.handle_frame.border),
-            icon: char::from(lucide_icons::Icon::Volume2),
+            icon: char::from(Icon::Volume2),
             icon_color: skin.rgba(metrics.icon_color),
             label_color: skin.rgba(metrics.label.color),
             label_role: metrics.label,

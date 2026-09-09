@@ -1,5 +1,5 @@
 use anyhow::Result;
-use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit::Visit};
+use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::common::{
@@ -64,7 +64,7 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
                     ));
                 }
             }
-            syn::visit::visit_expr_for_loop(self, fl);
+            visit::visit_expr_for_loop(self, fl);
         }
     }
     let mut v = V { rel, sup, out };

@@ -1,5 +1,5 @@
 use super::{StreamBackend, StreamEncoder};
-use crate::{EncodeError, EncodedAccessUnit, test_pcm::TestPcm};
+use crate::{EncodeError, EncodedAccessUnit};
 
 struct Consts;
 
@@ -32,10 +32,7 @@ fn encode_in_chunks(
     units
 }
 
-fn chunking_does_not_change_the_encoded_stream(backend: StreamBackend) {
-    let samples =
-        TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
-
+fn chunking_does_not_change_the_encoded_stream(samples: &[f32], backend: StreamBackend) {
     let whole = encode_in_chunks(backend, &samples, Consts::FRAMES, Consts::SAMPLE_RATE);
     let framed = encode_in_chunks(
         backend,
@@ -51,14 +48,13 @@ fn chunking_does_not_change_the_encoded_stream(backend: StreamBackend) {
 }
 
 fn timestamps_start_at_zero_and_advance_by_one_frame(
+    samples: &[f32],
     backend: StreamBackend,
     priming_frames: usize,
 ) {
     let frame_samples = u64::try_from(StreamEncoder::FRAME_SAMPLES).expect("frame size fits u64");
     let encoded_frames =
         u64::try_from(Consts::FRAMES + priming_frames).expect("frame count fits u64");
-    let samples =
-        TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS).samples_f32();
 
     for timescale in [Consts::SAMPLE_RATE, 90_000] {
         let rescale = |frames: u64| frames * u64::from(timescale) / u64::from(Consts::SAMPLE_RATE);
@@ -87,13 +83,13 @@ fn timestamps_start_at_zero_and_advance_by_one_frame(
 }
 
 fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
+    samples: &[f32],
     backend: StreamBackend,
     priming_frames: usize,
 ) {
     const SOURCE_RATE: u32 = 44_100;
     const TIMESCALE: u32 = 90_000;
 
-    let samples = TestPcm::sawtooth(Consts::FRAMES, SOURCE_RATE, Consts::CHANNELS).samples_f32();
     let mut encoder = StreamEncoder::builder()
         .backend(backend)
         .sample_rate(SOURCE_RATE)
@@ -137,7 +133,7 @@ fn new_rejects_a_channel_count_the_encoder_cannot_carry(backend: StreamBackend) 
     );
 }
 
-fn push_rejects_a_partial_frame(backend: StreamBackend) {
+fn push_rejects_a_partial_frame(samples: &[f32], backend: StreamBackend) {
     let mut encoder = StreamEncoder::builder()
         .backend(backend)
         .sample_rate(Consts::SAMPLE_RATE)
@@ -147,7 +143,7 @@ fn push_rejects_a_partial_frame(backend: StreamBackend) {
         .build()
         .expect("stream encoder");
 
-    let error = encoder.push(&[0.0, 0.0, 0.0]).expect_err("partial frame");
+    let error = encoder.push(&samples[..3]).expect_err("partial frame");
 
     assert!(matches!(error, EncodeError::InvalidInput(_)), "{error}");
 }
@@ -174,24 +170,32 @@ fn new_rejects_audio_no_backend_can_carry(backend: StreamBackend) {
 
 #[cfg(feature = "ffmpeg")]
 mod ffmpeg {
+    use kithara_test_fixtures::unit_fixtures::{encode_saw, trim_silence};
+    use kithara_test_utils::kithara;
+
     use super::{StreamBackend, StreamEncoder};
 
     const PRIMING_FRAMES: usize = StreamEncoder::FRAME_SAMPLES;
     const BACKEND: StreamBackend = StreamBackend::Ffmpeg;
 
-    #[test]
-    fn chunking_does_not_change_the_encoded_stream() {
-        super::chunking_does_not_change_the_encoded_stream(BACKEND);
+    #[kithara::test(native, flash(false))]
+    fn chunking_does_not_change_the_encoded_stream(encode_saw: Vec<f32>) {
+        super::chunking_does_not_change_the_encoded_stream(&encode_saw, BACKEND);
     }
 
-    #[test]
-    fn timestamps_start_at_zero_and_advance_by_one_frame() {
-        super::timestamps_start_at_zero_and_advance_by_one_frame(BACKEND, PRIMING_FRAMES);
+    #[kithara::test(native, flash(false))]
+    fn timestamps_start_at_zero_and_advance_by_one_frame(encode_saw: Vec<f32>) {
+        super::timestamps_start_at_zero_and_advance_by_one_frame(
+            &encode_saw,
+            BACKEND,
+            PRIMING_FRAMES,
+        );
     }
 
-    #[test]
-    fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline() {
+    #[kithara::test(native, flash(false))]
+    fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(encode_saw: Vec<f32>) {
         super::a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
+            &encode_saw,
             BACKEND,
             PRIMING_FRAMES,
         );
@@ -202,9 +206,9 @@ mod ffmpeg {
         super::new_rejects_a_channel_count_the_encoder_cannot_carry(BACKEND);
     }
 
-    #[test]
-    fn push_rejects_a_partial_frame() {
-        super::push_rejects_a_partial_frame(BACKEND);
+    #[kithara::test(native, flash(false))]
+    fn push_rejects_a_partial_frame(trim_silence: Vec<f32>) {
+        super::push_rejects_a_partial_frame(&trim_silence, BACKEND);
     }
 
     #[test]
@@ -215,24 +219,32 @@ mod ffmpeg {
 
 #[cfg(feature = "fdk-aac")]
 mod fdk {
+    use kithara_test_fixtures::unit_fixtures::{encode_saw, trim_silence};
+    use kithara_test_utils::kithara;
+
     use super::{StreamBackend, StreamEncoder};
 
     const PRIMING_FRAMES: usize = 2 * StreamEncoder::FRAME_SAMPLES;
     const BACKEND: StreamBackend = StreamBackend::Fdk;
 
-    #[test]
-    fn chunking_does_not_change_the_encoded_stream() {
-        super::chunking_does_not_change_the_encoded_stream(BACKEND);
+    #[kithara::test(native, flash(false))]
+    fn chunking_does_not_change_the_encoded_stream(encode_saw: Vec<f32>) {
+        super::chunking_does_not_change_the_encoded_stream(&encode_saw, BACKEND);
     }
 
-    #[test]
-    fn timestamps_start_at_zero_and_advance_by_one_frame() {
-        super::timestamps_start_at_zero_and_advance_by_one_frame(BACKEND, PRIMING_FRAMES);
+    #[kithara::test(native, flash(false))]
+    fn timestamps_start_at_zero_and_advance_by_one_frame(encode_saw: Vec<f32>) {
+        super::timestamps_start_at_zero_and_advance_by_one_frame(
+            &encode_saw,
+            BACKEND,
+            PRIMING_FRAMES,
+        );
     }
 
-    #[test]
-    fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline() {
+    #[kithara::test(native, flash(false))]
+    fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(encode_saw: Vec<f32>) {
         super::a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
+            &encode_saw,
             BACKEND,
             PRIMING_FRAMES,
         );
@@ -243,9 +255,9 @@ mod fdk {
         super::new_rejects_a_channel_count_the_encoder_cannot_carry(BACKEND);
     }
 
-    #[test]
-    fn push_rejects_a_partial_frame() {
-        super::push_rejects_a_partial_frame(BACKEND);
+    #[kithara::test(native, flash(false))]
+    fn push_rejects_a_partial_frame(trim_silence: Vec<f32>) {
+        super::push_rejects_a_partial_frame(&trim_silence, BACKEND);
     }
 
     #[test]

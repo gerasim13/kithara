@@ -70,10 +70,9 @@ type CacheItem<A> = (
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
-/// See crate `CONTEXT.md` for the cache contract. Cache key is
-/// `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
-/// `ResourceKey` carries its own asset namespace. Absolute keys bypass
-/// caching (capability gate or absolute-key bypass).
+/// Cache key is `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
+/// `ResourceKey` carries its own asset namespace. Absolute keys bypass caching
+/// (capability gate or absolute-key bypass).
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct CachedAssets<A>
@@ -223,8 +222,8 @@ where
         let ResourceStatus::Committed { final_len } = reader.status() else {
             return None;
         };
-        // WHY: A committed resource of unknown length counts as unbounded so it cannot stay in a byte-bounded cache - see CONTEXT.md "Memory
-        // byte bound".
+        // WHY: A committed resource of unknown length counts as unbounded so it cannot
+        // stay in a byte-bounded cache.
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 

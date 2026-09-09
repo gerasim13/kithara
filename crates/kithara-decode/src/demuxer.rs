@@ -128,7 +128,7 @@ pub(crate) enum DemuxSeekOutcome {
     Landed {
         landed_at: Duration,
         landed_byte: Option<u64>,
-        /// Codec priming hint. See `kithara-decode` CONTEXT.md "Seek pre-roll and trim".
+        /// Codec priming hint.
         preroll: PrerollHint,
     },
     /// The seek target lies past the stream's end; `duration` is the

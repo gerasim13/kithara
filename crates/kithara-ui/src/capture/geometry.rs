@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+use png::{BitDepth, ColorType, Encoder, Writer};
+
 /// The pixel geometry one capture set was taken at.
 ///
 /// Written beside the pages so another host can be photographed on exactly the
@@ -61,12 +63,12 @@ where
     Rows: Iterator<Item = &'row [u8]>,
 {
     let file = File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
-    let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
+    let mut encoder = Encoder::new(BufWriter::new(file), width, height);
+    encoder.set_color(ColorType::Rgba);
+    encoder.set_depth(BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .and_then(png::Writer::into_stream_writer)
+        .and_then(Writer::into_stream_writer)
         .map_err(|error| failed(path, error))?;
     for row in rows {
         writer.write_all(row).map_err(|error| failed(path, error))?;

@@ -76,6 +76,10 @@ impl<S> SessionDispatcher<S> for SessionClient<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -84,10 +88,6 @@ where
                 "unexpected host reply for player session command".into(),
             )),
         }
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
@@ -134,10 +134,9 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
     tx: mpsc::Sender<HostCmdMsg<S>>,
 ) -> Arc<dyn HostDispatcher<S>> {
-    let client = Arc::new(SessionClient {
+    Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
-    });
-    client
+    })
 }
 
 pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmdMsg<S>>, mpsc::Receiver<HostCmdMsg<S>>) {

@@ -13,8 +13,8 @@ use crate::{
 /// One locally cached HLS resource addressed by its rewritten playlist route.
 #[derive(Debug)]
 pub struct HlsResource {
-    content_type: String,
     path: PathBuf,
+    content_type: String,
 }
 
 impl HlsResource {
@@ -34,8 +34,8 @@ impl HlsResource {
 /// A complete cached VOD graph: rewritten playlists, media, init sections and keys.
 #[derive(Debug)]
 pub struct HlsBundle {
-    master: String,
     resources: BTreeMap<String, HlsResource>,
+    master: String,
 }
 
 /// Invalid or unavailable HLS bundle manifest.
@@ -112,19 +112,13 @@ impl TryFrom<&Asset> for HlsBundle {
             });
         }
         Ok(Self {
-            master: manifest.master,
             resources,
+            master: manifest.master,
         })
     }
 }
 
 impl HlsBundle {
-    /// Rewritten master-playlist route.
-    #[must_use]
-    pub fn master_route(&self) -> &str {
-        &self.master
-    }
-
     /// Resource for one rewritten route.
     #[must_use]
     pub fn get(&self, route: &str) -> Option<&HlsResource> {
@@ -136,6 +130,12 @@ impl HlsBundle {
         self.resources
             .iter()
             .map(|(route, resource)| (route.as_str(), resource))
+    }
+
+    /// Rewritten master-playlist route.
+    #[must_use]
+    pub fn master_route(&self) -> &str {
+        &self.master
     }
 }
 
@@ -179,9 +179,9 @@ mod tests {
                 .into_boxed_str(),
         );
         let entry = Box::leak(Box::new(AssetEntry {
+            path,
             name: "bundle",
             id: "bundle",
-            path,
             content_type: "application/x-kithara-hls-bundle",
             unavailable: None,
         }));

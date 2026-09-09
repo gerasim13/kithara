@@ -1,4 +1,5 @@
 use kithara_resampler::rubato::RubatoBackend;
+use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -46,9 +47,9 @@ fn blocks(frames: usize, count: usize) -> Vec<(u64, usize, usize)> {
 }
 
 #[kithara::test]
-fn arrival_order_does_not_change_the_artifacts() {
+fn arrival_order_does_not_change_the_artifacts(analysis_pcm: &'static [f32]) {
     let frames = 12 * usize::try_from(SR).unwrap_or(1);
-    let samples = sine(frames);
+    let samples = sine(analysis_pcm, frames);
     let ascending = blocks(frames, 12);
     let want = analyse(&samples, &ascending);
     assert!(!want.1.is_empty(), "the harness must find markers at all");

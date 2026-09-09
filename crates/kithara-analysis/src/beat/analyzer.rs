@@ -24,9 +24,9 @@ const BUDGET_RUNS: usize = 4;
 #[derive(Clone, Copy)]
 struct WindowMeta {
     full: bool,
-    index: usize,
     keep_seconds: f32,
     offset_seconds: f32,
+    index: usize,
 }
 
 pub(crate) struct DetectRequest {
@@ -66,19 +66,19 @@ pub(crate) struct BeatAnalyzer<B>
 where
     B: ResamplerBackend,
 {
-    params: GridParams,
-    failure: Option<BeatDetectError>,
-    downmix: SampleBuffer,
-    grid: GridBuffers,
-    runs: Runs<B>,
     windows: BTreeMap<usize, RawBeats>,
     short: BTreeSet<usize>,
+    grid: GridBuffers,
+    params: GridParams,
+    failure: Option<BeatDetectError>,
+    runs: Runs<B>,
+    downmix: SampleBuffer,
+    #[field(get, copy, vis = "pub(crate)")]
+    source_rate: u32,
     hop_frames: usize,
     min_frames: usize,
     ready_frames: usize,
     window_frames: usize,
-    #[field(get, copy, vis = "pub(crate)")]
-    source_rate: u32,
 }
 
 impl<B> BeatAnalyzer<B>
@@ -128,46 +128,27 @@ where
         }
     }
 
-    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
-        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
-    }
-
-    delegate::delegate! {
-        to self.runs {
-            pub(crate) fn intake(&self) -> Intake;
-            #[call(taken)]
-            pub(crate) fn coverage(&self) -> &Coverage;
-            #[cfg(test)]
-            #[call(held)]
-            pub(crate) fn held_frames(&self) -> usize;
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        match output.result {
+            Ok(raw) => self.apply_raw(output.window, raw),
+            Err(error) => self.failure = Some(error),
         }
     }
 
-    pub(crate) fn snapshot<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        detector: &dyn BeatDetector,
-        ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError>
-    where
-        S: HasPool<f32>,
-    {
-        if ending {
-            self.runs.flush()?;
+    fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
+        self.windows.insert(
+            window.index,
+            RawBeats {
+                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
+                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
+            },
+        );
+        if window.full {
+            self.short.remove(&window.index);
+        } else {
+            self.short.insert(window.index);
         }
-        self.detect(pools, detector, ending)?;
-
-        self.build_artifact()
-    }
-
-    pub(crate) fn snapshot_deferred(
-        &mut self,
-        ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError> {
-        if ending {
-            self.runs.flush()?;
-        }
-        self.build_artifact()
+        self.release_detected();
     }
 
     fn build_artifact(&mut self) -> Result<BeatArtifact, BeatDetectError> {
@@ -189,58 +170,25 @@ where
         build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid).map_err(Into::into)
     }
 
-    pub(crate) fn push_interleaved<S>(
+    fn detect<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        pcm: &[f32],
-        channels: usize,
-        at: u64,
-        opens: Opens,
         detector: &dyn BeatDetector,
-    ) -> bool
+        trailing: bool,
+    ) -> Result<(), BeatDetectError>
     where
         S: HasPool<f32>,
     {
-        let took = self.push_interleaved_deferred(pools, pcm, channels, at, opens);
-        self.failure = self.detect(pools, detector, false).err();
-        took
+        while let Some(request) = self.prepare_detection(pools, trailing) {
+            let DetectOutput { result, window } = request.detect(detector);
+            let raw = result?;
+            self.apply_raw(window, raw);
+        }
+        Ok(())
     }
 
-    pub(crate) fn push_interleaved_deferred<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        pcm: &[f32],
-        channels: usize,
-        at: u64,
-        opens: Opens,
-    ) -> bool
-    where
-        S: HasPool<f32>,
-    {
-        if channels == 0 || self.failure.is_some() {
-            return false;
-        }
-        let frames = pcm.len() / channels;
-        if frames == 0 {
-            return false;
-        }
-
-        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
-        if let Err(error) = self.downmix.ensure_len(frames) {
-            self.failure = Some(error.into());
-            return false;
-        }
-        self.downmix.truncate(frames);
-        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
-            *dst = frame.iter().sum::<f32>() * inv;
-        }
-        match self.runs.push(pools, &self.downmix, at, opens) {
-            Ok(took) => took,
-            Err(error) => {
-                self.failure = Some(error);
-                false
-            }
-        }
+    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
+        self.failure.as_ref()
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -313,30 +261,74 @@ where
         None
     }
 
-    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
-        match output.result {
-            Ok(raw) => self.apply_raw(output.window, raw),
-            Err(error) => self.failure = Some(error),
+    pub(crate) fn push_interleaved<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        opens: Opens,
+        detector: &dyn BeatDetector,
+    ) -> bool
+    where
+        S: HasPool<f32>,
+    {
+        let took = self.push_interleaved_deferred(pools, pcm, channels, at, opens);
+        self.failure = self.detect(pools, detector, false).err();
+        took
+    }
+
+    pub(crate) fn push_interleaved_deferred<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        opens: Opens,
+    ) -> bool
+    where
+        S: HasPool<f32>,
+    {
+        if channels == 0 || self.failure.is_some() {
+            return false;
+        }
+        let frames = pcm.len() / channels;
+        if frames == 0 {
+            return false;
+        }
+
+        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
+        if let Err(error) = self.downmix.ensure_len(frames) {
+            self.failure = Some(error.into());
+            return false;
+        }
+        self.downmix.truncate(frames);
+        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
+            *dst = frame.iter().sum::<f32>() * inv;
+        }
+        match self.runs.push(pools, &self.downmix, at, opens) {
+            Ok(took) => took,
+            Err(error) => {
+                self.failure = Some(error);
+                false
+            }
         }
     }
 
-    pub(crate) fn failure(&self) -> Option<&BeatDetectError> {
-        self.failure.as_ref()
-    }
-
-    pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
-        let mut writer = Writer::new(out);
-        self.runs.write_resume(&mut writer);
-        writer.write_len(self.windows.len());
-        for (index, raw) in &self.windows {
-            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
-            write_marks(&mut writer, &raw.beats);
-            write_marks(&mut writer, &raw.downbeats);
-        }
-        writer.write_len(self.short.len());
-        for index in &self.short {
-            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
-        }
+    fn release_detected(&mut self) {
+        let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
+        self.runs.release(|base| {
+            let first = base.div_ceil(hop);
+            let mut index = first;
+            while windows.contains_key(&index) && !short.contains(&index) {
+                index = index.saturating_add(1);
+            }
+            if index == first {
+                base
+            } else {
+                index.saturating_mul(hop)
+            }
+        });
     }
 
     pub(crate) fn restore<S>(
@@ -370,53 +362,61 @@ where
         Ok(())
     }
 
-    fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
-        self.windows.insert(
-            window.index,
-            RawBeats {
-                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
-                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
-            },
-        );
-        if window.full {
-            self.short.remove(&window.index);
-        } else {
-            self.short.insert(window.index);
-        }
-        self.release_detected();
-    }
-
-    fn release_detected(&mut self) {
-        let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
-        self.runs.release(|base| {
-            let first = base.div_ceil(hop);
-            let mut index = first;
-            while windows.contains_key(&index) && !short.contains(&index) {
-                index = index.saturating_add(1);
-            }
-            if index == first {
-                base
-            } else {
-                index.saturating_mul(hop)
-            }
-        });
-    }
-
-    fn detect<S>(
+    pub(crate) fn snapshot<S>(
         &mut self,
         pools: &PoolRegion<S>,
         detector: &dyn BeatDetector,
-        trailing: bool,
-    ) -> Result<(), BeatDetectError>
+        ending: bool,
+    ) -> Result<BeatArtifact, BeatDetectError>
     where
         S: HasPool<f32>,
     {
-        while let Some(request) = self.prepare_detection(pools, trailing) {
-            let DetectOutput { result, window } = request.detect(detector);
-            let raw = result?;
-            self.apply_raw(window, raw);
+        if ending {
+            self.runs.flush()?;
         }
-        Ok(())
+        self.detect(pools, detector, ending)?;
+
+        self.build_artifact()
+    }
+
+    pub(crate) fn snapshot_deferred(
+        &mut self,
+        ending: bool,
+    ) -> Result<BeatArtifact, BeatDetectError> {
+        if ending {
+            self.runs.flush()?;
+        }
+        self.build_artifact()
+    }
+
+    pub(crate) fn unanalysed(&self, extent: Option<u64>) -> Vec<FrameRange> {
+        extent.map_or_else(Vec::new, |extent| self.runs.taken().gaps(extent))
+    }
+
+    pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
+        let mut writer = Writer::new(out);
+        self.runs.write_resume(&mut writer);
+        writer.write_len(self.windows.len());
+        for (index, raw) in &self.windows {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+            write_marks(&mut writer, &raw.beats);
+            write_marks(&mut writer, &raw.downbeats);
+        }
+        writer.write_len(self.short.len());
+        for index in &self.short {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+        }
+    }
+
+    delegate::delegate! {
+        to self.runs {
+            pub(crate) fn intake(&self) -> Intake;
+            #[call(taken)]
+            pub(crate) fn coverage(&self) -> &Coverage;
+            #[cfg(test)]
+            #[call(held)]
+            pub(crate) fn held_frames(&self) -> usize;
+        }
     }
 }
 
@@ -473,6 +473,11 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
 mod tests {
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_fixtures::analysis_beat_fixtures::{
+        cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
+        quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
+        tenth_816000,
+    };
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
@@ -558,6 +563,10 @@ mod tests {
     }
 
     impl Pass {
+        fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
+            self.analyzer.prepare_detection(&self.pools, trailing)
+        }
+
         fn push_interleaved(
             &mut self,
             pcm: &[f32],
@@ -568,18 +577,6 @@ mod tests {
         ) -> bool {
             self.analyzer
                 .push_interleaved(&self.pools, pcm, channels, at, opens, detector)
-        }
-
-        fn snapshot(
-            &mut self,
-            detector: &dyn BeatDetector,
-            ending: bool,
-        ) -> Result<crate::BeatArtifact, BeatDetectError> {
-            self.analyzer.snapshot(&self.pools, detector, ending)
-        }
-
-        fn write_resume(&mut self, out: &mut Vec<u8>) {
-            self.analyzer.write_resume(out);
         }
 
         fn push_interleaved_deferred(
@@ -593,20 +590,21 @@ mod tests {
                 .push_interleaved_deferred(&self.pools, pcm, channels, at, opens)
         }
 
-        fn prepare_detection(&mut self, trailing: bool) -> Option<super::DetectRequest> {
-            self.analyzer.prepare_detection(&self.pools, trailing)
+        fn snapshot(
+            &mut self,
+            detector: &dyn BeatDetector,
+            ending: bool,
+        ) -> Result<crate::BeatArtifact, BeatDetectError> {
+            self.analyzer.snapshot(&self.pools, detector, ending)
         }
 
-        fn apply_detection(&mut self, output: super::DetectOutput) {
-            self.analyzer.apply_detection(output);
-        }
-
-        fn held_frames(&self) -> usize {
-            self.analyzer.held_frames()
-        }
-
-        fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange> {
-            self.analyzer.unanalysed(extent)
+        delegate::delegate! {
+            to self.analyzer {
+                fn apply_detection(&mut self, output: super::DetectOutput);
+                fn held_frames(&self) -> usize;
+                fn unanalysed(&self, extent: Option<u64>) -> Vec<crate::coverage::FrameRange>;
+                fn write_resume(&mut self, out: &mut Vec<u8>);
+            }
         }
     }
 
@@ -628,16 +626,6 @@ mod tests {
                 .each_call(matching!(_))
                 .answers_arc(Arc::new(move |_, mono| Ok(check(mono)))),
         )
-    }
-
-    fn stereo(frames: usize, f: impl Fn(usize) -> f32) -> Vec<f32> {
-        let mut out = Vec::with_capacity(frames * 2);
-        for n in 0..frames {
-            let s = f(n);
-            out.push(s);
-            out.push(s);
-        }
-        out
     }
 
     fn push_chunked(
@@ -662,14 +650,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resume_between_blocks_leaves_no_step_in_the_audio() {
+    fn resume_between_blocks_leaves_no_step_in_the_audio(sine_440: Vec<f32>) {
         // A 440 Hz sine at 22 050 Hz moves at most 0.063 between neighbouring
         // samples; anything larger is a seam an onset detector reads as a beat.
-        let step = std::f32::consts::TAU * 440.0 / 44_100.0;
-        let pcm = stereo(2 * 44_100, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_440;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let detector = detector(|mono| {
             let worst = mono
@@ -695,15 +679,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resamples_all_input_without_tail_loss() {
+    fn resamples_all_input_without_tail_loss(sine_440: Vec<f32>) {
         // 2.0 s of 440 Hz at 44.1 kHz must reach the detector as exactly
         // 2.0 s at 22 050 Hz, with real signal all the way to the end —
         // the resampler tail must be flushed, not dropped.
-        let step = std::f32::consts::TAU * 440.0 / 44_100.0;
-        let pcm = stereo(2 * 44_100, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_440;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(
@@ -730,10 +710,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resampler_delay_is_trimmed_so_positions_stay_aligned() {
+    fn resampler_delay_is_trimmed_so_positions_stay_aligned(step: Vec<f32>) {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
-        let pcm = stereo(2 * 44_100, |n| if n < 44_100 { 0.0 } else { 0.5 });
+        let pcm = step;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), 2 * Consts::TARGET);
@@ -755,13 +735,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn downmix_is_channel_mean() {
+    fn downmix_is_channel_mean(cancelling: Vec<f32>) {
         // L = +0.8, R = -0.8 cancels to mono silence.
-        let mut pcm = Vec::with_capacity(44_100 * 2);
-        for _ in 0..44_100 {
-            pcm.push(0.8);
-            pcm.push(-0.8);
-        }
+        let pcm = cancelling;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), Consts::TARGET);
@@ -776,9 +752,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn passthrough_at_detector_rate() {
+    fn passthrough_at_detector_rate(quarter_10000: Vec<f32>) {
         // A 22 050 Hz source needs no resampling: the detector sees the input.
-        let pcm = stereo(10_000, |_| 0.25);
+        let pcm = quarter_10000;
         let mut analyzer = analyzer(22_050, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 10_000].as_slice());
@@ -791,12 +767,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn custom_detector_rate_controls_passthrough_domain() {
+    fn custom_detector_rate_controls_passthrough_domain(quarter_4096: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .build();
-        let pcm = stereo(4096, |_| 0.25);
+        let pcm = quarter_4096;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
@@ -809,14 +785,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn detector_input_is_bounded_by_configured_window() {
+    fn detector_input_is_bounded_by_configured_window(quarter_132300: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(1)
             .detector_overlap_seconds(0)
             .build();
-        let pcm = stereo(3 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let pcm = quarter_132300;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -836,14 +812,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_at_the_minimum_is_detected_before_the_flush() {
+    fn a_run_at_the_minimum_is_detected_before_the_flush(quarter_88200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
             .build();
-        let pcm = stereo(2 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let pcm = quarter_88200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -871,7 +847,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_short_run_yields_a_grid_and_is_refined_when_it_fills() {
+    fn a_short_run_yields_a_grid_and_is_refined_when_it_fills(quarter_529200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
@@ -880,7 +856,7 @@ mod tests {
             .detector_min_window_seconds(2)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let pcm = stereo(12 * second, |_| 0.25);
+        let pcm = quarter_529200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -926,7 +902,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn finalize_builds_grid_in_source_frames() {
+    fn finalize_builds_grid_in_source_frames(tenth_816000: Vec<f32>) {
         // 9 downbeats every 2.0 s -> 120 bpm, positions converted at the
         // SOURCE rate (48 kHz here), not the detector's 22 050 Hz.
         let raw = RawBeats {
@@ -945,13 +921,7 @@ mod tests {
         };
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(move |_| raw.clone());
-        analyzer.push_interleaved(
-            &stereo(17 * 48_000, |_| 0.1),
-            2,
-            0,
-            Opens::Run,
-            &mut detector,
-        );
+        analyzer.push_interleaved(&tenth_816000, 2, 0, Opens::Run, &mut detector);
         let grid = analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
@@ -971,7 +941,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_holds_what_waits_rather_than_the_track() {
+    fn a_run_holds_what_waits_rather_than_the_track(quarter_2646000: Vec<f32>) {
         // Window 2 s, overlap 1 s: a 3 s window, a 12 s budget. Detection
         // keeps pace, so what waits is one window however long the track is.
         let config = BeatAnalysisConfig::builder()
@@ -981,7 +951,7 @@ mod tests {
             .detector_overlap_seconds(1)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let pcm = stereo(60 * second, |_| 0.25);
+        let pcm = quarter_2646000;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
@@ -1003,7 +973,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_that_fed_no_window_keeps_what_it_holds() {
+    fn a_run_that_fed_no_window_keeps_what_it_holds(
+        quarter_44100: Vec<f32>,
+        quarter_88200: Vec<f32>,
+    ) {
         // Window 2 s, no overlap. The first run opens half a second in and is
         // too short for any window; the second is a whole one.
         let config = BeatAnalysisConfig::builder()
@@ -1017,14 +990,14 @@ mod tests {
         let mut detector = detector(|_| empty_raw());
 
         let at = u64::try_from(second / 2).unwrap_or(0);
-        analyzer.push_interleaved_deferred(&stereo(second, |_| 0.25), 2, at, Opens::Run);
+        analyzer.push_interleaved_deferred(&quarter_44100, 2, at, Opens::Run);
         let held = analyzer.held_frames();
         assert!(held > 0, "the short run holds what it was given");
 
         // One whole window on the grid, so releasing on it leaves nothing of
         // its own behind and the hold that remains is the short run's.
         let far = u64::try_from(10 * second).unwrap_or(0);
-        analyzer.push_interleaved_deferred(&stereo(2 * second, |_| 0.25), 2, far, Opens::Run);
+        analyzer.push_interleaved_deferred(&quarter_88200, 2, far, Opens::Run);
         while let Some(request) = analyzer.prepare_detection(false) {
             analyzer.apply_detection(request.detect(&mut detector));
         }
@@ -1037,7 +1010,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_track_past_the_budget_is_taken_whole_by_waiting() {
+    fn a_track_past_the_budget_is_taken_whole_by_waiting(quarter_2646000: Vec<f32>) {
         // A detector too slow to keep pace fills the hold. Offered the same
         // second again once room appears, the pass takes the whole track.
         let config = BeatAnalysisConfig::builder()
@@ -1048,7 +1021,7 @@ mod tests {
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
         let seconds = 60;
-        let pcm = stereo(seconds * second, |_| 0.25);
+        let pcm = quarter_2646000;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
@@ -1089,7 +1062,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn detector_failure_propagates() {
+    fn detector_failure_propagates(tenth_4096: Vec<f32>) {
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
@@ -1097,12 +1070,12 @@ mod tests {
                     reason: "scripted".to_string(),
                 })
             }));
-        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2, 0, Opens::Run, &mut detector);
+        analyzer.push_interleaved(&tenth_4096, 2, 0, Opens::Run, &mut detector);
         assert!(analyzer.snapshot(&mut detector, true).is_err());
     }
 
     #[kithara::test]
-    fn shuffled_blocks_place_markers_where_ascending_does() {
+    fn shuffled_blocks_place_markers_where_ascending_does(sine_220: Vec<f32>) {
         // One detector window per second, so a 6 s source yields several
         // windows and the shuffle actually reorders detected spans.
         let config = BeatAnalysisConfig::builder()
@@ -1114,13 +1087,7 @@ mod tests {
         // Short enough that the mono budget never reclaims a span before its
         // window completes: marker equality across arrival orders holds below
         // the budget, and the budget's own behaviour is asserted separately.
-        let seconds = 3;
-        let frames = seconds * usize::try_from(Consts::SRC).unwrap_or(1);
-        let step = std::f32::consts::TAU * 220.0 / 44_100.0;
-        let pcm = stereo(frames, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_220;
 
         // Each window reports one beat a quarter of the way in, so the marker
         // positions are a pure function of where the window sits.
@@ -1172,7 +1139,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_hold_the_detector_cannot_read_still_takes_the_audio_that_completes_a_window() {
+    fn a_hold_the_detector_cannot_read_still_takes_the_audio_that_completes_a_window(
+        quarter_44100: Vec<f32>,
+        quarter_176400: Vec<f32>,
+    ) {
         // 3 s windows at 2 s hops are ready 4 s past a window's start, so four
         // runs opening 1 s past a hop boundary hold four windows' worth with
         // nothing to read.
@@ -1183,18 +1153,11 @@ mod tests {
             .detector_overlap_seconds(1)
             .detector_min_window_seconds(1)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
         for run in 0..4u64 {
             let at = (1 + 10 * run) * u64::from(Consts::SRC);
-            let took = analyzer.push_interleaved(
-                &stereo(4 * second, |_| 0.25),
-                2,
-                at,
-                Opens::Run,
-                &mut detector,
-            );
+            let took = analyzer.push_interleaved(&quarter_176400, 2, at, Opens::Run, &mut detector);
             assert!(took, "a run of its own is taken while there is room");
         }
         assert!(
@@ -1204,7 +1167,7 @@ mod tests {
 
         // This second fills the window of the run at 11 s.
         let took = analyzer.push_interleaved(
-            &stereo(second, |_| 0.25),
+            &quarter_44100,
             2,
             15 * u64::from(Consts::SRC),
             Opens::Extends,

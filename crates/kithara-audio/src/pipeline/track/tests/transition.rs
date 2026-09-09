@@ -7,6 +7,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
 };
+use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{
@@ -134,8 +135,8 @@ async fn wait_for_abandoned_incoming_progress(
 }
 
 #[kithara::test(tokio)]
-async fn eof_transition_retires_staged_incoming_and_aborts_variant() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn eof_transition_retires_staged_incoming_and_aborts_variant(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -158,8 +159,8 @@ async fn eof_transition_retires_staged_incoming_and_aborts_variant() {
 }
 
 #[kithara::test(tokio)]
-async fn failed_source_removal_retires_staged_incoming_and_aborts_variant() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn failed_source_removal_retires_staged_incoming_and_aborts_variant(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -184,8 +185,8 @@ async fn failed_source_removal_retires_staged_incoming_and_aborts_variant() {
 }
 
 #[kithara::test(tokio)]
-async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     fixture.control.set_exact_plan(incoming_plan());
 
     fixture.source.flush_deferred();
@@ -212,8 +213,8 @@ async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running() {
 }
 
 #[kithara::test(tokio)]
-async fn exact_incoming_build_pending_keeps_outgoing_pcm_running() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -244,8 +245,8 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running() {
 }
 
 #[kithara::test(tokio)]
-async fn raw_decode_head_is_independent_of_downstream_frame_shape() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn raw_decode_head_is_independent_of_downstream_frame_shape(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
 
     let TrackStep::Produced(first) = fixture.source.step_track() else {
         panic!("raw source must produce its first chunk");
@@ -290,8 +291,9 @@ async fn raw_decode_head_is_independent_of_downstream_frame_shape() {
 }
 
 #[kithara::test(tokio)]
-async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming() {
+async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source_with_gapless(
+        &route_pcm,
         Consts::SAMPLE_RATE,
         GaplessInfo::new(
             0,
@@ -319,8 +321,8 @@ async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming() {
 }
 
 #[kithara::test(tokio)]
-async fn incoming_completion_never_replaces_active_before_staged_pcm() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -357,8 +359,8 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm() {
 }
 
 #[kithara::test(tokio)]
-async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -399,8 +401,8 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier() {
 }
 
 #[kithara::test(tokio)]
-async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -446,8 +448,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
 }
 
 #[kithara::test(tokio)]
-async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
@@ -484,11 +486,12 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build() {
 }
 
 #[kithara::test(tokio)]
-async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
+async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pcm: RoutePcm) {
     const INCOMING_CHUNKS: usize = 5;
 
     let mut fixture =
-        route_signal_source_with_finite_incoming(Consts::SAMPLE_RATE, INCOMING_CHUNKS).await;
+        route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
+            .await;
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
@@ -569,11 +572,12 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
 }
 
 #[kithara::test(tokio)]
-async fn live_same_spec_promotion_arms_the_crossfade_ramp() {
+async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     const INCOMING_CHUNKS: usize = 5;
 
     let mut fixture =
-        route_signal_source_with_finite_incoming(Consts::SAMPLE_RATE, INCOMING_CHUNKS).await;
+        route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
+            .await;
     let TrackStep::Produced(_) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
@@ -600,11 +604,12 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp() {
 }
 
 #[kithara::test(tokio)]
-async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
+async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: RoutePcm) {
     const INCOMING_CHUNKS: usize = 5;
 
     let mut fixture =
-        route_signal_source_with_finite_incoming(Consts::SAMPLE_RATE, INCOMING_CHUNKS).await;
+        route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
+            .await;
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
@@ -651,11 +656,11 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
 }
 
 #[kithara::test(tokio)]
-async fn promotion_preserves_the_normalized_timeline_gap() {
+async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
     const ACTIVE_GAP: u64 = 17;
     const INCOMING_GAP: u64 = 3;
 
-    let mut fixture = route_signal_source_with_gaps(ACTIVE_GAP, INCOMING_GAP).await;
+    let mut fixture = route_signal_source_with_gaps(&route_pcm, ACTIVE_GAP, INCOMING_GAP).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -686,8 +691,8 @@ async fn promotion_preserves_the_normalized_timeline_gap() {
 /// time here, so a landing that is not a whole number of chunks is a landing
 /// that was pushed past it.
 #[kithara::test(tokio)]
-async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
@@ -722,8 +727,8 @@ async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it() {
 }
 
 #[kithara::test(tokio)]
-async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -804,8 +809,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative() {
 }
 
 #[kithara::test(tokio)]
-async fn stale_prepared_promotion_returns_incoming_for_shell_retirement() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -835,11 +840,14 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement() {
 }
 
 #[kithara::test(tokio)]
-async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks() {
+async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
+    route_pcm: RoutePcm,
+) {
     const RAW_CHUNKS: usize = 4;
     const TRAILING_FRAMES: u64 = 300;
 
     let mut fixture = route_signal_source_with_gapless_eof(
+        &route_pcm,
         Consts::SAMPLE_RATE,
         GaplessInfo::new(0, TRAILING_FRAMES),
         RAW_CHUNKS,
@@ -902,8 +910,8 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks()
 }
 
 #[kithara::test(tokio)]
-async fn newer_ticket_supersedes_only_incoming_generation() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let (first, second) = successive_incoming_plans();
     let first_transition = first.transition();
     let second_transition = second.transition();
@@ -940,8 +948,8 @@ async fn newer_ticket_supersedes_only_incoming_generation() {
 }
 
 #[kithara::test(tokio)]
-async fn stale_incoming_completion_retires_generation_in_shell() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let (first, second) = successive_incoming_plans();
     let first_transition = first.transition();
     let second_transition = second.transition();
@@ -1002,8 +1010,8 @@ async fn stale_incoming_completion_retires_generation_in_shell() {
 }
 
 #[kithara::test(tokio)]
-async fn incoming_media_facts_choose_reader_profile() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     fixture.control.enable_byte_map();
     let template = incoming_plan();
     let mut incoming_media = MediaInfo::builder()
@@ -1028,8 +1036,8 @@ async fn incoming_media_facts_choose_reader_profile() {
 }
 
 #[kithara::test(tokio)]
-async fn exact_promotion_emits_variant_switch_decoder_event() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     fixture.source = fixture
@@ -1063,8 +1071,8 @@ async fn exact_promotion_emits_variant_switch_decoder_event() {
     assert!(changed);
 }
 #[kithara::test(tokio)]
-async fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
-    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let request = SeekRequest {
         seek: SeekContext {
             target: Duration::from_secs(2),

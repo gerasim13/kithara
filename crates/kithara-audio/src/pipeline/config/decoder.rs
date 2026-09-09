@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
 #[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]

@@ -83,10 +83,10 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
+    context_requirement: ContextRequirement,
     trash_tx: HeapProd<PlayerTrack>,
     /// Last effective rate successfully delivered to the control thread.
     last_notified_rate: f32,
-    context_requirement: ContextRequirement,
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
@@ -120,32 +120,6 @@ impl PlayerNodeProcessor {
         S: HasPool<f32>,
     {
         Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
-    }
-
-    pub(super) fn with_context_requirement<S>(
-        inputs: NodeInputs,
-        shape: StreamShape,
-        pools: &PoolRegion<S>,
-        context_requirement: ContextRequirement,
-    ) -> Self
-    where
-        S: HasPool<f32>,
-    {
-        let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
-        Self {
-            last_notified_rate,
-            cmd_rx: inputs.cmd_rx,
-            notif_tx: inputs.notif_tx,
-            trash_tx: inputs.trash_tx,
-            playback: inputs.playback,
-            sample_rate: shape.sample_rate,
-            render: RenderPass::new(pools, shape),
-            crossfade: CrossfadeSettings::default(),
-            prefetch_duration: 0.0,
-            tracks: TrackSlots::default(),
-            tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
-            context_requirement,
-        }
     }
 
     /// Clean up finished tracks, dropping `playing` once none is audible.
@@ -252,6 +226,17 @@ impl PlayerNodeProcessor {
         self.render_with_context(None, buffers, frames, is_playing)
     }
 
+    fn render_context<'a>(
+        &self,
+        store: &'a ProcStore,
+        info: &ProcInfo,
+    ) -> Result<Option<&'a RenderContext>, &'static str> {
+        match self.context_requirement {
+            ContextRequirement::Standalone => Ok(None),
+            ContextRequirement::Session => read_render_context(store, info).map(Some),
+        }
+    }
+
     fn render_with_context(
         &mut self,
         context: Option<&RenderContext>,
@@ -271,17 +256,6 @@ impl PlayerNodeProcessor {
             frames,
             is_playing,
         )
-    }
-
-    fn render_context<'a>(
-        &self,
-        store: &'a ProcStore,
-        info: &ProcInfo,
-    ) -> Result<Option<&'a RenderContext>, &'static str> {
-        match self.context_requirement {
-            ContextRequirement::Standalone => Ok(None),
-            ContextRequirement::Session => read_render_context(store, info).map(Some),
-        }
     }
 
     fn retire(&mut self, track: PlayerTrack) {
@@ -357,6 +331,32 @@ impl PlayerNodeProcessor {
                     .store(track.duration(), Ordering::Relaxed);
                 break;
             }
+        }
+    }
+
+    pub(super) fn with_context_requirement<S>(
+        inputs: NodeInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+        context_requirement: ContextRequirement,
+    ) -> Self
+    where
+        S: HasPool<f32>,
+    {
+        let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
+        Self {
+            last_notified_rate,
+            context_requirement,
+            cmd_rx: inputs.cmd_rx,
+            notif_tx: inputs.notif_tx,
+            trash_tx: inputs.trash_tx,
+            playback: inputs.playback,
+            sample_rate: shape.sample_rate,
+            render: RenderPass::new(pools, shape),
+            crossfade: CrossfadeSettings::default(),
+            prefetch_duration: 0.0,
+            tracks: TrackSlots::default(),
+            tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
     }
 

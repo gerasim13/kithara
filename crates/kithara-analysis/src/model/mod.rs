@@ -1,4 +1,4 @@
-#[cfg(not(feature = "beat-backend"))]
+#[cfg(all(not(feature = "beat-backend"), feature = "analysis-beat"))]
 mod disabled;
 #[cfg(feature = "beat-backend")]
 mod enabled;

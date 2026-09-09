@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn lines(y: f32) -> Input<'static> {
-        Input::Wheel(Scroll::Lines { x: 0.0, y })
+        Input::Wheel(Scroll::Lines { y, x: 0.0 })
     }
 
     fn window() -> Rect {

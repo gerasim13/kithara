@@ -18,21 +18,21 @@ use crate::{
 };
 
 pub(super) struct BroadcastTask<S> {
-    completed: Option<Sender<()>>,
-    config: BroadcastConfig<S>,
     control: Arc<Control>,
-    counted_drops: u64,
     counters: Arc<Counters>,
-    encoder: Option<StreamEncoder>,
-    formats: HeapCons<FormatChange>,
-    frames: u64,
-    generation_capacity: usize,
-    next_format: Option<FormatChange>,
     origin: Arc<Origin>,
+    config: BroadcastConfig<S>,
+    formats: HeapCons<FormatChange>,
     pcm: HeapCons<f32>,
+    window: LiveWindow,
+    completed: Option<Sender<()>>,
+    encoder: Option<StreamEncoder>,
+    next_format: Option<FormatChange>,
     scratch: Option<SampleBuffer>,
     segmenter: Segmenter,
-    window: LiveWindow,
+    counted_drops: u64,
+    frames: u64,
+    generation_capacity: usize,
 }
 
 impl<S> BroadcastTask<S>
@@ -74,39 +74,27 @@ where
         })
     }
 
-    pub(super) fn counters(&self) -> Arc<Counters> {
-        Arc::clone(&self.counters)
-    }
-
-    pub(super) fn origin(&self) -> Arc<Origin> {
-        Arc::clone(&self.origin)
-    }
-
-    fn open_encoder(config: &BroadcastConfig<S>) -> BroadcastResult<StreamEncoder> {
-        Ok(StreamEncoder::builder()
-            .backend(StreamBackend::Fdk)
-            .sample_rate(config.sample_rate)
-            .channels(config.channels)
-            .bit_rate(config.bit_rate)
-            .timescale(config.sample_rate)
-            .build()?)
-    }
-
     fn complete(&mut self) {
         if let Some(completed) = self.completed.take() {
             let _ = completed.send(());
         }
     }
 
-    fn finish_encoder(&mut self) -> BroadcastResult<()> {
-        if let Some(encoder) = self.encoder.take() {
-            for unit in encoder.finish()? {
-                if let Some(segment) = self.segmenter.push(&unit)? {
-                    self.publish(segment);
-                }
-            }
+    pub(super) fn counters(&self) -> Arc<Counters> {
+        Arc::clone(&self.counters)
+    }
+
+    fn fail(&mut self, error: &dyn std::fmt::Display) -> TickResult {
+        tracing::error!(%error, "the live packager stopped");
+        self.control.finish();
+        self.encoder.take();
+        if let Some(segment) = self.segmenter.flush() {
+            self.publish(segment);
         }
-        Ok(())
+        self.window.finish();
+        self.publish_snapshot();
+        self.complete();
+        TickResult::Done
     }
 
     fn finish(&mut self) -> BroadcastResult<()> {
@@ -119,27 +107,14 @@ where
         Ok(())
     }
 
-    fn next_format(&mut self) -> Option<FormatChange> {
-        if self.next_format.is_none() {
-            self.next_format = self.formats.try_pop();
+    fn finish_encoder(&mut self) -> BroadcastResult<()> {
+        if let Some(encoder) = self.encoder.take() {
+            for unit in encoder.finish()? {
+                if let Some(segment) = self.segmenter.push(&unit)? {
+                    self.publish(segment);
+                }
+            }
         }
-        self.next_format
-    }
-
-    fn reconfigure(&mut self, change: FormatChange) -> BroadcastResult<()> {
-        if change.spec.channels != self.config.channels {
-            return Err(crate::BroadcastError::LiveChannelCount {
-                channels: change.spec.channels,
-            });
-        }
-        self.finish_encoder()?;
-        let config = self.config.with_sample_rate(change.spec.sample_rate.get());
-        if let Some(segment) = self.segmenter.reconfigure(&config)? {
-            self.publish(segment);
-        }
-        self.encoder = Some(Self::open_encoder(&config)?);
-        self.config = config;
-        self.next_format = None;
         Ok(())
     }
 
@@ -154,6 +129,27 @@ where
         if let Some(segment) = self.segmenter.mark_drop() {
             self.publish(segment);
         }
+    }
+
+    fn next_format(&mut self) -> Option<FormatChange> {
+        if self.next_format.is_none() {
+            self.next_format = self.formats.try_pop();
+        }
+        self.next_format
+    }
+
+    fn open_encoder(config: &BroadcastConfig<S>) -> BroadcastResult<StreamEncoder> {
+        Ok(StreamEncoder::builder()
+            .backend(StreamBackend::Fdk)
+            .sample_rate(config.sample_rate)
+            .channels(config.channels)
+            .bit_rate(config.bit_rate)
+            .timescale(config.sample_rate)
+            .build()?)
+    }
+
+    pub(super) fn origin(&self) -> Arc<Origin> {
+        Arc::clone(&self.origin)
     }
 
     fn process(&mut self, samples: &[f32]) -> BroadcastResult<()> {
@@ -210,17 +206,21 @@ where
         self.origin.snapshot.store(Arc::new(self.window.snapshot()));
     }
 
-    fn fail(&mut self, error: &dyn std::fmt::Display) -> TickResult {
-        tracing::error!(%error, "the live packager stopped");
-        self.control.finish();
-        self.encoder.take();
-        if let Some(segment) = self.segmenter.flush() {
+    fn reconfigure(&mut self, change: FormatChange) -> BroadcastResult<()> {
+        if change.spec.channels != self.config.channels {
+            return Err(crate::BroadcastError::LiveChannelCount {
+                channels: change.spec.channels,
+            });
+        }
+        self.finish_encoder()?;
+        let config = self.config.with_sample_rate(change.spec.sample_rate.get());
+        if let Some(segment) = self.segmenter.reconfigure(&config)? {
             self.publish(segment);
         }
-        self.window.finish();
-        self.publish_snapshot();
-        self.complete();
-        TickResult::Done
+        self.encoder = Some(Self::open_encoder(&config)?);
+        self.config = config;
+        self.next_format = None;
+        Ok(())
     }
 }
 

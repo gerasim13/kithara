@@ -87,9 +87,9 @@ impl AppleSession {
 
         Self {
             accept_encoding,
-            buffers: ByteBuffers::new(pools),
             connection_metrics,
             shared,
+            buffers: ByteBuffers::new(pools),
             body_queue_capacity: options.body_queue_capacity,
             body_queue_resume_at: options.body_queue_resume_at,
         }

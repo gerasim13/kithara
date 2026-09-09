@@ -119,7 +119,7 @@ impl Driver for MemDriver {
 
         let driver = Self {
             committed,
-            state: Mutex::new(MemState { buf: buffer, len }),
+            state: Mutex::new(MemState { len, buf: buffer }),
         };
 
         Ok((driver, init_state))

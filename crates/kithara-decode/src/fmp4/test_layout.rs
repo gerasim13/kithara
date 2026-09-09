@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{ByteMap, SegmentDescriptor};
+use kithara_test_utils::kithara;
 
 #[derive(Clone)]
 pub(crate) struct FakeSegmented {
@@ -116,4 +117,21 @@ pub(crate) fn build_test_layout(
             segments: Arc::new(descs),
         },
     )
+}
+
+#[kithara::fixture]
+pub(crate) fn aac_one() -> (Vec<u8>, FakeSegmented) {
+    build_test_layout(TestLayoutCodec::Aac, 1)
+}
+#[kithara::fixture]
+pub(crate) fn aac_three() -> (Vec<u8>, FakeSegmented) {
+    build_test_layout(TestLayoutCodec::Aac, 3)
+}
+#[kithara::fixture]
+pub(crate) fn aac_five() -> (Vec<u8>, FakeSegmented) {
+    build_test_layout(TestLayoutCodec::Aac, 5)
+}
+#[kithara::fixture]
+pub(crate) fn flac_three() -> (Vec<u8>, FakeSegmented) {
+    build_test_layout(TestLayoutCodec::Flac, 3)
 }

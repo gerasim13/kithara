@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, num::NonZeroUsize};
 
 use ::loom::sync::{
     Arc as LoomArc,
@@ -86,7 +86,7 @@ where
         .name(name.into())
         .spawn(tracked)
     {
-        Ok(inner) => JoinHandle { finished, inner },
+        Ok(inner) => JoinHandle { inner, finished },
         Err(error) => panic!("failed to spawn named loom thread: {error}"),
     }
 }
@@ -142,6 +142,6 @@ pub(crate) fn current_thread_id() -> u64 {
 
 #[inline]
 #[must_use]
-pub(crate) fn available_parallelism() -> Option<core::num::NonZeroUsize> {
-    core::num::NonZeroUsize::new(1)
+pub(crate) fn available_parallelism() -> Option<NonZeroUsize> {
+    NonZeroUsize::new(1)
 }

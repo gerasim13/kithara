@@ -1,6 +1,4 @@
 //! AVQueuePlayer-analogue orchestration layer on top of `kithara-play`.
-//!
-//! See `CONTEXT.md` for the public API contract and migration notes.
 
 mod attempts;
 mod config;

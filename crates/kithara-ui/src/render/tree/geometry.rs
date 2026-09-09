@@ -1,6 +1,6 @@
 use iced::{
     Background, Border, Color, Element, Length, Padding, Rectangle,
-    advanced::{layout::Layout, mouse},
+    advanced::{layout::Layout, mouse::Cursor},
     alignment::{Horizontal, Vertical},
     widget::{Container, container, container::Style as ContainerStyle},
 };
@@ -287,7 +287,7 @@ impl HostedLayout {
     fn append_open_picker_targets<'a>(
         &'a self,
         engine: &Engine,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         targets: &mut Vec<Target<'a>>,
     ) {
         for (path, item_count, item_height) in self.pickers() {
@@ -350,7 +350,7 @@ impl HostedLayout {
     fn append_targets<'a>(
         &'a self,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         engine: Option<&Engine>,
         targets: &mut Vec<Target<'a>>,
     ) {
@@ -516,18 +516,14 @@ impl HostedLayout {
     }
 
     #[cfg(test)]
-    pub(super) fn targets<'a>(
-        &'a self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) -> Vec<Target<'a>> {
+    pub(super) fn targets<'a>(&'a self, layout: Layout<'_>, cursor: Cursor) -> Vec<Target<'a>> {
         self.targets_with_engine(layout, cursor, None)
     }
 
     pub(super) fn targets_with_engine<'a>(
         &'a self,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         engine: Option<&Engine>,
     ) -> Vec<Target<'a>> {
         let mut targets = Vec::new();
@@ -582,10 +578,10 @@ pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
 /// that box, and nothing at all while it is outside. A child laid out past the
 /// edge of a viewport is not under a pointer that never entered it, whatever
 /// the child's own layout still says its box is.
-pub(super) fn clipped(cursor: mouse::Cursor, bounds: Rectangle) -> mouse::Cursor {
+pub(super) fn clipped(cursor: Cursor, bounds: Rectangle) -> Cursor {
     match cursor.position() {
         Some(point) if bounds.contains(point) => cursor,
-        Some(_) | None => mouse::Cursor::Unavailable,
+        Some(_) | None => Cursor::Unavailable,
     }
 }
 #[cfg(test)]

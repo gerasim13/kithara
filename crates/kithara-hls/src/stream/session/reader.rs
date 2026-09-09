@@ -6,6 +6,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NotReadyCause, PendingReason, ReadOutcome, SourceError, StreamError, StreamSeekPastEof,
 };
+use tracing::debug;
 
 use super::{HlsSession, pending};
 
@@ -49,6 +50,14 @@ where
         if let Some(len) = self.session.len()
             && position > len
         {
+            debug!(
+                variant = self.session.variant().variant_index_u32(),
+                current,
+                len,
+                position,
+                ?seek,
+                "refusing a seek past the published end of the variant"
+            );
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 StreamSeekPastEof::new(current, len, position),

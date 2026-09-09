@@ -43,6 +43,17 @@ pub(super) enum Style {
 }
 
 impl Style {
+    const fn bass(self, beat: usize) -> Pitch {
+        match self {
+            Self::AmbientDub => [Pitch::A1, Pitch::E2][(beat / 4) % 2],
+            Self::TripHop => [Pitch::C2, Pitch::G1][(beat / 2) % 2],
+            Self::Downtempo => [Pitch::D2, Pitch::A1][(beat / 2) % 2],
+            Self::House => [Pitch::E2, Pitch::B1][beat % 2],
+            Self::Techno => [Pitch::FS2, Pitch::CS2][(beat / 2) % 2],
+            Self::Breakbeat => [Pitch::A2, Pitch::E2][(beat / 2) % 2],
+        }
+    }
+
     pub(super) const fn bpm(self) -> f64 {
         match self {
             Self::AmbientDub => 62.0,
@@ -51,6 +62,24 @@ impl Style {
             Self::House => 124.0,
             Self::Techno => 132.0,
             Self::Breakbeat => 140.0,
+        }
+    }
+
+    const fn harmony(self) -> [Pitch; 3] {
+        match self {
+            Self::AmbientDub | Self::Breakbeat => [Pitch::A3, Pitch::C4, Pitch::E4],
+            Self::TripHop => [Pitch::C4, Pitch::DS4, Pitch::G4],
+            Self::Downtempo => [Pitch::D4, Pitch::F4, Pitch::A4],
+            Self::House => [Pitch::E4, Pitch::G4, Pitch::B4],
+            Self::Techno => [Pitch::FS3, Pitch::A3, Pitch::CS4],
+        }
+    }
+
+    const fn hat_divisions(self) -> usize {
+        match self {
+            Self::AmbientDub => 1,
+            Self::TripHop | Self::Downtempo | Self::House => 2,
+            Self::Techno | Self::Breakbeat => 4,
         }
     }
 
@@ -65,6 +94,16 @@ impl Style {
         }
     }
 
+    const fn kick(self, beat: usize) -> bool {
+        match self {
+            Self::AmbientDub => matches!(beat % 4, 0 | 3),
+            Self::TripHop => matches!(beat % 8, 0 | 3 | 6),
+            Self::Downtempo => matches!(beat % 4, 0 | 2),
+            Self::House | Self::Techno => true,
+            Self::Breakbeat => matches!(beat % 8, 0 | 2 | 5 | 7),
+        }
+    }
+
     const fn music_preset(self) -> &'static str {
         match self {
             Self::AmbientDub => "chord_pad",
@@ -76,37 +115,6 @@ impl Style {
         }
     }
 
-    const fn harmony(self) -> [Pitch; 3] {
-        match self {
-            Self::AmbientDub | Self::Breakbeat => [Pitch::A3, Pitch::C4, Pitch::E4],
-            Self::TripHop => [Pitch::C4, Pitch::DS4, Pitch::G4],
-            Self::Downtempo => [Pitch::D4, Pitch::F4, Pitch::A4],
-            Self::House => [Pitch::E4, Pitch::G4, Pitch::B4],
-            Self::Techno => [Pitch::FS3, Pitch::A3, Pitch::CS4],
-        }
-    }
-
-    const fn bass(self, beat: usize) -> Pitch {
-        match self {
-            Self::AmbientDub => [Pitch::A1, Pitch::E2][(beat / 4) % 2],
-            Self::TripHop => [Pitch::C2, Pitch::G1][(beat / 2) % 2],
-            Self::Downtempo => [Pitch::D2, Pitch::A1][(beat / 2) % 2],
-            Self::House => [Pitch::E2, Pitch::B1][beat % 2],
-            Self::Techno => [Pitch::FS2, Pitch::CS2][(beat / 2) % 2],
-            Self::Breakbeat => [Pitch::A2, Pitch::E2][(beat / 2) % 2],
-        }
-    }
-
-    const fn kick(self, beat: usize) -> bool {
-        match self {
-            Self::AmbientDub => matches!(beat % 4, 0 | 3),
-            Self::TripHop => matches!(beat % 8, 0 | 3 | 6),
-            Self::Downtempo => matches!(beat % 4, 0 | 2),
-            Self::House | Self::Techno => true,
-            Self::Breakbeat => matches!(beat % 8, 0 | 2 | 5 | 7),
-        }
-    }
-
     const fn snare(self, beat: usize) -> bool {
         match self {
             Self::AmbientDub => beat % 4 == 2,
@@ -115,20 +123,12 @@ impl Style {
             Self::Breakbeat => matches!(beat % 8, 1 | 4 | 6),
         }
     }
-
-    const fn hat_divisions(self) -> usize {
-        match self {
-            Self::AmbientDub => 1,
-            Self::TripHop | Self::Downtempo | Self::House => 2,
-            Self::Techno | Self::Breakbeat => 4,
-        }
-    }
 }
 
 pub(super) struct Truth {
-    bpm: f64,
     beats: Vec<(u64, Option<f32>)>,
     downbeats: Vec<(u64, Option<f32>)>,
+    bpm: f64,
 }
 
 impl From<Truth> for BeatArtifact {
@@ -164,9 +164,9 @@ pub(super) fn truth(style: Style, control: Control) -> Truth {
         }
     }
     Truth {
-        bpm: style.bpm(),
         beats,
         downbeats,
+        bpm: style.bpm(),
     }
 }
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use iced::{Theme, window};
+use iced::{Theme, window::Id};
 use kithara_ui::capture::{Geometry, Photographer, Stage, shoot_set};
 
 use crate::{
@@ -50,11 +50,9 @@ impl Stage for Iced {
     }
 
     fn shoot(&mut self) -> Result<&[u8], String> {
-        self.pixels = self.photographer.shoot(
-            view(&self.gallery, window::Id::unique()),
-            &self.theme,
-            self.frame,
-        )?;
+        self.pixels =
+            self.photographer
+                .shoot(view(&self.gallery, Id::unique()), &self.theme, self.frame)?;
         Ok(&self.pixels)
     }
 

@@ -9,8 +9,11 @@ use anyhow::{Context as _, Result};
 use proc_macro2::Span;
 use quote::ToTokens;
 use syn::{
-    Attribute, Expr, Fields, FnArg, GenericParam, ImplItem, Item, ItemImpl, ItemStruct, Lit,
-    Member, Meta, Pat, Path, Stmt, Token, Type, punctuated::Punctuated, spanned::Spanned,
+    Attribute, Expr, Fields, FnArg, GenericArgument, GenericParam, ImplItem, Item, ItemImpl,
+    ItemStruct, Lit, Member, Meta, Pat, Path, PathArguments, Stmt, Token, Type, Visibility,
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+    spanned::Spanned,
 };
 
 use super::Context;
@@ -385,10 +388,10 @@ fn from_candidate(src: &str, impl_block: &ItemImpl) -> Option<Candidate> {
         return None;
     }
     let segment = trait_path.segments.last()?;
-    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
         return None;
     };
-    let syn::GenericArgument::Type(source_ty) = args.args.first()? else {
+    let GenericArgument::Type(source_ty) = args.args.first()? else {
         return None;
     };
     let ImplItem::Fn(method) = &impl_block.items[0] else {
@@ -599,8 +602,8 @@ struct WriteArgs {
     args: Vec<Expr>,
 }
 
-impl syn::parse::Parse for WriteArgs {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+impl Parse for WriteArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let formatter = input.parse()?;
         input.parse::<syn::Token![,]>()?;
         let format = input.parse()?;
@@ -684,25 +687,76 @@ fn complete_from(
             return;
         }
     }
-    add_derive(src, item, Kind::From.derive(), item_start, candidate);
-    if let Item::Enum(value) = item {
-        let Some(variant_name) = from_variant(impl_block, &candidate.type_name) else {
-            candidate.skip = Some("enum constructor is not an explicit variant");
-            return;
-        };
-        let Some(variant) = value.variants.iter().find(|v| v.ident == variant_name) else {
-            candidate.skip = Some("enum variant not found");
-            return;
-        };
-        candidate.additions.push(Insertion {
-            at: line_start(src, variant.ident.span().byte_range().start),
-            text: indent_attribute(
-                src,
-                line_start(src, variant.ident.span().byte_range().start),
-                "#[from]\n",
-            ),
-        });
+    // `thiserror::Error` reads `#[from]` itself, on the field rather than the
+    // variant, and writes the conversion from it. A second derive of the same
+    // attribute is what the compiler refuses, so the enum takes the spelling
+    // its own derive already understands.
+    let thiserror = derives_thiserror(item_attrs(item));
+    if !thiserror {
+        add_derive(src, item, Kind::From.derive(), item_start, candidate);
     }
+    let Item::Enum(value) = item else {
+        return;
+    };
+    let Some(variant_name) = from_variant(impl_block, &candidate.type_name) else {
+        candidate.skip = Some("enum constructor is not an explicit variant");
+        return;
+    };
+    let Some(variant) = value.variants.iter().find(|v| v.ident == variant_name) else {
+        candidate.skip = Some("enum variant not found");
+        return;
+    };
+    if thiserror {
+        mark_thiserror_from(variant, candidate);
+        return;
+    }
+    candidate.additions.push(Insertion {
+        at: line_start(src, variant.ident.span().byte_range().start),
+        text: indent_attribute(
+            src,
+            line_start(src, variant.ident.span().byte_range().start),
+            "#[from]\n",
+        ),
+    });
+}
+
+fn derives_thiserror(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("derive"))
+        .any(|attr| {
+            attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+                .is_ok_and(|derives| derives.iter().any(|path| path_ends(path, "Error")))
+        })
+}
+
+/// Put `#[from]` on the field thiserror converts from. `#[from]` already
+/// implies `#[source]`, and thiserror refuses to read both, so a `#[source]`
+/// that is there becomes the `#[from]` rather than sitting beside it.
+fn mark_thiserror_from(variant: &syn::Variant, candidate: &mut Candidate) {
+    let [field] = variant.fields.iter().collect::<Vec<_>>()[..] else {
+        candidate.skip = Some("thiserror `#[from]` needs a single-field variant");
+        return;
+    };
+    if let Some(source) = field
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("source"))
+    {
+        candidate.replacements.push(Replacement {
+            range: source.span().byte_range(),
+            text: "#[from]".to_owned(),
+        });
+        return;
+    }
+    let at = field.attrs.first().map_or_else(
+        || field.ty.span().byte_range().start,
+        |attr| attr.span().byte_range().start,
+    );
+    candidate.additions.push(Insertion {
+        at,
+        text: "#[from] ".to_owned(),
+    });
 }
 
 fn from_variant(impl_block: &ItemImpl, type_name: &str) -> Option<String> {
@@ -818,11 +872,11 @@ pub(super) fn merge_derive(existing: &str, derive: &str) -> String {
 fn item_declaration_start(src: &str, item: &Item) -> usize {
     let byte = match item {
         Item::Struct(value) => match &value.vis {
-            syn::Visibility::Inherited => value.struct_token.span.byte_range().start,
+            Visibility::Inherited => value.struct_token.span.byte_range().start,
             visibility => visibility.span().byte_range().start,
         },
         Item::Enum(value) => match &value.vis {
-            syn::Visibility::Inherited => value.enum_token.span.byte_range().start,
+            Visibility::Inherited => value.enum_token.span.byte_range().start,
             visibility => visibility.span().byte_range().start,
         },
         _ => item.span().byte_range().start,
@@ -832,7 +886,7 @@ fn item_declaration_start(src: &str, item: &Item) -> usize {
 
 pub(super) fn field_declaration_start(src: &str, field: &syn::Field) -> usize {
     let byte = match &field.vis {
-        syn::Visibility::Inherited => field.ident.as_ref().map_or_else(
+        Visibility::Inherited => field.ident.as_ref().map_or_else(
             || field.ty.span().byte_range().start,
             |ident| ident.span().byte_range().start,
         ),

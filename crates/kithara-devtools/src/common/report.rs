@@ -181,7 +181,7 @@ pub fn print_ratchet_failures(diff: &RatchetDiff<'_>) {
         eprintln!(
             "\n{}",
             bold_red(&format!(
-                "🛑 {} NEW violation(s) not in baseline — fix the code, or justify in the owning CONTEXT.md:",
+                "🛑 {} NEW violation(s) not in baseline — fix the code at the responsible owner:",
                 diff.new_violations.len(),
             )),
         );

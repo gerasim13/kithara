@@ -53,4 +53,4 @@ time::sleep(time::Duration::from_millis(10)).await;
 
 Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-ffi`, and test infrastructure) to keep platform-specific branching isolated in one place.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-platform) for detailed contracts, invariants, and internals.

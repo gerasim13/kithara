@@ -40,13 +40,13 @@ where
 {
     keys: Arc<DashMap<Url, Bytes>>,
     scope: AssetScope<S>,
-    pools: PoolRegion<S>,
     bus: EventBus,
     /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
     key_peer: KeyPeer<S>,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
+    pools: PoolRegion<S>,
 }
 
 impl<S> Clone for KeyStore<S>

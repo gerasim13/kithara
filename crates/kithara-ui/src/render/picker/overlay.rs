@@ -2,10 +2,14 @@ use iced::{
     Event, Point, Rectangle, Renderer, Size, Theme,
     advanced::{
         Clipboard, Shell,
-        layout::{self, Layout},
-        mouse, overlay, renderer,
+        layout::{Layout, Node},
+        mouse,
+        mouse::Interaction,
+        overlay,
+        overlay::Element,
+        renderer,
     },
-    event,
+    event::Status,
 };
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
@@ -35,16 +39,16 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
     ) {
     }
 
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        layout::Node::new(Size::ZERO)
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> Node {
+        Node::new(Size::ZERO)
     }
 
     fn overlay<'a>(
         &'a mut self,
         _layout: Layout<'a>,
         _renderer: &Renderer,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
-        Some(overlay::Element::new(Box::new(PickerOverlay {
+    ) -> Option<Element<'a, UiEvent, Theme, Renderer>> {
+        Some(Element::new(Box::new(PickerOverlay {
             anchor: self.anchor,
             owner: self.owner,
             paint: self.paint,
@@ -79,8 +83,8 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
         draw_host_layer(renderer, &layer, self.paint.skin().text_resources());
     }
 
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        layout::Node::new(Size::new(
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> Node {
+        Node::new(Size::new(
             self.anchor.width,
             self.paint.item_height() * AsPrimitive::<f32>::as_(self.paint.item_count()),
         ))
@@ -95,11 +99,11 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Pointer
+            Interaction::Pointer
         } else {
-            mouse::Interaction::None
+            Interaction::None
         }
     }
 
@@ -140,7 +144,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
             if let Some(message) = message {
                 shell.publish(message);
             }
-            if status == event::Status::Captured {
+            if status == Status::Captured {
                 shell.capture_event();
             }
         }

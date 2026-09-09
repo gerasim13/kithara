@@ -4,16 +4,13 @@ use std::error::Error;
 ///
 /// An uncommitted sink must discard its pending transaction when dropped.
 pub trait RecordingSink: Send + 'static {
-    /// Readable or published value produced by commit.
-    type Output;
     /// Storage or transport failure.
     type Error: Error + Send + Sync + 'static;
+    /// Readable or published value produced by commit.
+    type Output;
 
-    /// Write bytes at an absolute container offset.
-    ///
-    /// # Errors
-    /// Returns the destination's write failure.
-    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error>;
+    /// Discard the open transaction. Calling this more than once is harmless.
+    fn abort(&mut self);
 
     /// Atomically publish the completed part at its exact length.
     ///
@@ -21,8 +18,11 @@ pub trait RecordingSink: Send + 'static {
     /// Returns the destination's commit failure.
     fn commit(&mut self, final_len: u64) -> Result<Self::Output, Self::Error>;
 
-    /// Discard the open transaction. Calling this more than once is harmless.
-    fn abort(&mut self);
+    /// Write bytes at an absolute container offset.
+    ///
+    /// # Errors
+    /// Returns the destination's write failure.
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error>;
 }
 
 /// Opens the transactional destination for each independently playable part.

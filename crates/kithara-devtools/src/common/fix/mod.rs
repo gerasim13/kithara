@@ -15,7 +15,7 @@ pub(crate) mod rewriter;
 #[cfg(test)]
 mod tests;
 
-pub use block::{ExpansionError, expand_blocks};
+pub use block::{BlockRange, ExpansionError, expand_blocks};
 pub use rewriter::SourceRewriter;
 
 /// Outcome of running a single check's `fix()` across the workspace.

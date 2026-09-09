@@ -20,6 +20,7 @@ use std::{
 use anyhow::bail;
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
+use kithara_devtools::common::project::ProjectConfig;
 #[cfg(unix)]
 use nix::{
     errno::Errno,
@@ -58,7 +59,18 @@ pub(crate) struct SelfCacheArgs {
 
 #[derive(Debug, Subcommand)]
 enum SelfCacheCommand {
-    Probe,
+    /// Report that this binary belongs to a cache generation, and with
+    /// `--config` that it can also read this checkout's project config.
+    ///
+    /// The two callers ask different questions. `_xtask-ready` asks the first
+    /// and must not ask the second: a config this checkout cannot parse is the
+    /// user's own error, which `status` reports without starting a build. The
+    /// `optional` transport asks the second, because it never reaches `status`
+    /// and hands the binary a subcommand that loads the config first.
+    Probe {
+        #[arg(long)]
+        config: bool,
+    },
     Status,
     Refresh {
         #[arg(long)]
@@ -82,7 +94,7 @@ enum SelfCacheCommand {
 pub(crate) fn run(args: &SelfCacheArgs) -> Result<()> {
     let root = layout::root()?;
     match &args.command {
-        SelfCacheCommand::Probe => probe(),
+        SelfCacheCommand::Probe { config } => probe(&root, *config),
         SelfCacheCommand::Status => status(&root),
         SelfCacheCommand::Refresh { force } => refresh(&root, *force),
         SelfCacheCommand::Bootstrap { force } => bootstrap(&root, *force),
@@ -91,8 +103,12 @@ pub(crate) fn run(args: &SelfCacheArgs) -> Result<()> {
     }
 }
 
-fn probe() -> Result<()> {
+fn probe(root: &Path, config: bool) -> Result<()> {
     let generation = layout::current()?.context("xtask is not running from a cache generation")?;
+    if config {
+        ProjectConfig::load(root)
+            .context("cached xtask cannot read this checkout's project config")?;
+    }
     println!("{}", generation.binary.display());
     Ok(())
 }

@@ -16,18 +16,6 @@ pub struct OfflineRenderRequest {
 }
 
 impl OfflineRenderRequest {
-    /// Expected output signal format.
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    /// Absolute half-open output-frame range.
-    #[must_use]
-    pub const fn frames(&self) -> &Range<u64> {
-        &self.frames
-    }
-
     /// Exact number of requested frames.
     ///
     /// # Errors
@@ -40,6 +28,18 @@ impl OfflineRenderRequest {
                 start: self.frames.start,
                 end: self.frames.end,
             })
+    }
+
+    /// Absolute half-open output-frame range.
+    #[must_use]
+    pub const fn frames(&self) -> &Range<u64> {
+        &self.frames
+    }
+
+    /// Expected output signal format.
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
     }
 }
 

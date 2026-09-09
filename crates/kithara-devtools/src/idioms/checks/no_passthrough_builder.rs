@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use syn::{
-    Expr, FnArg, ImplItem, Item, ItemFn, ItemImpl, Local, Pat, PatIdent, Stmt, Type, TypePath,
+    Expr, Fields, FnArg, ImplItem, Item, ItemFn, ItemImpl, Local, Member, Pat, PatIdent, Stmt,
+    Type, TypePath,
+    punctuated::Punctuated,
     visit::{self, Visit},
 };
 
@@ -62,7 +64,7 @@ fn collect_named_field_structs(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
         if let Item::Struct(s) = item
-            && let syn::Fields::Named(_) = &s.fields
+            && let Fields::Named(_) = &s.fields
         {
             out.insert(s.ident.to_string());
         }
@@ -125,7 +127,7 @@ fn check_fn(
 /// named-field struct parameter (by value or by reference), and that
 /// struct is declared in the same file.
 fn single_struct_param(
-    inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>,
+    inputs: &Punctuated<FnArg, syn::Token![,]>,
     structs: &HashSet<String>,
 ) -> Option<(String, String)> {
     let mut typed_inputs = inputs.iter().filter_map(|arg| match arg {
@@ -359,7 +361,7 @@ fn expr_param_field(expr: &Expr, param: &str) -> Option<String> {
         Expr::Field(f) => {
             if let Expr::Path(p) = &*f.base
                 && p.path.is_ident(param)
-                && let syn::Member::Named(name) = &f.member
+                && let Member::Named(name) = &f.member
             {
                 return Some(name.to_string());
             }

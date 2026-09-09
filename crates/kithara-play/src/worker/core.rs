@@ -23,8 +23,8 @@ static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct WorkerOwner<S> {
     dispatcher: Dispatcher,
-    base: Worker,
     pools: PoolRegion<S>,
+    base: Worker,
 }
 
 /// Explicit owner of the playback dispatcher.
@@ -74,8 +74,8 @@ impl<S> PlayWorker<S> {
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
             dispatcher,
-            base,
             pools,
+            base,
         }))
     }
 

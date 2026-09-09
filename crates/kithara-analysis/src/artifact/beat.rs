@@ -76,7 +76,7 @@ impl BeatArtifact {
         Self::with_regions(bpm, beats, downbeats, Vec::new())
     }
 
-    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "analysis-beat")))]
+    #[cfg(any(test, feature = "analysis-beat"))]
     pub(crate) fn regions(&self) -> &[FitRegion] {
         &self.regions
     }

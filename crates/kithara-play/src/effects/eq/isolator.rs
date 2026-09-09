@@ -97,15 +97,15 @@ impl IsolatorEq {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::eq_impulse;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::{pools, pools_with_budget};
 
     #[kithara::test]
-    fn a_decaying_tail_never_leaks_denormals() {
+    fn a_decaying_tail_never_leaks_denormals(eq_impulse: Vec<f32>) {
         const SAMPLE_RATE: u32 = 48_000;
-        const TAIL_SECONDS: u32 = 4;
 
         let bands = super::super::band::generate_log_spaced_bands(3);
         let config = EqConfig::builder(pools()).build();
@@ -115,9 +115,11 @@ mod tests {
             eq.set_gain(band, GainDb::MAX);
         }
 
-        let _ = eq.process_sample(1.0);
-        let denormals = (0..SAMPLE_RATE * TAIL_SECONDS)
-            .map(|_| eq.process_sample(0.0))
+        let _ = eq.process_sample(eq_impulse[0]);
+        let denormals = eq_impulse[1..]
+            .iter()
+            .copied()
+            .map(|sample| eq.process_sample(sample))
             .filter(|out| *out != 0.0 && out.abs() < f32::MIN_POSITIVE)
             .count();
 

@@ -2,6 +2,7 @@ use std::{
     ffi::OsStr,
     fs::File,
     io,
+    io::ErrorKind,
     path::Path,
     process::{Command, ExitStatus, Stdio},
     thread,
@@ -88,7 +89,7 @@ pub(crate) fn run_process_with_env(
     remove_secret_environment(&mut command);
     command.envs(environment.iter().copied());
     let mut child = command.spawn().map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
+        if error.kind() == ErrorKind::NotFound {
             ProcessError::MissingExecutable(request.program.to_owned())
         } else {
             ProcessError::Io(error)

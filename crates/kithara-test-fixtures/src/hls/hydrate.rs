@@ -27,10 +27,10 @@ pub(crate) struct KeyPolicy {
 }
 
 pub(crate) struct Options {
-    pub(crate) headers: HeaderMap,
-    pub(crate) key: Option<KeyPolicy>,
     pub(crate) refresh: &'static [&'static str],
     pub(crate) timeout: Duration,
+    pub(crate) headers: HeaderMap,
+    pub(crate) key: Option<KeyPolicy>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,16 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
+    fn content_type(self, url: &Url) -> &'static str {
+        match (self, self.extension(url)) {
+            (Self::Playlist, _) => "application/vnd.apple.mpegurl",
+            (Self::Media, "aac") => "audio/aac",
+            (Self::Media, "m4s" | "mp4" | "m4a") => "audio/mp4",
+            (Self::Media, "ts") => "video/mp2t",
+            (Self::Key | Self::Media, _) => "application/octet-stream",
+        }
+    }
+
     fn extension(self, url: &Url) -> &str {
         match self {
             Self::Key => "key",
@@ -53,23 +63,13 @@ impl Kind {
                 .unwrap_or("bin"),
         }
     }
-
-    fn content_type(self, url: &Url) -> &'static str {
-        match (self, self.extension(url)) {
-            (Self::Playlist, _) => "application/vnd.apple.mpegurl",
-            (Self::Media, "aac") => "audio/aac",
-            (Self::Media, "m4s" | "mp4" | "m4a") => "audio/mp4",
-            (Self::Media, "ts") => "video/mp2t",
-            (Self::Key | Self::Media, _) => "application/octet-stream",
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RedactedUrl(String);
 
 impl RedactedUrl {
-    fn new(url: &Url) -> Self {
+    pub(crate) fn new(url: &Url) -> Self {
         Self(format!(
             "{}{}",
             url.origin().ascii_serialization(),
@@ -152,12 +152,12 @@ pub(crate) enum HydrateError {
 }
 
 #[derive(Clone, Copy)]
-struct Deadline {
+pub(crate) struct Deadline {
     end: Instant,
 }
 
 impl Deadline {
-    fn new(timeout: Duration) -> Self {
+    pub(crate) fn new(timeout: Duration) -> Self {
         Self {
             end: Instant::now() + timeout,
         }
@@ -177,7 +177,7 @@ fn refresh_names(names: &[&str]) -> String {
     names.join(", ")
 }
 
-fn fetch(
+pub(crate) fn fetch(
     client: &Client,
     url: &Url,
     headers: &HeaderMap,
@@ -197,14 +197,14 @@ fn fetch(
     if !status.is_success() {
         return if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             Err(HydrateError::AuthStatus {
-                url: RedactedUrl::new(url),
                 status,
+                url: RedactedUrl::new(url),
                 refresh: refresh_names(refresh),
             })
         } else {
             Err(HydrateError::Status {
-                url: RedactedUrl::new(url),
                 status,
+                url: RedactedUrl::new(url),
             })
         };
     }
@@ -220,8 +220,8 @@ fn fetch(
 fn resolve(base: &Url, reference: &str) -> Result<Url, HydrateError> {
     base.join(reference)
         .map_err(|source| HydrateError::Resolve {
-            base: RedactedUrl::new(base),
             source,
+            base: RedactedUrl::new(base),
         })
 }
 
@@ -234,8 +234,8 @@ fn insert_kind(
         && first != kind
     {
         return Err(HydrateError::ConflictingKind {
-            url: RedactedUrl::new(url),
             first,
+            url: RedactedUrl::new(url),
             second: kind,
         });
     }
@@ -357,8 +357,8 @@ fn download_resource(
     };
     let bytes = fetch(client, url, &policy.headers, deadline, options.refresh)?;
     let processed = (policy.processor)(bytes).map_err(|reason| HydrateError::Key {
-        url: RedactedUrl::new(url),
         reason,
+        url: RedactedUrl::new(url),
     })?;
     validate_key(url, processed)
 }
@@ -393,13 +393,13 @@ pub(crate) fn hydrate(
         options.refresh,
     )?;
     let master_text = std::str::from_utf8(&master_bytes).map_err(|source| HydrateError::Utf8 {
-        url: RedactedUrl::new(master_url),
         source,
+        url: RedactedUrl::new(master_url),
     })?;
     let mut master = MasterPlaylist::try_from(master_text)
         .map_err(|source| HydrateError::Master {
-            url: RedactedUrl::new(master_url),
             source,
+            url: RedactedUrl::new(master_url),
         })?
         .into_owned();
     let playlist_urls = playlist_urls(&master, master_url)?;
@@ -419,14 +419,14 @@ pub(crate) fn hydrate(
     let mut resources = BTreeMap::new();
     for (url, bytes) in playlist_bytes {
         let text = std::str::from_utf8(&bytes).map_err(|source| HydrateError::Utf8 {
-            url: RedactedUrl::new(&url),
             source,
+            url: RedactedUrl::new(&url),
         })?;
         let playlist = text
             .parse::<MediaPlaylist>()
             .map_err(|source| HydrateError::MediaPlaylist {
-                url: RedactedUrl::new(&url),
                 source,
+                url: RedactedUrl::new(&url),
             })?
             .into_owned();
         collect_media_resources(&playlist, &url, &mut resources)?;
@@ -512,7 +512,53 @@ mod tests {
     use url::Url;
 
     use super::{HydrateError, Options, hydrate};
-    use crate::{context::BuildContext, hls_manifest::Manifest};
+    use crate::{
+        context::BuildContext,
+        hls_manifest::Manifest,
+        remote_file::{RemoteFileError, fetch_verified},
+    };
+
+    #[kithara::test(native, flash(false))]
+    fn remote_file_rejects_truncation_corruption_and_missing_content() {
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let server = TestServer::new(
+            HashMap::from([
+                ("/valid", (200, b"abc".as_slice())),
+                ("/short", (200, b"ab".as_slice())),
+                ("/corrupt", (200, b"bad".as_slice())),
+                ("/missing", (404, b"missing".as_slice())),
+            ]),
+            4,
+        );
+        let fetch = |path| {
+            let url = server.url.join(path).expect("fixture URL");
+            fetch_verified(&url, digest, 3, Duration::from_secs(2))
+        };
+        assert_eq!(fetch("valid").expect("verified bytes"), b"abc");
+        assert!(matches!(
+            fetch("short"),
+            Err(RemoteFileError::Length {
+                expected: 3,
+                received: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fetch("corrupt"),
+            Err(RemoteFileError::Digest { .. })
+        ));
+        assert!(matches!(fetch("missing"), Err(RemoteFileError::Fetch(_))));
+        assert_eq!(server.finish().values().sum::<usize>(), 4);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn missing_remote_configuration_names_the_required_input() {
+        let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
+        assert_eq!(
+            error.to_string(),
+            "repository variable KITHARA_REMOTE_FIXTURES is missing"
+        );
+    }
 
     struct TestServer {
         handle: JoinHandle<HashMap<String, usize>>,

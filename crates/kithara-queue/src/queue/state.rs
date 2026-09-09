@@ -80,15 +80,13 @@ where
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
-    /// Serialises a selection-apply against a concurrent [`Queue::select`].
-    /// A track's `spawn_apply_after_load` completion and a later `select`
-    /// that supersedes it both mutate the same selection state (pending,
-    /// current, navigation cursor, `TrackStatus::Cancelled`); without a
-    /// single serialization point the completion can observe-not-cancelled
-    /// then `select_item` *after* the superseding select committed, so the
-    /// superseded track barges in. Held only across the synchronous apply
-    /// critical section — never across an `.await`. See the crate `CONTEXT.md`
-    /// "Selection serialization".
+    /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
+    /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
+    /// mutate the same selection state (pending, current, navigation cursor,
+    /// `TrackStatus::Cancelled`); without a single serialization point the completion
+    /// can observe-not-cancelled then `select_item` *after* the superseding select
+    /// committed, so the superseded track barges in. Held only across the synchronous
+    /// apply critical section — never across an `.await`.
     pub(super) select_apply: Arc<Mutex<()>>,
     /// Test-only respawn resource cache. Populated by
     /// [`Queue::supply_test_resource_for_respawn`] and consumed by
@@ -141,8 +139,8 @@ pub struct Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) control: QueueControl<S>,
     pub(super) player: PlayerImpl<S>,
+    pub(super) control: QueueControl<S>,
 }
 
 impl<S> Deref for QueueControl<S>
@@ -210,12 +208,12 @@ where
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
-            admission: Mutex::new(()),
             loader,
             tracks,
             bus,
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
+            admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
@@ -229,11 +227,11 @@ where
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {
-            control: QueueControl {
-                player: player_control,
-                runtime,
-            },
             player,
+            control: QueueControl {
+                runtime,
+                player: player_control,
+            },
         }
     }
 }
@@ -242,10 +240,6 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) fn invalidate(&self) {
-        self.shutdown.cancel();
-    }
-
     /// Close the resident player, then irreversibly cancel queue-owned work.
     ///
     /// # Errors
@@ -259,6 +253,10 @@ where
         Ok(())
     }
 
+    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
+        let _ = self.with_open(operation);
+    }
+
     fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
@@ -267,29 +265,8 @@ where
         }
     }
 
-    pub(in crate::queue) fn with_open<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> T,
-    ) -> Result<T, PlayError> {
-        let _admission = self.lock_admission();
-        self.ensure_open()?;
-        Ok(operation(self))
-    }
-
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        let _admission = self.lock_admission();
-        self.ensure_open().map_err(E::from)?;
-        operation(self)
-    }
-
-    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
-        let _ = self.with_open(operation);
+    pub(crate) fn invalidate(&self) {
+        self.shutdown.cancel();
     }
 
     #[must_use]
@@ -331,6 +308,27 @@ where
         self.select_apply
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(in crate::queue) fn with_open<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> T,
+    ) -> Result<T, PlayError> {
+        let _admission = self.lock_admission();
+        self.ensure_open()?;
+        Ok(operation(self))
+    }
+
+    pub(in crate::queue) fn with_open_result<T, E>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<PlayError>,
+    {
+        let _admission = self.lock_admission();
+        self.ensure_open().map_err(E::from)?;
+        operation(self)
     }
 
     delegate::delegate! {
@@ -384,8 +382,8 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq,
-        SlotId, bridge::slot_channels,
+        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode,
+        SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     };
     use kithara_test_utils::kithara;
 
@@ -417,6 +415,10 @@ pub(crate) mod tests {
     }
 
     impl SessionDispatcher<TestPools> for TestSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
                 Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
@@ -433,17 +435,16 @@ pub(crate) mod tests {
             };
             Ok(reply)
         }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
     }
 
-    pub(crate) fn test_session() -> Arc<dyn SessionDispatcher<TestPools>> {
-        Arc::new(TestSession {
-            next_slot: AtomicU64::new(0),
-            nodes: Mutex::default(),
-        })
+    pub(crate) fn test_session() -> SessionBinding<TestPools> {
+        SessionBinding::new(
+            Arc::new(TestSession {
+                next_slot: AtomicU64::new(0),
+                nodes: Mutex::default(),
+            }),
+            TEST_SAMPLE_RATE,
+        )
     }
 
     fn queue_config() -> QueueConfig<TestPools> {

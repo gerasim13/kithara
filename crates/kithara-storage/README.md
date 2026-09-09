@@ -68,4 +68,4 @@ let outcome = resource.wait_range(0..1024)?;
 
 Foundation layer for `kithara-assets`. Higher-level concerns (trees of resources, eviction, leases) are handled by `kithara-assets`.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-storage) for detailed contracts, invariants, and internals.

@@ -1,0 +1,211 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs, path::Path};
+
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::tokio::task::spawn_blocking;
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetResource, AssetSource, AssetStore, ReadSide, StorageBackend,
+        WriteSide,
+    },
+    platform::{CancelToken, time::Duration},
+};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::{
+    audio::{AudioConfig, AudioRead, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::TestTempDir;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::bufpool_ext::TestPools;
+use kithara_integration_tests::bufpool_ext::pools;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_fixtures::hls_fixtures::hls_sized_wav_three;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::info;
+use url::Url;
+
+/// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
+/// (has a file path). The disk case is native-only because wasm targets do
+/// not expose a real filesystem.
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case::ephemeral_mem(true, false)]
+#[case::disk_mmap(false, true)]
+fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
+    struct StorageProbe;
+
+    let temp = TestTempDir::new();
+    let backend = if ephemeral {
+        StorageBackend::Memory
+    } else {
+        StorageBackend::Disk {
+            root: temp.path().into(),
+        }
+    };
+    let scope = AssetStore::builder(pools())
+        .backend(backend)
+        .build()
+        .scope::<StorageProbe>(&AssetSource::Remote {
+            url: Url::parse("https://cache.test/test").expect("valid test URL"),
+            discriminator: None,
+        })
+        .expect("valid test source");
+
+    let key = scope
+        .key(&AssetResource::Named {
+            namespace: "segments".to_string(),
+            name: "seg_0.m4s".to_string(),
+        })
+        .expect("valid test resource");
+    let AcquisitionResult::Pending(writer) = scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let reader = writer.reader();
+
+    assert_eq!(
+        reader.path().is_some(),
+        expect_path,
+        "resource path presence must match ephemeral flag: ephemeral={ephemeral}",
+    );
+}
+
+use crate::common::test_defaults::SawWav;
+
+/// Recursively count files inside a directory tree.
+#[cfg(not(target_arch = "wasm32"))]
+fn count_files(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let ft = entry.file_type();
+        if let Ok(ft) = ft {
+            if ft.is_file() {
+                count += 1;
+            } else if ft.is_dir() {
+                count += count_files(&entry.path());
+            }
+        }
+    }
+    count
+}
+
+#[kithara::fixture]
+async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
+    /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
+    /// `MemResources` which would make `wait_range()` block forever.
+    const SEGMENT_COUNT: usize = 3;
+    const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
+
+    let wav_data = hls_sized_wav_three;
+    info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
+
+    let segment_duration = SawWav::DEFAULT.segment_size as f64
+        / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        segments_per_variant: SEGMENT_COUNT,
+        segment_size: SawWav::DEFAULT.segment_size,
+        segment_duration_secs: segment_duration,
+        custom_data: Some(Arc::new(wav_data)),
+        ..Default::default()
+    })
+    .await;
+
+    server
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+)]
+async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: HlsTestServer) {
+    let server = audio_server;
+    let url = server.url("/master.m3u8");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancelToken::never();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel.clone())
+            .build(),
+    );
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::manual(0))
+        .build();
+
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
+    let mut audio = worker
+        .open(config)
+        .await
+        .expect("create Audio<Stream<Hls>> pipeline");
+
+    let temp_path = temp_dir.path().to_path_buf();
+    let result = spawn_blocking(move || {
+        let mut buf = vec![0.0f32; 4096];
+        let mut total_samples = 0usize;
+
+        for _ in 0..100 {
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
+            };
+            total_samples += n;
+
+            for &s in &buf[..n] {
+                assert!(
+                    s.is_finite() && (-1.0..=1.0).contains(&s),
+                    "invalid sample: {s}"
+                );
+            }
+        }
+
+        assert!(total_samples > 0, "must read some audio samples");
+        info!(total_samples, "Read audio samples");
+
+        let file_count = count_files(&temp_path);
+        assert_eq!(
+            file_count, 0,
+            "ephemeral mode must not create files on disk, found {file_count}"
+        );
+
+        info!("Verified: no disk files created in ephemeral mode");
+    })
+    .await;
+
+    match result {
+        Ok(()) => info!("Ephemeral pipeline test passed"),
+        Err(e) => panic!("spawn_blocking failed: {e}"),
+    }
+}

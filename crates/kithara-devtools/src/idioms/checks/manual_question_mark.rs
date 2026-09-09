@@ -1,6 +1,7 @@
 use anyhow::Result;
 use syn::{
     Arm, Expr, ExprMatch, ExprPath, ExprReturn, Pat, PatIdent, PatStruct, PatTupleStruct, Path,
+    Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -195,7 +196,7 @@ fn match_option(some: &Arm, none: &Arm) -> Option<Pattern> {
 fn arm_body_expr(arm: &Arm) -> &Expr {
     match &*arm.body {
         Expr::Block(b) if b.block.stmts.len() == 1 => match &b.block.stmts[0] {
-            syn::Stmt::Expr(e, _) => e,
+            Stmt::Expr(e, _) => e,
             _ => &arm.body,
         },
         _ => &arm.body,

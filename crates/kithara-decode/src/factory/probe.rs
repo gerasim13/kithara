@@ -195,19 +195,11 @@ pub(super) const fn codec_from_container(container: ContainerFormat) -> Option<A
 mod tests {
     use std::io::{Cursor, Seek};
 
+    use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::traits::BoxedSource;
-
-    fn hls_fixture(name: &str) -> Vec<u8> {
-        let route = format!("/hls/{name}");
-        let resource = kithara_test_fixtures::hls::long_plain()
-            .get(&route)
-            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
-        std::fs::read(resource.path())
-            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
-    }
 
     #[kithara::test]
     fn test_probe_hint_default() {
@@ -233,16 +225,15 @@ mod tests {
     }
 
     #[kithara::test]
-    fn sniff_container_detects_hls_fmp4_init_and_segment() {
-        let mut init_source: BoxedSource = Box::new(Cursor::new(hls_fixture("init-slq-a1.mp4")));
+    fn sniff_container_detects_hls_fmp4_init_and_segment(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
+        let mut init_source: BoxedSource = Box::new(Cursor::new(aac_init));
         assert_eq!(
             sniff_container_from_source(&mut init_source),
             Some(ContainerFormat::Fmp4)
         );
         assert_eq!(init_source.stream_position().expect("source position"), 0);
 
-        let mut segment_source: BoxedSource =
-            Box::new(Cursor::new(hls_fixture("segment-1-slq-a1.m4s")));
+        let mut segment_source: BoxedSource = Box::new(Cursor::new(aac_segment));
         assert_eq!(
             sniff_container_from_source(&mut segment_source),
             Some(ContainerFormat::Fmp4)

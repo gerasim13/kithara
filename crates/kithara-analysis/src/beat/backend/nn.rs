@@ -42,29 +42,11 @@ where
 mod tests {
     use kithara_beat::BeatConfig;
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_fixtures::analysis_beat_fixtures::nn_tone;
     use kithara_test_utils::kithara;
-    use num_traits::cast::AsPrimitive;
 
     use super::super::{BeatDetectorKind, build_detector};
     use crate::{BeatAnalysisConfig, test_pools::pools};
-
-    struct Consts;
-
-    impl Consts {
-        const SAMPLE_RATE: usize = 22_050;
-        const SECONDS: usize = 2;
-    }
-
-    fn tone() -> Vec<f32> {
-        let rate: f32 = Consts::SAMPLE_RATE.as_();
-        let step = std::f32::consts::TAU * 220.0 / rate;
-        (0..Consts::SECONDS * Consts::SAMPLE_RATE)
-            .map(|n| {
-                let t: f32 = n.as_();
-                0.5 * (step * t).sin()
-            })
-            .collect()
-    }
 
     fn config(beat: BeatConfig) -> BeatAnalysisConfig<RubatoBackend> {
         BeatAnalysisConfig::builder()
@@ -74,8 +56,8 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_non_default_beat_config_reaches_the_picker() {
-        let pcm = tone();
+    fn a_non_default_beat_config_reaches_the_picker(nn_tone: Vec<f32>) {
+        let pcm = nn_tone;
 
         let suppressed = config(BeatConfig::builder().peak_threshold(f32::MAX).build());
         let detector = build_detector(BeatDetectorKind::NnBeatThis, &suppressed, &pools())

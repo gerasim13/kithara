@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Expr, ExprLit, ItemFn, Lit, MetaNameValue, parse_macro_input, parse_quote};
+use syn::{Error, Expr, ExprLit, ItemFn, Lit, MetaNameValue, parse_macro_input, parse_quote};
 
 const DEFAULT_BUDGET_MS: u64 = 25;
 
@@ -32,7 +32,7 @@ fn expand_with_path(attr: TokenStream, item: TokenStream, path: &TokenStream2) -
     };
     let mut f = parse_macro_input!(item as ItemFn);
     if f.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(
+        return Error::new_spanned(
             f.sig.fn_token,
             "#[kithara::no_block] supports async fns only; for sync blocking escapes use #[kithara::allow_block]",
         )
@@ -58,7 +58,7 @@ fn expand_allow_block_with_path(
     path: &TokenStream2,
 ) -> TokenStream {
     if !attr.is_empty() {
-        return syn::Error::new_spanned(
+        return Error::new_spanned(
             proc_macro2::TokenStream::from(attr),
             "#[kithara::allow_block] takes no arguments",
         )
@@ -93,7 +93,7 @@ fn expand_allow_block_with_path(
 fn parse_budget(attr: TokenStream) -> syn::Result<u64> {
     let meta = syn::parse::<MetaNameValue>(attr)?;
     if !meta.path.is_ident("budget_ms") {
-        return Err(syn::Error::new_spanned(
+        return Err(Error::new_spanned(
             meta.path,
             "expected `budget_ms = <int>`",
         ));
@@ -102,6 +102,6 @@ fn parse_budget(attr: TokenStream) -> syn::Result<u64> {
         Expr::Lit(ExprLit {
             lit: Lit::Int(lit), ..
         }) => lit.base10_parse::<u64>(),
-        value => Err(syn::Error::new_spanned(value, "expected integer literal")),
+        value => Err(Error::new_spanned(value, "expected integer literal")),
     }
 }

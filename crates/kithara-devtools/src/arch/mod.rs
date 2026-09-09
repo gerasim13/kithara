@@ -20,6 +20,7 @@ mod config;
 use checks::{Context, registry};
 use config::ArchConfig;
 
+use self::checks::{Check, redundant_accessors::RedundantAccessors};
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
@@ -36,7 +37,7 @@ pub(crate) fn redundant_accessor_keys(
 ) -> Result<BTreeSet<String>> {
     let config = ArchConfig::load(&workspace_root.join(".config/arch"))?;
     let ctx = Context::new(&config, metadata, workspace_root, scope);
-    let violations = checks::Check::run(&checks::redundant_accessors::RedundantAccessors, &ctx)?;
+    let violations = Check::run(&RedundantAccessors, &ctx)?;
     Ok(violations
         .into_iter()
         .map(|violation| violation.key)

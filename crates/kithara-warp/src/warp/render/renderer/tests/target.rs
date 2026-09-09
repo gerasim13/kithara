@@ -4,12 +4,11 @@ use std::num::NonZero;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
+use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use super::{
-    Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer, sine,
-};
+use super::{Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
 use super::{StretchControls, WarpConfig, spec};
 use crate::test_pools::pools_with_budget as test_pools;
 
@@ -21,13 +20,14 @@ use crate::test_pools::pools_with_budget as test_pools;
 fn live_backend_swap_continues_and_keeps_pitch(
     #[case] initial: StretchKind,
     #[case] replacement: StretchKind,
+    warp_sine: Vec<f32>,
 ) {
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(initial);
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
-    let block = sine(4096);
+    let block = warp_sine[..(4096) * 2].to_vec();
     let mut out: Vec<f32> = Vec::new();
     for i in 0..24 {
         if i == 6 {

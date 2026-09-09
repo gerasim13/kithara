@@ -94,6 +94,9 @@ jobs:
       && (inputs.kind || 'nightly') == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/network.yml
+    # A called workflow starts with no secrets of its own, so the keys its
+    # build bakes in arrive empty unless the caller hands them over.
+    secrets: inherit
 
   # Three machines the Linux fan-out cannot reach: each has a runner pool of
   # its own, named by a variable of its own, so each stays a workflow of its

@@ -68,7 +68,7 @@ let stream = Stream::<File<AppPools>>::new(local).await?;
 
 `FileSource` is the `StreamType::Source` associated type; it is exported through `kithara_stream::Stream<File<S>>` and is rarely constructed directly. `FilePeer`, `FileCoord`, and the rest of the orchestration types are internal.
 
-Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all network activity; remote sources (`FileSrc::Remote`) download pull-driven through a `FilePeer` registered with the shared `Downloader`. See [CONTEXT.md](CONTEXT.md) for the architecture diagram and the local/remote contracts.
+Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all network activity; remote sources (`FileSrc::Remote`) download pull-driven through a `FilePeer` registered with the shared `Downloader`. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-file) for the architecture diagram and the local/remote contracts.
 
 ## Features
 
@@ -96,4 +96,4 @@ Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all net
 
 Depends on `kithara-stream` (Peer/Downloader, Source, byte-map/playhead types), `kithara-net` (HTTP), `kithara-assets` (disk cache via `AssetStore<S>`), `kithara-storage` (`StorageResource`), `kithara-events` (`FileEvent` via the shared `EventBus`). Composes with `kithara-audio` as `Audio<Stream<File<S>>>` inside the decode pipeline.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-file) for detailed contracts, invariants, and internals.

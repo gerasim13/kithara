@@ -572,23 +572,15 @@ fn sample_duration_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> u32 {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_platform::time::Duration;
+    use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment, flac_init};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::pools;
 
-    fn read_fixture(name: &str) -> Vec<u8> {
-        let route = format!("/hls/{name}");
-        let resource = kithara_test_fixtures::hls::long_plain()
-            .get(&route)
-            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
-        std::fs::read(resource.path())
-            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
-    }
-
     #[kithara::test]
-    fn parse_init_aac_extracts_codec_and_asc() {
-        let bytes = read_fixture("init-slq-a1.mp4");
+    fn parse_init_aac_extracts_codec_and_asc(aac_init: Vec<u8>) {
+        let bytes = aac_init;
         let init = parse_init(&bytes, &pools()).expect("BUG: parse init");
         assert_eq!(init.codec, AudioCodec::AacLc);
         assert!(init.timescale > 0, "timescale={}", init.timescale);
@@ -605,8 +597,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn parse_init_flac_extracts_streaminfo() {
-        let bytes = read_fixture("init-slossless-a1.mp4");
+    fn parse_init_flac_extracts_streaminfo(flac_init: Vec<u8>) {
+        let bytes = flac_init;
         let init = parse_init(&bytes, &pools()).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
@@ -615,10 +607,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn parse_segment_frames_aac_yields_monotonic_frames() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn parse_segment_frames_aac_yields_monotonic_frames(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
-        let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
+        let seg_bytes = aac_segment;
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(
             frames.len() > 40,
@@ -651,10 +643,10 @@ mod tests {
     /// `trun` sample count, so a single-moof segment is built with exactly
     /// one allocation — capacity equals the frame count, no realloc churn.
     #[kithara::test]
-    fn parse_segment_frames_presizes_vec_to_sample_count() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn parse_segment_frames_presizes_vec_to_sample_count(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
-        let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
+        let seg_bytes = aac_segment;
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(!frames.is_empty(), "segment must yield frames");
         assert_eq!(
@@ -666,10 +658,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn parse_segment_frames_total_duration_matches_extinf() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn parse_segment_frames_total_duration_matches_extinf(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
-        let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
+        let seg_bytes = aac_segment;
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         let total_ticks: u64 = frames.iter().map(|f| u64::from(f.duration)).sum();
         let total_seconds =

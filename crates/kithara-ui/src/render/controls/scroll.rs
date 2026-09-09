@@ -4,7 +4,7 @@ use iced::{
         Clipboard, Shell, Widget as IcedWidget,
         layout::{self, Layout},
         mouse, renderer,
-        widget::{Operation, Tree},
+        widget::{Operation, Tree, tree::State},
     },
     widget::canvas::{Canvas, Program},
 };
@@ -90,10 +90,10 @@ where
         operation.custom(None, layout.bounds(), tree.state.downcast_mut::<P::State>());
     }
 
-    fn state(&self) -> iced::advanced::widget::tree::State {
+    fn state(&self) -> State {
         let mut state = P::State::default();
         state.reconcile_canvas(&self.path, &self.config);
-        iced::advanced::widget::tree::State::new(state)
+        State::new(state)
     }
 
     delegate::delegate! {

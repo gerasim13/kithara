@@ -447,7 +447,7 @@ mod tests {
         let dead: Vec<f32> = (0_u16..)
             .map(|step| selector.x + f32::from(step) * 0.5)
             .take_while(|x| *x < selector.x + selector.w)
-            .filter(|x| painter.hit_index(&data, BOUNDS, Pt { x: *x, y }).is_none())
+            .filter(|x| painter.hit_index(&data, BOUNDS, Pt { y, x: *x }).is_none())
             .collect();
 
         assert_eq!(dead, [] as [f32; 0]);

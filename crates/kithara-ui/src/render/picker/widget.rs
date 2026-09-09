@@ -6,8 +6,12 @@ use iced::{
         Clipboard, Shell, Widget as IcedWidget,
         layout::{self, Layout},
         mouse, overlay, renderer,
-        widget::{self, Operation, Tree},
+        widget::{
+            self, Operation, Tree,
+            tree::{State, Tag},
+        },
     },
+    event::Status,
 };
 use kithara_platform::time::Instant;
 
@@ -127,7 +131,7 @@ impl PickerWidget<'_> {
         if let Some(message) = message {
             shell.publish(message);
         }
-        if status == iced::event::Status::Captured {
+        if status == Status::Captured {
             shell.capture_event();
         }
     }
@@ -232,8 +236,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         })
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PickerState::new(
+    fn state(&self) -> State {
+        State::new(PickerState::new(
             &self.path,
             self.paint.item_count(),
             self.paint.selected(),
@@ -241,8 +245,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         ))
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PickerState>()
+    fn tag(&self) -> Tag {
+        Tag::of::<PickerState>()
     }
 
     fn update(

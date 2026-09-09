@@ -38,7 +38,7 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
   vs download), inject a sample-capable pool facade, and pick the decoding policy.
 - `BeatThis::analyze(&mono_22050)` — run the mel, inference and peak-pick pipeline.
 - `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
-  are the values the golden fixtures are held to; see CONTEXT.md before moving
+  are the values the golden fixtures are held to; see [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) before moving
   them.
 - `RawBeats { beats, downbeats }` — pooled output positions in seconds, sorted
   and deduplicated.
@@ -63,4 +63,4 @@ returns raw beat / downbeat positions in seconds. It owns no decoder, resampler,
 or I/O — the consumer (`kithara-analysis`) handles decode, downmix, resample, and
 grid cleanup.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) for detailed contracts, invariants, and internals.

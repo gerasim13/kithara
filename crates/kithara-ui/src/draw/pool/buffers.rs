@@ -43,8 +43,8 @@ pub struct PoolStats {
 /// Shared reusable storage for retained commands, paths, and text.
 #[derive(Clone, Debug)]
 pub struct DrawBuffers {
-    region: PoolRegion<DrawSchema>,
     limits: DrawPoolLimits,
+    region: PoolRegion<DrawSchema>,
 }
 
 impl DrawBuffers {
@@ -63,6 +63,57 @@ impl DrawBuffers {
             Ok(buffers) => buffers,
             Err(error) => panic!("valid draw buffer configuration failed: {error}"),
         }
+    }
+
+    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
+        Buffer::pooled(self.region.get::<CommandKey>())
+    }
+
+    #[must_use]
+    pub const fn limits(&self) -> DrawPoolLimits {
+        self.limits
+    }
+
+    /// Starts an empty command list backed by this buffer family.
+    #[must_use]
+    pub fn list(&self) -> DrawListBuilder {
+        DrawListBuilder::pooled(self)
+    }
+
+    /// Copies path verbs into a buffer that returns here when unused.
+    #[must_use]
+    pub fn path<Verbs>(&self, rule: FillRule, verbs: Verbs) -> PoolPath
+    where
+        Verbs: IntoIterator<Item = Verb>,
+    {
+        let mut path = PoolPath::pooled(rule, self.region.get::<PathKey>());
+        path.extend(verbs);
+        path
+    }
+
+    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
+        path.into_pooled(|| self.region.get::<PathKey>())
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> PoolStats {
+        let stats = [
+            self.region.pool_stats::<CommandKey>(),
+            self.region.pool_stats::<PathKey>(),
+            self.region.pool_stats::<TextKey>(),
+        ];
+        PoolStats {
+            alloc_misses: stats.iter().map(|stats| stats.alloc_misses).sum(),
+            home_hits: stats.iter().map(|stats| stats.home_hits).sum(),
+            put_drops: stats.iter().map(|stats| stats.put_drops).sum(),
+            steal_hits: stats.iter().map(|stats| stats.steal_hits).sum(),
+        }
+    }
+
+    /// Copies UTF-8 content into a buffer that returns here when unused.
+    #[must_use]
+    pub fn text(&self, content: &str) -> PoolText {
+        PoolText::pooled(content, self.region.get::<TextKey>())
     }
 
     /// Builds the registered draw-buffer family under one shared hard budget.
@@ -84,58 +135,7 @@ impl DrawBuffers {
             .paths(config(limits.path_capacity))
             .text(config(limits.text_capacity))
             .build()?;
-        Ok(Self { region, limits })
-    }
-
-    /// Starts an empty command list backed by this buffer family.
-    #[must_use]
-    pub fn list(&self) -> DrawListBuilder {
-        DrawListBuilder::pooled(self)
-    }
-
-    /// Copies path verbs into a buffer that returns here when unused.
-    #[must_use]
-    pub fn path<Verbs>(&self, rule: FillRule, verbs: Verbs) -> PoolPath
-    where
-        Verbs: IntoIterator<Item = Verb>,
-    {
-        let mut path = PoolPath::pooled(rule, self.region.get::<PathKey>());
-        path.extend(verbs);
-        path
-    }
-
-    /// Copies UTF-8 content into a buffer that returns here when unused.
-    #[must_use]
-    pub fn text(&self, content: &str) -> PoolText {
-        PoolText::pooled(content, self.region.get::<TextKey>())
-    }
-
-    #[must_use]
-    pub const fn limits(&self) -> DrawPoolLimits {
-        self.limits
-    }
-
-    #[must_use]
-    pub fn stats(&self) -> PoolStats {
-        let stats = [
-            self.region.pool_stats::<CommandKey>(),
-            self.region.pool_stats::<PathKey>(),
-            self.region.pool_stats::<TextKey>(),
-        ];
-        PoolStats {
-            alloc_misses: stats.iter().map(|stats| stats.alloc_misses).sum(),
-            home_hits: stats.iter().map(|stats| stats.home_hits).sum(),
-            put_drops: stats.iter().map(|stats| stats.put_drops).sum(),
-            steal_hits: stats.iter().map(|stats| stats.steal_hits).sum(),
-        }
-    }
-
-    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
-        Buffer::pooled(self.region.get::<CommandKey>())
-    }
-
-    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
-        path.into_pooled(|| self.region.get::<PathKey>())
+        Ok(Self { limits, region })
     }
 }
 

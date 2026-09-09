@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kithara_platform::time::Duration;
+use kithara_platform::{flash, logging, time::Duration};
 
 use super::shared::{HangDump, NoContext};
 
@@ -28,13 +28,13 @@ impl PreKillGuard {
 /// audio worklet, where the global `tracing` subscriber's cross-instance
 /// vtable would trap).
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>, diag: &str) {
-    let flash = kithara_platform::flash::hang_dump(label);
+    let flash = flash::hang_dump(label);
     let flash = if flash.trim().is_empty() {
         String::new()
     } else {
         format!("\n{flash}")
     };
-    kithara_platform::logging::log_error(&format!(
+    logging::log_error(&format!(
         "[kithara_hang_detector] hang detected: {label} [{diag}] - {}{flash}",
         ctx.dump_json()
     ));

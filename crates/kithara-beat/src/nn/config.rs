@@ -1,5 +1,5 @@
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 
 /// Policy for turning the beat model's raw logits into events.
 #[derive(Clone, Copy, Debug, Builder, PartialEq, Patch)]

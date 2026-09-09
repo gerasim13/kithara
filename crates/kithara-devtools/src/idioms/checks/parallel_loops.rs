@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use syn::{Block, ExprForLoop, Stmt, spanned::Spanned, visit::Visit};
+use syn::{Block, Expr, ExprForLoop, Stmt, spanned::Spanned, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::common::{
@@ -51,7 +51,7 @@ struct BlockVisitor<'a> {
 impl<'ast> Visit<'ast> for BlockVisitor<'_> {
     fn visit_block(&mut self, b: &'ast Block) {
         scan_block(self.rel, b, self.out);
-        syn::visit::visit_block(self, b);
+        visit::visit_block(self, b);
     }
 }
 
@@ -90,7 +90,7 @@ fn scan_block(rel: &str, b: &Block, out: &mut Vec<Violation>) {
 
 const fn top_level_for_loop(s: &Stmt) -> Option<&ExprForLoop> {
     match s {
-        Stmt::Expr(syn::Expr::ForLoop(f), _) => Some(f),
+        Stmt::Expr(Expr::ForLoop(f), _) => Some(f),
         _ => None,
     }
 }

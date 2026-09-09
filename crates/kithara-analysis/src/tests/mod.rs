@@ -14,5 +14,5 @@ mod schedule;
     feature = "beat-backend"
 ))]
 mod track;
-#[cfg(all(not(target_arch = "wasm32"), feature = "analysis-waveform"))]
+#[cfg(feature = "analysis-waveform")]
 mod worker;

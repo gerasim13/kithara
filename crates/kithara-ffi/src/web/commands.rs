@@ -59,6 +59,12 @@ pub(crate) enum WorkerCmd {
     },
     /// Clear every track from the queue.
     RemoveAll,
+    /// Start (or restart) the analysis pass for a queued track, replying via
+    /// `request_id`.
+    Analyze {
+        id: TrackId,
+        request_id: u32,
+    },
     /// Set the ABR mode on the worker's current track. `None` selects
     /// automatic adaptation; `Some(index)` pins a manual variant. Mirrors
     /// [`NativeInner::set_abr_mode`](crate::native::inner::NativeInner).

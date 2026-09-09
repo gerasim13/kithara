@@ -26,12 +26,6 @@ impl WaveformPass {
         })
     }
 
-    delegate::delegate! {
-        to self.inner {
-            pub(crate) fn write_resume(&self, out: &mut Vec<u8>);
-        }
-    }
-
     pub(crate) fn push<S>(
         &mut self,
         pools: &PoolRegion<S>,
@@ -58,5 +52,11 @@ impl WaveformPass {
 
     pub(crate) fn snapshot(&mut self, extent: Option<u64>) -> Waveform {
         self.inner.snapshot(self.buckets, extent)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            pub(crate) fn write_resume(&self, out: &mut Vec<u8>);
+        }
     }
 }

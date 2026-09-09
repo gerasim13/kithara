@@ -82,12 +82,12 @@ mod tests {
     use super::*;
     use crate::{common::violation::Severity, style::config::DocSizeLimit};
 
-    fn context_limit() -> DocSizeConfig {
+    fn readme_limit() -> DocSizeConfig {
         DocSizeConfig {
             exclude_paths: Vec::new(),
             limits: vec![DocSizeLimit {
                 deny: 3000,
-                globs: vec!["**/CONTEXT.md".to_string()],
+                globs: vec!["**/README.md".to_string()],
                 warn: 1500,
             }],
         }
@@ -99,7 +99,7 @@ mod tests {
             limits: vec![
                 DocSizeLimit {
                     deny: 3000,
-                    globs: vec!["**/CONTEXT.md".to_string()],
+                    globs: vec!["**/ARCHITECTURE.md".to_string()],
                     warn: 1500,
                 },
                 DocSizeLimit {
@@ -115,7 +115,7 @@ mod tests {
     fn denies_when_a_document_exceeds_its_deny_limit() {
         let src = "line\n".repeat(601);
 
-        let violations = scan_content(&context_limit(), "crates/demo/CONTEXT.md", &src);
+        let violations = scan_content(&readme_limit(), "crates/demo/README.md", &src);
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].severity, Severity::Deny);
@@ -125,7 +125,7 @@ mod tests {
     fn stays_silent_at_the_warn_limit() {
         let src = "line\n".repeat(300);
 
-        let violations = scan_content(&context_limit(), "crates/demo/CONTEXT.md", &src);
+        let violations = scan_content(&readme_limit(), "crates/demo/README.md", &src);
 
         assert!(violations.is_empty());
     }
@@ -144,11 +144,11 @@ mod tests {
     fn skips_excluded_documents() {
         let cfg = DocSizeConfig {
             exclude_paths: vec!["crates/demo/**".to_string()],
-            limits: context_limit().limits,
+            limits: readme_limit().limits,
         };
         let src = "line\n".repeat(301);
 
-        let violations = scan_content(&cfg, "crates/demo/CONTEXT.md", &src);
+        let violations = scan_content(&cfg, "crates/demo/README.md", &src);
 
         assert!(violations.is_empty());
     }
@@ -157,7 +157,7 @@ mod tests {
     fn warns_when_a_document_exceeds_its_warn_limit() {
         let src = "line\n".repeat(301);
 
-        let violations = scan_content(&context_limit(), "crates/demo/CONTEXT.md", &src);
+        let violations = scan_content(&readme_limit(), "crates/demo/README.md", &src);
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].severity, Severity::Warn);

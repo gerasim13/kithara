@@ -14,7 +14,7 @@ use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
 };
 use kithara_platform::{
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, Notify},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
@@ -28,6 +28,7 @@ use kithara_stream::{
     VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId, WorkerWake,
 };
+use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -71,7 +72,6 @@ impl Consts {
     pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
     const ROUTE_SAMPLE_RATE: u32 = 48_000;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
-    const TONE_HZ: f64 = 440.0;
 
     pub(super) fn spec(sample_rate: u32) -> AudioSpec {
         AudioSpec::new(
@@ -186,19 +186,24 @@ impl Decoder for ProfileCountingDecoder {
     fn update_byte_len(&self, _len: u64) {}
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 struct RouteSignalDecoder {
+    pcm: Arc<[f32]>,
     drops: Arc<Mutex<Vec<u64>>>,
     gapless: Option<GaplessInfo>,
+    remaining_chunks: Option<usize>,
+    pools: Pools,
+    sample_rate: u32,
     id: u64,
     next_frame: u64,
-    pools: Pools,
-    remaining_chunks: Option<usize>,
-    sample_rate: u32,
+    #[field(with, vis = "")]
     timeline_gap: u64,
 }
 
 impl RouteSignalDecoder {
     fn new(
+        route_pcm: &RoutePcm,
         id: u64,
         sample_rate: u32,
         gapless: Option<GaplessInfo>,
@@ -206,21 +211,22 @@ impl RouteSignalDecoder {
         drops: Arc<Mutex<Vec<u64>>>,
         pools: Pools,
     ) -> Self {
+        let index = match sample_rate {
+            44_100 => 0,
+            48_000 => 1,
+            _ => panic!("unprepared route sample rate: {sample_rate}"),
+        };
         Self {
+            pcm: route_pcm[index].clone(),
             drops,
             gapless,
             id,
-            next_frame: 0,
             pools,
             remaining_chunks,
             sample_rate,
+            next_frame: 0,
             timeline_gap: 0,
         }
-    }
-
-    fn with_timeline_gap(mut self, timeline_gap: u64) -> Self {
-        self.timeline_gap = timeline_gap;
-        self
     }
 
     fn audio_spec(&self) -> AudioSpec {
@@ -239,6 +245,10 @@ impl Decoder for RouteSignalDecoder {
         Some(Duration::from_secs(60))
     }
 
+    fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
+        GaplessProfile::new(self.audio_spec(), self.gapless, None, 0)
+    }
+
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         if self.remaining_chunks == Some(0) {
             return Ok(DecoderChunkOutcome::Eof);
@@ -249,19 +259,9 @@ impl Decoder for RouteSignalDecoder {
         let spec = self.audio_spec();
         let channels = usize::from(Consts::CHANNELS);
         let frames = Consts::ROUTE_CHUNK_FRAMES;
-        let mut samples = vec![0.0; frames.saturating_mul(channels)];
-        for frame in 0..frames {
-            let absolute = self
-                .next_frame
-                .saturating_add(u64::try_from(frame).unwrap_or(u64::MAX));
-            let absolute_f64 = num_traits::cast::ToPrimitive::to_f64(&absolute).unwrap_or(f64::MAX);
-            let t = absolute_f64 / f64::from(self.sample_rate);
-            let sample = (t * Consts::TONE_HZ * std::f64::consts::TAU).sin() * 0.25;
-            let sample = num_traits::cast::ToPrimitive::to_f32(&sample).unwrap_or(0.0);
-            let base = frame.saturating_mul(channels);
-            samples[base] = sample;
-            samples[base + 1] = sample;
-        }
+        let start_sample =
+            usize::try_from(self.next_frame).expect("fixture frame index") * channels;
+        let samples = &self.pcm[start_sample..start_sample + frames * channels];
         let frame_count = u32::try_from(frames).unwrap_or(u32::MAX);
         let start = self.next_frame;
         let end = start.saturating_add(u64::from(frame_count));
@@ -279,12 +279,8 @@ impl Decoder for RouteSignalDecoder {
                 frames: frame_count,
                 ..Default::default()
             },
-            sample_buffer(&self.pools, &samples),
+            sample_buffer(&self.pools, samples),
         )))
-    }
-
-    fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
-        GaplessProfile::new(self.audio_spec(), self.gapless, None, 0)
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -321,9 +317,9 @@ impl Decoder for RouteSignalDecoder {
 struct TestWake;
 
 impl WorkerWake for TestWake {
-    fn wake(&self) {}
-
     fn defer(&self) {}
+
+    fn wake(&self) {}
 }
 
 #[derive(Default)]
@@ -338,11 +334,11 @@ impl CountingWake {
 }
 
 impl WorkerWake for CountingWake {
-    fn wake(&self) {
+    fn defer(&self) {
         self.count.fetch_add(1, Ordering::Release);
     }
 
-    fn defer(&self) {
+    fn wake(&self) {
         self.count.fetch_add(1, Ordering::Release);
     }
 }
@@ -414,15 +410,15 @@ impl TestControl {
         self.promote_calls.load(Ordering::Acquire)
     }
 
+    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
+        self.demand_in_flight.store(in_flight, Ordering::Release);
+    }
+
     pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
         *self.exact_plan.lock() = Some(plan);
         *self.prepared_profile.lock() = None;
         self.exact_reader_ready.store(false, Ordering::Release);
         self.exact_reader_taken.store(false, Ordering::Release);
-    }
-
-    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
-        self.demand_in_flight.store(in_flight, Ordering::Release);
     }
 
     pub(super) fn set_exact_reader_ready(&self) {
@@ -504,15 +500,6 @@ impl VariantControl for TestControl {
         promotion
     }
 
-    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.demand_in_flight.load(Ordering::Acquire)
-            && self
-                .exact_plan
-                .lock()
-                .as_ref()
-                .is_some_and(|plan| plan.transition() == transition)
-    }
-
     fn selected_variant_for_seek(&self) -> usize {
         0
     }
@@ -541,6 +528,15 @@ impl VariantControl for TestControl {
             plan, reader,
         )))
     }
+
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.demand_in_flight.load(Ordering::Acquire)
+            && self
+                .exact_plan
+                .lock()
+                .as_ref()
+                .is_some_and(|plan| plan.transition() == transition)
+    }
 }
 
 /// Optional park inside `wait_range`, letting a test hold the stream's
@@ -550,8 +546,9 @@ impl VariantControl for TestControl {
 #[derive(Default)]
 pub(super) struct WaitPark {
     armed: AtomicBool,
-    state: Mutex<WaitParkState>,
     condvar: Condvar,
+    entered: Notify,
+    state: Mutex<WaitParkState>,
 }
 
 #[derive(Default)]
@@ -565,11 +562,14 @@ impl WaitPark {
         self.armed.store(true, Ordering::Release);
     }
 
-    /// Block until the holder is inside `wait_range` — i.e. the control
-    /// mutex is held by a parked blocking read.
-    pub(super) fn wait_entered(&self) {
+    fn enter_if_armed(&self) {
+        if !self.armed.load(Ordering::Acquire) {
+            return;
+        }
         let mut state = self.state.lock();
-        while !state.entered {
+        state.entered = true;
+        self.entered.notify_one();
+        while !state.released {
             state = self.condvar.wait(state);
         }
     }
@@ -581,29 +581,28 @@ impl WaitPark {
         self.condvar.notify_all();
     }
 
-    fn enter_if_armed(&self) {
-        if !self.armed.load(Ordering::Acquire) {
-            return;
-        }
-        let mut state = self.state.lock();
-        state.entered = true;
-        self.condvar.notify_all();
-        while !state.released {
-            state = self.condvar.wait(state);
+    /// Wait until the holder is inside `wait_range` — i.e. the control
+    /// mutex is held by a parked blocking read.
+    pub(super) async fn wait_entered(&self) {
+        while !self.state.lock().entered {
+            self.entered.notified().await;
         }
     }
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
     park: Arc<WaitPark>,
-    peer: Option<Arc<DeferredWake>>,
     phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     seek: Arc<SeekState>,
     waits: Arc<Mutex<Vec<Range<u64>>>>,
+    #[field(with = with_peer_wake, option_set_some, vis = "pub(super)")]
+    peer: Option<Arc<DeferredWake>>,
 }
 
 impl TestSource {
@@ -621,25 +620,17 @@ impl TestSource {
         }
     }
 
-    /// Attach a reader→peer wake, as segmented sources vend one. Opt-in:
-    /// a `Some` peer changes `Stream`'s read-path unit clamping, so only
-    /// tests pinning the peer-wake contract install it.
-    pub(super) fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
-        self.peer = Some(wake);
-        self
-    }
-
-    fn segmented(control: Arc<TestControl>) -> Self {
-        control.enable_byte_map();
-        Self::new(control)
-    }
-
     pub(super) fn park_handle(&self) -> Arc<WaitPark> {
         Arc::clone(&self.park)
     }
 
     pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
         Arc::clone(&self.phase)
+    }
+
+    fn segmented(control: Arc<TestControl>) -> Self {
+        control.enable_byte_map();
+        Self::new(control)
     }
 
     pub(super) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
@@ -650,13 +641,25 @@ impl TestSource {
 /// Byte-space probe sharing the test source's scripted cells — the same
 /// phase, cursor, and byte-map gating as the `Source` impl below.
 struct SharedPhaseProbe {
+    byte_map: Arc<TestByteMap>,
+    control: Arc<TestControl>,
     phase: Arc<Mutex<SourcePhase>>,
     position: Arc<AtomicU64>,
-    control: Arc<TestControl>,
-    byte_map: Arc<TestByteMap>,
 }
 
 impl SourceProbe for SharedPhaseProbe {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        if self.control.byte_map_enabled.load(Ordering::Acquire) {
+            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
+        } else {
+            None
+        }
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(4096)
+    }
+
     fn phase(&self) -> SourcePhase {
         *self.phase.lock()
     }
@@ -672,27 +675,11 @@ impl SourceProbe for SharedPhaseProbe {
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
     }
-
-    fn len(&self) -> Option<u64> {
-        Some(4096)
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        if self.control.byte_map_enabled.load(Ordering::Acquire) {
-            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
-        } else {
-            None
-        }
-    }
 }
 
 impl Source for TestSource {
     fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
-    }
-
-    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        self.peer.clone()
     }
 
     fn advance(&self, n: u64) {
@@ -715,17 +702,12 @@ impl Source for TestSource {
         self.control.media_info.lock().clone()
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        *self.phase.lock()
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer.clone()
     }
 
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(SharedPhaseProbe {
-            phase: Arc::clone(&self.phase),
-            position: Arc::clone(&self.position),
-            control: Arc::clone(&self.control),
-            byte_map: Arc::clone(&self.byte_map),
-        })
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        *self.phase.lock()
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -738,6 +720,15 @@ impl Source for TestSource {
 
     fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(SharedPhaseProbe {
+            phase: Arc::clone(&self.phase),
+            position: Arc::clone(&self.position),
+            control: Arc::clone(&self.control),
+            byte_map: Arc::clone(&self.byte_map),
+        })
     }
 
     fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -981,91 +972,113 @@ struct RouteParams {
     chunks_before_eof: Option<usize>,
     gapless: Option<GaplessInfo>,
     incoming_chunks_before_eof: Option<usize>,
-    active_timeline_gap: u64,
-    incoming_timeline_gap: u64,
     segmented: bool,
     initial_host_rate: u32,
+    active_timeline_gap: u64,
+    incoming_timeline_gap: u64,
 }
 
-pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: None,
-        gapless: None,
-        incoming_chunks_before_eof: None,
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate,
-        segmented: false,
-    })
+pub(super) async fn route_signal_source(
+    route_pcm: &RoutePcm,
+    initial_host_rate: u32,
+) -> RouteFixture {
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: None,
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
     .await
 }
 
 pub(super) async fn route_signal_source_with_eof(
+    route_pcm: &RoutePcm,
     initial_host_rate: u32,
     chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: Some(chunks_before_eof),
-        gapless: None,
-        incoming_chunks_before_eof: None,
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate,
-        segmented: false,
-    })
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: Some(chunks_before_eof),
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
     .await
 }
 
 pub(super) async fn route_signal_source_with_gapless(
+    route_pcm: &RoutePcm,
     initial_host_rate: u32,
     gapless: GaplessInfo,
 ) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: None,
-        gapless: Some(gapless),
-        incoming_chunks_before_eof: None,
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate,
-        segmented: false,
-    })
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: None,
+            gapless: Some(gapless),
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
     .await
 }
 
 pub(super) async fn route_signal_source_with_gapless_eof(
+    route_pcm: &RoutePcm,
     initial_host_rate: u32,
     gapless: GaplessInfo,
     chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: Some(chunks_before_eof),
-        gapless: Some(gapless),
-        incoming_chunks_before_eof: None,
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate,
-        segmented: false,
-    })
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: Some(chunks_before_eof),
+            gapless: Some(gapless),
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
     .await
 }
 
 pub(super) async fn route_signal_source_with_finite_incoming(
+    route_pcm: &RoutePcm,
     initial_host_rate: u32,
     incoming_chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: None,
-        gapless: None,
-        incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate,
-        segmented: false,
-    })
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: None,
+            gapless: None,
+            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
     .await
 }
 
-async fn route_source(params: RouteParams) -> RouteFixture {
+async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture {
     let pools = pools();
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
@@ -1095,6 +1108,7 @@ async fn route_source(params: RouteParams) -> RouteFixture {
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
     let factory_pools = pools.clone();
+    let factory_pcm = route_pcm.clone();
     let decoder_factory = DecoderFactory::new(
         move |reader, _info| {
             if segmented && reader.byte_len() != container_byte_len {
@@ -1105,6 +1119,7 @@ async fn route_source(params: RouteParams) -> RouteFixture {
             let rate = factory_host_rate.load(Ordering::Acquire);
             Ok(Box::new(
                 RouteSignalDecoder::new(
+                    &factory_pcm,
                     99,
                     rate,
                     gapless,
@@ -1125,6 +1140,7 @@ async fn route_source(params: RouteParams) -> RouteFixture {
         decoder_factory,
         decoder: Box::new(
             RouteSignalDecoder::new(
+                route_pcm,
                 1,
                 Consts::SAMPLE_RATE,
                 gapless,
@@ -1169,18 +1185,22 @@ async fn route_source(params: RouteParams) -> RouteFixture {
 }
 
 pub(super) async fn route_signal_source_with_gaps(
+    route_pcm: &RoutePcm,
     active_timeline_gap: u64,
     incoming_timeline_gap: u64,
 ) -> RouteFixture {
-    route_source(RouteParams {
-        chunks_before_eof: None,
-        gapless: None,
-        incoming_chunks_before_eof: None,
-        active_timeline_gap,
-        incoming_timeline_gap,
-        initial_host_rate: Consts::SAMPLE_RATE,
-        segmented: false,
-    })
+    route_source(
+        route_pcm,
+        RouteParams {
+            active_timeline_gap,
+            incoming_timeline_gap,
+            chunks_before_eof: None,
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            initial_host_rate: Consts::SAMPLE_RATE,
+            segmented: false,
+        },
+    )
     .await
 }
 
@@ -1311,6 +1331,7 @@ fn exact_incoming_plan() -> VariantReaderPlan {
 }
 
 fn route_generation(
+    route_pcm: &RoutePcm,
     pools: &Pools,
     decoder_id: u64,
     variant: u32,
@@ -1318,6 +1339,7 @@ fn route_generation(
 ) -> DecoderGeneration {
     DecoderGeneration::new(
         Box::new(RouteSignalDecoder::new(
+            route_pcm,
             decoder_id,
             Consts::SAMPLE_RATE,
             None,
@@ -1334,6 +1356,7 @@ fn route_generation(
 }
 
 fn push_route_completion(
+    route_pcm: &RoutePcm,
     pools: &Pools,
     source: &StreamAudioSource<TestStream>,
     build: BuildId,
@@ -1344,7 +1367,7 @@ fn push_route_completion(
     let pushed = source.rebuild.completion().push(DecoderBuildComplete {
         build,
         purpose,
-        result: Ok(route_generation(pools, decoder_id, 1, drops)),
+        result: Ok(route_generation(route_pcm, pools, decoder_id, 1, drops)),
     });
     assert!(pushed.is_ok());
 }
@@ -1356,7 +1379,7 @@ fn assert_replacement_decodes(source: &mut StreamAudioSource<TestStream>) {
 }
 
 #[kithara::test(tokio)]
-async fn matching_replacement_aborts_primed_incoming_before_profile_prepare() {
+async fn matching_replacement_aborts_primed_incoming_before_profile_prepare(route_pcm: RoutePcm) {
     let RebuildFixture {
         control,
         drops,
@@ -1384,7 +1407,7 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare() {
             .install_incoming(
                 transition,
                 incoming_build,
-                route_generation(&pools, 8, 1, drops.clone()),
+                route_generation(&route_pcm, &pools, 8, 1, drops.clone()),
             )
             .is_none()
     );
@@ -1393,6 +1416,7 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare() {
     let replacement_build = BuildId::fixture(7);
     enter_rebuilding(&mut source, 7, recreate_state(1));
     push_route_completion(
+        &route_pcm,
         &pools,
         &source,
         replacement_build,
@@ -1411,7 +1435,7 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare() {
 }
 
 #[kithara::test(tokio)]
-async fn replacement_aborts_building_incoming_and_retires_its_late_completion() {
+async fn replacement_aborts_building_incoming_and_retires_its_late_completion(route_pcm: RoutePcm) {
     let RebuildFixture {
         control,
         drops,
@@ -1437,6 +1461,7 @@ async fn replacement_aborts_building_incoming_and_retires_its_late_completion() 
     let replacement_build = BuildId::fixture(7);
     enter_rebuilding(&mut source, 7, recreate_state(1));
     push_route_completion(
+        &route_pcm,
         &pools,
         &source,
         incoming_build,
@@ -1445,6 +1470,7 @@ async fn replacement_aborts_building_incoming_and_retires_its_late_completion() 
         drops.clone(),
     );
     push_route_completion(
+        &route_pcm,
         &pools,
         &source,
         replacement_build,
@@ -1626,14 +1652,14 @@ async fn rebuilding_decoder_completion_installs_once() {
 }
 
 #[kithara::test(tokio)]
-async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source() {
+async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pcm: RoutePcm) {
     let RouteFixture {
         control,
         drops,
         pools,
         mut source,
         ..
-    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let mut route_recreated = false;
     let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
     let epoch = source.seek_obs.epoch();
@@ -1659,6 +1685,7 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source() {
     control.set_media_info(media_info(1));
     enter_rebuilding(&mut source, 7, recreate_state(1));
     push_route_completion(
+        &route_pcm,
         &pools,
         &source,
         build,
@@ -1748,12 +1775,12 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
 }
 
 #[kithara::test(tokio)]
-async fn route_change_host_rate_delta_starts_decoder_recreate() {
+async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePcm) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
 
     host_sample_rate.store(48_000, Ordering::Release);
 
@@ -1778,12 +1805,12 @@ async fn route_change_host_rate_delta_starts_decoder_recreate() {
 }
 
 #[kithara::test(tokio)]
-async fn route_change_resumes_from_the_rendered_source_frontier() {
+async fn route_change_resumes_from_the_rendered_source_frontier(route_pcm: RoutePcm) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let mut route_recreated = false;
     let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
     let epoch = source.seek_engine.epoch();
@@ -1829,12 +1856,14 @@ async fn route_change_resumes_from_the_rendered_source_frontier() {
 }
 
 #[kithara::test(tokio)]
-async fn route_change_recreate_preserves_position_and_output_rate_continuity_metric() {
+async fn route_change_recreate_preserves_position_and_output_rate_continuity_metric(
+    route_pcm: RoutePcm,
+) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
     let mut left = Vec::new();
     let mut route_recreated = false;
 
@@ -1903,20 +1932,23 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
 /// the seek anchor instead hands an init-bearing demuxer a media byte; the
 /// recreate then fails outright and takes the track with it.
 #[kithara::test(tokio)]
-async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
+async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_pcm: RoutePcm) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_source(RouteParams {
-        chunks_before_eof: None,
-        gapless: None,
-        incoming_chunks_before_eof: None,
-        active_timeline_gap: 0,
-        incoming_timeline_gap: 0,
-        initial_host_rate: Consts::SAMPLE_RATE,
-        segmented: true,
-    })
+    } = route_source(
+        &route_pcm,
+        RouteParams {
+            chunks_before_eof: None,
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            initial_host_rate: Consts::SAMPLE_RATE,
+            segmented: true,
+        },
+    )
     .await;
 
     let mut route_recreated = false;
@@ -1974,12 +2006,12 @@ async fn equal_host_rate_does_not_start_route_recreate() {
 }
 
 #[kithara::test(tokio)]
-async fn first_matching_host_rate_latches_without_route_recreate() {
+async fn first_matching_host_rate_latches_without_route_recreate(route_pcm: RoutePcm) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(0).await;
+    } = route_signal_source(&route_pcm, 0).await;
 
     host_sample_rate.store(Consts::SAMPLE_RATE, Ordering::Release);
 
@@ -1989,12 +2021,12 @@ async fn first_matching_host_rate_latches_without_route_recreate() {
 }
 
 #[kithara::test(tokio)]
-async fn first_mismatched_host_rate_still_starts_route_recreate() {
+async fn first_mismatched_host_rate_still_starts_route_recreate(route_pcm: RoutePcm) {
     let RouteFixture {
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(0).await;
+    } = route_signal_source(&route_pcm, 0).await;
 
     host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
 
@@ -2187,12 +2219,13 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
 }
 
 #[kithara::test]
-fn a_seek_hands_its_buffered_chunks_to_the_retire_queue() {
+fn a_seek_hands_its_buffered_chunks_to_the_retire_queue(route_pcm: RoutePcm) {
     const STAGED: usize = 3;
     let pools = pools();
 
     let mut generation = DecoderGeneration::new(
         Box::new(RouteSignalDecoder::new(
+            &route_pcm,
             1,
             48_000,
             None,

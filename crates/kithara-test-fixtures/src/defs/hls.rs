@@ -26,8 +26,8 @@ impl Consts {
     const IV: [u8; 16] = [0; 16];
     const KEY: [u8; 16] = *b"0123456789abcdef";
     const SAMPLE_RATE: u32 = 44_100;
-    const SEGMENT_MILLIS: u64 = 6_000;
     const SEGMENTS: usize = 37;
+    const SEGMENT_MILLIS: u64 = 6_000;
     const TARGET_DURATION: u8 = 6;
     const TOTAL_MILLIS: u64 = 220_200;
     const VARIANTS: [VariantSpec; 4] = [
@@ -75,18 +75,18 @@ impl GaplessConsts {
 struct RssConsts;
 
 impl RssConsts {
-    const SEGMENT_MILLIS: u64 = 4_000;
     const SEGMENTS: usize = 25;
+    const SEGMENT_MILLIS: u64 = 4_000;
     const TARGET_DURATION: u8 = 4;
 }
 
 #[derive(Clone, Copy)]
 struct VariantSpec {
-    bandwidth: u64,
-    bit_rate: u64,
-    codec: AudioCodec,
     codecs: &'static str,
     label: &'static str,
+    codec: AudioCodec,
+    bandwidth: u64,
+    bit_rate: u64,
 }
 
 struct Variant {
@@ -95,8 +95,8 @@ struct Variant {
 }
 
 struct EncodedVariant {
-    spec: VariantSpec,
     track: EncodedTrack,
+    spec: VariantSpec,
 }
 
 fn encode_track(
@@ -164,7 +164,7 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
         encoded_frames
     };
     let track = encode_track(spec, total_frames, packets_per_segment);
-    EncodedVariant { spec, track }
+    EncodedVariant { track, spec }
 }
 
 fn encoded_variants() -> &'static [EncodedVariant] {
@@ -175,38 +175,6 @@ fn encoded_variants() -> &'static [EncodedVariant] {
             .build()
             .expect("invariant: fixture encoder pool builds")
             .install(|| Consts::VARIANTS.par_iter().copied().map(encode).collect())
-    })
-}
-
-fn variants() -> &'static [Variant] {
-    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = boundaries_at(
-                    &variant.track,
-                    (1..Consts::SEGMENTS)
-                        .map(|index| {
-                            u64::try_from(index).expect("invariant: segment index fits u64")
-                                * Consts::SEGMENT_MILLIS
-                        })
-                        .chain(std::iter::once(Consts::TOTAL_MILLIS)),
-                );
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
     })
 }
 
@@ -245,6 +213,18 @@ fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u
     boundaries
 }
 
+fn long_boundaries(track: &EncodedTrack) -> Vec<usize> {
+    boundaries_at(
+        track,
+        (1..Consts::SEGMENTS)
+            .map(|index| {
+                u64::try_from(index).expect("invariant: segment index fits u64")
+                    * Consts::SEGMENT_MILLIS
+            })
+            .chain(std::iter::once(Consts::TOTAL_MILLIS)),
+    )
+}
+
 fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries_at(track, GaplessConsts::BOUNDARY_MILLIS)
 }
@@ -259,52 +239,43 @@ fn rss_boundaries(track: &EncodedTrack) -> Vec<usize> {
     )
 }
 
+fn package_variants(
+    boundaries_for: impl Fn(&EncodedTrack) -> Vec<usize>,
+    encoding: GaplessEncoding,
+    label: &str,
+) -> Vec<Variant> {
+    encoded_variants()
+        .iter()
+        .map(|variant| {
+            let boundaries = boundaries_for(&variant.track);
+            let package =
+                mux_audio_track_at(&variant.track, encoding, &boundaries).unwrap_or_else(|error| {
+                    panic!(
+                        "kithara-test-fixtures: {:?} {label} HLS mux failed: {error}",
+                        variant.spec.codec
+                    )
+                });
+            Variant {
+                package,
+                spec: variant.spec,
+            }
+        })
+        .collect()
+}
+
+fn variants() -> &'static [Variant] {
+    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
+    PACKAGED.get_or_init(|| package_variants(long_boundaries, GaplessEncoding::None, "long"))
+}
+
 fn gapless_variants() -> &'static [Variant] {
     static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = gapless_boundaries(&variant.track);
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::Both, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} gapless HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
-    })
+    PACKAGED.get_or_init(|| package_variants(gapless_boundaries, GaplessEncoding::Both, "gapless"))
 }
 
 fn rss_variants() -> &'static [Variant] {
     static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
-    PACKAGED.get_or_init(|| {
-        encoded_variants()
-            .iter()
-            .map(|variant| {
-                let boundaries = rss_boundaries(&variant.track);
-                let package =
-                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "kithara-test-fixtures: {:?} RSS HLS mux failed: {error}",
-                                variant.spec.codec
-                            )
-                        });
-                Variant {
-                    package,
-                    spec: variant.spec,
-                }
-            })
-            .collect()
-    })
+    PACKAGED.get_or_init(|| package_variants(rss_boundaries, GaplessEncoding::None, "RSS"))
 }
 
 fn encrypt(bytes: &[u8]) -> Vec<u8> {
@@ -431,8 +402,8 @@ fn bundle(
     )?;
     resources.sort_by(|left, right| left.route.cmp(&right.route));
     toml::to_string(&Manifest {
-        master: "/hls/master.m3u8".to_owned(),
         resources,
+        master: "/hls/master.m3u8".to_owned(),
     })
     .map(String::into_bytes)
     .map_err(io::Error::other)

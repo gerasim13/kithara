@@ -6,14 +6,14 @@ use std::{
 
 use bon::Builder;
 use dashmap::DashMap;
+use kithara_derive::Patch;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
-use kithara_macros::Patch;
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, probe::IntoProbeArg};
 
 use super::peer::PeerEntry;
 use crate::{
@@ -51,7 +51,7 @@ impl AbrPeerId {
     }
 }
 
-impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
+impl IntoProbeArg for AbrPeerId {
     fn into_probe_arg(self) -> u64 {
         self.0.get()
     }

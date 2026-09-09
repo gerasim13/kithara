@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub(crate) struct Node<'a> {
-    pub(crate) name: &'a str,
     pub(crate) dependencies: &'a [&'a str],
+    pub(crate) name: &'a str,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

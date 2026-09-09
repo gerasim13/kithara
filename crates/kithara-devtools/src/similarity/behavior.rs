@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::{
-    Block, Expr, FnArg, GenericArgument, GenericParam, Lit, PathArguments, ReceiverKind, Safety,
-    Signature, Stmt, Type,
+    Block, Expr, FnArg, GenericArgument, GenericParam, Lit, PathArguments, ReceiverKind,
+    ReturnType, Safety, Signature, Stmt, Type,
     visit::{self, Visit},
 };
 
@@ -231,8 +231,8 @@ fn signature_label(signature: &Signature, generics: &BTreeMap<String, usize>) ->
         })
         .collect::<Vec<_>>();
     let output = match &signature.output {
-        syn::ReturnType::Default => "unit".to_string(),
-        syn::ReturnType::Type(_, ty) => type_label(ty, generics),
+        ReturnType::Default => "unit".to_string(),
+        ReturnType::Type(_, ty) => type_label(ty, generics),
     };
     format!(
         "function:receiver={}:args=[{}]:async={}:unsafe={}:returns={output}",

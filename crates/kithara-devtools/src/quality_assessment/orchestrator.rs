@@ -1,5 +1,6 @@
 use std::{
     fs,
+    fs::File,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::SystemTime,
@@ -500,7 +501,7 @@ fn execute(plan: &StagePlan, root: &Path, logs: &Path) -> Result<StageEvidence> 
         .iter()
         .map(|artifact| artifact_stamp(artifact))
         .collect::<Vec<_>>();
-    let stdout = fs::File::create(&log_path)
+    let stdout = File::create(&log_path)
         .with_context(|| format!("create assessment log: {}", log_path.display()))?;
     let stderr = stdout
         .try_clone()

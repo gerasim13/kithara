@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use iced::widget::canvas;
+use iced::widget::canvas::Cache;
 
 use crate::draw::{CachedValue, DrawList};
 
@@ -64,7 +64,7 @@ pub(crate) struct Marks<Key>
 where
     Key: PartialEq,
 {
-    geometry: canvas::Cache,
+    geometry: Cache,
     kept: RefCell<CachedValue<Option<Key>, DrawList>>,
 }
 
@@ -74,7 +74,7 @@ where
 {
     fn default() -> Self {
         Self {
-            geometry: canvas::Cache::default(),
+            geometry: Cache::default(),
             kept: RefCell::default(),
         }
     }
@@ -86,7 +86,7 @@ where
 {
     /// The kept picture and the geometry drawn from it, for as long as it takes
     /// to replay them. Nothing at all before the first [`Self::mark`].
-    pub(crate) fn drawn<T>(&self, with: impl FnOnce(&canvas::Cache, &DrawList) -> T) -> Option<T> {
+    pub(crate) fn drawn<T>(&self, with: impl FnOnce(&Cache, &DrawList) -> T) -> Option<T> {
         let kept = self.kept.borrow();
         kept.value().map(|list| with(&self.geometry, list))
     }

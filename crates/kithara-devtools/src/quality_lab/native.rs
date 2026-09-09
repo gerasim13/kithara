@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use serde_json::Value;
+use serde_json::{Deserializer, Value};
 
 use super::adapter::{InvocationSpec, ReportKind};
 
@@ -69,7 +69,7 @@ fn rustqual_findings(text: &str) -> Result<bool> {
 }
 
 fn cargo_dupes_findings(text: &str) -> Result<bool> {
-    let mut values = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+    let mut values = Deserializer::from_str(text).into_iter::<Value>();
     let stats = values
         .next()
         .transpose()

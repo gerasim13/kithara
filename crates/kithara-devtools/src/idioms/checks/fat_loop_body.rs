@@ -1,5 +1,5 @@
 use anyhow::Result;
-use syn::{Block, Expr, ExprForLoop, ExprLoop, ExprWhile, Stmt, visit::Visit};
+use syn::{Block, Expr, ExprForLoop, ExprLoop, ExprWhile, Stmt, visit, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
@@ -59,15 +59,15 @@ fn analyze_file(
     impl<'ast> Visit<'ast> for V<'_> {
         fn visit_expr_for_loop(&mut self, fl: &'ast ExprForLoop) {
             self.check(&fl.body, fl.for_token.span.start().line, "for");
-            syn::visit::visit_expr_for_loop(self, fl);
+            visit::visit_expr_for_loop(self, fl);
         }
         fn visit_expr_while(&mut self, w: &'ast ExprWhile) {
             self.check(&w.body, w.while_token.span.start().line, "while");
-            syn::visit::visit_expr_while(self, w);
+            visit::visit_expr_while(self, w);
         }
         fn visit_expr_loop(&mut self, l: &'ast ExprLoop) {
             self.check(&l.body, l.loop_token.span.start().line, "loop");
-            syn::visit::visit_expr_loop(self, l);
+            visit::visit_expr_loop(self, l);
         }
     }
     impl V<'_> {

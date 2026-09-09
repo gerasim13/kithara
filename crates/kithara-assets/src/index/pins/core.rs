@@ -77,9 +77,8 @@ impl PinCounts {
 
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
 ///
-/// Refcounted per root, lazily persisted. Only durable pins reach disk,
-/// and only on their 0→1 / 1→0 transitions. See the crate `CONTEXT.md`
-/// "Pins index" for the contract.
+/// Refcounted per root, lazily persisted. Only durable pins reach disk, and only on
+/// their 0→1 / 1→0 transitions.
 #[derive(Clone)]
 pub struct PinsIndex {
     pub(super) inner: Arc<PinsInner>,

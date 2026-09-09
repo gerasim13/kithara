@@ -298,8 +298,10 @@ const fn err_status(err: &AudioToolboxError) -> OSStatus {
 
 #[cfg(all(test, feature = "resample-rubato"))]
 mod tests {
-    use std::f32::consts::TAU;
 
+    use kithara_test_fixtures::unit_fixtures::{
+        apple_planar_44100, apple_planar_48000, trim_silence,
+    };
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
@@ -334,19 +336,31 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn resampler_apple_rubato_length_contract_44100_to_48000_stereo() {
-        assert_length_contract(44_100, 48_000, 2);
+    fn resampler_apple_rubato_length_contract_44100_to_48000_stereo(
+        apple_planar_44100: Vec<f32>,
+        trim_silence: Vec<f32>,
+    ) {
+        assert_length_contract(44_100, 48_000, &apple_planar_44100, &trim_silence);
     }
 
     #[kithara::test(native, flash(false))]
-    fn resampler_apple_rubato_length_contract_48000_to_44100_mono() {
-        assert_length_contract(48_000, 44_100, 1);
+    fn resampler_apple_rubato_length_contract_48000_to_44100_mono(
+        apple_planar_48000: Vec<f32>,
+        trim_silence: Vec<f32>,
+    ) {
+        assert_length_contract(48_000, 44_100, &apple_planar_48000[..1024], &trim_silence);
     }
 
     #[kithara::test(native, flash(false))]
-    fn resampler_apple_tail_flush_drain_eventually_empty() {
-        let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
-        let rendered = render(TestBackend::Apple, &input, 44_100, 48_000);
+    fn resampler_apple_tail_flush_drain_eventually_empty(
+        apple_planar_44100: Vec<f32>,
+        trim_silence: Vec<f32>,
+    ) {
+        let input = apple_planar_44100
+            .chunks_exact(1024)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
+        let rendered = render(TestBackend::Apple, &input, 44_100, 48_000, &trim_silence);
         let input_energy = energy(&input);
         let output_energy = energy(&rendered.output);
 
@@ -355,9 +369,15 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn resampler_apple_passthrough_near_identity() {
-        let input = planar_signal(2, test_consts::CHUNK_FRAMES, 48_000);
-        let rendered = render(TestBackend::Apple, &input, 48_000, 48_000);
+    fn resampler_apple_passthrough_near_identity(
+        apple_planar_48000: Vec<f32>,
+        trim_silence: Vec<f32>,
+    ) {
+        let input = apple_planar_48000
+            .chunks_exact(1024)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
+        let rendered = render(TestBackend::Apple, &input, 48_000, 48_000, &trim_silence);
         let rms = rms_diff(&input, &rendered.output);
 
         assert_len_close(
@@ -369,10 +389,16 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn resampler_apple_rubato_shape_energy_close() {
-        let input = planar_signal(2, test_consts::CHUNK_FRAMES, 44_100);
-        let apple = render(TestBackend::Apple, &input, 44_100, 48_000);
-        let rubato = render(TestBackend::Rubato, &input, 44_100, 48_000);
+    fn resampler_apple_rubato_shape_energy_close(
+        apple_planar_44100: Vec<f32>,
+        trim_silence: Vec<f32>,
+    ) {
+        let input = apple_planar_44100
+            .chunks_exact(1024)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
+        let apple = render(TestBackend::Apple, &input, 44_100, 48_000, &trim_silence);
+        let rubato = render(TestBackend::Rubato, &input, 44_100, 48_000, &trim_silence);
         let apple_energy = energy(&apple.output);
         let rubato_energy = energy(&rubato.output);
         let energy_delta = normalized_delta(apple_energy, rubato_energy);
@@ -381,11 +407,31 @@ mod tests {
         assert!(energy_delta <= test_consts::SHAPE_ENERGY_DELTA_TOLERANCE);
     }
 
-    fn assert_length_contract(source_rate: u32, target_rate: u32, channels: usize) {
-        let input = planar_signal(channels, test_consts::CHUNK_FRAMES, source_rate);
+    fn assert_length_contract(
+        source_rate: u32,
+        target_rate: u32,
+        pcm: &[f32],
+        trim_silence: &[f32],
+    ) {
+        let input = pcm
+            .chunks_exact(1024)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
         let expected = expected_frames(test_consts::CHUNK_FRAMES, source_rate, target_rate);
-        let apple = render(TestBackend::Apple, &input, source_rate, target_rate);
-        let rubato = render(TestBackend::Rubato, &input, source_rate, target_rate);
+        let apple = render(
+            TestBackend::Apple,
+            &input,
+            source_rate,
+            target_rate,
+            &trim_silence,
+        );
+        let rubato = render(
+            TestBackend::Rubato,
+            &input,
+            source_rate,
+            target_rate,
+            &trim_silence,
+        );
 
         assert_eq!(apple.contract_frames, expected);
         assert_eq!(rubato.contract_frames, expected);
@@ -399,6 +445,7 @@ mod tests {
         input: &[Vec<f32>],
         source_rate: u32,
         target_rate: u32,
+        silence: &[f32],
     ) -> Rendered {
         let channels = input.len();
         let frames = frame_count(input);
@@ -406,12 +453,12 @@ mod tests {
             TestBackend::Apple => {
                 let mut resampler =
                     create_apple_resampler(source_rate, target_rate, channels, frames);
-                render_resampler(backend, &mut resampler, input, false)
+                render_resampler(backend, &mut resampler, input, false, silence)
             }
             TestBackend::Rubato => {
                 let mut resampler =
                     create_rubato_resampler(source_rate, target_rate, channels, frames);
-                render_resampler(backend, &mut resampler, input, true)
+                render_resampler(backend, &mut resampler, input, true, silence)
             }
         }
     }
@@ -421,6 +468,7 @@ mod tests {
         resampler: &mut R,
         input: &[Vec<f32>],
         pump_rubato_tail: bool,
+        silence: &[f32],
     ) -> Rendered
     where
         R: Resampler,
@@ -453,7 +501,7 @@ mod tests {
         }
 
         if pump_rubato_tail {
-            zero_pump_rubato_tail(resampler, &mut output, contract_frames);
+            zero_pump_rubato_tail(resampler, &mut output, contract_frames, silence);
         }
 
         let frames = frame_count(&output);
@@ -515,30 +563,20 @@ mod tests {
             .build()
     }
 
-    fn planar_signal(channels: usize, frames: usize, sample_rate: u32) -> Vec<Vec<f32>> {
-        (0..channels)
-            .map(|channel| {
-                let channel = channel.to_f32().expect("test channel index fits f32");
-                let sample_rate = sample_rate.to_f32().expect("test sample rate fits f32");
-                let frequency = channel.mul_add(27.5, 110.0);
-                (0..frames)
-                    .map(|frame| {
-                        let frame = frame.to_f32().expect("test frame index fits f32");
-                        let t = frame / sample_rate;
-                        (TAU * frequency * t).sin() * 0.5
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn zero_pump_rubato_tail<R>(resampler: &mut R, output: &mut [Vec<f32>], contract_frames: usize)
-    where
+    fn zero_pump_rubato_tail<R>(
+        resampler: &mut R,
+        output: &mut [Vec<f32>],
+        contract_frames: usize,
+        silence: &[f32],
+    ) where
         R: Resampler,
     {
         let channels = output.len();
         let input_frames = resampler.input_frames_next();
-        let zero_input = vec![vec![0.0; input_frames]; channels];
+        let zero_input = silence[..input_frames * channels]
+            .chunks_exact(input_frames)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
         let zero_input_refs = planar_refs(&zero_input);
         let mut pump_count = 0;
         while frame_count(output) < contract_frames {

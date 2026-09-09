@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_bufpool::HasPool;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, QueueEvent};
 use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::QueueControl;
@@ -32,11 +32,9 @@ where
     pub fn set_crossfade_duration(&self, seconds: f32) {
         self.command(|queue| {
             queue.player.set_crossfade_duration(seconds);
-            queue
-                .bus
-                .publish(kithara_events::QueueEvent::CrossfadeDurationChanged {
-                    seconds: queue.player.crossfade_duration(),
-                });
+            queue.bus.publish(QueueEvent::CrossfadeDurationChanged {
+                seconds: queue.player.crossfade_duration(),
+            });
         });
     }
 

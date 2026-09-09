@@ -176,12 +176,11 @@ pub fn paced_backoff(duration: Duration) {
     }
 }
 
-/// Under `flash`, a timed park registers an unparkable waiter on the
-/// quiescence engine (deadline = virtual now + `duration`) and blocks off-lock
-/// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
-/// The wait consumes no real wall-clock: when every participant is parked the
-/// engine jumps the virtual clock to the earliest deadline. See
-/// `crate::flash` and the crate CONTEXT.md.
+/// Under `flash`, a timed park registers an unparkable waiter on the quiescence engine
+/// (deadline = virtual now + `duration`) and blocks off-lock until the engine crosses
+/// that deadline OR a peer [`unpark`]s this thread. The wait consumes no real
+/// wall-clock: when every participant is parked the engine jumps the virtual clock to
+/// the earliest deadline.
 #[inline]
 #[track_caller]
 pub fn park_timeout(duration: Duration) {

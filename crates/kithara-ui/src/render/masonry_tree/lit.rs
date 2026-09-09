@@ -1,17 +1,3 @@
-//! What this host does with a flag the application turns under it.
-//!
-//! A document dresses a row by naming a flag: while the flag reads true the row
-//! shows one face, and otherwise another. This host keeps the tree it mounted,
-//! so a flag it read once and never again freezes the face the document was
-//! mounted at - which is what a picked row in the quality menu did, staying
-//! undressed however many times it was picked.
-//!
-//! The other host is not asked here. It rebuilds every frame, so it follows a
-//! flag by construction, and nothing in a test can read a colour back out of it
-//! without rasterising a window: the picture it draws is iced's, not this
-//! crate's. Comparing the two pictures needs a rasteriser for each host in one
-//! lane, which is a harness this crate does not have.
-
 use kithara_test_utils::kithara;
 
 use crate::{

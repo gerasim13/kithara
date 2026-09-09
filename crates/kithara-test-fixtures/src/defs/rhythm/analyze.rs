@@ -1,6 +1,7 @@
 use std::{
+    io::Cursor,
     num::{NonZeroU32, NonZeroUsize},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock, PoisonError},
 };
 
 use futures_lite::future::block_on;
@@ -11,10 +12,10 @@ use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
 };
 use kithara_bufpool::testing::{Pools, TestPools, pools};
-use kithara_decode::TrackMetadata;
+use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{thread, time::Duration};
-use kithara_resampler::rubato::RubatoBackend;
+use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 
 struct Consts;
@@ -34,7 +35,23 @@ impl Consts {
 }
 
 pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
-    let reader = WavReader::parse(wav).unwrap_or_else(|error| panic!("rhythm WAV: {error}"));
+    let reader = PcmReader::parse_wav(wav).unwrap_or_else(|error| panic!("rhythm WAV: {error}"));
+    analyze(reader).0
+}
+
+pub(in crate::defs) fn beat_flac(flac: &[u8]) -> (BeatArtifact, u64) {
+    let reader =
+        PcmReader::decode_flac(flac).unwrap_or_else(|error| panic!("library FLAC: {error}"));
+    analyze(reader)
+}
+
+/// One analysis at a time: a session keeps the whole mono track and its
+/// detection buffers in the worker's shared pool region, and `build.rs`
+/// materialises every library sidecar in one batch, so eleven concurrent
+/// sessions exceeded the region budget and settled without a beat grid.
+fn analyze(reader: PcmReader) -> (BeatArtifact, u64) {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let rate = reader.spec.sample_rate;
     let (mut results, _producer) = worker().analyze(
         Box::new(reader),
@@ -46,14 +63,21 @@ pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
         while results.changed().await.is_ok() {}
         results.borrow().clone()
     })
-    .unwrap_or_else(|| panic!("production rhythm analysis produced no result"));
+    .expect("production rhythm analysis produced no result");
     let analysis = progress.analysis();
-    assert!(analysis.is_settled(), "rhythm analysis must cover the WAV");
-    analysis
+    assert!(
+        analysis.is_settled(),
+        "rhythm analysis must cover the source"
+    );
+    let frames = analysis
+        .extent()
+        .expect("settled rhythm analysis has a source extent");
+    let artifact = analysis
         .beat()
-        .unwrap_or_else(|| panic!("production rhythm analysis produced no beat artifact"))
+        .expect("production rhythm analysis produced no beat artifact")
         .artifact()
-        .clone()
+        .clone();
+    (artifact, frames)
 }
 
 fn worker() -> &'static AnalysisWorker {
@@ -69,17 +93,17 @@ fn worker() -> &'static AnalysisWorker {
     })
 }
 
-struct WavReader {
-    bus: EventBus,
-    cursor: usize,
-    metadata: TrackMetadata,
-    pools: Pools,
-    samples: Vec<f32>,
+struct PcmReader {
     spec: AudioSpec,
+    bus: EventBus,
+    pools: Pools,
+    metadata: TrackMetadata,
+    samples: Vec<f32>,
+    cursor: usize,
 }
 
-impl WavReader {
-    fn parse(bytes: &[u8]) -> Result<Self, String> {
+impl PcmReader {
+    fn parse_wav(bytes: &[u8]) -> Result<Self, String> {
         if bytes.get(..4) != Some(b"RIFF")
             || bytes.get(8..12) != Some(b"WAVE")
             || bytes.get(36..40) != Some(b"data")
@@ -112,17 +136,45 @@ impl WavReader {
             .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / Consts::SAMPLE_SCALE)
             .collect();
         Ok(Self {
+            samples,
             bus: EventBus::default(),
             cursor: 0,
             metadata: TrackMetadata::default(),
             pools: pools(),
-            samples,
             spec: AudioSpec::new(channels, sample_rate),
         })
     }
 
-    fn total_frames(&self) -> usize {
-        self.samples.len() / usize::from(self.spec.channels)
+    fn decode_flac(bytes: &[u8]) -> Result<Self, String> {
+        let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
+            .build();
+        let mut decoder =
+            DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some("flac"), config)
+                .map_err(|error| format!("open: {error}"))?;
+        let spec = decoder.spec();
+        let metadata = decoder.metadata();
+        let mut samples = Vec::new();
+        loop {
+            match decoder
+                .next_chunk()
+                .map_err(|error| format!("decode: {error}"))?
+            {
+                DecoderChunkOutcome::Chunk(chunk) => samples.extend_from_slice(&chunk.samples),
+                DecoderChunkOutcome::Pending(reason) => {
+                    return Err(format!("in-memory source is pending: {reason:?}"));
+                }
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        Ok(Self {
+            spec,
+            bus: EventBus::default(),
+            cursor: 0,
+            metadata,
+            pools: pools(),
+            samples,
+        })
     }
 
     fn position_at(&self, frame: usize) -> Duration {
@@ -130,9 +182,13 @@ impl WavReader {
             .duration_for(u64::try_from(frame).expect("invariant: fixture frame fits u64"))
             .expect("invariant: fixture duration fits platform duration")
     }
+
+    fn total_frames(&self) -> usize {
+        self.samples.len() / usize::from(self.spec.channels)
+    }
 }
 
-impl AudioSession for WavReader {
+impl AudioSession for PcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.position_at(self.total_frames()))
     }
@@ -146,7 +202,7 @@ impl AudioSession for WavReader {
     }
 }
 
-impl AudioRead for WavReader {
+impl AudioRead for PcmReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         if self.cursor >= self.total_frames() {
             return Ok(ChunkOutcome::Eof {
@@ -204,7 +260,7 @@ impl AudioRead for WavReader {
     }
 }
 
-impl AudioControl for WavReader {
+impl AudioControl for PcmReader {
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
         let frame = usize::try_from(self.spec.frame_at(target)?).map_err(|_| {
             DecodeError::SeekOutOfRange {

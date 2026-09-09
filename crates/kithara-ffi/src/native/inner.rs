@@ -4,9 +4,10 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    drm::{KeyRequest, KeyRequestFactory},
+    drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
+    host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -34,10 +35,7 @@ use crate::{
     types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
 };
 
-fn build_processor_closure(
-    processor: Arc<dyn FfiKeyProcessor>,
-    salt: String,
-) -> kithara::drm::KeyProcessor {
+fn build_processor_closure(processor: Arc<dyn FfiKeyProcessor>, salt: String) -> KeyProcessor {
     Arc::new(move |key: Bytes| {
         Ok(Bytes::from(
             processor.process_key(key.to_vec(), salt.clone()),
@@ -164,8 +162,6 @@ pub(crate) struct NativeInner {
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
-    queue_owner: kithara::host::HostOwned<FfiQueue>,
-    queue: FfiQueueControl,
     /// Rust-owned asset store shared by the queue and every item resource.
     store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
@@ -180,6 +176,8 @@ pub(crate) struct NativeInner {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    queue: FfiQueueControl,
+    queue_owner: HostOwned<FfiQueue>,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
@@ -235,12 +233,12 @@ impl NativeInner {
         Self {
             downloader,
             store,
+            queue_owner,
+            queue,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
-            queue_owner,
-            queue,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -640,11 +638,9 @@ fn merged_headers_for_item(
 }
 
 impl Drop for NativeInner {
-    /// Fire the master cancel pulse so the shutdown signal reaches
-    /// subsystems before structural Arc teardown unwinds. The facade
-    /// owns `NativeInner` by value, so this runs exactly when the
-    /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
-    /// "Cancel Hierarchy".
+    /// Fire the master cancel pulse so the shutdown signal reaches subsystems before
+    /// structural Arc teardown unwinds. The facade owns `NativeInner` by value, so this
+    /// runs exactly when the `AudioPlayer` is dropped.
     fn drop(&mut self) {
         if let Err(error) = super::session::remove(&self.queue_owner) {
             tracing::error!(?error, "failed to remove FFI Queue from the process Host");

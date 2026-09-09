@@ -24,4 +24,4 @@ decoded audio through the same renderer contract. It does not decode audio,
 own source lifecycle, own `Player` / `PlayWorker` / Host/session state, access
 storage, or analyze samples.
 
-See [CONTEXT.md](CONTEXT.md) for ownership and dependency boundaries.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-warp) for ownership and dependency boundaries.

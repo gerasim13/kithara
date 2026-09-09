@@ -15,17 +15,17 @@ const SEQLOCK_PHASES: u64 = 2;
 
 #[derive(Debug, Default)]
 struct RenderCell {
-    version: AtomicU64,
-    output_start: AtomicI64,
+    frontier_output: AtomicI64,
     output_end: AtomicI64,
-    sample_rate: AtomicU32,
-    beat_start: AtomicU64,
-    beat_end: AtomicU64,
+    output_start: AtomicI64,
     beats_present: AtomicU32,
+    sample_rate: AtomicU32,
+    beat_end: AtomicU64,
+    beat_start: AtomicU64,
+    frontier_source: AtomicU64,
     session_epoch: AtomicU64,
     transport_revision: AtomicU64,
-    frontier_source: AtomicU64,
-    frontier_output: AtomicI64,
+    version: AtomicU64,
 }
 
 impl RenderCell {
@@ -103,16 +103,16 @@ impl RenderCell {
 }
 
 struct RawSnapshot {
-    output_start: i64,
-    output_end: i64,
-    sample_rate: u32,
-    beat_start: u64,
-    beat_end: u64,
     beats_present: bool,
+    frontier_output: i64,
+    output_end: i64,
+    output_start: i64,
+    sample_rate: u32,
+    beat_end: u64,
+    beat_start: u64,
+    frontier_source: u64,
     session_epoch: u64,
     transport_revision: u64,
-    frontier_source: u64,
-    frontier_output: i64,
 }
 
 impl RawSnapshot {
@@ -139,7 +139,7 @@ impl RawSnapshot {
             .source(self.frontier_source)
             .output(SessionFrame::new(self.frontier_output))
             .build();
-        Some(RenderSnapshot { context, frontier })
+        Some(RenderSnapshot { frontier, context })
     }
 }
 
@@ -151,6 +151,12 @@ impl RawSnapshot {
 pub struct RenderPublisher(Arc<RenderCell>);
 
 impl RenderPublisher {
+    /// Returns the read side paired with this publisher.
+    #[must_use]
+    pub fn reader(&self) -> RenderReader {
+        RenderReader(Arc::clone(&self.0))
+    }
+
     delegate::delegate! {
         to self.0 {
             /// Withdraws the current context at a session-axis discontinuity.
@@ -166,12 +172,6 @@ impl RenderPublisher {
             )]
             pub fn publish(&self, context: &RenderContext, frontier: PresentationFrontier);
         }
-    }
-
-    /// Returns the read side paired with this publisher.
-    #[must_use]
-    pub fn reader(&self) -> RenderReader {
-        RenderReader(Arc::clone(&self.0))
     }
 }
 
@@ -207,9 +207,9 @@ impl RenderReader {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderSnapshot {
-    context: RenderContext,
     #[field(get, copy)]
     frontier: PresentationFrontier,
+    context: RenderContext,
 }
 
 impl RenderSnapshot {
@@ -243,8 +243,8 @@ impl RenderSnapshot {
             .output(SessionFrame::new(output))
             .build();
         Some(Self {
-            context: self.context,
             frontier,
+            context: self.context,
         })
     }
 }

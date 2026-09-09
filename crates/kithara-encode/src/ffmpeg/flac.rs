@@ -7,6 +7,7 @@ use ffmpeg::{
     encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::filter::Graph;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::{
@@ -84,7 +85,7 @@ impl FlacFFmpegEncoder {
 
 struct PacketCollectingEncoder {
     encoder: AudioEncoder,
-    filter: ffmpeg::filter::Graph,
+    filter: Graph,
     timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,

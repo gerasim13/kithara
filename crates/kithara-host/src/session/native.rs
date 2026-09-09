@@ -1,6 +1,10 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelCtx, backend::AudioBackend};
+use firewheel::{
+    FirewheelCtx,
+    backend::AudioBackend,
+    cpal::{CpalBackend, CpalConfig},
+};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_platform::{
@@ -8,7 +12,6 @@ use kithara_platform::{
     thread::spawn_named,
 };
 use kithara_play::{GroupState, player::PlayerMember};
-use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{
@@ -26,8 +29,6 @@ pub(crate) struct SessionClient<S> {
 }
 
 impl<S> SessionClient<S> {
-    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
-    #[kithara::allow_block]
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
@@ -48,6 +49,10 @@ impl<S> SessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -56,10 +61,6 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
                 "unexpected host reply for player session command".into(),
             )),
         }
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
@@ -144,7 +145,7 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
+    ctx: &mut FirewheelCtx<CpalBackend>,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
 ) -> Result<(), String> {
@@ -166,11 +167,8 @@ fn start_stream_cpal(
     }
 }
 
-fn cpal_config(
-    sample_rate: u32,
-    output_block_frames: Option<NonZeroU32>,
-) -> firewheel::cpal::CpalConfig {
-    let mut config = firewheel::cpal::CpalConfig::default();
+fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> CpalConfig {
+    let mut config = CpalConfig::default();
     config.output.desired_sample_rate = NonZeroU32::new(sample_rate).map(NonZeroU32::get);
     if let Some(frames) = output_block_frames {
         config.output.desired_block_frames = Some(frames.get());
@@ -184,7 +182,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
 ) -> Arc<dyn HostDispatcher<S>> {
-    spawn_session_client::<firewheel::cpal::CpalBackend, S>(
+    spawn_session_client::<CpalBackend, S>(
         "kithara-engine",
         root,
         root_view,

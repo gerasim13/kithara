@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioConfigPatch, AudioDecoderConfig, ConsumerWakeMode};
+use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
@@ -39,13 +39,24 @@ where
     pub(crate) initial_abr_mode: AbrMode,
     /// Shared asset store used by playback and derived resources.
     pub(crate) store: AssetStore<S>,
+    /// What a configuration document says about the [`AudioConfig`] this
+    /// resource builds, carried as a patch for the same reason [`Self::hls`]
+    /// is. A document's live spelling is its own top-level `audio:` section.
+    ///
+    /// [`AudioConfig`]: kithara_audio::AudioConfig
+    #[builder(default)]
+    pub(crate) audio: AudioConfigPatch,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Encryption key handling configuration.
+    /// What a configuration document says about the [`FileConfig`] this
+    /// resource builds, carried as a patch for the same reason [`Self::hls`]
+    /// is. A document's live spelling is its own top-level `file:` section.
+    ///
+    /// [`FileConfig`]: kithara_file::FileConfig
     #[builder(default)]
-    pub(crate) keys: KeyOptions,
+    pub(crate) file: FileConfigPatch,
     /// What a configuration document says about the [`HlsConfig`] this
     /// resource builds, carried as a patch because that configuration cannot
     /// exist before the track's URL and store do. A document's live spelling
@@ -54,43 +65,9 @@ where
     /// [`HlsConfig`]: kithara_hls::HlsConfig
     #[builder(default)]
     pub(crate) hls: HlsConfigPatch,
-    /// What a configuration document says about the [`FileConfig`] this
-    /// resource builds, carried as a patch for the same reason [`Self::hls`]
-    /// is. A document's live spelling is its own top-level `file:` section.
-    ///
-    /// [`FileConfig`]: kithara_file::FileConfig
+    /// Encryption key handling configuration.
     #[builder(default)]
-    pub(crate) file: FileConfigPatch,
-    /// What a configuration document says about the [`AudioConfig`] this
-    /// resource builds, carried as a patch for the same reason [`Self::hls`]
-    /// is. A document's live spelling is its own top-level `audio:` section.
-    ///
-    /// [`AudioConfig`]: kithara_audio::AudioConfig
-    #[builder(default)]
-    pub(crate) audio: AudioConfigPatch,
-    /// Session-owned audio-consumer wake capability. Player preparation fills
-    /// this field; `None` identifies a direct resource consumed off RT. Not a
-    /// document key: the session owns it.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
-    /// Whether audio-thread reads block on a producer-ring underrun. Only an
-    /// offline harness or a player's own policy sets this, so it is not a
-    /// document key.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
-    /// Rate the audio host actually opened, handed to the built audio
-    /// pipeline. The player overwrites it from its engine, so it is not a
-    /// document key.
-    pub(crate) host_sample_rate: Option<NonZeroU32>,
-    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
-    /// reader that does not exist yet. `resource/build.rs` forwards this to
-    /// neither branch, so no value here changes variant selection today, and
-    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
-    /// asserting the value survives `Loader::build_config`. Not a document key
-    /// for exactly that reason: a document knob the binary ignores is worse
-    /// than no knob. Make it one when the ABR wiring lands.
-    #[builder(default = 0.0)]
-    pub(crate) preferred_peak_bitrate: f64,
+    pub(crate) keys: KeyOptions,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -113,14 +90,32 @@ where
     pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub(crate) hls_base_url: Option<Url>,
+    /// Rate the audio host actually opened, handed to the built audio
+    /// pipeline. The player overwrites it from its engine, so it is not a
+    /// document key.
+    pub(crate) host_sample_rate: Option<NonZeroU32>,
+    /// Explicit playback worker. Player preparation fills this field; direct
+    /// Resource callers must configure it themselves.
+    pub(crate) worker: Option<PlayWorker<S>>,
     /// Resident Warp resources and live temporal controls. Not a document
     /// key: a player-managed resource has this overwritten with the player's
     /// own `warp`, which is where a document's `player.warp:` section lands.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
-    /// Explicit playback worker. Player preparation fills this field; direct
-    /// Resource callers must configure it themselves.
-    pub(crate) worker: Option<PlayWorker<S>>,
+    /// Whether audio-thread reads block on a producer-ring underrun. Only an
+    /// offline harness or a player's own policy sets this, so it is not a
+    /// document key.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
+    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
+    /// reader that does not exist yet. `resource/build.rs` forwards this to
+    /// neither branch, so no value here changes variant selection today, and
+    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
+    /// asserting the value survives `Loader::build_config`. Not a document key
+    /// for exactly that reason: a document knob the binary ignores is worse
+    /// than no knob. Make it one when the ABR wiring lands.
+    #[builder(default = 0.0)]
+    pub(crate) preferred_peak_bitrate: f64,
 }
 
 impl<S, B> Clone for ResourceConfig<S, B>
@@ -138,7 +133,6 @@ where
             hls: self.hls.clone(),
             file: self.file.clone(),
             audio: self.audio.clone(),
-            consumer_wake_mode: self.consumer_wake_mode,
             block_on_underrun: self.block_on_underrun,
             host_sample_rate: self.host_sample_rate,
             preferred_peak_bitrate: self.preferred_peak_bitrate,
@@ -192,12 +186,6 @@ mod tests {
         Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
             .build())
-    }
-
-    #[kithara::test]
-    fn direct_config_has_no_session_wake_policy() {
-        let config = test_config("https://example.com/track.mp3").expect("valid config");
-        assert_eq!(config.consumer_wake_mode, None);
     }
 
     fn worker() -> PlayWorker<TestPools> {
@@ -447,10 +435,6 @@ mod tests {
         let config = test_config("https://example.com/song.mp3").expect("valid config");
 
         assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-        assert_eq!(
-            config.consumer_wake_mode, None,
-            "a direct resource carries no session wake policy"
-        );
         assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());
         assert!(

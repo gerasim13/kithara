@@ -54,8 +54,8 @@ where
 {
     pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
-    pub(super) pending_resources: PendingResourceIndex<S>,
     pub(super) eviction: EvictionRouter,
+    pub(super) pending_resources: PendingResourceIndex<S>,
     pub(super) transactions: ResourceTransactionIndex,
     pub(super) backend: StoreBackendInner<S>,
 }
@@ -98,11 +98,6 @@ impl<S> AssetStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    #[cfg(test)]
-    pub(super) fn capabilities(&self) -> Capabilities {
-        delegate_to_store!(self, capabilities)
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -161,20 +156,9 @@ where
         )
     }
 
-    delegate::delegate! {
-        to self.inner.availability {
-            /// Byte ranges known to the availability aggregate for this resource.
-            #[must_use]
-            pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64>;
-            /// Return `true` when every byte in `range` is already present for
-            /// the resource, or when the range is empty. Aggregate-only: no
-            /// locks, no filesystem.
-            #[must_use]
-            pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool;
-            /// Committed final length per the availability aggregate, if known.
-            #[must_use]
-            pub fn final_len(&self, key: &ResourceKey) -> Option<u64>;
-        }
+    #[cfg(test)]
+    pub(super) fn capabilities(&self) -> Capabilities {
+        delegate_to_store!(self, capabilities)
     }
 
     /// Persist the in-memory byte-availability aggregate snapshot to
@@ -318,6 +302,22 @@ where
         Fut: Future<Output = T>,
     {
         self.inner.transactions.run(key, operation).await
+    }
+
+    delegate::delegate! {
+        to self.inner.availability {
+            /// Byte ranges known to the availability aggregate for this resource.
+            #[must_use]
+            pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64>;
+            /// Return `true` when every byte in `range` is already present for
+            /// the resource, or when the range is empty. Aggregate-only: no
+            /// locks, no filesystem.
+            #[must_use]
+            pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool;
+            /// Committed final length per the availability aggregate, if known.
+            #[must_use]
+            pub fn final_len(&self, key: &ResourceKey) -> Option<u64>;
+        }
     }
 }
 

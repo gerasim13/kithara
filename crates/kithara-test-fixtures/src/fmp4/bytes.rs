@@ -11,16 +11,6 @@ impl Mp4Bytes {
         self.buf
     }
 
-    delegate::delegate! {
-        to self.buf {
-            pub(crate) const fn len(&self) -> usize;
-            #[call(extend_from_slice)]
-            pub(crate) fn push_bytes(&mut self, value: &[u8]);
-            #[call(push)]
-            pub(crate) fn push_u8(&mut self, value: u8);
-        }
-    }
-
     pub(crate) fn push_fourcc(&mut self, value: [u8; 4]) {
         self.push_bytes(&value);
     }
@@ -51,6 +41,16 @@ impl Mp4Bytes {
 
     pub(crate) fn push_zeroes(&mut self, count: usize) {
         self.buf.resize(self.buf.len() + count, 0);
+    }
+
+    delegate::delegate! {
+        to self.buf {
+            pub(crate) const fn len(&self) -> usize;
+            #[call(extend_from_slice)]
+            pub(crate) fn push_bytes(&mut self, value: &[u8]);
+            #[call(push)]
+            pub(crate) fn push_u8(&mut self, value: u8);
+        }
     }
 }
 

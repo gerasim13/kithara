@@ -6,9 +6,10 @@ use ffmpeg::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
     },
-    format::{self as av_format, flag::Flags as FormatFlags},
+    format::{self as av_format, context::Output, flag::Flags as FormatFlags},
 };
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::filter::Graph;
 
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
@@ -141,7 +142,7 @@ fn encode_direct_pcm(
 
 struct DirectEncoder {
     encoder: AudioEncoder,
-    filter: ffmpeg::filter::Graph,
+    filter: Graph,
 }
 
 #[derive(Clone, Copy)]
@@ -152,10 +153,7 @@ struct DirectEncodeConfig<'a> {
 }
 
 impl DirectEncoder {
-    fn new(
-        octx: &mut av_format::context::Output,
-        config: DirectEncodeConfig<'_>,
-    ) -> Result<Self, EncodeError> {
+    fn new(octx: &mut Output, config: DirectEncodeConfig<'_>) -> Result<Self, EncodeError> {
         let DirectEncodeConfig {
             target,
             sample_rate,
@@ -222,14 +220,14 @@ impl DirectEncoder {
 
     fn receive_and_process_encoded_packets(
         &mut self,
-        octx: &mut av_format::context::Output,
+        octx: &mut Output,
     ) -> Result<(), FfmpegError> {
         write_encoded_packets(&mut self.encoder, octx)
     }
 
     fn receive_and_process_filtered_frames(
         &mut self,
-        octx: &mut av_format::context::Output,
+        octx: &mut Output,
     ) -> Result<(), FfmpegError> {
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
             write_encoded_packets(encoder, octx)
@@ -237,10 +235,7 @@ impl DirectEncoder {
     }
 }
 
-fn write_encoded_packets(
-    encoder: &mut AudioEncoder,
-    octx: &mut av_format::context::Output,
-) -> Result<(), FfmpegError> {
+fn write_encoded_packets(encoder: &mut AudioEncoder, octx: &mut Output) -> Result<(), FfmpegError> {
     let mut encoded = Packet::empty();
     let stream_time_base = octx.stream(0).ok_or(FfmpegError::Bug)?.time_base();
     while encoder.receive_packet(&mut encoded).is_ok() {

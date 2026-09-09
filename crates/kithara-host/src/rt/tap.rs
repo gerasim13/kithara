@@ -48,8 +48,8 @@ impl AudioNode for TapNode {
 }
 
 struct TapProcessor {
-    outputs: Option<OutputGroup>,
     sample_rate: NonZeroU32,
+    outputs: Option<OutputGroup>,
 }
 
 impl TapProcessor {
@@ -58,8 +58,8 @@ impl TapProcessor {
             outputs.reconfigure(AudioSpec::new(2, sample_rate));
         }
         Self {
-            outputs,
             sample_rate,
+            outputs,
         }
     }
 

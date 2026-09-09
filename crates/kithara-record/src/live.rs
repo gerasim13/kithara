@@ -28,8 +28,8 @@ impl Consts {
 
 #[derive(Clone, Copy)]
 pub(super) struct FormatChange {
-    pub(super) frame: u64,
     pub(super) spec: AudioSpec,
+    pub(super) frame: u64,
 }
 
 /// Completed live-recording counts.
@@ -47,14 +47,14 @@ type ResultSlot = Arc<Mutex<Option<Result<LiveRecordingReport, LiveRecordingErro
 #[derive(Default)]
 struct Control {
     accepting: AtomicBool,
-    cut_at: AtomicU64,
     cut_requested: AtomicBool,
     finish_requested: AtomicBool,
     generation_overflowed: AtomicBool,
     overflowed: AtomicBool,
-    result: ResultSlot,
     writing: AtomicBool,
+    cut_at: AtomicU64,
     written_frames: AtomicU64,
+    result: ResultSlot,
 }
 
 impl Control {
@@ -67,9 +67,9 @@ impl Control {
 /// RT endpoint copied into the Host master-output group.
 pub struct RecordingOutput {
     control: Arc<Control>,
+    spec: AudioSpec,
     formats: HeapProd<FormatChange>,
     pcm: HeapProd<f32>,
-    spec: AudioSpec,
     wake: Wake,
 }
 
@@ -87,8 +87,8 @@ impl LiveOutput for RecordingOutput {
             return;
         }
         let change = FormatChange {
-            frame: self.control.written_frames.load(Ordering::Acquire),
             spec,
+            frame: self.control.written_frames.load(Ordering::Acquire),
         };
         if self.formats.try_push(change).is_err() {
             self.control
@@ -149,17 +149,22 @@ impl LiveOutput for RecordingOutput {
             self.overflow();
             return;
         };
-        if self
-            .control
-            .written_frames
-            .fetch_update(Ordering::Release, Ordering::Relaxed, |written| {
-                written.checked_add(frames)
-            })
-            .is_err()
-        {
-            self.control.writing.store(false, Ordering::Release);
-            self.overflow();
-            return;
+        let mut written = self.control.written_frames.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = written.checked_add(frames) else {
+                self.control.writing.store(false, Ordering::Release);
+                self.overflow();
+                return;
+            };
+            match self.control.written_frames.compare_exchange_weak(
+                written,
+                next,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => written = current,
+            }
         }
         self.control.writing.store(false, Ordering::Release);
         self.wake.defer();
@@ -276,10 +281,10 @@ impl LiveRecorder {
             },
         )?;
         let output = RecordingOutput {
+            spec,
             control: Arc::clone(&control),
             formats: format_tx,
             pcm: pcm_tx,
-            spec,
             wake: wake.clone(),
         };
         let handle = LiveRecordingHandle {

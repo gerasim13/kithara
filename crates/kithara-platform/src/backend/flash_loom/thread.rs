@@ -1,3 +1,5 @@
+use core::num::NonZeroUsize;
+
 use crate::loom::thread as backend;
 pub use crate::{common::time::Duration, loom::thread::JoinHandle};
 
@@ -78,6 +80,6 @@ pub fn current_thread_id() -> u64 {
 }
 
 #[must_use]
-pub fn available_parallelism() -> Option<core::num::NonZeroUsize> {
+pub fn available_parallelism() -> Option<NonZeroUsize> {
     backend::available_parallelism()
 }

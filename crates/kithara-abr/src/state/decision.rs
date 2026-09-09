@@ -1,5 +1,5 @@
 use kithara_events::{AbrMode, AbrReason, VariantIndex, VariantInfo};
-use kithara_platform::time::Instant;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{kithara, probe::IntoProbeArg};
 use num_traits::ToPrimitive;
 
@@ -274,7 +274,7 @@ fn candidate_variant(
 #[derive(Clone, Copy)]
 struct SwitchContext<'a> {
     settings: &'a AbrSettings,
-    buffer_ahead: Option<kithara_platform::time::Duration>,
+    buffer_ahead: Option<Duration>,
     candidate_idx: VariantIndex,
     current: VariantIndex,
     adjusted_bps: f64,

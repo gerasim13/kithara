@@ -30,11 +30,5 @@ pub enum AnalysisFileError {
     Corrupt,
     /// The latest full snapshot payload is invalid.
     #[error("analysis payload is invalid: {0}")]
-    Payload(#[source] BlobError),
-}
-
-impl From<BlobError> for AnalysisFileError {
-    fn from(error: BlobError) -> Self {
-        Self::Payload(error)
-    }
+    Payload(#[from] BlobError),
 }

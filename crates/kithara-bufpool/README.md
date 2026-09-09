@@ -100,4 +100,4 @@ generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
 Acquisition and return stay lock-free; every capacity increase is checked
 against both the region and selected-pool limits.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-bufpool) for detailed contracts, invariants, and internals.

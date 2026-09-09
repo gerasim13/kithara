@@ -22,7 +22,7 @@ use num_traits::cast::cast;
 use vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
     kurbo::Affine,
-    peniko::{Color as VelloColor, color::palette},
+    peniko::{Color as VelloColor, color::palette::css::BLACK},
     wgpu::{
         DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
         TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
@@ -476,7 +476,7 @@ fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
     rasterise_at(
         scene,
         (u32::from(Fixture::SURFACE.0), u32::from(Fixture::SURFACE.1)),
-        palette::css::BLACK,
+        BLACK,
     )
 }
 

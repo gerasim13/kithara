@@ -21,14 +21,14 @@ use crate::{
 };
 
 pub(crate) struct Job {
+    pub(crate) token: AnalysisToken,
     pub(crate) reader: Box<dyn AudioReader>,
     pub(crate) cancel: CancelToken,
-    pub(crate) ingest: ring::Reader,
     pub(crate) rate: NonZeroU32,
-    pub(crate) token: AnalysisToken,
-    pub(crate) revision: u64,
-    pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) resume: Option<AnalysisProgress>,
+    pub(crate) ingest: ring::Reader,
+    pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
+    pub(crate) revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,11 +39,11 @@ enum TaskPhase {
 }
 
 struct Run {
-    chosen: u64,
-    at: u64,
-    started: bool,
-    grew: bool,
     deferred: bool,
+    grew: bool,
+    started: bool,
+    at: u64,
+    chosen: u64,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -52,26 +52,26 @@ pub(crate) struct AnalysisTask<B, S>
 where
     B: ResamplerBackend,
 {
+    token: AnalysisToken,
     reader: Box<dyn AudioReader>,
     #[field(get = cancel_token, vis = "pub(crate)")]
     cancel: CancelToken,
-    analyzers: Option<TrackAnalyzers<B, S>>,
-    ingest: ring::Reader,
-    scratch: Option<SampleBuffer>,
+    extent: Extent,
     rate: NonZeroU32,
-    token: AnalysisToken,
-    revision: u64,
+    chunk_frames: NonZeroU64,
+    analyzers: Option<TrackAnalyzers<B, S>>,
+    run: Option<Run>,
+    scratch: Option<SampleBuffer>,
+    ingest: ring::Reader,
+    schedule: Schedule,
     tx: watch::Sender<Option<AnalysisProgress>>,
     phase: TaskPhase,
     beat_dirty: bool,
-    chunk_frames: NonZeroU64,
-    producer_drain_limit: usize,
+    frontier: u64,
     publish_frames: u64,
     published_at: u64,
-    extent: Extent,
-    frontier: u64,
-    schedule: Schedule,
-    run: Option<Run>,
+    revision: u64,
+    producer_drain_limit: usize,
 }
 
 impl<B, S> AnalysisTask<B, S>
@@ -103,16 +103,16 @@ where
         };
         Ok(Self {
             analyzers,
-            beat_dirty: false,
-            cancel: job.cancel,
             chunk_frames,
             extent,
+            published_at,
+            beat_dirty: false,
+            cancel: job.cancel,
             frontier: 0,
             ingest: job.ingest,
             phase: TaskPhase::Decode,
             producer_drain_limit: producer_drain_limit.get(),
             publish_frames: rate.saturating_mul(u64::from(publish_seconds.get())),
-            published_at,
             rate: job.rate,
             reader: job.reader,
             run: None,
@@ -124,36 +124,11 @@ where
         })
     }
 
-    fn target(&self) -> Option<&Coverage> {
-        let analyzers = self.analyzers.as_ref()?;
-        match analyzers.beat_intake() {
-            Intake::Full => Some(analyzers.coverage()),
-            Intake::Continuing | Intake::Anywhere => Some(analyzers.analysed()),
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        if let Some(analyzers) = &mut self.analyzers {
+            analyzers.apply_detection(output);
+            self.beat_dirty = true;
         }
-    }
-
-    fn intake(&self) -> Intake {
-        self.analyzers
-            .as_ref()
-            .map_or(Intake::Anywhere, TrackAnalyzers::beat_intake)
-    }
-
-    fn run_window(&self) -> Option<u64> {
-        (self.intake() != Intake::Continuing).then_some(self.chunk_frames.get())
-    }
-
-    fn is_covered(&self, range: FrameRange) -> bool {
-        self.target()
-            .is_some_and(|coverage| coverage.contains(range))
-    }
-
-    fn is_complete(&self) -> bool {
-        let Some(extent) = self.extent.frames() else {
-            return false;
-        };
-        self.analyzers
-            .as_ref()
-            .is_some_and(|analyzers| analyzers.analysed().contains(FrameRange::new(0, extent)))
     }
 
     fn choose(&self, window: Option<u64>) -> Option<u64> {
@@ -263,6 +238,11 @@ where
         analyzers.covered_frames().saturating_sub(self.published_at) >= self.publish_frames
     }
 
+    pub(crate) fn fail_compute_unavailable(&mut self) {
+        warn!("analysis: compute pool unavailable; pass ended");
+        self.phase = TaskPhase::Done;
+    }
+
     fn finish(&mut self, settled: bool) {
         debug!(
             extent = ?self.extent.frames(),
@@ -275,6 +255,26 @@ where
         } else {
             TaskPhase::Done
         };
+    }
+
+    fn intake(&self) -> Intake {
+        self.analyzers
+            .as_ref()
+            .map_or(Intake::Anywhere, TrackAnalyzers::beat_intake)
+    }
+
+    fn is_complete(&self) -> bool {
+        let Some(extent) = self.extent.frames() else {
+            return false;
+        };
+        self.analyzers
+            .as_ref()
+            .is_some_and(|analyzers| analyzers.analysed().contains(FrameRange::new(0, extent)))
+    }
+
+    fn is_covered(&self, range: FrameRange) -> bool {
+        self.target()
+            .is_some_and(|coverage| coverage.contains(range))
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -290,18 +290,6 @@ where
         self.analyzers.as_mut()?.prepare_detection(trailing)
     }
 
-    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
-        if let Some(analyzers) = &mut self.analyzers {
-            analyzers.apply_detection(output);
-            self.beat_dirty = true;
-        }
-    }
-
-    pub(crate) fn fail_compute_unavailable(&mut self) {
-        warn!("analysis: compute pool unavailable; pass ended");
-        self.phase = TaskPhase::Done;
-    }
-
     fn publish(&mut self, detector: Option<&mut Detector>, ending: bool) {
         let Some(analyzers) = &mut self.analyzers else {
             return;
@@ -313,6 +301,18 @@ where
             analyzers.progress(detector, ending, self.chunk_frames, self.extent.frames());
         self.published_at = analyzers.covered_frames();
         self.tx.send(Some(progress)).ok();
+    }
+
+    fn run_window(&self) -> Option<u64> {
+        (self.intake() != Intake::Continuing).then_some(self.chunk_frames.get())
+    }
+
+    fn target(&self) -> Option<&Coverage> {
+        let analyzers = self.analyzers.as_ref()?;
+        match analyzers.beat_intake() {
+            Intake::Full => Some(analyzers.coverage()),
+            Intake::Continuing | Intake::Anywhere => Some(analyzers.analysed()),
+        }
     }
 }
 

@@ -3,6 +3,10 @@ use std::num::NonZeroU32;
 use kithara_decode::BlenderProfile;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_fixtures::unit_fixtures::{
+    blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
+    blend_outgoing_constant, blend_signed_frame,
+};
 use kithara_test_utils::kithara;
 
 use super::GaplessBlender;
@@ -40,10 +44,10 @@ fn blender(pools: &Pools, profile: BlenderProfile) -> GaplessBlender {
 }
 
 #[kithara::test]
-fn single_input_blender_is_bit_exact() {
+fn single_input_blender_is_bit_exact(blend_identity: Vec<f32>) {
     let pools = pools();
     let spec = spec(2, 48_000);
-    let input = chunk(&pools, spec, vec![-1.0, -0.25, 0.0, 0.25, 0.5, 1.0]);
+    let input = chunk(&pools, spec, blend_identity);
     let input_ptr = input.samples.as_ptr();
     let input_meta = input.meta;
     let input_bits = input
@@ -69,7 +73,7 @@ fn single_input_blender_is_bit_exact() {
 }
 
 #[kithara::test]
-fn replacing_active_profile_accepts_the_new_spec() {
+fn replacing_active_profile_accepts_the_new_spec(blend_multichannel: Vec<f32>) {
     let pools = pools();
     let initial = spec(2, 44_100);
     let replacement = spec(6, 48_000);
@@ -83,7 +87,7 @@ fn replacing_active_profile_accepts_the_new_spec() {
     blender.replace_active(BlenderProfile::new(replacement));
     let capacities_after = blender.buffer_capacities();
 
-    let output = blender.process_active(chunk(&pools, replacement, vec![0.25; 12]));
+    let output = blender.process_active(chunk(&pools, replacement, blend_multichannel));
 
     assert_eq!(output.spec(), replacement);
     assert_eq!(capacities_after.0, prepared_capacity);
@@ -107,20 +111,18 @@ fn high_rate_join_uses_the_full_twenty_milliseconds() {
 }
 
 #[kithara::test]
-fn real_outgoing_pcm_is_blended_for_the_full_linear_join() {
+fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
+    blend_outgoing: Vec<f32>,
+    blend_incoming: Vec<f32>,
+) {
     const CHUNK_FRAMES: usize = 128;
     const JOIN_FRAMES: usize = 882;
-    const POST_JOIN_FRAMES: usize = 1_024;
 
     let pools = pools();
     let spec = spec(2, 44_100);
     let channels = usize::from(spec.channels);
-    let outgoing = (0..JOIN_FRAMES.saturating_mul(channels))
-        .map(|sample| deterministic_sample(sample, 37, 257))
-        .collect::<Vec<_>>();
-    let incoming = (0..(JOIN_FRAMES + POST_JOIN_FRAMES).saturating_mul(channels))
-        .map(|sample| deterministic_sample(sample + 19, 53, 251))
-        .collect::<Vec<_>>();
+    let outgoing = blend_outgoing;
+    let incoming = blend_incoming;
     let mut blender = blender(&pools, BlenderProfile::new(spec));
     blender
         .prepare_active(BlenderProfile::new(spec))
@@ -160,21 +162,15 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join() {
     }
 }
 
-fn deterministic_sample(index: usize, multiplier: usize, modulus: usize) -> f32 {
-    let value = index.saturating_mul(multiplier) % modulus;
-    let centered =
-        i16::try_from(value).unwrap_or(i16::MAX) - i16::try_from(modulus / 2).unwrap_or(i16::MAX);
-    f32::from(centered) / f32::from(u16::try_from(modulus).unwrap_or(u16::MAX))
-}
-
 #[kithara::test]
-fn reset_cancels_an_active_join() {
-    const JOIN_FRAMES: usize = 882;
-
+fn reset_cancels_an_active_join(
+    blend_outgoing_constant: Vec<f32>,
+    blend_join_frame: Vec<f32>,
+    blend_signed_frame: Vec<f32>,
+) {
     let pools = pools();
     let spec = spec(2, 44_100);
-    let channels = usize::from(spec.channels);
-    let outgoing = vec![-0.75; JOIN_FRAMES * channels];
+    let outgoing = blend_outgoing_constant;
     let mut blender = blender(&pools, BlenderProfile::new(spec));
     blender
         .prepare_active(BlenderProfile::new(spec))
@@ -184,11 +180,11 @@ fn reset_cancels_an_active_join() {
         true
     }));
     blender.commit_join();
-    let joined = blender.process_active(chunk(&pools, spec, vec![0.25; channels]));
+    let joined = blender.process_active(chunk(&pools, spec, blend_join_frame));
     assert_eq!(joined.samples[0].to_bits(), (-0.75_f32).to_bits());
 
     blender.reset();
-    let input = chunk(&pools, spec, vec![0.25, -0.25]);
+    let input = chunk(&pools, spec, blend_signed_frame);
     let input_bits = input
         .samples
         .iter()

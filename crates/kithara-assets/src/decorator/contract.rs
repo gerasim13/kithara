@@ -29,13 +29,11 @@ bitflags::bitflags! {
 /// Explicit public contract for the assets abstraction.
 ///
 /// Acquisition is **phase-typed**: `acquire_resource*` hands back an
-/// [`AcquisitionResult`] — a `Pending` [`WriteSide`] writer that must
-/// `commit` before any read, or a `Ready` [`ReadSide`] reader when the
-/// resource is already committed. `open_resource*` always returns a `Ready`
-/// reader. The decrypt-readiness gate is carried in these types, not behind a
-/// runtime `is_readable()` probe; storage lifecycle `status()` stays a runtime
-/// facade on the reader. See crate `CONTEXT.md` for the asset / resource /
-/// identity model.
+/// [`AcquisitionResult`] — a `Pending` [`WriteSide`] writer that must `commit` before
+/// any read, or a `Ready` [`ReadSide`] reader when the resource is already committed.
+/// `open_resource*` always returns a `Ready` reader. The decrypt-readiness gate is
+/// carried in these types, not behind a runtime `is_readable()` probe; storage
+/// lifecycle `status()` stays a runtime facade on the reader.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Writer (Pending) phase returned by `acquire_resource*`.
     type ActiveRes: WriteSide<Reader = Self::ReadyRes>;

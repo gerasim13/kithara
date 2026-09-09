@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use bon::Builder;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
     not(target_arch = "wasm32"),

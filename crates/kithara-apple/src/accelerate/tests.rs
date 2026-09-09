@@ -1,18 +1,21 @@
+use kithara_test_fixtures::unit_fixtures::{
+    accelerate_clear, accelerate_copy, accelerate_ramp, accelerate_wave,
+};
 use kithara_test_utils::kithara;
 
 use super::{BiquadFilter, clear_f32, copy_f32, linear_interpolate_f32, ramp_f32};
 
 #[kithara::test(native, flash(false))]
-fn copy_f32_matches_slice_copy() {
-    let source = [1.0, -2.0, 3.5, 4.25];
+fn copy_f32_matches_slice_copy(accelerate_copy: Vec<f32>) {
+    let source = accelerate_copy;
     let mut target = [0.0; 4];
     assert_eq!(copy_f32(&source, &mut target), source.len());
-    assert_eq!(target, source);
+    assert_eq!(target.as_slice(), source.as_slice());
 }
 
 #[kithara::test(native, flash(false))]
-fn clear_f32_sets_zero() {
-    let mut target = [1.0, -2.0, 3.0];
+fn clear_f32_sets_zero(accelerate_clear: Vec<f32>) {
+    let mut target = accelerate_clear;
     clear_f32(&mut target);
     assert_eq!(target, [0.0; 3]);
 }
@@ -25,8 +28,8 @@ fn ramp_f32_matches_scalar_ramp() {
 }
 
 #[kithara::test(native, flash(false))]
-fn interpolation_outputs_requested_frames() {
-    let source = [0.0, 1.0, 2.0, 3.0];
+fn interpolation_outputs_requested_frames(accelerate_ramp: Vec<f32>) {
+    let source = accelerate_ramp;
     let positions = [0.0, 0.5, 1.0];
     let mut target = [0.0; 3];
     assert_eq!(
@@ -36,8 +39,8 @@ fn interpolation_outputs_requested_frames() {
 }
 
 #[kithara::test(native, flash(false))]
-fn linear_interpolation_matches_scalar_positions() {
-    let source = [0.0, 1.0, 2.0, 3.0];
+fn linear_interpolation_matches_scalar_positions(accelerate_ramp: Vec<f32>) {
+    let source = accelerate_ramp;
     let positions = [1.0, 1.25, 1.5, 1.75];
     let mut target = [0.0; 4];
 
@@ -47,8 +50,8 @@ fn linear_interpolation_matches_scalar_positions() {
 }
 
 #[kithara::test(native, flash(false))]
-fn quadratic_interpolation_matches_scalar_positions() {
-    let source = [0.0, 1.0, 0.0, -1.0, 0.0];
+fn quadratic_interpolation_matches_scalar_positions(accelerate_wave: Vec<f32>) {
+    let source = accelerate_wave;
     let positions = [1.0, 1.25, 1.5, 1.75];
     let mut target = [0.0; 4];
 
@@ -61,13 +64,13 @@ fn quadratic_interpolation_matches_scalar_positions() {
 }
 
 #[kithara::test(native, flash(false))]
-fn biquad_low_pass_processes_requested_frames() {
+fn biquad_low_pass_processes_requested_frames(accelerate_wave: Vec<f32>) {
     let Some(mut filter) =
         BiquadFilter::low_pass(44_100.0, 12_000.0, std::f64::consts::FRAC_1_SQRT_2)
     else {
         panic!("valid low pass filter");
     };
-    let source = [0.0, 1.0, 0.0, -1.0, 0.0];
+    let source = accelerate_wave;
     let mut target = [0.0; 5];
     assert_eq!(filter.process(&source, &mut target), source.len());
     assert!(target.iter().all(|sample| f32::is_finite(*sample)));

@@ -11,9 +11,6 @@ use kithara_test_utils::kithara;
 /// ([`wait`](PreloadGate::wait)) is a plain tokio task that polls `ready` and
 /// re-arms its own runtime timer while the gate is still closed — the worker
 /// does not drive the wakeup.
-///
-/// The contract (signal sites, rearm on seek) lives in
-/// `crates/kithara-audio/CONTEXT.md`.
 pub struct PreloadGate {
     ready: AtomicBool,
     ready_epoch: AtomicU64,

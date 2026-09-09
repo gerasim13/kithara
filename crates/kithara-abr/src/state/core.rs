@@ -129,30 +129,6 @@ impl AbrState {
         Self::new_at(mode, Instant::now())
     }
 
-    /// Build an `AbrState` whose session starts at `reference`.
-    ///
-    /// The anti-oscillation interval before the first switch is measured from
-    /// the session's start, so a test that states what that interval holds has
-    /// to be able to say when the session started - otherwise the assertion is
-    /// a race against its own setup.
-    #[must_use]
-    pub(crate) fn new_at(mode: AbrMode, reference: Instant) -> Self {
-        let initial_variant = match mode {
-            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx.get(),
-            AbrMode::Auto(None) => 0,
-        };
-        Self {
-            current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            last_switch_at_nanos: AtomicU64::new(Self::NO_SWITCH),
-            max_bandwidth_bps: AtomicU64::new(Self::NO_BANDWIDTH_CAP),
-            lock_count: AtomicUsize::new(0),
-            mode: AtomicUsize::new(mode.into()),
-            flags: AtomicU8::new(AbrFlags::empty().bits()),
-            reference_instant: reference,
-            pending: Mutex::default(),
-        }
-    }
-
     /// Drop the pending request only when `ticket` still identifies it.
     ///
     /// Returns `true` when the matching request was removed. A stale ticket
@@ -353,6 +329,30 @@ impl AbrState {
     #[must_use]
     pub fn mode(&self) -> AbrMode {
         AbrMode::from(self.mode.load(Ordering::Acquire))
+    }
+
+    /// Build an `AbrState` whose session starts at `reference`.
+    ///
+    /// The anti-oscillation interval before the first switch is measured from
+    /// the session's start, so a test that states what that interval holds has
+    /// to be able to say when the session started - otherwise the assertion is
+    /// a race against its own setup.
+    #[must_use]
+    pub(crate) fn new_at(mode: AbrMode, reference: Instant) -> Self {
+        let initial_variant = match mode {
+            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx.get(),
+            AbrMode::Auto(None) => 0,
+        };
+        Self {
+            current_variant: Arc::new(AtomicUsize::new(initial_variant)),
+            last_switch_at_nanos: AtomicU64::new(Self::NO_SWITCH),
+            max_bandwidth_bps: AtomicU64::new(Self::NO_BANDWIDTH_CAP),
+            lock_count: AtomicUsize::new(0),
+            mode: AtomicUsize::new(mode.into()),
+            flags: AtomicU8::new(AbrFlags::empty().bits()),
+            reference_instant: reference,
+            pending: Mutex::default(),
+        }
     }
 
     /// Observe whether an exact pending intent is absent, temporarily locked,

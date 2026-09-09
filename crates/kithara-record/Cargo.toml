@@ -31,6 +31,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
 
 [lints]

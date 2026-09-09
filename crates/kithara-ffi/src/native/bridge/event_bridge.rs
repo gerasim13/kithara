@@ -384,7 +384,10 @@ mod tests {
             AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
             QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
         },
-        platform::sync::{Arc, Mutex},
+        platform::{
+            sync::{Arc, Mutex},
+            tokio::task::spawn_blocking,
+        },
         play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
         queue::{QueueConfig, test_utils::QueueProbe},
     };
@@ -913,7 +916,11 @@ mod tests {
                 .build(),
         );
         let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
-        let owner = crate::native::session::insert(queue)
+        // The FFI surface calls the session from the caller's thread, never
+        // from a runtime worker.
+        let owner = spawn_blocking(move || crate::native::session::insert(queue))
+            .await
+            .expect("insert task completes")
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
         let id = queue.register_for_test();
@@ -944,9 +951,15 @@ mod tests {
 
         let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
         cancel.cancel();
-        let joined = thread.join();
-        crate::native::session::remove(&owner)
-            .expect("INVARIANT: the FFI test Queue detaches from its Host");
+        let (joined, owner) = spawn_blocking(move || {
+            let joined = thread.join();
+            crate::native::session::remove(&owner)
+                .expect("INVARIANT: the FFI test Queue detaches from its Host");
+            (joined, owner)
+        })
+        .await
+        .expect("teardown task completes");
+        drop(owner);
 
         assert!(
             reload_started,

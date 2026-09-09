@@ -21,10 +21,10 @@ struct Run<B>
 where
     B: ResamplerBackend,
 {
-    start: u64,
-    end: u64,
-    mono: SampleBuffer,
     stream: Option<MonoStream<B>>,
+    mono: SampleBuffer,
+    end: u64,
+    start: u64,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -33,16 +33,16 @@ pub(super) struct Runs<B>
 where
     B: ResamplerBackend,
 {
-    runs: Vec<Run<B>>,
     config: BeatAnalysisConfig<B>,
-    budget: usize,
-    max_runs: usize,
     #[field(get, vis = "pub(super)")]
     taken: Coverage,
+    runs: Vec<Run<B>>,
     ratio: f64,
     source_rate: u32,
     #[field(get, copy, vis = "pub(super)")]
     target_rate: u32,
+    budget: usize,
+    max_runs: usize,
 }
 
 impl<B> Runs<B>
@@ -67,138 +67,6 @@ where
             source_rate: source_rate.max(1),
             target_rate,
         }
-    }
-
-    pub(super) fn held(&self) -> usize {
-        self.runs.iter().map(|run| run.mono.len()).sum()
-    }
-
-    pub(super) fn intake(&self) -> Intake {
-        if self.held() >= self.budget {
-            Intake::Full
-        } else if self.runs.len() >= self.max_runs {
-            Intake::Continuing
-        } else {
-            Intake::Anywhere
-        }
-    }
-
-    fn admits(&self, range: FrameRange, opens: Opens) -> bool {
-        match (self.intake(), opens) {
-            (Intake::Full, _) => false,
-            (Intake::Continuing, Opens::Run) => {
-                self.meets(range) || (self.runs.len() <= self.max_runs && self.reaches(range))
-            }
-            (Intake::Anywhere, Opens::Run) => true,
-            (Intake::Continuing | Intake::Anywhere, Opens::Extends) => self.meets(range),
-        }
-    }
-
-    fn meets(&self, range: FrameRange) -> bool {
-        self.runs
-            .iter()
-            .any(|run| run.start <= range.end() && range.start() <= run.end)
-    }
-
-    fn reaches(&self, range: FrameRange) -> bool {
-        self.taken
-            .runs()
-            .iter()
-            .any(|region| region.start() >= range.end())
-    }
-
-    fn missing(&self, from: u64, until: u64) -> Option<FrameRange> {
-        let mut at = from;
-        for run in self.taken.runs() {
-            if run.end() <= at {
-                continue;
-            }
-            if at < run.start() {
-                let end = run.start().min(until);
-                return (at < end).then(|| FrameRange::new(at, end - at));
-            }
-            at = run.end();
-        }
-        (at < until).then(|| FrameRange::new(at, until - at))
-    }
-
-    fn detector_frames(&self, frames: u64) -> usize {
-        scale(frames, self.ratio)
-    }
-
-    pub(super) fn release(&mut self, opens_at: impl Fn(usize) -> usize) {
-        let ratio = self.ratio;
-        for run in &mut self.runs {
-            let base = scale(run.start, ratio);
-            let target = (opens_at(base).to_f64().unwrap_or(f64::MAX) / ratio)
-                .floor()
-                .to_u64()
-                .unwrap_or(u64::MAX)
-                .clamp(run.start, run.end);
-            let exact = scale(target, ratio)
-                .saturating_sub(base)
-                .min(run.mono.len());
-            if exact == 0 {
-                continue;
-            }
-            run.mono.drain(..exact);
-            run.start = target;
-            // The charge follows what the run still holds, so the hold budget
-            // bounds the bytes as well as the frames.
-            run.mono.shrink_to_fit();
-        }
-    }
-
-    pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
-        for index in 0..self.runs.len() {
-            let Some((span, stream)) = self
-                .runs
-                .get_mut(index)
-                .map(|run| (run.end.saturating_sub(run.start), run.stream.take()))
-            else {
-                continue;
-            };
-            let expected = self.detector_frames(span);
-            let Some(run) = self.runs.get_mut(index) else {
-                continue;
-            };
-            let mono = &mut run.mono;
-            finish_into(mono, stream)?;
-            pad(mono, expected)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn push<S>(
-        &mut self,
-        pools: &PoolRegion<S>,
-        mono: &[f32],
-        at: u64,
-        opens: Opens,
-    ) -> Result<bool, BeatDetectError>
-    where
-        S: HasPool<f32>,
-    {
-        let Ok(span) = u64::try_from(mono.len()) else {
-            return Ok(false);
-        };
-        let end = at.saturating_add(span);
-        let mut cursor = at;
-        let mut took = false;
-
-        while let Some(piece) = self.missing(cursor, end) {
-            if !self.admits(piece, opens) {
-                break;
-            }
-            let Some(block) = slice(mono, at, piece.start(), piece.end()) else {
-                break;
-            };
-            self.absorb(pools, block, piece.start(), piece.end())?;
-            self.taken.insert(piece);
-            cursor = piece.end();
-            took = true;
-        }
-        Ok(took)
     }
 
     fn absorb<S>(
@@ -226,12 +94,59 @@ where
         Ok(())
     }
 
-    pub(super) fn spans(&self) -> impl Iterator<Item = (u64, &[f32])> {
-        self.runs.iter().map(|run| (run.start, &run.mono[..]))
+    fn admits(&self, range: FrameRange, opens: Opens) -> bool {
+        match (self.intake(), opens) {
+            (Intake::Full, _) => false,
+            (Intake::Continuing, Opens::Run) => {
+                self.meets(range) || (self.runs.len() <= self.max_runs && self.reaches(range))
+            }
+            (Intake::Anywhere, Opens::Run) => true,
+            (Intake::Continuing | Intake::Anywhere, Opens::Extends) => self.meets(range),
+        }
     }
 
-    pub(super) fn offset_in_run(&self, start: u64, frame: u64) -> usize {
-        self.detector_frames(frame.saturating_sub(start))
+    fn detector_frames(&self, frames: u64) -> usize {
+        scale(frames, self.ratio)
+    }
+
+    pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
+        for index in 0..self.runs.len() {
+            let Some((span, stream)) = self
+                .runs
+                .get_mut(index)
+                .map(|run| (run.end.saturating_sub(run.start), run.stream.take()))
+            else {
+                continue;
+            };
+            let expected = self.detector_frames(span);
+            let Some(run) = self.runs.get_mut(index) else {
+                continue;
+            };
+            let mono = &mut run.mono;
+            finish_into(mono, stream)?;
+            pad(mono, expected)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn held(&self) -> usize {
+        self.runs.iter().map(|run| run.mono.len()).sum()
+    }
+
+    pub(super) fn intake(&self) -> Intake {
+        if self.held() >= self.budget {
+            Intake::Full
+        } else if self.runs.len() >= self.max_runs {
+            Intake::Continuing
+        } else {
+            Intake::Anywhere
+        }
+    }
+
+    fn meets(&self, range: FrameRange) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.start <= range.end() && range.start() <= run.end)
     }
 
     fn merge<S>(
@@ -281,11 +196,30 @@ where
         }
 
         Ok(Some(Run {
+            stream,
             start: base,
             end: cursor,
             mono: out,
-            stream,
         }))
+    }
+
+    fn missing(&self, from: u64, until: u64) -> Option<FrameRange> {
+        let mut at = from;
+        for run in self.taken.runs() {
+            if run.end() <= at {
+                continue;
+            }
+            if at < run.start() {
+                let end = run.start().min(until);
+                return (at < end).then(|| FrameRange::new(at, end - at));
+            }
+            at = run.end();
+        }
+        (at < until).then(|| FrameRange::new(at, until - at))
+    }
+
+    pub(super) fn offset_in_run(&self, start: u64, frame: u64) -> usize {
+        self.detector_frames(frame.saturating_sub(start))
     }
 
     fn open<S>(
@@ -308,11 +242,73 @@ where
             Some(stream)
         };
         Ok(Run {
-            start: at,
             end,
-            mono: out,
             stream,
+            start: at,
+            mono: out,
         })
+    }
+
+    pub(super) fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+        opens: Opens,
+    ) -> Result<bool, BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
+        let Ok(span) = u64::try_from(mono.len()) else {
+            return Ok(false);
+        };
+        let end = at.saturating_add(span);
+        let mut cursor = at;
+        let mut took = false;
+
+        while let Some(piece) = self.missing(cursor, end) {
+            if !self.admits(piece, opens) {
+                break;
+            }
+            let Some(block) = slice(mono, at, piece.start(), piece.end()) else {
+                break;
+            };
+            self.absorb(pools, block, piece.start(), piece.end())?;
+            self.taken.insert(piece);
+            cursor = piece.end();
+            took = true;
+        }
+        Ok(took)
+    }
+
+    fn reaches(&self, range: FrameRange) -> bool {
+        self.taken
+            .runs()
+            .iter()
+            .any(|region| region.start() >= range.end())
+    }
+
+    pub(super) fn release(&mut self, opens_at: impl Fn(usize) -> usize) {
+        let ratio = self.ratio;
+        for run in &mut self.runs {
+            let base = scale(run.start, ratio);
+            let target = (opens_at(base).to_f64().unwrap_or(f64::MAX) / ratio)
+                .floor()
+                .to_u64()
+                .unwrap_or(u64::MAX)
+                .clamp(run.start, run.end);
+            let exact = scale(target, ratio)
+                .saturating_sub(base)
+                .min(run.mono.len());
+            if exact == 0 {
+                continue;
+            }
+            run.mono.drain(..exact);
+            run.start = target;
+            // The charge follows what the run still holds, so the hold budget
+            // bounds the bytes as well as the frames.
+            run.mono.shrink_to_fit();
+        }
     }
 
     fn resample<S>(
@@ -336,6 +332,10 @@ where
         push_stream(&mut inner, mono, out)?;
         *stream = Some(inner);
         Ok(())
+    }
+
+    pub(super) fn spans(&self) -> impl Iterator<Item = (u64, &[f32])> {
+        self.runs.iter().map(|run| (run.start, &run.mono[..]))
     }
 
     fn stream<S>(&self, pools: &PoolRegion<S>) -> Result<MonoStream<B>, BeatDetectError>
@@ -364,29 +364,6 @@ impl<B> Runs<B>
 where
     B: ResamplerBackend,
 {
-    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
-        // A run read to its end holds only its resampler, which the blob
-        // does not carry.
-        let live = || self.runs.iter().filter(|run| run.start < run.end);
-        writer.write_len(live().count());
-        for run in live() {
-            writer.write_u64(run.start);
-            writer.write_u64(run.end);
-            // The blob carries the span the run declares, so the tail still
-            // inside a live resampler reads back as silence.
-            write_padded(
-                writer,
-                &run.mono,
-                self.detector_frames(run.end.saturating_sub(run.start)),
-            );
-        }
-        writer.write_len(self.taken.runs().len());
-        for run in self.taken.runs() {
-            writer.write_u64(run.start());
-            writer.write_u64(run.end());
-        }
-    }
-
     pub(super) fn restore<S>(
         &mut self,
         pools: &PoolRegion<S>,
@@ -409,9 +386,9 @@ where
             mono.copy_from_slice(&samples);
             mono.shrink_to_fit();
             restored.push(Run {
+                mono,
                 start: run.start,
                 end: run.end,
-                mono,
                 stream: None,
             });
         }
@@ -432,6 +409,29 @@ where
             return Err(BlobError::Corrupt);
         }
         Ok(())
+    }
+
+    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
+        // A run read to its end holds only its resampler, which the blob
+        // does not carry.
+        let live = || self.runs.iter().filter(|run| run.start < run.end);
+        writer.write_len(live().count());
+        for run in live() {
+            writer.write_u64(run.start);
+            writer.write_u64(run.end);
+            // The blob carries the span the run declares, so the tail still
+            // inside a live resampler reads back as silence.
+            write_padded(
+                writer,
+                &run.mono,
+                self.detector_frames(run.end.saturating_sub(run.start)),
+            );
+        }
+        writer.write_len(self.taken.runs().len());
+        for run in self.taken.runs() {
+            writer.write_u64(run.start());
+            writer.write_u64(run.end());
+        }
     }
 }
 
@@ -527,6 +527,7 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
 mod tests {
     use kithara_bufpool::PoolConfig;
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_fixtures::analysis_beat_fixtures::{fragments, run_ramp};
     use kithara_test_utils::kithara;
 
     use super::{Intake, Opens, Runs};
@@ -539,19 +540,19 @@ mod tests {
     const SRC: u32 = 44_100;
 
     struct TestRuns {
-        inner: Runs<RubatoBackend>,
         pools: Pools,
+        inner: Runs<RubatoBackend>,
     }
 
     impl TestRuns {
+        fn flush(&mut self) {
+            self.inner.flush().expect("run buffers fit the test region");
+        }
+
         fn push(&mut self, mono: &[f32], at: u64, opens: Opens) -> bool {
             self.inner
                 .push(&self.pools, mono, at, opens)
                 .expect("run buffers fit the test region")
-        }
-
-        fn flush(&mut self) {
-            self.inner.flush().expect("run buffers fit the test region");
         }
     }
 
@@ -584,13 +585,13 @@ mod tests {
         pools: Pools,
     ) -> TestRuns {
         TestRuns {
+            pools,
             inner: Runs::new(
                 BeatAnalysisConfig::<RubatoBackend>::default(),
                 source_rate,
                 budget,
                 max_runs,
             ),
-            pools,
         }
     }
 
@@ -605,13 +606,9 @@ mod tests {
         )
     }
 
-    fn ramp(frames: usize, from: u64) -> Vec<f32> {
-        (0..frames)
-            .map(|n| {
-                let t = (from + n as u64) as f32 / 1000.0;
-                t.sin()
-            })
-            .collect()
+    fn ramp(input: &[f32], frames: usize, from: u64) -> Vec<f32> {
+        let start = usize::try_from(from).expect("fixture offset fits usize");
+        input[start..start + frames].to_vec()
     }
 
     fn layout(runs: &TestRuns) -> Vec<(u64, usize)> {
@@ -627,8 +624,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn arrival_size_does_not_change_the_resampled_audio() {
-        let source = ramp(88_200, 0);
+    fn arrival_size_does_not_change_the_resampled_audio(run_ramp: Vec<f32>) {
+        let source = ramp(&run_ramp, 88_200, 0);
         let mut whole = runs(SRC);
         whole.push(&source, 0, Opens::Run);
         whole.flush();
@@ -653,23 +650,23 @@ mod tests {
     }
 
     #[kithara::test]
-    fn adjacent_blocks_form_one_run() {
+    fn adjacent_blocks_form_one_run(run_ramp: Vec<f32>) {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 0), 0, Opens::Run);
-        set.push(&ramp(4410, 4410), 4410, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Run);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 4410)], "8820 source frames at 2:1");
     }
 
     #[kithara::test]
-    fn a_gap_keeps_two_runs_until_it_is_filled() {
+    fn a_gap_keeps_two_runs_until_it_is_filled(run_ramp: Vec<f32>) {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 0), 0, Opens::Run);
-        set.push(&ramp(4410, 88_200), 88_200, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Run);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 2205), (88_200, 2205)]);
 
-        set.push(&ramp(83_790, 4410), 4410, Opens::Run);
+        set.push(&ramp(&run_ramp, 83_790, 4410), 4410, Opens::Run);
         set.flush();
         assert_eq!(
             layout(&set),
@@ -679,18 +676,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_block_before_a_run_extends_it_backwards() {
+    fn a_block_before_a_run_extends_it_backwards(run_ramp: Vec<f32>) {
         let mut set = runs(SRC);
-        set.push(&ramp(4410, 4410), 4410, Opens::Run);
-        set.push(&ramp(4410, 0), 0, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Run);
+        set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
         set.flush();
         assert_eq!(layout(&set), vec![(0, 4410)]);
     }
 
     #[kithara::test]
-    fn shuffled_blocks_land_at_the_same_detector_offsets() {
+    fn shuffled_blocks_land_at_the_same_detector_offsets(run_ramp: Vec<f32>) {
         let blocks: Vec<(u64, Vec<f32>)> = (0..8u64)
-            .map(|i| (i * 4410, ramp(4410, i * 4410)))
+            .map(|i| (i * 4410, ramp(&run_ramp, 4410, i * 4410)))
             .collect();
 
         let mut ascending = runs(SRC);
@@ -724,13 +721,17 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_full_hold_turns_audio_down_instead_of_giving_it_up() {
+    fn a_full_hold_turns_audio_down_instead_of_giving_it_up(run_ramp: Vec<f32>) {
         // Ten blocks of 4410 source frames are 22_050 at the detector rate,
         // well past a 10_000 frame hold.
         let mut set = budgeted(SRC, 10_000, usize::MAX);
         let mut refused = 0;
         for block in 0..10u64 {
-            if !set.push(&ramp(4410, block * 4410), block * 4410, Opens::Run) {
+            if !set.push(
+                &ramp(&run_ramp, 4410, block * 4410),
+                block * 4410,
+                Opens::Run,
+            ) {
                 refused += 1;
             }
         }
@@ -753,10 +754,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn audio_turned_down_is_taken_once_there_is_room() {
+    fn audio_turned_down_is_taken_once_there_is_room(run_ramp: Vec<f32>) {
         let mut set = budgeted(SRC, 10_000, usize::MAX);
         for block in 0..10u64 {
-            set.push(&ramp(4410, block * 4410), block * 4410, Opens::Run);
+            set.push(
+                &ramp(&run_ramp, 4410, block * 4410),
+                block * 4410,
+                Opens::Run,
+            );
         }
         let stopped = set.taken().frontier();
 
@@ -767,55 +772,55 @@ mod tests {
             "the detector read everything it held"
         );
         assert!(
-            set.push(&ramp(4410, stopped), stopped, Opens::Run),
+            set.push(&ramp(&run_ramp, 4410, stopped), stopped, Opens::Run),
             "the stretch it turned down is taken on the next offer"
         );
         assert_eq!(set.taken().frontier(), stopped + 4410);
     }
 
     #[kithara::test]
-    fn audio_the_pass_did_not_read_extends_a_run_without_opening_one() {
+    fn audio_the_pass_did_not_read_extends_a_run_without_opening_one(run_ramp: Vec<f32>) {
         let mut set = budgeted(SRC, usize::MAX, usize::MAX);
         assert!(
-            !set.push(&ramp(4410, 88_200), 88_200, Opens::Extends),
+            !set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Extends),
             "audio offered from elsewhere is backlog the pass did not plan for"
         );
         assert!(
-            set.push(&ramp(4410, 0), 0, Opens::Run),
+            set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run),
             "the pass reads for itself"
         );
         assert!(
-            set.push(&ramp(4410, 4410), 4410, Opens::Extends),
+            set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Extends),
             "the same audio continuing a run costs the pass nothing new"
         );
     }
 
     #[kithara::test]
-    fn a_run_cap_leaves_room_for_a_window_in_every_run() {
+    fn a_run_cap_leaves_room_for_a_window_in_every_run(run_ramp: Vec<f32>) {
         // The cap keeps blocks far apart from filling the hold with runs too
         // short for the detector to read.
         let mut set = budgeted(SRC, usize::MAX, 2);
-        assert!(set.push(&ramp(4410, 0), 0, Opens::Run));
-        assert!(set.push(&ramp(4410, 88_200), 88_200, Opens::Run));
+        assert!(set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run));
+        assert!(set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Run));
         assert!(
             set.intake() == Intake::Continuing,
             "the cap is reached, so audio away from both runs waits"
         );
         assert!(
-            !set.push(&ramp(4410, 441_000), 441_000, Opens::Run),
+            !set.push(&ramp(&run_ramp, 4410, 441_000), 441_000, Opens::Run),
             "a third run is what the cap turns down"
         );
         assert!(
-            set.push(&ramp(4410, 4410), 4410, Opens::Run),
+            set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Run),
             "audio continuing a run is what carries it to a full window"
         );
     }
 
     #[kithara::test]
-    fn released_audio_leaves_the_rest_where_it_was() {
+    fn released_audio_leaves_the_rest_where_it_was(run_ramp: Vec<f32>) {
         // 48 kHz -> 22.05 kHz is not a whole ratio, so a release rounded up
         // would move the run past the window it must resume at.
-        let source = ramp(48_000 * 4, 0);
+        let source = ramp(&run_ramp, 48_000 * 4, 0);
         let mut whole = runs(48_000);
         whole.push(&source, 0, Opens::Run);
         whole.flush();
@@ -841,10 +846,10 @@ mod tests {
         }
     }
 
-    fn capped_with_a_released_front() -> TestRuns {
+    fn capped_with_a_released_front(run_ramp: &[f32]) -> TestRuns {
         let mut set = budgeted(48_000, usize::MAX, 2);
-        set.push(&ramp(9600, 100_000), 100_000, Opens::Run);
-        set.push(&ramp(4800, 300_000), 300_000, Opens::Run);
+        set.push(&ramp(&run_ramp, 9600, 100_000), 100_000, Opens::Run);
+        set.push(&ramp(&run_ramp, 4800, 300_000), 300_000, Opens::Run);
         set.flush();
         let advance = set.offset_in_run(100_000, 104_000);
         set.release(|base| base + advance);
@@ -852,39 +857,39 @@ mod tests {
     }
 
     #[kithara::test]
-    fn one_run_reaches_for_another_and_the_rest_wait() {
-        let mut set = capped_with_a_released_front();
+    fn one_run_reaches_for_another_and_the_rest_wait(run_ramp: Vec<f32>) {
+        let mut set = capped_with_a_released_front(&run_ramp);
         assert_eq!(set.intake(), Intake::Continuing, "the cap is reached");
         let front = set.spans().next().map(|(start, _)| start).expect("one run");
         assert!(front > 100_000, "the release must move the run's start");
 
         assert!(
-            set.push(&ramp(4800, 0), 0, Opens::Run),
+            set.push(&ramp(&run_ramp, 4800, 0), 0, Opens::Run),
             "audio reading through to the run in front of it is taken"
         );
         assert_eq!(set.spans().count(), 3, "the run under way is the third");
         assert!(
-            !set.push(&ramp(4800, 200_000), 200_000, Opens::Run),
+            !set.push(&ramp(&run_ramp, 4800, 200_000), 200_000, Opens::Run),
             "a second stretch waits until the one under way arrives"
         );
         assert_eq!(set.spans().count(), 3, "{:?}", layout(&set));
     }
 
     #[kithara::test]
-    fn audio_the_pass_did_not_read_waits_for_the_run_it_belongs_to() {
-        let mut set = capped_with_a_released_front();
+    fn audio_the_pass_did_not_read_waits_for_the_run_it_belongs_to(run_ramp: Vec<f32>) {
+        let mut set = capped_with_a_released_front(&run_ramp);
 
         assert!(
-            !set.push(&ramp(4800, 0), 0, Opens::Extends),
+            !set.push(&ramp(&run_ramp, 4800, 0), 0, Opens::Extends),
             "a producer's range does not open the run that reads a gap through"
         );
         assert_eq!(set.spans().count(), 2, "{:?}", layout(&set));
     }
 
     #[kithara::test]
-    fn audio_in_front_of_a_released_run_costs_it_nothing() {
+    fn audio_in_front_of_a_released_run_costs_it_nothing(run_ramp: Vec<f32>) {
         let mut set = runs(48_000);
-        set.push(&ramp(96_000, 32_000), 32_000, Opens::Run);
+        set.push(&ramp(&run_ramp, 96_000, 32_000), 32_000, Opens::Run);
         set.flush();
         let advance = set.offset_in_run(32_000, 60_000);
         set.release(|base| base + advance);
@@ -895,7 +900,7 @@ mod tests {
             .expect("one run");
         assert!(started_at > 32_000, "the release must move the run's start");
 
-        set.push(&ramp(32_000, 0), 0, Opens::Run);
+        set.push(&ramp(&run_ramp, 32_000, 0), 0, Opens::Run);
 
         assert!(
             set.spans()
@@ -906,7 +911,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn reclaimed_mono_releases_charged_capacity() {
+    fn reclaimed_mono_releases_charged_capacity(run_ramp: Vec<f32>) {
         const BUDGET: usize = 4096;
         const MAX_CHARGED_BYTES: usize = BUDGET * size_of::<f32>();
         const TARGET_RATE: u32 = 22_050;
@@ -915,7 +920,7 @@ mod tests {
         let mut set = budgeted_with_pools(TARGET_RATE, BUDGET, usize::MAX, pools.clone());
         for cycle in 0..4u64 {
             let at = cycle * BUDGET as u64;
-            set.push(&ramp(BUDGET, at), at, Opens::Run);
+            set.push(&ramp(&run_ramp, BUDGET, at), at, Opens::Run);
 
             assert_eq!(set.held(), BUDGET);
             assert!(
@@ -928,9 +933,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn fragmented_runs_share_the_region_with_loader_scratch() {
-        // Every run holds its own resampler, so the run cap is what bounds the
-        // region a source arriving in scattered fragments can take.
+    fn fragmented_runs_share_the_region_with_loader_scratch(fragments: Vec<f32>) {
+        /// Every run holds its own resampler, so the run cap is what bounds the
+        /// region a source arriving in scattered fragments can take.
         const RUNS: usize = 4;
         const LOADER_BYTES: usize = 512 * 1024;
         const POOL_BYTES: usize = 2 * LOADER_BYTES;
@@ -942,7 +947,11 @@ mod tests {
 
         let mut set = budgeted_with_pools(SRC, usize::MAX, RUNS, pools.clone());
         for fragment in 0..24u16 {
-            set.push(&[f32::from(fragment)], u64::from(fragment) * 2, Opens::Run);
+            set.push(
+                &fragments[usize::from(fragment)..usize::from(fragment) + 1],
+                u64::from(fragment) * 2,
+                Opens::Run,
+            );
         }
         assert_eq!(
             set.spans().count(),
@@ -965,12 +974,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_non_integer_ratio_keeps_joins_on_position() {
+    fn a_non_integer_ratio_keeps_joins_on_position(run_ramp: Vec<f32>) {
         // 48 kHz -> 22.05 kHz is not a whole ratio, so a per-segment rounding
         // error would show up as a length drift at every join.
         let mut set = runs(48_000);
         for block in 0..10u64 {
-            set.push(&ramp(4801, block * 4801), block * 4801, Opens::Run);
+            set.push(
+                &ramp(&run_ramp, 4801, block * 4801),
+                block * 4801,
+                Opens::Run,
+            );
         }
         set.flush();
         let total = set.offset_in_run(0, 48_010);

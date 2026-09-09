@@ -34,17 +34,25 @@ use crate::AnalysisProgress;
 
 const CHUNK_FRAMES: u64 = 8820;
 
-#[kithara::test(native, flash(false))]
-fn a_real_track_reaches_its_end_whole() {
+#[kithara::fixture]
+fn probe_pcm() -> Option<Vec<f32>> {
     let Ok(path) = std::env::var("KITHARA_PROBE_PCM") else {
-        return;
+        return None;
     };
-    let pools = crate::test_pools::pools();
     let bytes = std::fs::read(&path).expect("probe pcm");
     let pcm: Vec<f32> = bytes
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
+    Some(pcm)
+}
+
+#[kithara::test(native, flash(false))]
+fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
+    let Some(pcm) = probe_pcm else {
+        return;
+    };
+    let pools = crate::test_pools::pools();
     let track = Track::new(pools.clone(), spec(), CHUNK_FRAMES, pcm);
     let frames = track.frames();
     let rate = spec().sample_rate;
@@ -53,12 +61,12 @@ fn a_real_track_reaches_its_end_whole() {
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let (_writer, ingest) = ring::open_for(rate);
     jobs.send(Job {
-        token: "probe".into(),
-        revision: 0,
-        reader: Box::new(track),
         tx,
         rate,
         ingest,
+        token: "probe".into(),
+        revision: 0,
+        reader: Box::new(track),
         cancel: CancelToken::root(),
         resume: None,
     })

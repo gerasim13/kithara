@@ -7,8 +7,11 @@ lowest layer that prevents the mistake.
 - `docs/workflows/rust-ai.md`: task flow, split, handoff, and reference routing.
 - `docs/guides/*`: expanded red flags, examples, review guidance, and policy
   details loaded only when relevant.
-- Owning crate `CONTEXT.md`: lifecycle, invariants, state ownership, protocol, or
-  cache contracts for that crate.
+- Owning crate wiki page: architecture, cross-file contracts, and decision
+  rationale. README links to it; task status belongs in issues and the Project.
+- Scoped `AGENTS.md`: only necessary crate-specific prohibitions that must be
+  known before reading code and are not enforced by checks or covered by root
+  rules. Do not create a mandatory rule file per crate.
 - `ast-grep` / `xtask`: stable mechanical shapes caught as the last line of
   defense.
 - Tool hooks or command guards: repeatable tool misuse, wrong test command,

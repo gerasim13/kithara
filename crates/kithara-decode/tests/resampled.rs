@@ -21,20 +21,16 @@ use kithara_resampler::{
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_test_fixtures::unit_fixtures::{
+    poisoned_float_wav, resampled_markers, resampled_wav_eight, resampled_wav_four,
+    resampled_wav_seek, trim_silence,
+};
 use kithara_test_utils::kithara;
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;
 const SOURCE_RATE: u32 = 44_100;
 const TARGET_RATE: u32 = 48_000;
-const WAV_BITS_PER_SAMPLE: u16 = 16;
-const WAV_BYTES_PER_SAMPLE: u16 = WAV_BITS_PER_SAMPLE / 8;
-const WAV_DATA_OFFSET: u32 = 36;
-const WAV_FMT_CHUNK_SIZE: u32 = 16;
-const WAV_HEADER_SIZE: usize = 44;
-const WAV_PCM_FORMAT: u16 = 1;
-const WAV_FLOAT_FORMAT: u16 = 3;
-const MARKERS: [[f32; FRAMES]; 2] = [[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]];
 const POISON: [[f32; FRAMES]; 2] = [
     [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
     [0.25, -0.25, 0.5, -0.5],
@@ -61,7 +57,7 @@ fn test_frames(sample_rate: u32, duration: Duration) -> usize {
 }
 
 #[derive(Clone)]
-struct AdapterProbeBackend;
+struct AdapterProbeBackend(Vec<f32>);
 
 impl ResamplerBackend for AdapterProbeBackend {
     type Resampler = AdapterProbeResampler;
@@ -74,6 +70,7 @@ impl ResamplerBackend for AdapterProbeBackend {
         S: HasPool<f32>,
     {
         Ok(AdapterProbeResampler {
+            markers: self.0.clone(),
             channels: settings.channels,
             mode: settings.mode,
         })
@@ -89,6 +86,7 @@ impl ResamplerBackend for AdapterProbeBackend {
 }
 
 struct AdapterProbeResampler {
+    markers: Vec<f32>,
     channels: NonZeroUsize,
     mode: ResamplerMode,
 }
@@ -132,7 +130,7 @@ impl Resampler for AdapterProbeResampler {
         output: &mut [&mut [f32]],
     ) -> Result<ResamplerProcess, kithara_resampler::ResamplerError> {
         for (channel, dst) in output.iter_mut().enumerate() {
-            dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
+            dst[..FRAMES].copy_from_slice(&self.markers[channel * FRAMES..(channel + 1) * FRAMES]);
         }
         Ok(ResamplerProcess::new(FRAMES, FRAMES))
     }
@@ -143,7 +141,7 @@ impl Resampler for AdapterProbeResampler {
 type Captured = Arc<Mutex<Vec<f32>>>;
 
 #[derive(Clone)]
-struct CaptureProbeBackend(Captured);
+struct CaptureProbeBackend(Captured, Vec<f32>);
 
 impl ResamplerBackend for CaptureProbeBackend {
     type Resampler = CaptureProbeResampler;
@@ -156,6 +154,7 @@ impl ResamplerBackend for CaptureProbeBackend {
         S: HasPool<f32>,
     {
         Ok(CaptureProbeResampler {
+            markers: self.1.clone(),
             captured: Arc::clone(&self.0),
             channels: settings.channels,
             mode: settings.mode,
@@ -172,6 +171,7 @@ impl ResamplerBackend for CaptureProbeBackend {
 }
 
 struct CaptureProbeResampler {
+    markers: Vec<f32>,
     captured: Captured,
     channels: NonZeroUsize,
     mode: ResamplerMode,
@@ -222,7 +222,7 @@ impl Resampler for CaptureProbeResampler {
                 .extend_from_slice(channel);
         }
         for (channel, dst) in output.iter_mut().enumerate() {
-            dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
+            dst[..FRAMES].copy_from_slice(&self.markers[channel * FRAMES..(channel + 1) * FRAMES]);
         }
         Ok(ResamplerProcess::new(FRAMES, FRAMES))
     }
@@ -231,7 +231,7 @@ impl Resampler for CaptureProbeResampler {
 }
 
 #[derive(Clone)]
-struct DelayedProbeBackend;
+struct DelayedProbeBackend(Vec<f32>, Vec<f32>);
 
 impl ResamplerBackend for DelayedProbeBackend {
     type Resampler = DelayedProbeResampler;
@@ -244,6 +244,8 @@ impl ResamplerBackend for DelayedProbeBackend {
         S: HasPool<f32>,
     {
         Ok(DelayedProbeResampler {
+            silence: self.1.clone(),
+            markers: self.0.clone(),
             channels: settings.channels,
             has_pending: false,
             mode: settings.mode,
@@ -260,6 +262,8 @@ impl ResamplerBackend for DelayedProbeBackend {
 }
 
 struct DelayedProbeResampler {
+    silence: Vec<f32>,
+    markers: Vec<f32>,
     channels: NonZeroUsize,
     mode: ResamplerMode,
     has_pending: bool,
@@ -309,9 +313,10 @@ impl Resampler for DelayedProbeResampler {
     ) -> Result<ResamplerProcess, kithara_resampler::ResamplerError> {
         for (channel, dst) in output.iter_mut().enumerate() {
             if self.has_pending {
-                dst[..FRAMES].copy_from_slice(&MARKERS[channel]);
+                dst[..FRAMES]
+                    .copy_from_slice(&self.markers[channel * FRAMES..(channel + 1) * FRAMES]);
             } else {
-                dst[..FRAMES].fill(0.0);
+                dst[..FRAMES].copy_from_slice(&self.silence[..FRAMES]);
             }
         }
         self.has_pending = true;
@@ -324,9 +329,16 @@ impl Resampler for DelayedProbeResampler {
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_adapter_wraps_configured_backend() {
+fn standalone_decoder_adapter_wraps_configured_backend(
+    resampled_markers: Vec<f32>,
+    resampled_wav_four: &'static [u8],
+) {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
-    let mut decoder = decoder_with_resampler(target_rate, AdapterProbeBackend);
+    let mut decoder = decoder_over(
+        resampled_wav_four.to_vec(),
+        target_rate,
+        AdapterProbeBackend(resampled_markers),
+    );
     let output: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
@@ -339,12 +351,15 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_adapter_emits_one_resampler_block_per_call() {
+fn standalone_decoder_adapter_emits_one_resampler_block_per_call(
+    resampled_markers: Vec<f32>,
+    resampled_wav_eight: &'static [u8],
+) {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
-        test_wav_with_frames(FRAMES * 2),
+        resampled_wav_eight.to_vec(),
         target_rate,
-        AdapterProbeBackend,
+        AdapterProbeBackend(resampled_markers),
     );
 
     let first: AudioChunk = decoder
@@ -363,9 +378,17 @@ fn standalone_decoder_adapter_emits_one_resampler_block_per_call() {
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
+fn standalone_decoder_adapter_flushes_backend_delay_at_eof(
+    trim_silence: Vec<f32>,
+    resampled_markers: Vec<f32>,
+    resampled_wav_four: &'static [u8],
+) {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
-    let mut decoder = decoder_with_resampler(target_rate, DelayedProbeBackend);
+    let mut decoder = decoder_over(
+        resampled_wav_four.to_vec(),
+        target_rate,
+        DelayedProbeBackend(resampled_markers, trim_silence),
+    );
     let output: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
@@ -381,15 +404,17 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
+fn standalone_decoder_seek_reanchors_output_to_trimmed_target(
+    resampled_markers: Vec<f32>,
+    resampled_wav_seek: &'static [u8],
+) {
     const TARGET: Duration = Duration::from_millis(30);
-    const WAV_FRAMES: usize = 4_096;
 
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
-        test_wav_with_frames(WAV_FRAMES),
+        resampled_wav_seek.to_vec(),
         target_rate,
-        AdapterProbeBackend,
+        AdapterProbeBackend(resampled_markers),
     );
     let DecoderSeekOutcome::Landed { landed_at, .. } =
         decoder.seek(TARGET).expect("seek resampled decoder")
@@ -418,19 +443,21 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
 }
 
 #[kithara::test(native, flash(false))]
-fn standalone_decoder_seek_rounds_timeline_frames_half_up() {
+fn standalone_decoder_seek_rounds_timeline_frames_half_up(
+    resampled_markers: Vec<f32>,
+    resampled_wav_seek: &'static [u8],
+) {
     const SOURCE_TARGET_FRAME: u64 = 1_441;
     const ROUNDING_TARGET_RATE: u32 = 44_085;
     const EXPECTED_LANDED_FRAME: u64 = 1_152;
     const EXPECTED_OUTPUT_FRAME: u64 = 1_441;
-    const WAV_FRAMES: usize = 4_096;
 
     let target = test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME);
     let target_rate = NonZeroU32::new(ROUNDING_TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
-        test_wav_with_frames(WAV_FRAMES),
+        resampled_wav_seek.to_vec(),
         target_rate,
-        AdapterProbeBackend,
+        AdapterProbeBackend(resampled_markers),
     );
     let DecoderSeekOutcome::Landed {
         landed_at,
@@ -464,13 +491,16 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up() {
 }
 
 #[kithara::test(native, flash(false))]
-fn resampler_never_sees_a_sample_the_file_poisoned() {
+fn resampler_never_sees_a_sample_the_file_poisoned(
+    resampled_markers: Vec<f32>,
+    poisoned_float_wav: &'static [u8],
+) {
     let captured: Captured = Arc::default();
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_over(
-        poisoned_float_wav(),
+        poisoned_float_wav.to_vec(),
         target_rate,
-        CaptureProbeBackend(Arc::clone(&captured)),
+        CaptureProbeBackend(Arc::clone(&captured), resampled_markers),
     );
     let _: AudioChunk = decoder
         .next_chunk()
@@ -504,7 +534,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
 }
 
 #[kithara::test(native, flash(false))]
-fn decoder_factory_uses_configured_pool_region() {
+fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]) {
     let pools = default_pools();
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
         DecoderConfig::builder().pools(pools.clone()).build();
@@ -512,9 +542,12 @@ fn decoder_factory_uses_configured_pool_region() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let mut decoder =
-        DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
-            .expect("decoder builds");
+    let mut decoder = DecoderFactory::create_from_media_info(
+        Cursor::new(resampled_wav_four.to_vec()),
+        &media_info,
+        config,
+    )
+    .expect("decoder builds");
 
     assert_eq!(pools.stats().allocated_bytes, 0);
     let chunk: AudioChunk = decoder
@@ -524,16 +557,6 @@ fn decoder_factory_uses_configured_pool_region() {
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
     assert!(pools.stats().allocated_bytes > 0);
-}
-
-fn decoder_with_resampler<B>(
-    target_rate: NonZeroU32,
-    backend: B,
-) -> Box<dyn kithara_decode::Decoder>
-where
-    B: ResamplerBackend,
-{
-    decoder_over(test_wav(), target_rate, backend)
 }
 
 fn decoder_over<B>(
@@ -563,55 +586,4 @@ where
 
 const fn marker_samples() -> &'static [f32] {
     &[1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0]
-}
-
-fn test_wav() -> Vec<u8> {
-    test_wav_with_frames(FRAMES)
-}
-
-fn test_wav_with_frames(frames: usize) -> Vec<u8> {
-    let data_size = frames
-        .saturating_mul(usize::from(CHANNELS))
-        .saturating_mul(usize::from(WAV_BYTES_PER_SAMPLE));
-    let mut wav = wav_header(WAV_PCM_FORMAT, WAV_BITS_PER_SAMPLE, data_size);
-    wav.resize(WAV_HEADER_SIZE + data_size, 0);
-    wav
-}
-
-fn poisoned_float_wav() -> Vec<u8> {
-    const BYTES_PER_SAMPLE: u16 = 4;
-    const BITS_PER_SAMPLE: u16 = BYTES_PER_SAMPLE * 8;
-
-    let data_size = FRAMES
-        .saturating_mul(usize::from(CHANNELS))
-        .saturating_mul(usize::from(BYTES_PER_SAMPLE));
-    let mut wav = wav_header(WAV_FLOAT_FORMAT, BITS_PER_SAMPLE, data_size);
-    for frame in 0..FRAMES {
-        for channel in POISON {
-            wav.extend_from_slice(&channel[frame].to_le_bytes());
-        }
-    }
-    wav
-}
-
-fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
-    let bytes_per_sample = bits_per_sample / 8;
-    let data_size_u32 = u32::try_from(data_size).expect("test WAV data size fits u32");
-    let mut wav = Vec::with_capacity(WAV_HEADER_SIZE + data_size);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(WAV_DATA_OFFSET + data_size_u32).to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&WAV_FMT_CHUNK_SIZE.to_le_bytes());
-    wav.extend_from_slice(&format.to_le_bytes());
-    wav.extend_from_slice(&CHANNELS.to_le_bytes());
-    wav.extend_from_slice(&SOURCE_RATE.to_le_bytes());
-    wav.extend_from_slice(
-        &(SOURCE_RATE * u32::from(CHANNELS) * u32::from(bytes_per_sample)).to_le_bytes(),
-    );
-    wav.extend_from_slice(&(CHANNELS * bytes_per_sample).to_le_bytes());
-    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size_u32.to_le_bytes());
-    wav
 }

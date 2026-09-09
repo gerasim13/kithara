@@ -33,11 +33,11 @@ pub(super) struct Context<'a> {
     pub(super) set: &'a ModuleSet,
     pub(super) text: &'a TextDoc,
     pub(super) args: BTreeMap<String, String>,
+    pub(super) origin: SourceUri,
     /// The module instance this expansion belongs to, which every include
     /// under it shares. State a document keeps is named under it, so a close
     /// button an included surface carries turns the flag its includer reads.
     pub(super) instance: String,
-    pub(super) origin: SourceUri,
     pub(super) prefix: String,
 }
 

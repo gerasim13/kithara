@@ -1,45 +1,40 @@
-use std::num::NonZeroUsize;
+use kithara_platform::thread::spawn_named;
 
-use kithara_platform::{CancelToken, sync::Arc};
+use super::ComputeSubmitError;
+use crate::config::PoolConfig;
 
-use super::{ComputeContext, ComputeRejected, ComputeSubmitError};
-use crate::{Wake, config::PoolConfig};
+/// Owned compute pool that runs each admitted job on its own spawned thread.
+pub(crate) enum ComputePool {
+    Disabled,
+    Owned { name: String },
+}
 
-pub(crate) struct ComputeRuntime;
-
-impl ComputeRuntime {
-    pub(crate) fn new(pool: PoolConfig, max_in_flight: NonZeroUsize) -> Self {
-        let _ = (pool, max_in_flight);
-        Self
+impl ComputePool {
+    pub(super) fn new(config: PoolConfig) -> Self {
+        match config {
+            PoolConfig::Disabled => Self::Disabled,
+            PoolConfig::OwnedLazy(config) => Self::Owned { name: config.name },
+        }
     }
 
-    pub(crate) fn submit<T, F>(
-        &self,
-        task_budget: &Arc<Budget>,
-        task_token: &CancelToken,
-        wake: Wake,
-        payload: T,
-        job: F,
-    ) -> Result<(), ComputeRejected<T>>
-    where
-        T: Send + 'static,
-        F: FnOnce(ComputeContext, T) + Send + 'static,
-    {
-        let _ = (task_budget, task_token, wake, job);
-        let reason = if task_token.is_cancelled() {
-            ComputeSubmitError::Cancelled
-        } else {
-            ComputeSubmitError::Unavailable
+    pub(super) const fn is_disabled(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+
+    pub(super) fn spawner(&self) -> Result<Spawner, ComputeSubmitError> {
+        let Self::Owned { name } = self else {
+            return Err(ComputeSubmitError::Unavailable);
         };
-        Err(ComputeRejected::new(reason, payload))
+        Ok(Spawner { name: name.clone() })
     }
 }
 
-pub(crate) struct Budget;
+pub(super) struct Spawner {
+    name: String,
+}
 
-impl Budget {
-    pub(crate) const fn new(limit: NonZeroUsize) -> Self {
-        let _ = limit;
-        Self
+impl Spawner {
+    pub(super) fn spawn<F: FnOnce() + Send + 'static>(self, job: F) {
+        drop(spawn_named(self.name, job));
     }
 }

@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, path::PathBuf};
 
-use kithara_platform::time::Duration;
+use kithara_platform::{flash, time::Duration};
 
 pub trait HangDump {
     fn dump_json(&self) -> String;
@@ -38,7 +38,7 @@ impl PreKillGuard {
 /// Preserve the pre-existing tracing-only Flash report when `hang` is off.
 #[doc(hidden)]
 pub fn record_test_hang(label: &str, _diagnostic: &str) {
-    kithara_platform::flash::log_hang_dump(label);
+    flash::log_hang_dump(label);
 }
 
 /// No dump machinery compiled in: unexpected panics keep the default hook.

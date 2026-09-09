@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;
-use syn::{Attribute, Item, Meta, parse_file};
+use quote::ToTokens;
+use syn::{Attribute, Item, Meta, meta::ParseNestedMeta, parse_file};
 
 use super::{Check, Context};
 use crate::common::{
@@ -178,7 +179,7 @@ fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
     false
 }
 
-fn meta_contains_test(meta: &syn::meta::ParseNestedMeta<'_>) -> bool {
+fn meta_contains_test(meta: &ParseNestedMeta<'_>) -> bool {
     if meta.path.is_ident("test") {
         return true;
     }
@@ -193,7 +194,7 @@ fn meta_contains_test(meta: &syn::meta::ParseNestedMeta<'_>) -> bool {
 }
 
 fn quote_str(meta: &Meta) -> String {
-    quote::ToTokens::to_token_stream(meta).to_string()
+    ToTokens::to_token_stream(meta).to_string()
 }
 
 fn attr_token_contains_test(s: &str) -> bool {

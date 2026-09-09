@@ -11,6 +11,19 @@ impl<T, const SHARDS: usize> PooledVec<T, SHARDS> {
         Self(inner)
     }
 
+    /// Append elements under both hard budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when capacity overflows, exceeds either hard budget,
+    /// or cannot be allocated.
+    pub fn try_extend<I>(&mut self, values: I) -> Result<(), PoolError>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        self.0.try_extend(values)
+    }
+
     delegate::delegate! {
         to self.0 {
             /// Return the allocated element capacity.
@@ -35,19 +48,6 @@ impl<T, const SHARDS: usize> PooledVec<T, SHARDS> {
             where
                 T: Clone + Default,;
         }
-    }
-
-    /// Append elements under both hard budgets.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when capacity overflows, exceeds either hard budget,
-    /// or cannot be allocated.
-    pub fn try_extend<I>(&mut self, values: I) -> Result<(), PoolError>
-    where
-        I: IntoIterator<Item = T>,
-    {
-        self.0.try_extend(values)
     }
 }
 

@@ -1,6 +1,6 @@
 use kithara::{
     abr::AbrMode,
-    events::{AbrEvent, AudioEvent, Envelope, Event},
+    events::{AbrEvent, AudioEvent, Envelope, Event, EventReceiver},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -168,7 +168,7 @@ impl ItemEventBridge {
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
-        rx: kithara::events::EventReceiver,
+        rx: EventReceiver,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
@@ -183,7 +183,7 @@ impl ItemEventBridge {
     }
 
     fn spawn_event_task(
-        mut rx: kithara::events::EventReceiver,
+        mut rx: EventReceiver,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,

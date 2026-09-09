@@ -197,17 +197,17 @@ impl Run {
         }
     }
 
-    const fn wheels(self) -> usize {
-        match self {
-            Self::Plain | Self::Buckets(_) | Self::Moves(_) => 0,
-            Self::Wheels(count) => count,
-        }
-    }
-
     const fn moves(self) -> usize {
         match self {
             Self::Plain | Self::Buckets(_) | Self::Wheels(_) => 0,
             Self::Moves(count) => count,
+        }
+    }
+
+    const fn wheels(self) -> usize {
+        match self {
+            Self::Plain | Self::Buckets(_) | Self::Moves(_) => 0,
+            Self::Wheels(count) => count,
         }
     }
 }
@@ -229,8 +229,15 @@ enum Group {
 /// One page, the program that drives it, and everything the harness has to know
 /// before its numbers mean anything.
 struct Page {
+    /// The hotpath guard each host opens for this page. Stage labels inside are
+    /// the host's, so the guard name is what makes a line `host.page.stage`.
+    immediate_guard: &'static str,
     name: &'static str,
+    retained_guard: &'static str,
     group: Group,
+    /// The one reading this page moves on its own, if it has one. A run that
+    /// claims to measure an animating page has to show that it animated.
+    moving: Option<&'static str>,
     /// The document this page is the harness's own, when it is not one of the
     /// pages the gallery's screen offers.
     own: Option<&'static str>,
@@ -238,21 +245,14 @@ struct Page {
     /// stress waveforms only on the stress tab and the visualiser only on the
     /// vis one, so a page measured under the wrong tab is a still picture.
     tab: sections::Page,
-    frames: usize,
     program: Program,
-    /// The one reading this page moves on its own, if it has one. A run that
-    /// claims to measure an animating page has to show that it animated.
-    moving: Option<&'static str>,
     /// Where a wheel is delivered, in logical page points. A wheel outside the
     /// viewport measures a page that was never scrolled.
     pointer_at: Pt,
     /// Whether this page also runs a fenced variant, which serialises the queue
     /// and whose totals may never be added to an unfenced frame total.
     fenced: bool,
-    /// The hotpath guard each host opens for this page. Stage labels inside are
-    /// the host's, so the guard name is what makes a line `host.page.stage`.
-    immediate_guard: &'static str,
-    retained_guard: &'static str,
+    frames: usize,
 }
 
 const PAGES: &[Page] = &[
@@ -514,16 +514,6 @@ impl Page {
         self.own.unwrap_or_else(sections::entry)
     }
 
-    /// The screen's own state standing at this page, which is how the one
-    /// screen the gallery ships is opened at the page under measurement.
-    fn standing(&self) -> ViewState {
-        let mut view = ViewState::default();
-        if self.own.is_none() {
-            view.stand(sections::PAGE, self.tab);
-        }
-        view
-    }
-
     /// Turns a mounted screen to this page. A page the harness wrote is the
     /// whole document, so there is nothing to turn.
     fn open(&self, ui: &mut Ui<'_, PageApp>) {
@@ -534,6 +524,16 @@ impl Page {
             panic!("the page-perf fixture must open {}: {error}", self.name)
         });
     }
+
+    /// The screen's own state standing at this page, which is how the one
+    /// screen the gallery ships is opened at the page under measurement.
+    fn standing(&self) -> ViewState {
+        let mut view = ViewState::default();
+        if self.own.is_none() {
+            view.stand(sections::PAGE, self.tab);
+        }
+        view
+    }
 }
 
 /// The gallery as an application, with the page it shows fixed by the harness.
@@ -542,7 +542,6 @@ impl Page {
 /// recompiling: a page that turned itself mid-run would measure the mount.
 struct PageApp {
     entry: &'static str,
-    published: usize,
     reads: DemoReads,
     /// Whether what the document publishes is fed back into the demo model.
     ///
@@ -553,6 +552,7 @@ struct PageApp {
     /// what the scroll runs measure: the retained library page publishes a
     /// selection with its scroll, and applying that scrolls the list back to it.
     closes_loop: bool,
+    published: usize,
 }
 
 impl PageApp {
@@ -563,10 +563,10 @@ impl PageApp {
             reads.set_wave_buckets(count);
         }
         Self {
+            reads,
             closes_loop: matches!(run, Run::Moves(_)),
             entry: page.document(),
             published: 0,
-            reads,
         }
     }
 
@@ -592,16 +592,16 @@ impl PageApp {
 }
 
 impl App for PageApp {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         self.entry
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(&self.reads)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn tick(&mut self) {
@@ -625,11 +625,11 @@ impl App for PageApp {
 /// cannot.
 #[derive(Clone, Copy, Default)]
 struct Census {
+    /// Native declarations the frame produced, retained host only.
+    natives: Option<Natives>,
     /// Vello scene encoding sizes. The immediate host has no scene and leaves
     /// this unset rather than reporting a zero it never measured.
     scene: Option<Scene>,
-    /// Native declarations the frame produced, retained host only.
-    natives: Option<Natives>,
     pool: Pool,
     scheduled: bool,
 }
@@ -645,6 +645,13 @@ struct Pool {
 }
 
 impl Pool {
+    fn add(&mut self, other: Self) {
+        self.alloc_misses += other.alloc_misses;
+        self.home_hits += other.home_hits;
+        self.put_drops += other.put_drops;
+        self.steal_hits += other.steal_hits;
+    }
+
     fn delta(before: &PoolStats, after: &PoolStats) -> Self {
         Self {
             alloc_misses: after.alloc_misses.saturating_sub(before.alloc_misses),
@@ -652,13 +659,6 @@ impl Pool {
             put_drops: after.put_drops.saturating_sub(before.put_drops),
             steal_hits: after.steal_hits.saturating_sub(before.steal_hits),
         }
-    }
-
-    fn add(&mut self, other: Self) {
-        self.alloc_misses += other.alloc_misses;
-        self.home_hits += other.home_hits;
-        self.put_drops += other.put_drops;
-        self.steal_hits += other.steal_hits;
     }
 }
 
@@ -680,32 +680,20 @@ struct Natives {
 /// where it is not.
 #[derive(Default)]
 struct Tally {
-    frames: usize,
-    scheduled: usize,
+    natives: Option<Natives>,
     /// The last frame's scene. A scrolled page legitimately encodes a different
     /// scene every frame, so this is a snapshot, not a total.
     scene: Option<Scene>,
-    natives: Option<Natives>,
+    pool: Pool,
+    durations: Vec<Duration>,
     /// Whether any frame declared a different number of native draws than the
     /// first. One page cannot be measured as two.
     natives_varied: bool,
-    pool: Pool,
-    durations: Vec<Duration>,
+    frames: usize,
+    scheduled: usize,
 }
 
 impl Tally {
-    fn push(&mut self, census: Census, elapsed: Duration) {
-        self.frames += 1;
-        self.scheduled += usize::from(census.scheduled);
-        if let (Some(first), Some(now)) = (self.natives, census.natives) {
-            self.natives_varied |= first != now;
-        }
-        self.natives = self.natives.or(census.natives);
-        self.scene = census.scene;
-        self.pool.add(census.pool);
-        self.durations.push(elapsed);
-    }
-
     /// Total, mean, shortest and longest frame, in microseconds.
     fn micros(&self) -> [u128; 4] {
         let total: u128 = self.durations.iter().map(Duration::as_micros).sum();
@@ -724,42 +712,41 @@ impl Tally {
             .unwrap_or_default();
         [total, total / count, min, max]
     }
+
+    fn push(&mut self, census: Census, elapsed: Duration) {
+        self.frames += 1;
+        self.scheduled += usize::from(census.scheduled);
+        if let (Some(first), Some(now)) = (self.natives, census.natives) {
+            self.natives_varied |= first != now;
+        }
+        self.natives = self.natives.or(census.natives);
+        self.scene = census.scene;
+        self.pool.add(census.pool);
+        self.durations.push(elapsed);
+    }
 }
 
 /// One frame's worth of work on one host, from the input applied to the pixels
 /// produced. Both hosts rasterise: stopping at the recorded commands would
 /// report times for the visualiser passes without running them.
 trait PageHost {
-    /// Puts the pointer where the wheel will be delivered, once, before the
-    /// warm-up. A wheel is dispatched at wherever the host last saw the
-    /// pointer, so a host never told scrolls the wrong thing, or nothing.
-    fn place_pointer(&mut self);
-
-    /// Delivers one wheel detent at the page's pointer point.
-    fn wheel(&mut self, lines: f32);
-
-    /// Puts the button down where the pointer is, for the whole run. A fader
-    /// only tracks the pointer while it is held, so a drag measured without
-    /// this measures a page that ignored every move.
-    fn press(&mut self);
-
-    /// Moves the pointer along the rail and reports where it landed, so the
-    /// caller can turn it around at the ends rather than measure a clamp.
-    fn move_by(&mut self, dx: f32) -> f32;
-
-    /// Lets the button go, once, after the last measured frame.
-    fn release(&mut self);
-
-    /// Produces and rasterises one frame.
-    fn frame(&mut self) -> Census;
+    /// What [`PageHost::picture`] is a fingerprint of, in one word, for the
+    /// lines that report it. A still scene on a page whose visualiser moves in
+    /// a pass that never enters one is not a still page, and a line that said
+    /// "picture" for both hosts would be claiming it is.
+    fn drawn_as(&self) -> &'static str;
 
     /// The same, with the queue drained inside each pass. A fenced run
     /// serialises the GPU into the frame it belongs to; it is its own scenario
     /// and its totals may never be added to an unfenced total.
     fn fenced_frame(&mut self) -> Census;
 
-    /// The pixels of the last frame this host rasterised.
-    fn pixels(&mut self) -> Vec<u8>;
+    /// Produces and rasterises one frame.
+    fn frame(&mut self) -> Census;
+
+    /// Moves the pointer along the rail and reports where it landed, so the
+    /// caller can turn it around at the ends rather than measure a clamp.
+    fn move_by(&mut self, dx: f32) -> f32;
 
     /// A fingerprint of the last frame, taken at the last artefact this host
     /// owns. Two runs of one page that fingerprint alike drew the same picture,
@@ -773,40 +760,54 @@ trait PageHost {
     /// whether or not anything scrolled.
     fn picture(&mut self) -> u64;
 
-    /// What [`PageHost::picture`] is a fingerprint of, in one word, for the
-    /// lines that report it. A still scene on a page whose visualiser moves in
-    /// a pass that never enters one is not a still page, and a line that said
-    /// "picture" for both hosts would be claiming it is.
-    fn drawn_as(&self) -> &'static str;
+    /// The pixels of the last frame this host rasterised.
+    fn pixels(&mut self) -> Vec<u8>;
+
+    /// Puts the pointer where the wheel will be delivered, once, before the
+    /// warm-up. A wheel is dispatched at wherever the host last saw the
+    /// pointer, so a host never told scrolls the wrong thing, or nothing.
+    fn place_pointer(&mut self);
+
+    /// Puts the button down where the pointer is, for the whole run. A fader
+    /// only tracks the pointer while it is held, so a drag measured without
+    /// this measures a page that ignored every move.
+    fn press(&mut self);
+
+    /// How many events the mounted document published, cumulative.
+    fn published(&self) -> usize;
 
     /// A fingerprint of the page's own moving reading, if the page named one.
     fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
 
-    /// How many events the mounted document published, cumulative.
-    fn published(&self) -> usize;
+    /// Lets the button go, once, after the last measured frame.
+    fn release(&mut self);
+
+    /// Delivers one wheel detent at the page's pointer point.
+    fn wheel(&mut self, lines: f32);
 }
 
 /// The immediate host: every frame rebuilds the element tree from the compiled
 /// document, lays it out, applies the queued events, draws and presents.
 struct Immediate {
-    app: PageApp,
     cache: Cache,
+    ui: CompiledUi,
     cursor: Cursor,
     device: Device,
-    pending: Vec<Event>,
+    app: PageApp,
+    pointer_at: Pt,
     queue: Queue,
     renderer: iced::Renderer,
-    scheduled: bool,
     texture: Texture,
     theme: Theme,
-    ui: CompiledUi,
-    pointer_at: Pt,
+    pending: Vec<Event>,
+    scheduled: bool,
 }
 
 impl Immediate {
     fn new(ui: CompiledUi, page: &Page, app: PageApp, gpu: &ImmediateGpu) -> Self {
         Self {
             app,
+            ui,
             cache: Cache::default(),
             cursor: Cursor::Available(Point::new(page.pointer_at.x, page.pointer_at.y)),
             device: gpu.device.clone(),
@@ -820,7 +821,6 @@ impl Immediate {
             scheduled: false,
             texture: gpu.texture(),
             theme: theme(builtin::skin()),
-            ui,
             pointer_at: page.pointer_at,
         }
     }
@@ -908,42 +908,8 @@ impl Immediate {
 }
 
 impl PageHost for Immediate {
-    fn place_pointer(&mut self) {
-        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
-        self.cursor = Cursor::Available(position);
-        self.pending
-            .push(Event::Mouse(MouseEvent::CursorMoved { position }));
-    }
-
-    fn wheel(&mut self, lines: f32) {
-        self.pending.push(Event::Mouse(MouseEvent::WheelScrolled {
-            delta: ScrollDelta::Lines { x: 0.0, y: lines },
-        }));
-    }
-
-    fn press(&mut self) {
-        self.pending
-            .push(Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)));
-    }
-
-    fn move_by(&mut self, dx: f32) -> f32 {
-        self.pointer_at.x += dx;
-        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
-        self.cursor = Cursor::Available(position);
-        self.pending
-            .push(Event::Mouse(MouseEvent::CursorMoved { position }));
-        self.pointer_at.x
-    }
-
-    fn release(&mut self) {
-        self.pending
-            .push(Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left)));
-    }
-
-    fn frame(&mut self) -> Census {
-        let census = self.draw();
-        measure_block!("iced.encode", self.present());
-        census
+    fn drawn_as(&self) -> &'static str {
+        "pixels"
     }
 
     fn fenced_frame(&mut self) -> Census {
@@ -955,8 +921,19 @@ impl PageHost for Immediate {
         census
     }
 
-    fn pixels(&mut self) -> Vec<u8> {
-        readback(&self.device, &self.queue, &self.texture)
+    fn frame(&mut self) -> Census {
+        let census = self.draw();
+        measure_block!("iced.encode", self.present());
+        census
+    }
+
+    fn move_by(&mut self, dx: f32) -> f32 {
+        self.pointer_at.x += dx;
+        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
+        self.cursor = Cursor::Available(position);
+        self.pending
+            .push(Event::Mouse(MouseEvent::CursorMoved { position }));
+        self.pointer_at.x
     }
 
     /// The pixels themselves: what this host hands the texture comes back the
@@ -966,16 +943,39 @@ impl PageHost for Immediate {
         digest(&self.pixels())
     }
 
-    fn drawn_as(&self) -> &'static str {
-        "pixels"
+    fn pixels(&mut self) -> Vec<u8> {
+        readback(&self.device, &self.queue, &self.texture)
+    }
+
+    fn place_pointer(&mut self) {
+        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
+        self.cursor = Cursor::Available(position);
+        self.pending
+            .push(Event::Mouse(MouseEvent::CursorMoved { position }));
+    }
+
+    fn press(&mut self) {
+        self.pending
+            .push(Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)));
+    }
+
+    fn published(&self) -> usize {
+        self.app.published
     }
 
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
         self.app.digest_of(endpoint?)
     }
 
-    fn published(&self) -> usize {
-        self.app.published
+    fn release(&mut self) {
+        self.pending
+            .push(Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left)));
+    }
+
+    fn wheel(&mut self, lines: f32) {
+        self.pending.push(Event::Mouse(MouseEvent::WheelScrolled {
+            delta: ScrollDelta::Lines { x: 0.0, y: lines },
+        }));
     }
 }
 
@@ -1000,10 +1000,10 @@ fn redraw_asked(state: &State) -> bool {
 /// refresh, a paint into a Vello scene, and the two native passes around it.
 struct Retained<'a> {
     gpu: &'a mut RetainedGpu,
-    picture: u64,
-    scheduled: bool,
-    ui: Ui<'a, PageApp>,
     pointer_at: Pt,
+    ui: Ui<'a, PageApp>,
+    scheduled: bool,
+    picture: u64,
 }
 
 impl<'a> Retained<'a> {
@@ -1013,9 +1013,9 @@ impl<'a> Retained<'a> {
         page.open(&mut ui);
         Self {
             gpu,
+            ui,
             picture: 0,
             scheduled: false,
-            ui,
             pointer_at: page.pointer_at,
         }
     }
@@ -1080,31 +1080,16 @@ impl<'a> Retained<'a> {
 }
 
 impl PageHost for Retained<'_> {
-    fn place_pointer(&mut self) {
-        let at = self.pointer_at;
-        self.ui.input(Input::Pointer(PointerInput::new(
-            MOUSE,
-            None,
-            PointerPhase::Move,
-            Some(at),
-            1,
-        )));
+    fn drawn_as(&self) -> &'static str {
+        "scene"
     }
 
-    fn wheel(&mut self, lines: f32) {
-        self.ui
-            .input(Input::Wheel(Scroll::Lines { x: 0.0, y: lines }));
+    fn fenced_frame(&mut self) -> Census {
+        self.draw(true)
     }
 
-    fn press(&mut self) {
-        let at = self.pointer_at;
-        self.ui.input(Input::Pointer(PointerInput::new(
-            MOUSE,
-            Some(PointerButton::Primary),
-            PointerPhase::Down,
-            Some(at),
-            1,
-        )));
+    fn frame(&mut self) -> Census {
+        self.draw(false)
     }
 
     fn move_by(&mut self, dx: f32) -> f32 {
@@ -1120,6 +1105,46 @@ impl PageHost for Retained<'_> {
         at.x
     }
 
+    /// The scene of the last frame drawn, fingerprinted where it was handed
+    /// over, rather than the pixels Vello then made of it.
+    fn picture(&mut self) -> u64 {
+        self.picture
+    }
+
+    fn pixels(&mut self) -> Vec<u8> {
+        readback_vello(&self.gpu.device, &self.gpu.queue, &self.gpu.texture)
+    }
+
+    fn place_pointer(&mut self) {
+        let at = self.pointer_at;
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            PointerPhase::Move,
+            Some(at),
+            1,
+        )));
+    }
+
+    fn press(&mut self) {
+        let at = self.pointer_at;
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            Some(PointerButton::Primary),
+            PointerPhase::Down,
+            Some(at),
+            1,
+        )));
+    }
+
+    fn published(&self) -> usize {
+        self.ui.app().published
+    }
+
+    fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
+        self.ui.app().digest_of(endpoint?)
+    }
+
     fn release(&mut self) {
         let at = self.pointer_at;
         self.ui.input(Input::Pointer(PointerInput::new(
@@ -1131,34 +1156,9 @@ impl PageHost for Retained<'_> {
         )));
     }
 
-    fn frame(&mut self) -> Census {
-        self.draw(false)
-    }
-
-    fn fenced_frame(&mut self) -> Census {
-        self.draw(true)
-    }
-
-    fn pixels(&mut self) -> Vec<u8> {
-        readback_vello(&self.gpu.device, &self.gpu.queue, &self.gpu.texture)
-    }
-
-    /// The scene of the last frame drawn, fingerprinted where it was handed
-    /// over, rather than the pixels Vello then made of it.
-    fn picture(&mut self) -> u64 {
-        self.picture
-    }
-
-    fn drawn_as(&self) -> &'static str {
-        "scene"
-    }
-
-    fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
-        self.ui.app().digest_of(endpoint?)
-    }
-
-    fn published(&self) -> usize {
-        self.ui.app().published
+    fn wheel(&mut self, lines: f32) {
+        self.ui
+            .input(Input::Wheel(Scroll::Lines { x: 0.0, y: lines }));
     }
 }
 
@@ -1179,14 +1179,6 @@ impl Fixture {
         }
     }
 
-    fn config(&self) -> Config<'_> {
-        Config::builder()
-            .endpoints(self.registry.as_ref())
-            .resolver(&self.resolver)
-            .text(builtin::text_doc())
-            .build()
-    }
-
     fn compiled(&self, page: &Page) -> CompiledUi {
         let entry = page.document();
         compile(
@@ -1199,6 +1191,14 @@ impl Fixture {
             &page.standing(),
         )
         .unwrap_or_else(|error| panic!("the page-perf document {entry} must compile: {error}"))
+    }
+
+    fn config(&self) -> Config<'_> {
+        Config::builder()
+            .endpoints(self.registry.as_ref())
+            .resolver(&self.resolver)
+            .text(builtin::text_doc())
+            .build()
     }
 }
 
@@ -1314,31 +1314,6 @@ impl RetainedGpu {
         })
     }
 
-    /// Shader images, then the scene, then the native visualiser draws - the
-    /// order the window runner uses.
-    fn passes(&mut self, frame: &Frame) {
-        let view = self
-            .texture
-            .create_view(&vello_wgpu::TextureViewDescriptor::default());
-        measure_block!(
-            "vello.pass.shader",
-            self.shaders
-                .render(&self.device, &self.queue, &mut self.vello, frame.shaders())
-        );
-        measure_block!("vello.scene", self.scene(frame, &view));
-        measure_block!(
-            "vello.pass.vis",
-            self.vis.render(
-                &self.device,
-                &self.queue,
-                &view,
-                frame.vis(),
-                1.0,
-                [width(), height()],
-            )
-        );
-    }
-
     /// The same three passes with the queue drained after each, so each label
     /// carries its own GPU time instead of the next pass's submit.
     fn fenced_passes(&mut self, frame: &Frame) {
@@ -1365,6 +1340,31 @@ impl RetainedGpu {
             );
             drain_vello(&self.device);
         });
+    }
+
+    /// Shader images, then the scene, then the native visualiser draws - the
+    /// order the window runner uses.
+    fn passes(&mut self, frame: &Frame) {
+        let view = self
+            .texture
+            .create_view(&vello_wgpu::TextureViewDescriptor::default());
+        measure_block!(
+            "vello.pass.shader",
+            self.shaders
+                .render(&self.device, &self.queue, &mut self.vello, frame.shaders())
+        );
+        measure_block!("vello.scene", self.scene(frame, &view));
+        measure_block!(
+            "vello.pass.vis",
+            self.vis.render(
+                &self.device,
+                &self.queue,
+                &view,
+                frame.vis(),
+                1.0,
+                [width(), height()],
+            )
+        );
     }
 
     fn scene(&mut self, frame: &Frame, view: &vello_wgpu::TextureView) {
@@ -1606,20 +1606,20 @@ fn load_fonts() {
 /// about the thing the run claims to measure.
 struct Outcome<'run> {
     page: &'run Page,
+    /// Which artefact those two were taken from, for the lines that report them.
+    drawn_as: &'static str,
+    expected: Natives,
     run: Run,
     tally: Tally,
-    expected: Natives,
+    /// The page's own moving reading, at the same two moments.
+    reading: [Option<u64>; 2],
     /// The page as its host drew it, before the first measured frame and after
     /// the last.
     picture: [u64; 2],
-    /// Which artefact those two were taken from, for the lines that report them.
-    drawn_as: &'static str,
-    /// The page's own moving reading, at the same two moments.
-    reading: [Option<u64>; 2],
+    fenced: bool,
     /// Whether the last frame is more than one flat colour.
     painted: bool,
     published: usize,
-    fenced: bool,
 }
 
 /// The cheap-page control and the stress page: is the stress page's cost its

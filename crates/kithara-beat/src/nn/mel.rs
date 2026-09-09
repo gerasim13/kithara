@@ -33,8 +33,8 @@ impl MelExtractor {
         let mut data = pools.get_with_len::<f32>(samples.len())?;
         data.copy_from_slice(samples);
         let input = Tensor {
-            shape: smallvec![1, samples.len()],
             data,
+            shape: smallvec![1, samples.len()],
         };
 
         let mut outputs = self.model.run(&[("audio_pcm", &input)], pools)?;

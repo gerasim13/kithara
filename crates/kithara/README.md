@@ -82,3 +82,7 @@ engine, crossfade, EQ — reach into `kithara::play`. The `prelude` collects the
 everyday types.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the architecture, detailed contracts, and invariants.
+
+## Integration
+
+[Crate contracts](https://github.com/zvuk/kithara/wiki/kithara).

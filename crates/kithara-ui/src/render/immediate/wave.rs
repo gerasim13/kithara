@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Size, Theme,
     keyboard::{Event as KeyboardEvent, Modifiers},
-    mouse::{self, Cursor},
+    mouse::{self, Button, Cursor, Interaction},
     widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
 use kithara_platform::time::Instant;
@@ -121,13 +121,13 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
         state: &MiniWaveState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         if self.data.has_waveform() {
             self.drag
                 .cursor(&state.drag, &iced_interact::hit(bounds, cursor))
                 .into()
         } else {
-            mouse::Interaction::default()
+            Interaction::default()
         }
     }
 
@@ -147,7 +147,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
         }
         if self.painter.hero() {
             match event {
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
                     if state.modifiers.shift() && cursor.is_over(bounds) =>
                 {
                     let start = self.track_position(bounds, cursor)?;
@@ -158,7 +158,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
                     let end = self.track_position(bounds, cursor)?;
                     return Some(scalar_child(&self.path, "loop_end", f64::from(end)));
                 }
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
                     if state.loop_start.take().is_some() =>
                 {
                     return Some(Action::capture());

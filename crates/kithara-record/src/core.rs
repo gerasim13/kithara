@@ -5,12 +5,12 @@ use crate::{RecordingConfig, RecordingError, RecordingResult, RecordingSink};
 
 /// Shared encode, container, and transaction core for one recording part.
 pub struct RecordingCore<S: RecordingSink> {
-    channels: usize,
     container: Option<ContainerSession>,
     encoder: Option<EncoderSession>,
     expected_frames: Option<u64>,
-    frames: u64,
     sink: Option<S>,
+    frames: u64,
+    channels: usize,
 }
 
 impl<S: RecordingSink> RecordingCore<S> {
@@ -46,39 +46,23 @@ impl<S: RecordingSink> RecordingCore<S> {
         }
 
         Ok(Self {
+            expected_frames,
             channels: usize::from(config.encode().channels),
             container: Some(container),
             encoder: Some(encoder),
-            expected_frames,
             frames: 0,
             sink: Some(sink),
         })
     }
 
-    /// Encode and write complete interleaved PCM frames.
-    ///
-    /// # Errors
-    /// Returns a terminal encode or sink failure and aborts the transaction.
-    pub fn push(&mut self, samples: &[f32]) -> RecordingResult<(), S::Error> {
-        if self.sink.is_none() {
-            return Err(RecordingError::Inactive);
+    fn fail<T>(&mut self, error: RecordingError<S::Error>) -> RecordingResult<T, S::Error> {
+        if let Some(sink) = self.sink.as_mut() {
+            sink.abort();
         }
-        let Ok(frame_delta) = u64::try_from(samples.len() / self.channels) else {
-            return self.fail(RecordingError::FrameCountOverflow);
-        };
-        let Some(next_frames) = self.frames.checked_add(frame_delta) else {
-            return self.fail(RecordingError::FrameCountOverflow);
-        };
-        let units = match self.encoder.as_mut() {
-            Some(encoder) => match encoder.push(samples) {
-                Ok(units) => units,
-                Err(error) => return self.fail(error.into()),
-            },
-            None => return Err(RecordingError::Inactive),
-        };
-        self.write_units(units)?;
-        self.frames = next_frames;
-        Ok(())
+        self.sink.take();
+        self.encoder.take();
+        self.container.take();
+        Err(error)
     }
 
     /// Flush the encoder and container, then atomically publish the part.
@@ -120,20 +104,29 @@ impl<S: RecordingSink> RecordingCore<S> {
         Ok(output)
     }
 
-    fn write_units(
-        &mut self,
-        units: Vec<kithara_encode::EncodedAccessUnit>,
-    ) -> RecordingResult<(), S::Error> {
-        for unit in units {
-            let writes = match self.container.as_mut() {
-                Some(container) => match container.push(unit) {
-                    Ok(writes) => writes,
-                    Err(error) => return self.fail(error.into()),
-                },
-                None => return Err(RecordingError::Inactive),
-            };
-            self.write_container(writes)?;
+    /// Encode and write complete interleaved PCM frames.
+    ///
+    /// # Errors
+    /// Returns a terminal encode or sink failure and aborts the transaction.
+    pub fn push(&mut self, samples: &[f32]) -> RecordingResult<(), S::Error> {
+        if self.sink.is_none() {
+            return Err(RecordingError::Inactive);
         }
+        let Ok(frame_delta) = u64::try_from(samples.len() / self.channels) else {
+            return self.fail(RecordingError::FrameCountOverflow);
+        };
+        let Some(next_frames) = self.frames.checked_add(frame_delta) else {
+            return self.fail(RecordingError::FrameCountOverflow);
+        };
+        let units = match self.encoder.as_mut() {
+            Some(encoder) => match encoder.push(samples) {
+                Ok(units) => units,
+                Err(error) => return self.fail(error.into()),
+            },
+            None => return Err(RecordingError::Inactive),
+        };
+        self.write_units(units)?;
+        self.frames = next_frames;
         Ok(())
     }
 
@@ -150,14 +143,21 @@ impl<S: RecordingSink> RecordingCore<S> {
         Ok(())
     }
 
-    fn fail<T>(&mut self, error: RecordingError<S::Error>) -> RecordingResult<T, S::Error> {
-        if let Some(sink) = self.sink.as_mut() {
-            sink.abort();
+    fn write_units(
+        &mut self,
+        units: Vec<kithara_encode::EncodedAccessUnit>,
+    ) -> RecordingResult<(), S::Error> {
+        for unit in units {
+            let writes = match self.container.as_mut() {
+                Some(container) => match container.push(unit) {
+                    Ok(writes) => writes,
+                    Err(error) => return self.fail(error.into()),
+                },
+                None => return Err(RecordingError::Inactive),
+            };
+            self.write_container(writes)?;
         }
-        self.sink.take();
-        self.encoder.take();
-        self.container.take();
-        Err(error)
+        Ok(())
     }
 }
 
@@ -186,6 +186,7 @@ mod tests {
     };
 
     use kithara_encode::EncodeConfig;
+    use kithara_test_fixtures::unit_fixtures::trim_silence;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -198,21 +199,21 @@ mod tests {
         type Error = io::Error;
         type Output = ();
 
-        fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
-            Ok(())
+        fn abort(&mut self) {
+            self.aborted.store(true, Ordering::Release);
         }
 
         fn commit(&mut self, _final_len: u64) -> Result<Self::Output, Self::Error> {
             Ok(())
         }
 
-        fn abort(&mut self) {
-            self.aborted.store(true, Ordering::Release);
+        fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
+            Ok(())
         }
     }
 
     #[kithara::test(native, flash(false))]
-    fn frame_count_overflow_aborts_transaction() {
+    fn frame_count_overflow_aborts_transaction(trim_silence: Vec<f32>) {
         let aborted = Arc::new(AtomicBool::new(false));
         let config = RecordingConfig::builder()
             .encode(
@@ -233,12 +234,12 @@ mod tests {
         recording.frames = u64::MAX;
 
         assert!(matches!(
-            recording.push(&[0.0, 0.0]),
+            recording.push(&trim_silence[..2]),
             Err(RecordingError::FrameCountOverflow)
         ));
         assert!(aborted.load(Ordering::Acquire));
         assert!(matches!(
-            recording.push(&[0.0, 0.0]),
+            recording.push(&trim_silence[..2]),
             Err(RecordingError::Inactive)
         ));
     }

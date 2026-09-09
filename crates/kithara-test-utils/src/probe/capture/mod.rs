@@ -1,9 +1,7 @@
 //! Probe event capture helper for integration tests.
 //!
-//! Records every `tracing::event!` whose target ends with `_probe` into a
-//! process-wide `Vec` so a test can snapshot the sequence and assert on it.
-//! See the crate `CONTEXT.md` "Probe capture" for the subscriber and
-//! activation contract.
+//! Records every `tracing::event!` whose target ends with `_probe` into a process-wide
+//! `Vec` so a test can snapshot the sequence and assert on it.
 
 mod event;
 mod layer;

@@ -30,6 +30,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) non_english_text: NonEnglishTextConfig,
     #[serde(default)]
+    pub(crate) qualified_path_depth: QualifiedPathDepthConfig,
+    #[serde(default)]
     pub(crate) readme_shape: ReadmeShapeConfig,
     #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
@@ -37,6 +39,66 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) struct_init_order: StructInitOrderConfig,
     #[serde(default)]
     pub(crate) trait_item_order: TraitItemOrderConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QualifiedPathDepthConfig {
+    #[serde(default = "default_qualified_path_excludes")]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Path prefixes the check leaves alone. `self`, `super`, and `crate`
+    /// say where the item is relative to here, which is the information the
+    /// path exists to carry; `std` and `tokio` read as the library they are.
+    #[serde(default = "default_exempt_roots")]
+    pub(crate) exempt_roots: Vec<String>,
+    #[serde(default = "default_qualified_path_includes")]
+    pub(crate) include_paths: Vec<String>,
+    /// Segments a path may carry before it is reading a directory rather than
+    /// naming an item.
+    #[serde(default = "default_max_segments")]
+    pub(crate) max_segments: usize,
+}
+
+impl Default for QualifiedPathDepthConfig {
+    fn default() -> Self {
+        Self {
+            exempt_roots: default_exempt_roots(),
+            exclude_paths: default_qualified_path_excludes(),
+            include_paths: default_qualified_path_includes(),
+            max_segments: default_max_segments(),
+        }
+    }
+}
+
+fn default_exempt_roots() -> Vec<String> {
+    ["self", "super", "crate", "std", "tokio"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_qualified_path_excludes() -> Vec<String> {
+    [
+        "**/tests/**",
+        "**/test_*.rs",
+        "**/*_test.rs",
+        "**/*_tests.rs",
+        "**/tests.rs",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+fn default_qualified_path_includes() -> Vec<String> {
+    ["crates/**/*.rs", "tests/**/*.rs"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+const fn default_max_segments() -> usize {
+    2
 }
 
 #[derive(Debug, Deserialize)]

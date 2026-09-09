@@ -6,7 +6,7 @@ use std::{
 };
 
 use glob::Pattern;
-use syn::{ImplItem, Item, Meta, spanned::Spanned};
+use syn::{ImplItem, Item, Meta, punctuated::Punctuated, spanned::Spanned};
 
 use crate::common::{
     parse::parse_file,
@@ -107,7 +107,7 @@ fn cfg_predicate_is_test_only(meta: &Meta) -> bool {
     match meta {
         Meta::Path(path) => path.is_ident("test"),
         Meta::List(list) if list.path.is_ident("all") => list
-            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
             .is_ok_and(|nested| nested.iter().any(cfg_predicate_is_test_only)),
         _ => false,
     }
@@ -324,7 +324,7 @@ fn cfg_predicate_has_test(meta: &Meta) -> bool {
     match meta {
         Meta::Path(p) => p.is_ident("test"),
         Meta::List(list) if list.path.is_ident("any") || list.path.is_ident("all") => list
-            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .parse_args_with(Punctuated::<Meta, syn::Token![,]>::parse_terminated)
             .is_ok_and(|nested| nested.iter().any(cfg_predicate_has_test)),
         _ => false,
     }

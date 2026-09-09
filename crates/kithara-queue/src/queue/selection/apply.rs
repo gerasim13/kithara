@@ -15,33 +15,6 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) fn watch_apply(
-        &self,
-        id: TrackId,
-        handle: Option<task::JoinHandle<Result<Resource, QueueError>>>,
-    ) {
-        if self.is_closed() {
-            return;
-        }
-        let Some(handle) = handle else {
-            return;
-        };
-        let queue = self.clone();
-        drop(task::spawn(async move {
-            let resource = match handle.await {
-                Ok(Ok(resource)) => resource,
-                Ok(Err(_)) => return,
-                Err(join_err) => {
-                    warn!(id = id.as_u64(), error = %join_err, "loader join failed");
-                    return;
-                }
-            };
-            drop(task::spawn_sync(move || {
-                queue.apply_loaded(id, resource);
-            }));
-        }));
-    }
-
     /// Apply a finished load synchronously, off the runtime.
     ///
     /// Takes the admission lock and dispatches through the session's
@@ -148,5 +121,32 @@ where
             reason: AdvanceReason::UserSelect,
         });
         self.tracks.set_status(id, TrackStatus::Consumed);
+    }
+
+    pub(super) fn watch_apply(
+        &self,
+        id: TrackId,
+        handle: Option<task::JoinHandle<Result<Resource, QueueError>>>,
+    ) {
+        if self.is_closed() {
+            return;
+        }
+        let Some(handle) = handle else {
+            return;
+        };
+        let queue = self.clone();
+        drop(task::spawn(async move {
+            let resource = match handle.await {
+                Ok(Ok(resource)) => resource,
+                Ok(Err(_)) => return,
+                Err(join_err) => {
+                    warn!(id = id.as_u64(), error = %join_err, "loader join failed");
+                    return;
+                }
+            };
+            drop(task::spawn_sync(move || {
+                queue.apply_loaded(id, resource);
+            }));
+        }));
     }
 }

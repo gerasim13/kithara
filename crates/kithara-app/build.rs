@@ -24,6 +24,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde_yaml_ng::Value;
+
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
@@ -40,7 +42,7 @@ fn main() {
     let yaml_src = fs::read_to_string(&app_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", app_yaml_path.display()));
 
-    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml_src)
+    let document: Value = serde_yaml_ng::from_str(&yaml_src)
         .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);
@@ -81,9 +83,9 @@ fn main() {
 
 /// Every `$VAR` / `${VAR}` reference in the document, labelled by where it sits.
 /// Untyped on purpose: a section added to the schema needs no change here.
-fn collect_refs(value: &serde_yaml_ng::Value, path: &str, refs: &mut Vec<(String, String)>) {
+fn collect_refs(value: &Value, path: &str, refs: &mut Vec<(String, String)>) {
     match value {
-        serde_yaml_ng::Value::String(text) => {
+        Value::String(text) => {
             if let Some(name) = text.strip_prefix('$').filter(|_| !text.contains("${")) {
                 refs.push((path.to_string(), name.to_string()));
                 return;
@@ -96,12 +98,12 @@ fn collect_refs(value: &serde_yaml_ng::Value, path: &str, refs: &mut Vec<(String
                 rest = &tail[end + 1..];
             }
         }
-        serde_yaml_ng::Value::Sequence(items) => {
+        Value::Sequence(items) => {
             for (index, item) in items.iter().enumerate() {
                 collect_refs(item, &format!("{path}[{index}]"), refs);
             }
         }
-        serde_yaml_ng::Value::Mapping(entries) => {
+        Value::Mapping(entries) => {
             for (key, entry) in entries {
                 let key = key.as_str().unwrap_or("?");
                 let child = if path.is_empty() {

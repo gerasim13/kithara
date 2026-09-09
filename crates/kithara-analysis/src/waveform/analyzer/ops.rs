@@ -31,6 +31,11 @@ impl WaveformAnalyzer {
         u64::try_from(self.window_hop).unwrap_or(1)
     }
 
+    #[cfg(test)]
+    pub(super) fn partial_len(&self) -> usize {
+        self.partial.len()
+    }
+
     fn reduce(&mut self, index: u64) {
         let bands = if self
             .fft
@@ -91,6 +96,11 @@ impl WaveformAnalyzer {
         self.reduce(0);
     }
 
+    #[cfg(test)]
+    pub(super) fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
+        self.bands.get(&index).copied()
+    }
+
     pub(super) fn scatter<S>(
         &mut self,
         pools: &PoolRegion<S>,
@@ -142,16 +152,6 @@ impl WaveformAnalyzer {
         dst.copy_from_slice(src);
         partial.written.insert(FrameRange::new(from, to - from));
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn partial_len(&self) -> usize {
-        self.partial.len()
-    }
-
-    #[cfg(test)]
-    pub(super) fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
-        self.bands.get(&index).copied()
     }
 
     pub(super) fn size(&self) -> u64 {

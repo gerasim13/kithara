@@ -30,11 +30,11 @@ pub(crate) trait Packager: 'static {
 
     fn is_live(live: &Self::Live) -> bool;
 
-    /// `Ok(None)`: no device rate measured yet, so the request stands.
-    fn start(host: &AppHost, config: &Self::Config) -> BroadcastResult<Option<Self::Live>>;
-
     /// Releases the Host output group before the packager drains.
     fn release(host: &AppHost) -> BroadcastResult<()>;
+
+    /// `Ok(None)`: no device rate measured yet, so the request stands.
+    fn start(host: &AppHost, config: &Self::Config) -> BroadcastResult<Option<Self::Live>>;
 
     /// Drains the stream and shuts it down. Blocking.
     fn stop(live: Self::Live);

@@ -3542,8 +3542,8 @@ mod gesture_census {
     /// the tree took the event. This keeps the first; the driver answers the
     /// second.
     struct Driven<'a> {
-        published: Vec<UiEvent>,
         skin: &'a Skin,
+        published: Vec<UiEvent>,
     }
 
     impl Reads for Driven<'_> {
@@ -3591,8 +3591,8 @@ mod gesture_census {
             Named::Press => {
                 let handled = host.click_at(at);
                 Answer {
-                    acted: !host.app().published.is_empty(),
                     handled,
+                    acted: !host.app().published.is_empty(),
                 }
             }
             Named::Drag => {
@@ -3614,8 +3614,8 @@ mod gesture_census {
             Named::Wheel => {
                 let handled = host.wheel_at(at, -2.0);
                 Answer {
-                    acted: !host.app().published.is_empty(),
                     handled,
+                    acted: !host.app().published.is_empty(),
                 }
             }
         }
@@ -3642,8 +3642,8 @@ mod gesture_census {
             let mut x = SWEEP / 2.0;
             while x < width {
                 let app = Driven {
-                    published: Vec::new(),
                     skin,
+                    published: Vec::new(),
                 };
                 let mut host = Immediate::mount(app, &ui, skin, (DRIVEN_WIDTH, DRIVEN_HEIGHT));
                 let answer = played(named, &mut host, Pt { x, y });

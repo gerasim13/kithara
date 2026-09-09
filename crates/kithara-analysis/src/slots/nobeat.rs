@@ -77,13 +77,21 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot<S>(
+    pub(crate) fn apply_detection(&mut self, _output: DetectOutput) {}
+
+    pub(crate) const fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
+        seen
+    }
+
+    pub(crate) const fn intake(&self) -> Intake {
+        Intake::Anywhere
+    }
+
+    pub(crate) fn prepare_detection<S>(
         &mut self,
         _pools: &PoolRegion<S>,
-        _detector: Option<&mut Detector>,
-        _ending: bool,
-        _extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+        _trailing: bool,
+    ) -> Option<DetectRequest>
     where
         S: HasPool<f32>,
     {
@@ -105,31 +113,6 @@ where
         false
     }
 
-    pub(crate) const fn coverage<'a>(&'a self, seen: &'a Coverage) -> &'a Coverage {
-        seen
-    }
-
-    pub(crate) const fn intake(&self) -> Intake {
-        Intake::Anywhere
-    }
-
-    pub(crate) fn prepare_detection<S>(
-        &mut self,
-        _pools: &PoolRegion<S>,
-        _trailing: bool,
-    ) -> Option<DetectRequest>
-    where
-        S: HasPool<f32>,
-    {
-        None
-    }
-
-    pub(crate) fn apply_detection(&mut self, _output: DetectOutput) {}
-
-    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
-        None
-    }
-
     pub(crate) fn restore<S>(
         &mut self,
         _pools: &PoolRegion<S>,
@@ -143,5 +126,22 @@ where
         } else {
             Err(BlobError::Corrupt)
         }
+    }
+
+    pub(crate) fn snapshot<S>(
+        &mut self,
+        _pools: &PoolRegion<S>,
+        _detector: Option<&mut Detector>,
+        _ending: bool,
+        _extent: Option<u64>,
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
+        None
+    }
+
+    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
+        None
     }
 }

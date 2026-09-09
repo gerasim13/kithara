@@ -4,6 +4,7 @@
 //! [`crate::lib`]. Inside this module all sources are unconditionally
 //! wasm-only and require no per-item gating.
 
+pub(crate) mod analysis;
 pub mod bindings;
 pub(crate) mod bridge;
 pub(crate) mod commands;

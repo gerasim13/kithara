@@ -10,6 +10,7 @@ use std::{
 use arc_swap::ArcSwap;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
+use rkyv::rancor::Error;
 
 use super::core::{Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
@@ -71,11 +72,9 @@ impl AvailabilityIndex {
             return Ok(());
         }
 
-        let archived = match rkyv::access::<
-            crate::index::schema::ArchivedAvailabilityFile,
-            rkyv::rancor::Error,
-        >(&buf[..n])
-        {
+        let archived = match rkyv::access::<crate::index::schema::ArchivedAvailabilityFile, Error>(
+            &buf[..n],
+        ) {
             Ok(archived) => archived,
             Err(e) => {
                 tracing::debug!("Failed to validate availability index: {}", e);
@@ -192,7 +191,7 @@ fn write_aggregate(
         })
         .collect();
     let file = AvailabilityFile { assets, version: 1 };
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
+    let bytes = rkyv::to_bytes::<Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {
         res.write_all_durable(&bytes)?;

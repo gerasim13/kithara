@@ -406,8 +406,8 @@ mod tests {
     #[kithara::test(native, tokio)]
     async fn a_revision_offered_to_an_entry_redraws_the_deck_waveform() {
         let cancel = CancelToken::root();
-        let (_host, queue) = fixtures::queue();
-        let (track_id, source) = fixtures::track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = fixtures::queue_off().await;
+        let (track_id, source) = fixtures::track(&host, 1, "file:///tmp/track-1.mp3").await;
         let config = fixtures::app_config(&cancel, fixtures::memory_store());
         let entry = fixtures::entry(&config, queue.clone(), track_id, source);
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
@@ -436,6 +436,7 @@ mod tests {
             "the deck draws the revision the entry published"
         );
         cancel.cancel();
+        host.close().await;
     }
 
     fn wave_of(height: u8) -> Waveform {

@@ -84,8 +84,8 @@ pub struct SlotControl {
     pub trash_rx: HeapCons<PlayerTrack>,
     pub cmd_tx: HeapProd<PlayerCmd>,
     pub eq: SharedEq,
-    seek: SeekBindings,
     render: RenderBindings,
+    seek: SeekBindings,
 }
 
 #[derive(Default)]
@@ -108,26 +108,13 @@ impl SlotControl {
         }
     }
 
-    /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
-        self.seek.0.push((item_id, handle));
-    }
-
-    /// Forget the exact resource generation returned by the processor.
-    pub fn unbind_seek(&mut self, item_id: TrackId, handle: &Arc<dyn SeekBegin>) {
-        self.seek.0.retain(|(bound_id, bound_handle)| {
-            *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
-        });
-    }
-
     pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
         self.render.0.push((item_id, reader));
     }
 
-    pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
-        self.render
-            .0
-            .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);
+    /// Record the control half of a track's seek path.
+    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
+        self.seek.0.push((item_id, handle));
     }
 
     pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
@@ -142,6 +129,19 @@ impl SlotControl {
                     i64::from(context.output_frames().end),
                 )
             })
+    }
+
+    pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
+        self.render
+            .0
+            .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);
+    }
+
+    /// Forget the exact resource generation returned by the processor.
+    pub fn unbind_seek(&mut self, item_id: TrackId, handle: &Arc<dyn SeekBegin>) {
+        self.seek.0.retain(|(bound_id, bound_handle)| {
+            *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
+        });
     }
 }
 

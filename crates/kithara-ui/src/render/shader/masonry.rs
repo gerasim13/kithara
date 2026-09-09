@@ -2,7 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
-use masonry::vello::{Renderer, peniko::ImageData, wgpu};
+use masonry::vello::{
+    Renderer,
+    peniko::ImageData,
+    wgpu,
+    wgpu::{
+        BindingType, BufferBindingType, BufferUsages, Color, ColorWrites, LoadOp, MultisampleState,
+        Origin3d, PipelineCompilationOptions, PrimitiveState, PrimitiveTopology, ShaderSource,
+        ShaderStages, StoreOp, TextureAspect, TextureDimension, TextureFormat, TextureUsages,
+        TextureViewDescriptor,
+    },
+};
 use num_traits::cast::AsPrimitive as _;
 
 use super::ShaderFrame;
@@ -131,8 +141,8 @@ impl ShaderPass {
                     Some(wgpu::TexelCopyTextureInfoBase {
                         texture: slot.texture.clone(),
                         mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
+                        origin: Origin3d::ZERO,
+                        aspect: TextureAspect::All,
                     }),
                 ));
                 slot.image = Some(declaration.image.clone());
@@ -151,8 +161,8 @@ impl ShaderPass {
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
+                            load: LoadOp::Clear(Color::TRANSPARENT),
+                            store: StoreOp::Store,
                         },
                     })],
                     depth_stencil_attachment: None,
@@ -195,7 +205,7 @@ impl Slot {
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.shader.retained.uniforms"),
             size: uniform_size.as_(),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -215,12 +225,12 @@ impl Slot {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&TextureViewDescriptor::default());
         Self {
             image: None,
             size,
@@ -240,9 +250,9 @@ fn uniform_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         label: Some("kithara_ui.shader.retained.uniform_layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
@@ -263,7 +273,7 @@ fn program_pipeline(
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("kithara_ui.shader.retained.module"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: ShaderSource::Wgsl(source.into()),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("kithara_ui.shader.retained.pipeline"),
@@ -271,23 +281,23 @@ fn program_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: PipelineCompilationOptions::default(),
             buffers: &[],
         },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..wgpu::PrimitiveState::default()
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            ..PrimitiveState::default()
         },
         depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
+        multisample: MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: TextureFormat::Rgba8Unorm,
                 blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: ColorWrites::ALL,
             })],
         }),
         multiview: None,

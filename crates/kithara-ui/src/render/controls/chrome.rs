@@ -5,9 +5,12 @@ use iced::{
     advanced::{
         Renderer as _, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
-        layout::{self, Layout},
+        layout::{self, Layout, Node},
         renderer,
-        widget::{self, Tree},
+        widget::{
+            Tree,
+            tree::{State, Tag},
+        },
     },
     mouse::{Cursor, Interaction},
     widget::canvas::{self, Action, Canvas, Frame, Geometry},
@@ -131,12 +134,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
         });
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let intrinsic = if let Some((label, content)) = self.label() {
             let state = tree.state.downcast_mut::<LeafState>();
             let mut text = state.text.borrow_mut();
@@ -147,19 +145,19 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
             Size::ZERO
         };
         let lengths = self.lengths();
-        layout::Node::new(limits.resolve(lengths.width, lengths.height, intrinsic))
+        Node::new(limits.resolve(lengths.width, lengths.height, intrinsic))
     }
 
     fn size(&self) -> Size<Length> {
         self.lengths()
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(LeafState::default())
+    fn state(&self) -> State {
+        State::new(LeafState::default())
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<LeafState>()
+    fn tag(&self) -> Tag {
+        Tag::of::<LeafState>()
     }
 }
 

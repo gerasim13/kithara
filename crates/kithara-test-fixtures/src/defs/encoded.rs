@@ -78,6 +78,7 @@ fn rhythm_mp3(
 ///
 /// Embedded because the browser suite reads it and wasm has no store.
 #[kithara::asset(ext = "flac", content_type = "audio/flac", embed)]
+#[case::saw_1s(Consts::ONE_SECOND_FRAMES)]
 #[case::saw_6s(Consts::SIX_SECOND_FRAMES)]
 fn flac_unknown_length(total_frames: usize) -> Vec<u8> {
     let pcm = Pcm::new(

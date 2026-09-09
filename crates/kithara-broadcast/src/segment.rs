@@ -12,9 +12,9 @@ pub struct Segment {
     pub bytes: Bytes,
     pub discontinuity: bool,
     pub duration_ts: u32,
-    pub seq: u64,
     /// Media ticks per second for this segment's duration and timestamp.
     pub timescale: u32,
+    pub seq: u64,
 }
 
 /// Frames access units into ADTS and rotates segments on the media clock.
@@ -90,22 +90,6 @@ impl Segmenter {
         closed
     }
 
-    pub(crate) fn reconfigure<S>(
-        &mut self,
-        config: &BroadcastConfig<S>,
-    ) -> BroadcastResult<Option<Segment>> {
-        config.validate()?;
-        let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
-        let target_ts = config.target_ticks()?;
-        let closed = self.close();
-        self.packer = packer;
-        self.timescale = config.sample_rate;
-        self.target_ts = target_ts;
-        self.stream_ts = 0;
-        self.discontinuity = true;
-        Ok(closed)
-    }
-
     /// Append an access unit and close the segment once it reaches the target.
     ///
     /// # Errors
@@ -125,6 +109,22 @@ impl Segmenter {
             return Ok(self.close());
         }
         Ok(None)
+    }
+
+    pub(crate) fn reconfigure<S>(
+        &mut self,
+        config: &BroadcastConfig<S>,
+    ) -> BroadcastResult<Option<Segment>> {
+        config.validate()?;
+        let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
+        let target_ts = config.target_ticks()?;
+        let closed = self.close();
+        self.packer = packer;
+        self.timescale = config.sample_rate;
+        self.target_ts = target_ts;
+        self.stream_ts = 0;
+        self.discontinuity = true;
+        Ok(closed)
     }
 }
 

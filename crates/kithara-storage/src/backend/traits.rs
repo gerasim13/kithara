@@ -152,12 +152,11 @@ pub struct DriverState {
 /// `Resource::open(token, MmapOptions { .. })` callsite resolves to
 /// `Resource<MmapDriver>::open` because `MmapOptions = <MmapDriver as Driver>::Options`.
 ///
-/// The `redundant_reexport` audit lint flags the dual surface
-/// (`pub use mmap::MmapOptions` AND `<MmapDriver as Driver>::Options = MmapOptions`)
-/// — the duplication is intentional: `MmapOptions` is the canonical
-/// constructor type users reach via `kithara_storage::MmapOptions`, while
-/// the trait associated type is the bound that lets `Resource::open`
-/// stay generic. See `crates/kithara-storage/CONTEXT.md` for the rationale.
+/// The `redundant_reexport` audit lint flags the dual surface (`pub use
+/// mmap::MmapOptions` AND `<MmapDriver as Driver>::Options = MmapOptions`) — the
+/// duplication is intentional: `MmapOptions` is the canonical constructor type users
+/// reach via `kithara_storage::MmapOptions`, while the trait associated type is the
+/// bound that lets `Resource::open` stay generic.
 pub trait Driver: DriverIo {
     /// Configuration needed to open/create a driver instance.
     type Options: Send;

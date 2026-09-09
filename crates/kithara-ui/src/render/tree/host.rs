@@ -3,10 +3,13 @@ use iced::{
     advanced::{
         Clipboard, Shell, Widget as IcedWidget,
         layout::{self, Layout},
-        mouse, overlay, renderer,
-        widget::{self, Operation, Tree},
+        mouse,
+        mouse::Cursor,
+        overlay, renderer,
+        widget::{self, Operation, Tree, operation::focusable, tree::Tag},
     },
     window,
+    window::RedrawRequest,
 };
 use kithara_platform::time::Instant;
 
@@ -96,7 +99,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         theme: &Theme,
         style: &renderer::Style,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         viewport: &Rectangle,
     ) {
         self.child.as_widget().draw(
@@ -122,11 +125,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             .layout(&mut tree.children[0], renderer, limits);
         let child_layout = Layout::new(&node);
         let state = tree.state.downcast_mut::<State>();
-        let targets = self.layout.targets_with_engine(
-            child_layout,
-            mouse::Cursor::Unavailable,
-            Some(&state.engine),
-        );
+        let targets =
+            self.layout
+                .targets_with_engine(child_layout, Cursor::Unavailable, Some(&state.engine));
         state
             .engine
             .reconcile(active_descriptors(&self.layout, &targets));
@@ -165,7 +166,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         &self,
         tree: &Tree,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
@@ -233,8 +234,8 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         widget::tree::State::new(State::new(&self.layout))
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<State>()
+    fn tag(&self) -> Tag {
+        Tag::of::<State>()
     }
 
     fn update(
@@ -242,7 +243,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         tree: &mut Tree,
         event: &Event,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        cursor: Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, UiEvent>,
@@ -287,7 +288,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         if state.engine.focused_path().is_some()
             && focus_before.as_deref() != state.engine.focused_path()
         {
-            let mut unfocus = widget::operation::focusable::unfocus();
+            let mut unfocus = focusable::unfocus();
             self.child.as_widget_mut().operate(
                 &mut tree.children[0],
                 layout,
@@ -324,11 +325,9 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             || picker_overlay_needs_rebuild
             || text_projection_changed
         {
-            let targets = self.layout.targets_with_engine(
-                layout,
-                mouse::Cursor::Unavailable,
-                Some(&state.engine),
-            );
+            let targets =
+                self.layout
+                    .targets_with_engine(layout, Cursor::Unavailable, Some(&state.engine));
             sync_scrolls(
                 &mut self.child,
                 &mut tree.children[0],
@@ -379,7 +378,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             shell.request_input_method(&request);
         }
 
-        if shell.redraw_request() != window::RedrawRequest::NextFrame {
+        if shell.redraw_request() != RedrawRequest::NextFrame {
             let targets = self
                 .layout
                 .targets_with_engine(layout, cursor, Some(&state.engine));
@@ -413,7 +412,7 @@ fn route_open_picker(
     engine: &mut Engine,
     layout: Layout<'_>,
     event: &Event,
-    cursor: mouse::Cursor,
+    cursor: Cursor,
     shell: &mut Shell<'_, UiEvent>,
 ) -> bool {
     let Some(input @ Input::Pointer(pointer)) = iced_interact::input(event) else {
@@ -512,7 +511,7 @@ fn interaction(
     engine: &Engine,
     layout_tree: &HostedLayout,
     layout: Layout<'_>,
-    cursor: mouse::Cursor,
+    cursor: Cursor,
 ) -> mouse::Interaction {
     engine
         .cursor(&layout_tree.targets_with_engine(layout, cursor, Some(engine)))
@@ -2747,7 +2746,7 @@ mod tests {
         );
         assert_eq!(
             shell.redraw_request(),
-            window::RedrawRequest::NextFrame,
+            RedrawRequest::NextFrame,
             "moving between adjacent activation controls must repaint both hover states"
         );
         drop(shell);
@@ -3775,7 +3774,7 @@ mod tests {
             &viewport_bounds,
         );
         assert!(shell.is_event_captured());
-        assert_ne!(shell.redraw_request(), window::RedrawRequest::Wait);
+        assert_ne!(shell.redraw_request(), RedrawRequest::Wait);
         drop(shell);
         assert!(messages.is_empty(), "selection changes must not publish");
         assert_eq!(

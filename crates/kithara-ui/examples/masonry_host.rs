@@ -8,7 +8,7 @@ use kithara_ui::{
     ids::{EndpointId, SourceUri},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
     render::{
-        CustomSkin, ReadValue, Reads, Skin, document,
+        CustomSkin, ReadValue, Reads, Skin, UiEvent, document,
         document::{Clock, Ctx},
         masonry::{
             CustomWidget, MasonryHost, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
@@ -16,6 +16,7 @@ use kithara_ui::{
         },
     },
     shaping::FontPolicy,
+    skin::TextRoleSkin,
     source::{MemResolver, UiConfig},
     view,
 };
@@ -43,7 +44,7 @@ impl Reads for EmptyReads {
 }
 
 struct LetterboxedBadge {
-    role: kithara_ui::skin::TextRoleSkin,
+    role: TextRoleSkin,
 }
 
 impl CustomWidget for LetterboxedBadge {
@@ -148,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         LetterboxedBadge {
             role: skin.text.section,
         },
-        |()| kithara_ui::render::UiEvent::OpenSettings,
+        |()| UiEvent::OpenSettings,
     );
     let root = document::render(&ui.root, ctx, host);
     let mut root = MasonryRoot::new(

@@ -8,9 +8,9 @@ use masonry::{
     accesskit::{Node as AccessNode, Role, TreeUpdate},
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
     core::{
-        AccessCtx, BoxConstraints, ChildrenIds, CursorIcon, EventCtx, Handled, LayoutCtx, PaintCtx,
-        PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Widget,
-        WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
+        AccessCtx, BoxConstraints, ChildrenIds, CursorIcon, ErasedAction, EventCtx, Handled,
+        LayoutCtx, PaintCtx, PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx,
+        TextEvent, Widget, WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
     },
     kurbo::{Point, Rect as MasonryRect, Size},
     ui_events::keyboard::{Key, NamedKey},
@@ -215,12 +215,18 @@ where
         Ok(handled)
     }
 
+    /// The colour the node `id` writes its text in right now.
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn ink_of(&self, id: WidgetId) -> Option<Rgba> {
+        self.root.get_widget(id)?.downcast::<Node>()?.ink()
+    }
+
     /// Reports whether Masonry requested another paint or animation frame.
     pub(crate) fn needs_frame(&self) -> bool {
         frame_requested(&self.platform) || self.animates || self.moved
     }
 
-    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
+    fn push_action(&mut self, action: ErasedAction) -> Result<(), MasonryRootError> {
         let actual = action.type_name();
         let host = action
             .downcast::<HostAction>()
@@ -245,12 +251,6 @@ where
         let rendered = self.root.redraw();
         self.sync()?;
         Ok(rendered)
-    }
-
-    /// The colour the node `id` writes its text in right now.
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) fn ink_of(&self, id: WidgetId) -> Option<Rgba> {
-        self.root.get_widget(id)?.downcast::<Node>()?.ink()
     }
 
     pub(crate) fn shader_declarations(&self) -> Vec<ShaderDeclaration> {
@@ -420,6 +420,19 @@ where
         }
     }
 
+    /// The open surface this point lands in, when one covers it.
+    ///
+    /// A surface floats above the document, so the room it covers is its own.
+    /// The topmost one wins, the same order a press outside them is dismissed
+    /// in, and an engine that already holds the pointer keeps it either way.
+    fn covering_surface(&self, at: Option<Pt>) -> Option<usize> {
+        let at = at?;
+        let point = Point::new(at.x.into(), at.y.into());
+        self.popovers.iter().rposition(|popover| {
+            popover.state.standing().is_some() && popover.state.surface().contains(point)
+        })
+    }
+
     fn dismisses_popover(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
         let PointerEvent::Down(button) = event else {
             return Ok(false);
@@ -545,19 +558,6 @@ where
             }
         }
         Ok(false)
-    }
-
-    /// The open surface this point lands in, when one covers it.
-    ///
-    /// A surface floats above the document, so the room it covers is its own.
-    /// The topmost one wins, the same order a press outside them is dismissed
-    /// in, and an engine that already holds the pointer keeps it either way.
-    fn covering_surface(&self, at: Option<Pt>) -> Option<usize> {
-        let at = at?;
-        let point = Point::new(at.x.into(), at.y.into());
-        self.popovers.iter().rposition(|popover| {
-            popover.state.standing().is_some() && popover.state.surface().contains(point)
-        })
     }
 
     fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {

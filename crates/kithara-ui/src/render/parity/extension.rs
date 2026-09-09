@@ -39,8 +39,30 @@ impl Extension {
     /// Padding the extension adds around what it shaped.
     const PAD: f32 = 4.0;
 
-    fn kinds() -> CustomKinds {
-        CustomKinds::default().with(Self::KIND, || Caption, |()| UiEvent::OpenSettings)
+    /// The size the extension asks for, shaped outside either host so a box
+    /// both hosts got wrong the same way cannot pass for agreement.
+    fn asked() -> Size2 {
+        let (width, height) = Self::CASE;
+        let mut context = TextContext::from(builtin::skin().text_resources());
+        Caption.measure(
+            &mut TextMeasurer::new(&mut context),
+            SizeLimits::new(Size2::default(), Size2::new(width.as_(), height.as_())),
+        )
+    }
+
+    fn compiled() -> CompiledUi {
+        compile(
+            "extension.klayout.ron",
+            &Self::document(),
+            &Endpoints::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::builder()
+                .custom_kinds([Self::KIND.to_owned()].into_iter().collect())
+                .build(),
+            &view::EMPTY,
+        )
+        .unwrap_or_else(|error| panic!("the extension fixture must compile: {error}"))
     }
 
     fn document() -> MemResolver {
@@ -62,54 +84,8 @@ impl Extension {
         resolver
     }
 
-    fn compiled() -> CompiledUi {
-        compile(
-            "extension.klayout.ron",
-            &Self::document(),
-            &Endpoints::default(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::builder()
-                .custom_kinds([Self::KIND.to_owned()].into_iter().collect())
-                .build(),
-            &view::EMPTY,
-        )
-        .unwrap_or_else(|error| panic!("the extension fixture must compile: {error}"))
-    }
-
-    /// The size the extension asks for, shaped outside either host so a box
-    /// both hosts got wrong the same way cannot pass for agreement.
-    fn asked() -> Size2 {
-        let (width, height) = Self::CASE;
-        let mut context = TextContext::from(builtin::skin().text_resources());
-        Caption.measure(
-            &mut TextMeasurer::new(&mut context),
-            SizeLimits::new(Size2::default(), Size2::new(width.as_(), height.as_())),
-        )
-    }
-
-    /// The box the retained host measured the extension into.
-    fn retained() -> Rect {
-        let (width, height) = Self::CASE;
-        let endpoints = Endpoints::default();
-        let resolver = Self::document();
-        let kinds = Self::kinds();
-        let mut ui = Ui::new(
-            Page,
-            Config::builder()
-                .endpoints(&endpoints)
-                .kinds(&kinds)
-                .resolver(&resolver)
-                .text(builtin::text_doc())
-                .build(),
-            (width, height),
-            1.0,
-        )
-        .unwrap_or_else(|error| panic!("the extension fixture must mount: {error}"));
-        ui.scene()
-            .unwrap_or_else(|error| panic!("the retained host must draw the extension: {error}"));
-        ui.rect_of("page/drawn")
-            .unwrap_or_else(|| panic!("the extension must be laid out"))
+    fn kinds() -> CustomKinds {
+        CustomKinds::default().with(Self::KIND, || Caption, |()| UiEvent::OpenSettings)
     }
 
     /// The box the immediate host measured the extension into.
@@ -144,6 +120,30 @@ impl Extension {
         };
         drawn
     }
+
+    /// The box the retained host measured the extension into.
+    fn retained() -> Rect {
+        let (width, height) = Self::CASE;
+        let endpoints = Endpoints::default();
+        let resolver = Self::document();
+        let kinds = Self::kinds();
+        let mut ui = Ui::new(
+            Page,
+            Config::builder()
+                .endpoints(&endpoints)
+                .kinds(&kinds)
+                .resolver(&resolver)
+                .text(builtin::text_doc())
+                .build(),
+            (width, height),
+            1.0,
+        )
+        .unwrap_or_else(|error| panic!("the extension fixture must mount: {error}"));
+        ui.scene()
+            .unwrap_or_else(|error| panic!("the retained host must draw the extension: {error}"));
+        ui.rect_of("page/drawn")
+            .unwrap_or_else(|| panic!("the extension must be laid out"))
+    }
 }
 
 /// An application whose whole document is the page holding one extension.
@@ -156,16 +156,16 @@ impl Reads for Page {
 }
 
 impl App for Page {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         "extension.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}

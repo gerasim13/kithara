@@ -13,6 +13,20 @@ impl Schedule {
         self.barren.insert(at);
     }
 
+    pub(crate) fn extend(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
+        let extent = extent?;
+        let mut widest: Option<FrameRange> = None;
+        for gap in coverage.gaps(extent) {
+            if self.barren.contains(&gap.start()) {
+                continue;
+            }
+            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+                widest = Some(gap);
+            }
+        }
+        widest.map(FrameRange::start)
+    }
+
     fn gap_target(&self, coverage: &Coverage, extent: u64, window: Option<u64>) -> Option<u64> {
         let mut widest: Option<FrameRange> = None;
         for gap in coverage.gaps(extent) {
@@ -53,20 +67,6 @@ impl Schedule {
         (0..identities)
             .find_map(|identity| self.untouched(coverage, extent, window, identity))
             .or_else(|| self.gap_target(coverage, extent, Some(window)))
-    }
-
-    pub(crate) fn extend(&self, coverage: &Coverage, extent: Option<u64>) -> Option<u64> {
-        let extent = extent?;
-        let mut widest: Option<FrameRange> = None;
-        for gap in coverage.gaps(extent) {
-            if self.barren.contains(&gap.start()) {
-                continue;
-            }
-            if widest.is_none_or(|held| gap.frames() > held.frames()) {
-                widest = Some(gap);
-            }
-        }
-        widest.map(FrameRange::start)
     }
 
     fn untouched(

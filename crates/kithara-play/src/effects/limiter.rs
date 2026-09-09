@@ -103,6 +103,11 @@ impl PeakLimiter {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{
+        limiter_attack, limiter_half, limiter_infinity, limiter_left, limiter_negative,
+        limiter_negative_infinity, limiter_peak, limiter_quiet, limiter_recovery, limiter_right,
+        limiter_silence, limiter_spike, limiter_two, limiter_unity,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -125,21 +130,21 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn below_ceiling_is_bit_exact_unity() {
+    fn below_ceiling_is_bit_exact_unity(limiter_unity: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let input = [0.5, -0.3, 0.1, -0.7, 0.0, 0.97, -0.97];
-        let mut left = input;
-        let mut right = input;
+        let input = limiter_unity.clone();
+        let mut left = input.clone();
+        let mut right = input.clone();
         run(&mut lim, &mut left, &mut right);
         assert_eq!(left, input);
         assert_eq!(right, input);
     }
 
     #[kithara::test(native, flash(false))]
-    fn positive_peak_clamped_to_ceiling() {
+    fn positive_peak_clamped_to_ceiling(limiter_peak: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let mut left = [2.0_f32; 8];
-        let mut right = [2.0_f32; 8];
+        let mut left = limiter_peak.clone();
+        let mut right = limiter_peak.clone();
         run(&mut lim, &mut left, &mut right);
         for &s in &left {
             assert!(
@@ -150,10 +155,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn negative_peak_clamped_to_ceiling() {
+    fn negative_peak_clamped_to_ceiling(limiter_negative: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let mut left = [-2.0_f32; 8];
-        let mut right = [-2.0_f32; 8];
+        let mut left = limiter_negative.clone();
+        let mut right = limiter_negative.clone();
         run(&mut lim, &mut left, &mut right);
         for &s in &left {
             assert!(
@@ -164,10 +169,13 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn no_sample_exceeds_ceiling_over_varied_input() {
+    fn no_sample_exceeds_ceiling_over_varied_input(
+        limiter_right: Vec<f32>,
+        limiter_left: Vec<f32>,
+    ) {
         let mut lim = limiter(48_000, 50.0);
-        let mut left: Vec<f32> = (0..512).map(|i| (i as f32 * 0.13).sin() * 3.0).collect();
-        let mut right: Vec<f32> = (0..512).map(|i| (i as f32 * 0.07).cos() * 2.5).collect();
+        let mut left = limiter_left.clone();
+        let mut right = limiter_right.clone();
         {
             let mut chans: [&mut [f32]; 2] = [&mut left, &mut right];
             lim.process_planar(&mut chans);
@@ -179,10 +187,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn channels_link_by_frame_peak() {
+    fn channels_link_by_frame_peak(limiter_quiet: Vec<f32>, limiter_two: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let mut left = [2.0_f32];
-        let mut right = [0.1_f32];
+        let mut left = limiter_two.clone();
+        let mut right = limiter_quiet.clone();
         run(&mut lim, &mut left, &mut right);
         let gain = CEILING / 2.0;
         assert!(2.0f32.mul_add(-gain, left[0]).abs() < 1e-6);
@@ -190,26 +198,29 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn attack_is_immediate_from_first_frame() {
+    fn attack_is_immediate_from_first_frame(limiter_attack: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let mut left = [2.0_f32; 4];
-        let mut right = [2.0_f32; 4];
+        let mut left = limiter_attack.clone();
+        let mut right = limiter_attack.clone();
         run(&mut lim, &mut left, &mut right);
         assert!((left[0] - CEILING).abs() < 1e-6, "first frame not limited");
     }
 
     #[kithara::test(native, flash(false))]
-    fn release_recovers_monotonically_toward_unity() {
+    fn release_recovers_monotonically_toward_unity(
+        limiter_half: Vec<f32>,
+        limiter_spike: Vec<f32>,
+    ) {
         let mut lim = limiter(44_100, 50.0);
-        let mut spike_l = [4.0_f32];
-        let mut spike_r = [4.0_f32];
+        let mut spike_l = limiter_spike.clone();
+        let mut spike_r = limiter_spike.clone();
         run(&mut lim, &mut spike_l, &mut spike_r);
 
         let signal = 0.5_f32;
         let mut prev_gain = 0.0_f32;
         for _ in 0..20_000 {
-            let mut l = [signal];
-            let mut r = [signal];
+            let mut l = limiter_half.clone();
+            let mut r = limiter_half.clone();
             run(&mut lim, &mut l, &mut r);
             let gain = l[0] / signal;
             assert!(
@@ -226,18 +237,18 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn release_slope_is_sample_rate_derived() {
+    fn release_slope_is_sample_rate_derived(limiter_half: Vec<f32>, limiter_spike: Vec<f32>) {
         let drive = |lim: &mut PeakLimiter| {
-            let mut sl = [4.0_f32];
-            let mut sr = [4.0_f32];
+            let mut sl = limiter_spike.clone();
+            let mut sr = limiter_spike.clone();
             run(lim, &mut sl, &mut sr);
         };
         let recover_after = |lim: &mut PeakLimiter, frames: usize| -> f32 {
             let signal = 0.5_f32;
             let mut gain = 0.0;
             for _ in 0..frames {
-                let mut l = [signal];
-                let mut r = [signal];
+                let mut l = limiter_half.clone();
+                let mut r = limiter_half.clone();
                 run(lim, &mut l, &mut r);
                 gain = l[0] / signal;
             }
@@ -257,10 +268,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn silence_stays_silent_and_finite() {
+    fn silence_stays_silent_and_finite(limiter_silence: Vec<f32>) {
         let mut lim = limiter(44_100, 50.0);
-        let mut left = [0.0_f32; 16];
-        let mut right = [0.0_f32; 16];
+        let mut left = limiter_silence.clone();
+        let mut right = limiter_silence.clone();
         run(&mut lim, &mut left, &mut right);
         for &s in left.iter().chain(right.iter()) {
             assert_eq!(s, 0.0);
@@ -269,17 +280,21 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn non_finite_frame_stays_silent_without_ducking_the_next_block() {
+    fn non_finite_frame_stays_silent_without_ducking_the_next_block(
+        limiter_recovery: Vec<f32>,
+        limiter_negative_infinity: Vec<f32>,
+        limiter_infinity: Vec<f32>,
+    ) {
         let mut lim = limiter(48_000, 50.0);
-        let mut spike_l = [f32::INFINITY];
-        let mut spike_r = [f32::NEG_INFINITY];
+        let mut spike_l = limiter_infinity.clone();
+        let mut spike_r = limiter_negative_infinity.clone();
         run(&mut lim, &mut spike_l, &mut spike_r);
         assert_eq!(spike_l[0], 0.0);
         assert_eq!(spike_r[0], 0.0);
 
         let signal = 0.5_f32;
-        let mut left = [signal; 64];
-        let mut right = [signal; 64];
+        let mut left = limiter_recovery.clone();
+        let mut right = limiter_recovery.clone();
         run(&mut lim, &mut left, &mut right);
         assert_eq!(left, [signal; 64], "the block after lost level");
         assert_eq!(right, [signal; 64], "the block after lost level");

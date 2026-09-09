@@ -63,12 +63,6 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
-    /// Where each press of this screen writes its own state.
-    #[must_use]
-    pub const fn views(&self) -> &ViewWrites {
-        &self.views
-    }
-
     #[cfg(feature = "render")]
     #[must_use]
     pub(crate) const fn draw_buffers(&self) -> &DrawBuffers {
@@ -123,6 +117,12 @@ impl CompiledUi {
         })
     }
 
+    /// Where each press of this screen writes its own state.
+    #[must_use]
+    pub const fn views(&self) -> &ViewWrites {
+        &self.views
+    }
+
     delegate::delegate! {
         to self.arena {
             /// Resolves a string interned by this compiled UI.
@@ -155,8 +155,8 @@ impl Address<'_> {
     /// The address one step further down, at `index` among this node's children.
     pub(crate) const fn child(&self, index: usize) -> Address<'_> {
         Address::Child {
-            parent: self,
             index,
+            parent: self,
         }
     }
 
@@ -231,9 +231,9 @@ pub enum CompiledNode {
 #[non_exhaustive]
 pub struct SplitCell {
     pub node: CompiledNode,
-    pub weight: f32,
-    pub from: f32,
     pub until: Option<f32>,
+    pub from: f32,
+    pub weight: f32,
 }
 
 impl CompiledNode {
@@ -386,26 +386,26 @@ const fn cell_corners(
 /// document named the module itself or a page of a `Tabs`.
 #[derive(Clone, Copy)]
 struct ModuleAt<'a> {
+    with: &'a BTreeMap<String, String>,
     instance: &'a InstanceId,
     source: &'a str,
-    with: &'a BTreeMap<String, String>,
-    size: Option<SizeSpec>,
     frame: FrameSides,
+    size: Option<SizeSpec>,
     corners: bool,
 }
 
 struct Compiler<'a> {
     budget: &'a mut Budget,
+    states: &'a mut Census,
     interner: &'a mut Interner,
+    shaders: &'a mut ShaderCache,
     skin: &'a SkinDoc,
     text: &'a TextDoc,
     config: &'a UiConfig,
-    view: &'a ViewState,
     includes: &'a mut Vec<IncludedModule>,
-    shaders: &'a mut ShaderCache,
+    view: &'a ViewState,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
-    states: &'a mut Census,
 }
 
 impl Compiler<'_> {

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    fs::File,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::Command,
@@ -212,7 +213,7 @@ fn has_shell_shebang(path: &Path) -> bool {
     if path.extension().is_some() {
         return false;
     }
-    let Ok(file) = fs::File::open(path) else {
+    let Ok(file) = File::open(path) else {
         return false;
     };
     let mut first_line = String::new();

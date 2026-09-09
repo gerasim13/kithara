@@ -32,13 +32,13 @@ struct DecodedFrames {
 pub(crate) struct Fmp4SegmentDemuxer<S> {
     segments: Arc<dyn ByteMap>,
     source: BoxedSource,
+    init: Fmp4InitInfo,
+    cursor: Option<SegmentCursor>,
     /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
     /// recycles one high-water allocation instead of mallocing per
     /// segment (and per variant-switch demuxer recreate).
     pools: PoolRegion<S>,
-    init: Fmp4InitInfo,
-    cursor: Option<SegmentCursor>,
     track_info: TrackInfo,
     /// Index of the next segment to decode. Sequential playback advances
     /// this by one per segment; a seek sets it to the segment after the
@@ -228,7 +228,7 @@ where
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: back off to `target - warmup` for SBR/PS pre-roll (CONTEXT.md "Seek pre-roll and trim").
+        // WHY: back off to `target - warmup` for SBR/PS pre-roll.
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));

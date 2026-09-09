@@ -1,4 +1,4 @@
-use kithara_platform::ranged;
+use kithara_derive::Ranged;
 
 struct Consts;
 
@@ -7,12 +7,12 @@ impl Consts {
     const DB_LOG_BASE: f32 = 10.0;
 }
 
-ranged!(
-    /// Gain of one EQ band, in dB. `0.0` is unity and [`GainDb::MIN`] kills the
-    /// band. The range is asymmetric on purpose: cutting stays useful far past
-    /// the point where boosting only clips.
-    pub struct GainDb(f32, -24.0, 6.0, 0.0)
-);
+/// Gain of one EQ band, in dB. `0.0` is unity and [`GainDb::MIN`] kills the
+/// band. The range is asymmetric on purpose: cutting stays useful far past
+/// the point where boosting only clips.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
+#[ranged(min = -24.0, max = 6.0, default = 0.0, clamp)]
+pub struct GainDb(f32);
 
 impl GainDb {
     /// The gain a knob sitting at `knob` asks for: `0.0` is [`Self::MIN`],

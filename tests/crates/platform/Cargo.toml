@@ -1,0 +1,26 @@
+[package]
+name = "kithara-platform-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-test-utils"]
+
+[features]
+flash = ["kithara/flash"]
+no-block = ["kithara/no-block"]
+
+[dependencies]
+kithara = { workspace = true, features = ["platform", "test-utils"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "loom"
+path = "tests/loom.rs"

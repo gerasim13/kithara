@@ -37,5 +37,5 @@ production code outside the allowlist enforced by `just lint arch`
 - the `kithara-stream` batch `never()` sentinel;
 - the `kithara-hls` `wake_signal` latch.
 
-See `crates/kithara-play/CONTEXT.md` "Cancel Hierarchy" for the full runtime
+See [kithara-play contracts](https://github.com/zvuk/kithara/wiki/kithara-play) "Cancel Hierarchy" for the full runtime
 contract.

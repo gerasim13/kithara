@@ -47,5 +47,5 @@ factories, while shared Apple ABI and safe AudioToolbox wrappers come from
 The crate root denies unsafe code. The Apple backend uses `kithara-apple`
 wrappers instead of declaring local AudioToolbox or Accelerate bindings.
 
-See [CONTEXT.md](CONTEXT.md) for the backend contract, allocation contract, and
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-resampler) for the backend contract, allocation contract, and
 decoder integration rules.

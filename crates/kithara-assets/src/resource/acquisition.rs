@@ -4,7 +4,7 @@ use std::{fmt, fmt::Debug, ops::Range, path::Path};
 
 use kithara_bufpool::ByteBuffer;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 /// A clone-able raw-byte write handle, decoupled from the non-`Clone` commit
 /// owner. A streaming raw-write closure holds one to write *pre-processing*
@@ -143,14 +143,12 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
             return Ok(0);
         }
         let len_usize = usize::try_from(len).map_err(|error| {
-            kithara_storage::StorageError::Failed(format!(
+            StorageError::Failed(format!(
                 "resource read: len {len} does not fit usize: {error}"
             ))
         })?;
         buf.ensure_len(len_usize).map_err(|error| {
-            kithara_storage::StorageError::Failed(format!(
-                "resource read buffer growth failed: {error}"
-            ))
+            StorageError::Failed(format!("resource read buffer growth failed: {error}"))
         })?;
         let n = self.read_at(0, buf)?;
         buf.truncate(n);

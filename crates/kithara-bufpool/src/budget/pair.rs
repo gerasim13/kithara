@@ -2,8 +2,8 @@ use super::{BudgetSnapshot, PoolBudget, RegionBudget};
 
 #[derive(Clone, Debug)]
 pub(crate) struct BudgetPair {
-    region: RegionBudget,
     pool: PoolBudget,
+    region: RegionBudget,
 }
 
 impl BudgetPair {
@@ -14,25 +14,19 @@ impl BudgetPair {
         }
     }
 
-    delegate::delegate! {
-        to self.pool {
-            pub(crate) fn current(&self) -> usize;
-            pub(crate) fn limit(&self) -> usize;
+    pub(crate) fn release(&self, amount: usize) {
+        if amount == 0 {
+            return;
         }
-        to self.region {
-            #[call(current)]
-            pub(crate) fn region_current(&self) -> usize;
-            #[call(limit)]
-            pub(crate) fn region_limit(&self) -> usize;
-            #[call(reclaim)]
-            pub(crate) fn reclaim_region(&self, requested: usize) -> usize;
+        if self.pool.0.release(amount, "typed pool") {
+            let _ = self.region.counter.release(amount, "buffer region");
         }
     }
 
     pub(crate) fn reserve(&self, amount: usize) -> Result<Reservation<'_>, ReserveFailure> {
         let mut reservation = Reservation {
-            budgets: self,
             amount,
+            budgets: self,
             pool_acquired: false,
             region_acquired: false,
         };
@@ -54,12 +48,18 @@ impl BudgetPair {
         Ok(reservation)
     }
 
-    pub(crate) fn release(&self, amount: usize) {
-        if amount == 0 {
-            return;
+    delegate::delegate! {
+        to self.pool {
+            pub(crate) fn current(&self) -> usize;
+            pub(crate) fn limit(&self) -> usize;
         }
-        if self.pool.0.release(amount, "typed pool") {
-            let _ = self.region.counter.release(amount, "buffer region");
+        to self.region {
+            #[call(current)]
+            pub(crate) fn region_current(&self) -> usize;
+            #[call(limit)]
+            pub(crate) fn region_limit(&self) -> usize;
+            #[call(reclaim)]
+            pub(crate) fn reclaim_region(&self, requested: usize) -> usize;
         }
     }
 }
@@ -79,21 +79,21 @@ pub(crate) enum ReserveFailure {
 #[must_use = "dropping an uncommitted reservation rolls it back"]
 pub(crate) struct Reservation<'a> {
     budgets: &'a BudgetPair,
-    amount: usize,
     pool_acquired: bool,
     region_acquired: bool,
+    amount: usize,
 }
 
 impl Reservation<'_> {
+    pub(crate) fn commit(mut self) {
+        self.pool_acquired = false;
+        self.region_acquired = false;
+    }
+
     pub(crate) fn reduce(&mut self, amount: usize) {
         debug_assert!(amount <= self.amount);
         self.budgets.release(amount);
         self.amount -= amount;
-    }
-
-    pub(crate) fn commit(mut self) {
-        self.pool_acquired = false;
-        self.region_acquired = false;
     }
 }
 

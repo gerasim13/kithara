@@ -108,6 +108,122 @@ impl std::error::Error for LoadError {
 }
 
 impl Config {
+    /// Knobs the document sets on the built [`AppConfig`]. Fields the document
+    /// never names stay `None`, leaving what the builder produced in place.
+    ///
+    /// [`AppConfig`]: crate::config::AppConfig
+    #[must_use]
+    pub fn app(&self) -> AppConfigPatch {
+        self.document.app.clone()
+    }
+
+    /// The media-identity registry the asset store reads.
+    #[must_use]
+    pub fn asset_layouts(&self) -> AssetLayoutRegistry {
+        asset_layouts(&self.document.assets)
+    }
+
+    /// Knobs the document sets on the asset store. A document that names no
+    /// backend resolves to [`StorageBackend::default`] — a stable root under
+    /// the system temp directory — and deliberately not to
+    /// `AssetStore::open`'s own fallback, which is a fresh unique directory
+    /// per launch and would move the on-disk cache every run.
+    #[must_use]
+    pub fn assets_store(&self) -> AssetStoreConfigPatch {
+        let mut store = self.document.assets_store.clone();
+        store.backend.get_or_insert_with(StorageBackend::default);
+        store
+    }
+
+    /// Knobs the document sets on every track's audio pipeline. `audio:`,
+    /// `hls:`, and `file:` are the document's only spelling for the three
+    /// configurations a track is opened with -- `resource.audio`,
+    /// `resource.hls`, and `resource.file` are refused -- and each rides to
+    /// its construction site as a patch, because none of those configurations
+    /// exists until a track does.
+    #[must_use]
+    pub fn audio(&self) -> AudioConfigPatch {
+        self.document.audio.clone()
+    }
+
+    /// What the document's `beat:` section says about source beat analysis,
+    /// merged onto the crate's own defaults. The backend the analyzer resamples
+    /// through is the caller's, never a document key.
+    ///
+    /// # Errors
+    /// Returns the [`BeatAnalysisConfigPatchError`] the merged policy was
+    /// refused with, naming the section that carried the refused value, rather
+    /// than searching a tempo band the detector never scores.
+    pub fn beat(
+        &self,
+    ) -> Result<BeatAnalysisConfig<PlaybackResamplerBackend>, BeatAnalysisConfigPatchError> {
+        let mut config = BeatAnalysisConfig::default();
+        config.apply(self.document.beat.clone())?;
+        Ok(config)
+    }
+
+    /// Knobs the document sets on this session's live broadcast. Applied at
+    /// the construction site in `main`, where the worker and pools a
+    /// `BroadcastConfig` is built from exist.
+    #[cfg(feature = "broadcast")]
+    #[must_use]
+    pub fn broadcast(&self) -> BroadcastConfigPatch {
+        self.document.broadcast.clone()
+    }
+
+    /// Knobs the document sets on the background dispatchers the app builds.
+    /// Applied at each construction site, which keeps its own thread name.
+    #[must_use]
+    pub fn dispatcher(&self) -> DispatcherConfigPatch {
+        self.document.dispatcher.clone()
+    }
+
+    /// Knobs the document sets on the shared downloader, the ABR controller
+    /// it owns among them: `abr_settings` is a nested patch, so
+    /// `downloader.abr_settings` is the document's only spelling for
+    /// `kithara-abr`'s configuration. Applied at the construction site in
+    /// `main`, where the HTTP client the downloader is built around exists.
+    #[must_use]
+    pub fn downloader(&self) -> DownloaderConfigPatch {
+        self.document.downloader.clone()
+    }
+
+    /// The DRM policy the key registry resolves through.
+    ///
+    /// # Errors
+    /// Returns an error when a provider declares a policy that cannot be
+    /// honoured -- a reserved header, a salt of zero length, or a hex salt
+    /// of odd length.
+    pub fn drm_policy(&self) -> Result<DomainKeyPolicy, PolicyError> {
+        drm_policy(&self.document.drm)
+    }
+
+    /// The effective configuration as a document. Printed before expansion, so
+    /// a dump names `$KITHARA_...` rather than handing out the secret behind it.
+    #[must_use]
+    pub fn dump(&self) -> String {
+        serde_yaml_ng::to_string(&self.source)
+            .unwrap_or_else(|e| format!("cannot render the configuration: {e}"))
+    }
+
+    /// Knobs the document sets on every file track's stream.
+    #[must_use]
+    pub fn file(&self) -> FileConfigPatch {
+        self.document.file.clone()
+    }
+
+    /// Knobs the document sets on the asset store's flush policy.
+    #[must_use]
+    pub fn flush(&self) -> FlushPolicyPatch {
+        self.document.flush.clone()
+    }
+
+    /// Knobs the document sets on every HLS track's stream.
+    #[must_use]
+    pub fn hls(&self) -> HlsConfigPatch {
+        self.document.hls.clone()
+    }
+
     /// Read the configuration: the baked document, an overlay laid on top, then
     /// environment references expanded over the result.
     ///
@@ -130,8 +246,8 @@ impl Config {
     ) -> Result<Self, LoadError> {
         let mut source: Value =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).map_err(|source| LoadError::Parse {
-                path: PathBuf::from(BAKED_PATH),
                 source,
+                path: PathBuf::from(BAKED_PATH),
             })?;
 
         let overlay_path = Self::overlay_path(explicit, beside)?;
@@ -167,6 +283,12 @@ impl Config {
         Ok(Self { document, source })
     }
 
+    /// The HTTP options the document names.
+    #[must_use]
+    pub fn net(&self) -> NetOptionsPatch {
+        self.document.net.clone()
+    }
+
     fn overlay_path(
         explicit: Option<&Path>,
         beside: Option<&Path>,
@@ -181,14 +303,41 @@ impl Config {
         Ok(beside.filter(|path| path.exists()).map(Path::to_path_buf))
     }
 
+    /// Knobs the document sets on the one playback worker every deck
+    /// shares. Applied at the construction site in `main`, where the pools it
+    /// is built from exist.
+    #[must_use]
+    pub fn play_worker(&self) -> PlayWorkerConfigPatch {
+        self.document.play_worker.clone()
+    }
+
+    /// Knobs the document sets on the player, threaded into every deck's
+    /// `PlayerConfig`.
+    #[must_use]
+    pub fn player(&self) -> PlayerConfigPatch {
+        self.document.player.clone()
+    }
+
+    /// Knobs the document sets on the application's buffer pools.
+    #[must_use]
+    pub fn pools(&self) -> PoolsSection {
+        self.document.pools.clone()
+    }
+
+    /// Knobs the document sets on the queue.
+    #[must_use]
+    pub fn queue(&self) -> QueueConfigPatch {
+        self.document.queue.clone()
+    }
+
     fn read(path: &Path) -> Result<Value, LoadError> {
         let text = fs::read_to_string(path).map_err(|source| LoadError::Read {
-            path: path.to_path_buf(),
             source,
+            path: path.to_path_buf(),
         })?;
         serde_yaml_ng::from_str(&text).map_err(|source| LoadError::Parse {
-            path: path.to_path_buf(),
             source,
+            path: path.to_path_buf(),
         })
     }
 
@@ -196,35 +345,6 @@ impl Config {
     #[must_use]
     pub fn tracks(&self) -> &[String] {
         &self.document.playlist.tracks
-    }
-
-    /// The HTTP options the document names.
-    #[must_use]
-    pub fn net(&self) -> NetOptionsPatch {
-        self.document.net.clone()
-    }
-
-    /// Knobs the document sets on every track's audio pipeline. `audio:`,
-    /// `hls:`, and `file:` are the document's only spelling for the three
-    /// configurations a track is opened with -- `resource.audio`,
-    /// `resource.hls`, and `resource.file` are refused -- and each rides to
-    /// its construction site as a patch, because none of those configurations
-    /// exists until a track does.
-    #[must_use]
-    pub fn audio(&self) -> AudioConfigPatch {
-        self.document.audio.clone()
-    }
-
-    /// Knobs the document sets on every HLS track's stream.
-    #[must_use]
-    pub fn hls(&self) -> HlsConfigPatch {
-        self.document.hls.clone()
-    }
-
-    /// Knobs the document sets on every file track's stream.
-    #[must_use]
-    pub fn file(&self) -> FileConfigPatch {
-        self.document.file.clone()
     }
 
     /// Knobs the document sets on the compiled UI: the crate default, then
@@ -252,130 +372,10 @@ impl Config {
         Ok(config)
     }
 
-    /// Knobs the document sets on the player, threaded into every deck's
-    /// `PlayerConfig`.
-    #[must_use]
-    pub fn player(&self) -> PlayerConfigPatch {
-        self.document.player.clone()
-    }
-
-    /// Knobs the document sets on the built [`AppConfig`]. Fields the document
-    /// never names stay `None`, leaving what the builder produced in place.
-    ///
-    /// [`AppConfig`]: crate::config::AppConfig
-    #[must_use]
-    pub fn app(&self) -> AppConfigPatch {
-        self.document.app.clone()
-    }
-
     /// Knobs the document sets on the compute worker.
     #[must_use]
     pub fn worker(&self) -> WorkerConfigPatch {
         self.document.worker.clone()
-    }
-
-    /// Knobs the document sets on the one playback worker every deck
-    /// shares. Applied at the construction site in `main`, where the pools it
-    /// is built from exist.
-    #[must_use]
-    pub fn play_worker(&self) -> PlayWorkerConfigPatch {
-        self.document.play_worker.clone()
-    }
-
-    /// Knobs the document sets on the background dispatchers the app builds.
-    /// Applied at each construction site, which keeps its own thread name.
-    #[must_use]
-    pub fn dispatcher(&self) -> DispatcherConfigPatch {
-        self.document.dispatcher.clone()
-    }
-
-    /// Knobs the document sets on the application's buffer pools.
-    #[must_use]
-    pub fn pools(&self) -> PoolsSection {
-        self.document.pools.clone()
-    }
-
-    /// Knobs the document sets on the asset store. A document that names no
-    /// backend resolves to [`StorageBackend::default`] — a stable root under
-    /// the system temp directory — and deliberately not to
-    /// `AssetStore::open`'s own fallback, which is a fresh unique directory
-    /// per launch and would move the on-disk cache every run.
-    #[must_use]
-    pub fn assets_store(&self) -> AssetStoreConfigPatch {
-        let mut store = self.document.assets_store.clone();
-        store.backend.get_or_insert_with(StorageBackend::default);
-        store
-    }
-
-    /// Knobs the document sets on the queue.
-    #[must_use]
-    pub fn queue(&self) -> QueueConfigPatch {
-        self.document.queue.clone()
-    }
-
-    /// Knobs the document sets on the shared downloader, the ABR controller
-    /// it owns among them: `abr_settings` is a nested patch, so
-    /// `downloader.abr_settings` is the document's only spelling for
-    /// `kithara-abr`'s configuration. Applied at the construction site in
-    /// `main`, where the HTTP client the downloader is built around exists.
-    #[must_use]
-    pub fn downloader(&self) -> DownloaderConfigPatch {
-        self.document.downloader.clone()
-    }
-
-    /// Knobs the document sets on the asset store's flush policy.
-    #[must_use]
-    pub fn flush(&self) -> FlushPolicyPatch {
-        self.document.flush.clone()
-    }
-
-    /// Knobs the document sets on this session's live broadcast. Applied at
-    /// the construction site in `main`, where the worker and pools a
-    /// `BroadcastConfig` is built from exist.
-    #[cfg(feature = "broadcast")]
-    #[must_use]
-    pub fn broadcast(&self) -> BroadcastConfigPatch {
-        self.document.broadcast.clone()
-    }
-
-    /// The media-identity registry the asset store reads.
-    #[must_use]
-    pub fn asset_layouts(&self) -> AssetLayoutRegistry {
-        asset_layouts(&self.document.assets)
-    }
-
-    /// What the document's `beat:` section says about source beat analysis,
-    /// merged onto the crate's own defaults. The backend the analyzer resamples
-    /// through is the caller's, never a document key.
-    ///
-    /// # Errors
-    /// Returns the [`BeatAnalysisConfigPatchError`] the merged policy was
-    /// refused with, naming the section that carried the refused value, rather
-    /// than searching a tempo band the detector never scores.
-    pub fn beat(
-        &self,
-    ) -> Result<BeatAnalysisConfig<PlaybackResamplerBackend>, BeatAnalysisConfigPatchError> {
-        let mut config = BeatAnalysisConfig::default();
-        config.apply(self.document.beat.clone())?;
-        Ok(config)
-    }
-
-    /// The DRM policy the key registry resolves through.
-    ///
-    /// # Errors
-    /// Returns an error when a provider declares a policy that cannot be
-    /// honoured -- a reserved header, a salt of zero length, or a hex salt
-    /// of odd length.
-    pub fn drm_policy(&self) -> Result<DomainKeyPolicy, PolicyError> {
-        drm_policy(&self.document.drm)
-    }
-
-    /// The effective configuration as a document. Printed before expansion, so
-    /// a dump names `$KITHARA_...` rather than handing out the secret behind it.
-    #[must_use]
-    pub fn dump(&self) -> String {
-        serde_yaml_ng::to_string(&self.source)
-            .unwrap_or_else(|e| format!("cannot render the configuration: {e}"))
     }
 }
 

@@ -27,20 +27,20 @@ use crate::{
 };
 
 pub(crate) struct AnalysisService {
-    rx: mpsc::Receiver<Request>,
     pub(super) owner: Owner,
     cancel: CancelToken,
+    rx: mpsc::Receiver<Request>,
 }
 
 pub(super) struct Owner {
-    pub(super) config: AppConfig,
-    pub(super) runner: TrackAnalysisRunner,
-    pub(super) cache: TrackAnalysisCache,
     pub(super) persistence: AnalysisPersistence,
-    pub(super) entries: Vec<Entry>,
-    pub(super) pending: VecDeque<usize>,
+    pub(super) config: AppConfig,
     pub(super) active: Option<Activity>,
     pub(super) axis: Option<NonZeroU32>,
+    pub(super) cache: TrackAnalysisCache,
+    pub(super) runner: TrackAnalysisRunner,
+    pub(super) entries: Vec<Entry>,
+    pub(super) pending: VecDeque<usize>,
 }
 
 impl AnalysisService {
@@ -64,16 +64,16 @@ impl AnalysisService {
             config.analysis_chunk_seconds,
         );
         let owner = Owner {
-            config: config.clone(),
             runner,
             cache,
             persistence,
+            config: config.clone(),
             entries: Vec::new(),
             pending: VecDeque::new(),
             active: None,
             axis: None,
         };
-        (Self { rx, owner, cancel }, handle)
+        (Self { owner, cancel, rx }, handle)
     }
 
     pub(crate) async fn run(self) {
@@ -97,6 +97,38 @@ impl AnalysisService {
 }
 
 impl Owner {
+    fn entry_for(
+        &mut self,
+        queue: &AppQueueControl,
+        track_id: TrackId,
+        source: AppTrackSource,
+    ) -> Option<(usize, AppResourceConfig)> {
+        let Some(config) = resource_config_from_source(source, &self.config) else {
+            debug!(
+                ?track_id,
+                "analysis: source yields no resource; nothing to analyse"
+            );
+            return None;
+        };
+        let target = match AnalysisTarget::for_config(&config) {
+            Ok(target) => target,
+            Err(error) => {
+                warn!(%error, ?track_id, "analysis layout rejected the derived resource key");
+                return None;
+            }
+        };
+        let known = self
+            .entries
+            .iter()
+            .position(|entry| entry.target().is_same(&target));
+        let index = known.unwrap_or_else(|| {
+            self.entries
+                .push(Entry::new(target, config.clone(), queue.clone(), track_id));
+            self.entries.len() - 1
+        });
+        Some((index, config))
+    }
+
     fn handle(&mut self, request: Request) {
         match request {
             Request::Subscribe {
@@ -116,6 +148,115 @@ impl Owner {
                 track_ids,
                 axis,
             } => self.warm(&queue, &track_ids, axis),
+        }
+    }
+
+    fn next_pending(&mut self) -> Option<usize> {
+        let position = self
+            .pending
+            .iter()
+            .position(|&index| self.entries[index].is_held())
+            .unwrap_or(0);
+        self.pending.remove(position)
+    }
+
+    fn preempt_background(&mut self, index: usize) {
+        let Some(Activity::Running(run)) = &mut self.active else {
+            return;
+        };
+        if run.entry == index || run.requeue || self.entries[run.entry].is_held() {
+            return;
+        }
+        debug!(
+            preempted = ?self.entries[run.entry].track_id(),
+            held = ?self.entries[index].track_id(),
+            "analysis: background pass preempted by a held track"
+        );
+        run.requeue = true;
+        self.runner.clear();
+    }
+
+    pub(super) fn pump(&mut self) {
+        self.retire_stale_axis();
+        let Some(axis) = self.axis else {
+            return;
+        };
+        if self.active.is_some() {
+            return;
+        }
+        while let Some(index) = self.next_pending() {
+            if let Some(run) = self.open_run(index, axis) {
+                self.active = Some(Activity::Running(run));
+                return;
+            }
+        }
+    }
+
+    fn retire_stale_axis(&mut self) {
+        let (Some(Activity::Running(run)), Some(axis)) = (&mut self.active, self.axis) else {
+            return;
+        };
+        if run.axis == axis || run.requeue {
+            return;
+        }
+        warn!(
+            from = run.axis.get(),
+            to = axis.get(),
+            "analysis: the host rate moved; the pass restarts on the new axis"
+        );
+        run.requeue = true;
+        self.runner.clear();
+    }
+
+    fn schedule(&mut self, index: usize, axis: NonZeroU32) {
+        if !self.runner.is_active() {
+            return;
+        }
+        let fingerprint = self.runner.fingerprint();
+        let entry = &mut self.entries[index];
+        let track_id = entry.track_id();
+        let held = entry.is_held();
+        if entry
+            .value_for(axis)
+            .is_some_and(|progress| settled_for(&progress, fingerprint))
+        {
+            debug!(?track_id, held, "analysis: settled; nothing to schedule");
+            return;
+        }
+        match entry.stage() {
+            Stage::Queued | Stage::Running => {}
+            Stage::Ended(on) if on == axis => {
+                debug!(
+                    ?track_id,
+                    held, "analysis: the pass ran its course; left alone"
+                );
+                return;
+            }
+            Stage::Idle | Stage::Ended(_) => {
+                entry.set_stage(Stage::Queued);
+                self.pending.push_back(index);
+                debug!(?track_id, held, "analysis: scheduled");
+            }
+        }
+        if held {
+            self.preempt_background(index);
+        }
+    }
+
+    pub(super) fn seed(&mut self, index: usize, axis: NonZeroU32) {
+        let entry = &self.entries[index];
+        if entry.value_for(axis).is_some() {
+            return;
+        }
+        if let Some(progress) = self.cache.get(entry.target(), axis) {
+            debug!(
+                track_id = ?entry.track_id(),
+                revision = progress.analysis().revision(),
+                complete = progress.analysis().is_complete(),
+                resumable = progress.is_resumable(),
+                "analysis: cached snapshot served"
+            );
+            entry.offer(progress);
         }
     }
 
@@ -158,147 +299,6 @@ impl Owner {
             self.schedule(index, axis);
         }
         self.pump();
-    }
-
-    fn entry_for(
-        &mut self,
-        queue: &AppQueueControl,
-        track_id: TrackId,
-        source: AppTrackSource,
-    ) -> Option<(usize, AppResourceConfig)> {
-        let Some(config) = resource_config_from_source(source, &self.config) else {
-            debug!(
-                ?track_id,
-                "analysis: source yields no resource; nothing to analyse"
-            );
-            return None;
-        };
-        let target = match AnalysisTarget::for_config(&config) {
-            Ok(target) => target,
-            Err(error) => {
-                warn!(%error, ?track_id, "analysis layout rejected the derived resource key");
-                return None;
-            }
-        };
-        let known = self
-            .entries
-            .iter()
-            .position(|entry| entry.target().is_same(&target));
-        let index = known.unwrap_or_else(|| {
-            self.entries
-                .push(Entry::new(target, config.clone(), queue.clone(), track_id));
-            self.entries.len() - 1
-        });
-        Some((index, config))
-    }
-
-    pub(super) fn seed(&mut self, index: usize, axis: NonZeroU32) {
-        let entry = &self.entries[index];
-        if entry.value_for(axis).is_some() {
-            return;
-        }
-        if let Some(progress) = self.cache.get(entry.target(), axis) {
-            debug!(
-                track_id = ?entry.track_id(),
-                revision = progress.analysis().revision(),
-                complete = progress.analysis().is_complete(),
-                resumable = progress.is_resumable(),
-                "analysis: cached snapshot served"
-            );
-            entry.offer(progress);
-        }
-    }
-
-    fn schedule(&mut self, index: usize, axis: NonZeroU32) {
-        if !self.runner.is_active() {
-            return;
-        }
-        let fingerprint = self.runner.fingerprint();
-        let entry = &mut self.entries[index];
-        let track_id = entry.track_id();
-        let held = entry.is_held();
-        if entry
-            .value_for(axis)
-            .is_some_and(|progress| settled_for(&progress, fingerprint))
-        {
-            debug!(?track_id, held, "analysis: settled; nothing to schedule");
-            return;
-        }
-        match entry.stage() {
-            Stage::Queued | Stage::Running => {}
-            Stage::Ended(on) if on == axis => {
-                debug!(
-                    ?track_id,
-                    held, "analysis: the pass ran its course; left alone"
-                );
-                return;
-            }
-            Stage::Idle | Stage::Ended(_) => {
-                entry.set_stage(Stage::Queued);
-                self.pending.push_back(index);
-                debug!(?track_id, held, "analysis: scheduled");
-            }
-        }
-        if held {
-            self.preempt_background(index);
-        }
-    }
-
-    fn preempt_background(&mut self, index: usize) {
-        let Some(Activity::Running(run)) = &mut self.active else {
-            return;
-        };
-        if run.entry == index || run.requeue || self.entries[run.entry].is_held() {
-            return;
-        }
-        debug!(
-            preempted = ?self.entries[run.entry].track_id(),
-            held = ?self.entries[index].track_id(),
-            "analysis: background pass preempted by a held track"
-        );
-        run.requeue = true;
-        self.runner.clear();
-    }
-
-    fn retire_stale_axis(&mut self) {
-        let (Some(Activity::Running(run)), Some(axis)) = (&mut self.active, self.axis) else {
-            return;
-        };
-        if run.axis == axis || run.requeue {
-            return;
-        }
-        warn!(
-            from = run.axis.get(),
-            to = axis.get(),
-            "analysis: the host rate moved; the pass restarts on the new axis"
-        );
-        run.requeue = true;
-        self.runner.clear();
-    }
-
-    pub(super) fn pump(&mut self) {
-        self.retire_stale_axis();
-        let Some(axis) = self.axis else {
-            return;
-        };
-        if self.active.is_some() {
-            return;
-        }
-        while let Some(index) = self.next_pending() {
-            if let Some(run) = self.open_run(index, axis) {
-                self.active = Some(Activity::Running(run));
-                return;
-            }
-        }
-    }
-
-    fn next_pending(&mut self) -> Option<usize> {
-        let position = self
-            .pending
-            .iter()
-            .position(|&index| self.entries[index].is_held())
-            .unwrap_or(0);
-        self.pending.remove(position)
     }
 }
 

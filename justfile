@@ -120,7 +120,7 @@ _xtask-cached MODE *ARGS:
       binary="$generation/xtask$suffix"; \
       [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || unavailable; \
       if [ "$mode" = optional ]; then \
-        "$binary" self-cache probe </dev/null >/dev/null 2>&1 || unavailable; \
+        "$binary" self-cache probe --config </dev/null >/dev/null 2>&1 || unavailable; \
       fi; \
       exec "$binary" "$@"
 

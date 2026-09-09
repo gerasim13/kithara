@@ -13,12 +13,12 @@ impl Packager for Unmeasured {
         true
     }
 
-    fn start(_host: &AppHost, _config: &()) -> BroadcastResult<Option<Stream>> {
-        Ok(None)
-    }
-
     fn release(_host: &AppHost) -> BroadcastResult<()> {
         Ok(())
+    }
+
+    fn start(_host: &AppHost, _config: &()) -> BroadcastResult<Option<Stream>> {
+        Ok(None)
     }
 
     fn stop(_live: Stream) {}

@@ -1,9 +1,3 @@
-//! Writes one generated body to a path, for builds that cannot link the crate.
-//!
-//! The store is content-addressed under a build fingerprint, so a foreign build
-//! system has no stable path to read. Gradle packages the exported file into
-//! the instrumentation APK.
-
 use std::{fs, path::PathBuf, process::ExitCode};
 
 use kithara_test_fixtures::assets::by_name;

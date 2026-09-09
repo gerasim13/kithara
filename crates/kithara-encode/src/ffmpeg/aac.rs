@@ -62,6 +62,8 @@ impl AacFFmpegEncoder {
 #[cfg(test)]
 mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_fixtures::unit_fixtures::encode_saw_i16;
+    use kithara_test_utils::kithara;
 
     use super::{AacFFmpegEncoder, PackagedEncodeRequest};
     use crate::{
@@ -77,7 +79,6 @@ mod tests {
         const BIT_RATE: u64 = 128_000;
         const CHANNELS: u16 = 2;
         const ENCODER_DELAY: u32 = 2_112;
-        const FRAMES: usize = 4_096;
         const SAMPLE_RATE: u32 = 48_000;
         const TRAILING_DELAY: u32 = 1_920;
     }
@@ -103,9 +104,13 @@ mod tests {
         .expect("offline AAC-LC encode")
     }
 
-    #[test]
-    fn the_offline_wrapper_keeps_every_streamed_access_unit() {
-        let pcm = TestPcm::sawtooth(Consts::FRAMES, Consts::SAMPLE_RATE, Consts::CHANNELS);
+    #[kithara::test(native, flash(false))]
+    fn the_offline_wrapper_keeps_every_streamed_access_unit(encode_saw_i16: &'static [u8]) {
+        let pcm = TestPcm::from_bytes(
+            encode_saw_i16.to_vec(),
+            Consts::SAMPLE_RATE,
+            Consts::CHANNELS,
+        );
         let offline = encode_offline(&pcm);
 
         let mut encoder = StreamEncoder::builder()
@@ -122,10 +127,10 @@ mod tests {
         assert_eq!(offline.access_units, streamed);
     }
 
-    #[test]
-    fn offline_track_holds_the_golden_shape() {
-        let track = encode_offline(&TestPcm::sawtooth(
-            Consts::FRAMES,
+    #[kithara::test(native, flash(false))]
+    fn offline_track_holds_the_golden_shape(encode_saw_i16: &'static [u8]) {
+        let track = encode_offline(&TestPcm::from_bytes(
+            encode_saw_i16.to_vec(),
             Consts::SAMPLE_RATE,
             Consts::CHANNELS,
         ));

@@ -8,10 +8,10 @@ use crate::{EncodeConfig, EncodeError, EncodeResult, EncodedAccessUnit};
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ContainerWrite {
-    /// Absolute byte offset in the output resource.
-    pub offset: u64,
     /// Bytes to write at `offset`.
     pub bytes: Vec<u8>,
+    /// Absolute byte offset in the output resource.
+    pub offset: u64,
 }
 
 /// Final writes and length for a completed container.
@@ -28,21 +28,21 @@ pub struct ContainerFinish {
 #[derive(Debug)]
 pub struct ContainerSession {
     block_align: u16,
-    byte_rate: u32,
     channels: u16,
+    byte_rate: u32,
+    sample_rate: u32,
     data_bytes: u64,
     next_frame: u64,
-    sample_rate: u32,
 }
 
 impl ContainerSession {
     const BITS_PER_SAMPLE: u16 = 32;
     const FORMAT_CHUNK_BYTES: u32 = 16;
     const HEADER_BYTES: usize = 44;
+    const MAX_DATA_BYTES: u64 = Self::RIFF_MAX_BYTES - Self::RIFF_OVERHEAD_BYTES;
     const PCM_FLOAT_FORMAT: u16 = 3;
     const RIFF_MAX_BYTES: u64 = 4_294_967_295;
     const RIFF_OVERHEAD_BYTES: u64 = 36;
-    const MAX_DATA_BYTES: u64 = Self::RIFF_MAX_BYTES - Self::RIFF_OVERHEAD_BYTES;
 
     /// Open the container selected by `config`.
     ///
@@ -73,27 +73,61 @@ impl ContainerSession {
         })
     }
 
+    /// Finish the WAV header and return the complete byte length.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the final RIFF fields cannot be represented.
+    pub fn finish(self) -> EncodeResult<ContainerFinish> {
+        let data_bytes = u32::try_from(self.data_bytes).map_err(|_| {
+            EncodeError::InvalidInput("WAV data size does not fit into u32".to_owned())
+        })?;
+        let riff_bytes = u32::try_from(Self::RIFF_OVERHEAD_BYTES + self.data_bytes)
+            .map_err(|_| EncodeError::InvalidInput("WAV RIFF size overflow".to_owned()))?;
+        let mut header = [0_u8; Self::HEADER_BYTES];
+        let mut offset = 0;
+        Self::write_header(&mut header, &mut offset, b"RIFF");
+        Self::write_header(&mut header, &mut offset, &riff_bytes.to_le_bytes());
+        Self::write_header(&mut header, &mut offset, b"WAVEfmt ");
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &Self::FORMAT_CHUNK_BYTES.to_le_bytes(),
+        );
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &Self::PCM_FLOAT_FORMAT.to_le_bytes(),
+        );
+        Self::write_header(&mut header, &mut offset, &self.channels.to_le_bytes());
+        Self::write_header(&mut header, &mut offset, &self.sample_rate.to_le_bytes());
+        Self::write_header(&mut header, &mut offset, &self.byte_rate.to_le_bytes());
+        Self::write_header(&mut header, &mut offset, &self.block_align.to_le_bytes());
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &Self::BITS_PER_SAMPLE.to_le_bytes(),
+        );
+        Self::write_header(&mut header, &mut offset, b"data");
+        Self::write_header(&mut header, &mut offset, &data_bytes.to_le_bytes());
+        debug_assert_eq!(offset, header.len());
+
+        let header_bytes = u64::try_from(Self::HEADER_BYTES)
+            .map_err(|_| EncodeError::InvalidInput("WAV header size overflow".to_owned()))?;
+
+        Ok(ContainerFinish {
+            writes: vec![ContainerWrite {
+                offset: 0,
+                bytes: header.into(),
+            }],
+            final_len: header_bytes + self.data_bytes,
+        })
+    }
+
     /// Maximum complete PCM frames this container can represent.
     #[must_use]
     pub fn max_frames(&self) -> u64 {
         Self::MAX_DATA_BYTES / u64::from(self.block_align)
-    }
-
-    /// Check a known final frame count before encoding starts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EncodeError::ContainerLimitExceeded`] when the corresponding
-    /// PCM payload cannot fit in the WAV container.
-    pub fn validate_frame_count(&self, frames: u64) -> EncodeResult<()> {
-        if frames <= self.max_frames() {
-            return Ok(());
-        }
-        Err(EncodeError::ContainerLimitExceeded {
-            container: ContainerFormat::Wav,
-            attempted_bytes: frames.saturating_mul(u64::from(self.block_align)),
-            max_bytes: Self::MAX_DATA_BYTES,
-        })
     }
 
     /// Place one access unit in the container.
@@ -147,54 +181,20 @@ impl ContainerSession {
         }])
     }
 
-    /// Finish the WAV header and return the complete byte length.
+    /// Check a known final frame count before encoding starts.
     ///
     /// # Errors
     ///
-    /// Returns an error when the final RIFF fields cannot be represented.
-    pub fn finish(self) -> EncodeResult<ContainerFinish> {
-        let data_bytes = u32::try_from(self.data_bytes).map_err(|_| {
-            EncodeError::InvalidInput("WAV data size does not fit into u32".to_owned())
-        })?;
-        let riff_bytes = u32::try_from(Self::RIFF_OVERHEAD_BYTES + self.data_bytes)
-            .map_err(|_| EncodeError::InvalidInput("WAV RIFF size overflow".to_owned()))?;
-        let mut header = [0_u8; Self::HEADER_BYTES];
-        let mut offset = 0;
-        Self::write_header(&mut header, &mut offset, b"RIFF");
-        Self::write_header(&mut header, &mut offset, &riff_bytes.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, b"WAVEfmt ");
-        Self::write_header(
-            &mut header,
-            &mut offset,
-            &Self::FORMAT_CHUNK_BYTES.to_le_bytes(),
-        );
-        Self::write_header(
-            &mut header,
-            &mut offset,
-            &Self::PCM_FLOAT_FORMAT.to_le_bytes(),
-        );
-        Self::write_header(&mut header, &mut offset, &self.channels.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, &self.sample_rate.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, &self.byte_rate.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, &self.block_align.to_le_bytes());
-        Self::write_header(
-            &mut header,
-            &mut offset,
-            &Self::BITS_PER_SAMPLE.to_le_bytes(),
-        );
-        Self::write_header(&mut header, &mut offset, b"data");
-        Self::write_header(&mut header, &mut offset, &data_bytes.to_le_bytes());
-        debug_assert_eq!(offset, header.len());
-
-        let header_bytes = u64::try_from(Self::HEADER_BYTES)
-            .map_err(|_| EncodeError::InvalidInput("WAV header size overflow".to_owned()))?;
-
-        Ok(ContainerFinish {
-            writes: vec![ContainerWrite {
-                offset: 0,
-                bytes: header.into(),
-            }],
-            final_len: header_bytes + self.data_bytes,
+    /// Returns [`EncodeError::ContainerLimitExceeded`] when the corresponding
+    /// PCM payload cannot fit in the WAV container.
+    pub fn validate_frame_count(&self, frames: u64) -> EncodeResult<()> {
+        if frames <= self.max_frames() {
+            return Ok(());
+        }
+        Err(EncodeError::ContainerLimitExceeded {
+            container: ContainerFormat::Wav,
+            attempted_bytes: frames.saturating_mul(u64::from(self.block_align)),
+            max_bytes: Self::MAX_DATA_BYTES,
         })
     }
 

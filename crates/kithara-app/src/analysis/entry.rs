@@ -17,14 +17,14 @@ pub(crate) struct Entry {
     #[field(get)]
     target: AnalysisTarget,
     #[field(get)]
-    config: AppResourceConfig,
-    #[field(get)]
     queue: AppQueueControl,
-    #[field(get, copy)]
-    track_id: TrackId,
+    #[field(get)]
+    config: AppResourceConfig,
     tx: watch::Sender<Option<AnalysisProgress>>,
     #[field(get, copy)]
     stage: Stage,
+    #[field(get, copy)]
+    track_id: TrackId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,8 +52,17 @@ impl Entry {
         }
     }
 
-    pub(crate) fn set_stage(&mut self, stage: Stage) {
-        self.stage = stage;
+    pub(crate) fn offer(&self, progress: AnalysisProgress) -> bool {
+        let same = self.tx.borrow().as_ref().is_some_and(|held| {
+            let held = held.analysis();
+            let next = progress.analysis();
+            held.token() == next.token() && held.revision() == next.revision()
+        });
+        if same {
+            return false;
+        }
+        self.tx.send_replace(Some(progress));
+        true
     }
 
     pub(crate) fn point_at(
@@ -67,13 +76,14 @@ impl Entry {
         self.track_id = track_id;
     }
 
-    delegate::delegate! {
-        to self.tx {
-            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<AnalysisProgress>>;
-            #[call(receiver_count)]
-            #[expr($ > 0)]
-            pub(crate) fn is_held(&self) -> bool;
+    pub(crate) fn release(&self) {
+        if !self.is_held() {
+            self.tx.send_replace(None);
         }
+    }
+
+    pub(crate) fn set_stage(&mut self, stage: Stage) {
+        self.stage = stage;
     }
 
     pub(crate) fn value_for(&self, axis: NonZeroU32) -> Option<AnalysisProgress> {
@@ -84,23 +94,13 @@ impl Entry {
             .cloned()
     }
 
-    pub(crate) fn release(&self) {
-        if !self.is_held() {
-            self.tx.send_replace(None);
+    delegate::delegate! {
+        to self.tx {
+            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<AnalysisProgress>>;
+            #[call(receiver_count)]
+            #[expr($ > 0)]
+            pub(crate) fn is_held(&self) -> bool;
         }
-    }
-
-    pub(crate) fn offer(&self, progress: AnalysisProgress) -> bool {
-        let same = self.tx.borrow().as_ref().is_some_and(|held| {
-            let held = held.analysis();
-            let next = progress.analysis();
-            held.token() == next.token() && held.revision() == next.revision()
-        });
-        if same {
-            return false;
-        }
-        self.tx.send_replace(Some(progress));
-        true
     }
 }
 

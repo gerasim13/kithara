@@ -83,6 +83,10 @@ impl StretchControls {
         self.engine.keylock.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn rate_target(&self) -> RateTarget {
+        RateTarget::unpack(self.target.load(Ordering::Acquire))
+    }
+
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -119,10 +123,6 @@ impl StretchControls {
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.rate_target().speed()
-    }
-
-    pub(crate) fn rate_target(&self) -> RateTarget {
-        RateTarget::unpack(self.target.load(Ordering::Acquire))
     }
 
     delegate::delegate! {

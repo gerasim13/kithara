@@ -1,5 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
+use wasm_safe_thread::guard::{ReadGuard, WriteGuard};
+
 type WstRwLock<T> = wasm_safe_thread::rwlock::RwLock<T>;
 
 pub struct RwLock<T>(WstRwLock<T>);
@@ -30,7 +32,7 @@ impl<T: Default> Default for RwLock<T> {
     }
 }
 
-pub struct RwLockReadGuard<'a, T>(wasm_safe_thread::guard::ReadGuard<'a, T>);
+pub struct RwLockReadGuard<'a, T>(ReadGuard<'a, T>);
 
 impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
@@ -41,7 +43,7 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
     }
 }
 
-pub struct RwLockWriteGuard<'a, T>(wasm_safe_thread::guard::WriteGuard<'a, T>);
+pub struct RwLockWriteGuard<'a, T>(WriteGuard<'a, T>);
 
 impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;

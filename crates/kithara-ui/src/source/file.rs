@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     collections::BTreeMap,
     fs, io,
+    io::{Error, ErrorKind},
     path::{Path, PathBuf},
 };
 
@@ -63,8 +64,8 @@ impl FileResolver {
 }
 
 /// Tells a name that is not there from one that is there and would not open.
-fn refusal(origin: SourceUri, rel: &str, error: &io::Error) -> UiDocError {
-    if error.kind() == io::ErrorKind::NotFound {
+fn refusal(origin: SourceUri, rel: &str, error: &Error) -> UiDocError {
+    if error.kind() == ErrorKind::NotFound {
         return UiDocError::NotFound {
             origin,
             rel: rel.to_owned(),
@@ -73,7 +74,7 @@ fn refusal(origin: SourceUri, rel: &str, error: &io::Error) -> UiDocError {
     UiDocError::Unreadable {
         origin,
         rel: rel.to_owned(),
-        source: io::Error::new(error.kind(), error.to_string()),
+        source: Error::new(error.kind(), error.to_string()),
     }
 }
 

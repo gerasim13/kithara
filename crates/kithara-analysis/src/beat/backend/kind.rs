@@ -1,3 +1,6 @@
+#[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
+compile_error!("the beat backend needs a detector: beat-nn or beat-dsp");
+
 #[cfg(all(
     feature = "beat-nn",
     not(any(

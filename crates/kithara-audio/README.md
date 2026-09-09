@@ -107,6 +107,6 @@ source with `kithara-warp` and `kithara-stretch`; none of those playback
 transforms are owned here. `kithara-analysis` consumes this crate's decoded
 source and observer protocols; analysis itself is not owned here.
 
-See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, and
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-audio) for detailed threading, seek/recreate, and
 prepared-source contracts. Source analysis contracts are in
-[`kithara-analysis`](../kithara-analysis/CONTEXT.md).
+[`kithara-analysis`](https://github.com/zvuk/kithara/wiki/kithara-analysis).

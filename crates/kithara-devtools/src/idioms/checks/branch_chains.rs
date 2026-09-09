@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use syn::{
     BinOp, Expr, ExprBinary, ExprIf, ExprMacro,
+    parse::{Parse, ParseStream},
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -229,8 +230,8 @@ struct RcvAndRest {
     receiver: Expr,
 }
 
-impl syn::parse::Parse for RcvAndRest {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+impl Parse for RcvAndRest {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let receiver: Expr = input.parse()?;
         let _: proc_macro2::TokenStream = input.parse()?;
         Ok(Self { receiver })

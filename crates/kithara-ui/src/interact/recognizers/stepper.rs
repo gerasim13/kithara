@@ -150,7 +150,7 @@ mod tests {
     }
 
     fn at(y: f32) -> Hit {
-        Hit::new(Some(Pt { x: 40.0, y }), surface())
+        Hit::new(Some(Pt { y, x: 40.0 }), surface())
     }
 
     fn inside() -> Hit {
@@ -158,7 +158,7 @@ mod tests {
     }
 
     fn moved(y: f32) -> Input<'static> {
-        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x: 40.0, y })))
+        Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { y, x: 40.0 })))
     }
 
     fn pointer(phase: PointerPhase) -> Input<'static> {
@@ -280,7 +280,7 @@ mod tests {
     fn the_press_measures_travel_against_the_event_and_not_the_local_hit() {
         let mut stepper = Stepper::default();
         let now = Instant::now();
-        let local = |y| Hit::new(Some(Pt { x: 40.0, y }), surface());
+        let local = |y| Hit::new(Some(Pt { y, x: 40.0 }), surface());
 
         stepper.on_input(
             Input::Pointer(mouse_input(
