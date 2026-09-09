@@ -75,6 +75,7 @@ fn render(
     let mut output = header(&assessment);
     append_crap(&mut output, &assessment, crap_report, budgets)?;
     append_architecture(&mut output, &assessment, budgets)?;
+    super::lcom::append(&mut output, &assessment.lcom4, budgets.summary_rows);
     append_evidence_gaps(&mut output, &assessment, budgets)?;
     output.push_str(
         "Full details are in the uploaded quality assessment artifact (`assessment.md` and `assessment.json`).\n",
@@ -335,6 +336,38 @@ mod tests {
             .find("uploaded quality assessment artifact")
             .expect("artifact pointer");
         assert!(decision < crap && crap < architecture && architecture < gaps && gaps < artifact);
+    }
+
+    #[test]
+    fn lcom4_renders_beside_crap_with_groups_and_existing_row_budget() {
+        let temp = tempdir().expect("tempdir");
+        let directory = write_assessment(temp.path(), &[]);
+        let path = directory.join("assessment.json");
+        let mut assessment: Value =
+            serde_json::from_slice(&fs::read(&path).expect("assessment")).expect("JSON");
+        assessment["lcom4"] = json!({
+            "notes": ["Source-level diagnostic only"],
+            "types": [
+                {"name": "demo::Split", "target": "lib", "location": "src/lib.rs:1", "lcom4": 2,
+                 "groups": [{"methods": ["read"], "fields": ["a"]}, {"methods": ["write"], "fields": ["b"]}]},
+                {"name": "demo::Together", "target": "lib", "location": "src/lib.rs:9", "lcom4": 1,
+                 "groups": [{"methods": ["get", "set"], "fields": ["value"]}]}
+            ]
+        });
+        write_json(&path, &assessment);
+        let budgets = QualityRenderBudgets {
+            summary_rows: 1,
+            ..QualityRenderBudgets::default()
+        };
+        let output = render(&directory, None, &budgets).expect("summary");
+        assert!(output.contains("## Coverage risk (CRAP)"));
+        assert!(output.contains("## Type cohesion (LCOM4)"));
+        assert!(output.contains("Measured types: 2; types with LCOM4 > 1: 1."));
+        assert!(
+            output.contains("| demo::Split | lib | src/lib.rs:1 | 2 | `read` (a); `write` (b) |")
+        );
+        assert!(output.contains("1 additional LCOM4 rows in assessment.json"));
+        assert!(!output.contains("demo::Together"));
     }
 
     #[test]
@@ -624,7 +657,7 @@ mod tests {
                     "manifest": "manifest.json",
                     "stages": "stages/"
                 },
-                "schema_version": 1
+                "schema_version": 2
             }),
         );
         write_json(
@@ -640,6 +673,7 @@ mod tests {
                     "workspace_loc": 162702
                 },
                 "revision": "a8a67acb3135",
+                "lcom4": { "types": [], "notes": [] },
                 "summary": {
                     "debt_threshold": 100,
                     "debt_units": 229,
@@ -658,7 +692,7 @@ mod tests {
                     "evidence_artifacts": []
                 }],
                 "verdict": "refactor",
-                "schema_version": 1
+                "schema_version": 2
             }),
         );
         directory
