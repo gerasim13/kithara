@@ -536,6 +536,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned(
 #[kithara::test(native, flash(false))]
 fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]) {
     let pools = default_pools();
+    assert_eq!(pools.stats().allocated_bytes, 0);
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
         DecoderConfig::builder().pools(pools.clone()).build();
     let media_info = MediaInfo::builder()
@@ -549,14 +550,18 @@ fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]
     )
     .expect("decoder builds");
 
-    assert_eq!(pools.stats().allocated_bytes, 0);
+    let prepared_bytes = pools.stats().allocated_bytes;
+    assert!(prepared_bytes > 0, "packet storage uses the injected pool");
     let chunk: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
-    assert!(pools.stats().allocated_bytes > 0);
+    assert!(
+        pools.stats().allocated_bytes > prepared_bytes,
+        "PCM storage uses the same injected pool"
+    );
 }
 
 fn decoder_over<B>(

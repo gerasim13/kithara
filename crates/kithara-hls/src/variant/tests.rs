@@ -2889,6 +2889,37 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     writer.commit(Some(len)).expect("commit segment");
 }
 
+#[kithara::test]
+fn prepared_reads_defer_segment_replacement_until_preparation() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[64, 64], &ctx);
+    for index in 0..2 {
+        write_seg_bytes(&v, &ctx, index, 64);
+        settle_seg(&v, &ctx, index, 64);
+    }
+    v.prepare_read(0).expect("prepare first segment");
+    let opens = v.segments.opens.load(Ordering::Relaxed);
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("first read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert!(matches!(
+        v.read_at(64, &mut bytes).expect("segment boundary"),
+        ReadOutcome::Pending(_)
+    ));
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens);
+    v.prepare_requested_read(0)
+        .expect("prepare requested segment");
+    assert!(matches!(
+        v.read_at(64, &mut bytes).expect("prepared boundary"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens + 1);
+}
+
 /// A chunked run over one slot opens its resource once.
 #[kithara::test]
 fn reading_a_segment_in_chunks_opens_its_resource_once() {

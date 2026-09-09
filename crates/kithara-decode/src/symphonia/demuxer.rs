@@ -3,12 +3,15 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use kithara_bufpool::ByteBuffer;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
     StreamSeekPastEof,
 };
 use kithara_test_utils::kithara;
+#[cfg(test)]
+use symphonia::core::packet::Packet;
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -35,11 +38,7 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{
-        FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType,
-        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
-    },
-    packet::Packet,
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
 
@@ -49,6 +48,7 @@ use crate::{
     error::{DecodeError, DecodeResult},
     symphonia::{
         config::SymphoniaConfig,
+        packets::Packets,
         probe::{ReaderBootstrap, new_direct, probe_with_seek},
     },
 };
@@ -60,19 +60,13 @@ pub(crate) struct SymphoniaDemuxer {
     /// decoder for codecs whose generic [`AudioCodec`] enum representation
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
     pub(crate) native_params: AudioCodecParameters,
-    format_reader: Box<dyn FormatReader>,
+    format_reader: Packets,
     byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Live byte cursor of the underlying media source. Populated by
     /// the [`super::super::symphonia::adapter::ReadSeekAdapter`] when
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
-    /// Latest packet handed to [`Demuxer::next_frame`]. Held so the
-    /// returned `Frame<'_>` can borrow the packet's `Box<[u8]>` payload
-    /// directly — Symphonia owns the allocation, we don't clone it.
-    /// Replaced (and the previous packet dropped) on every successful
-    /// `next_frame` call.
-    current_packet: Option<Packet>,
     /// Pending reason retained while recovering an interrupted packet read.
     /// Symphonia's `MediaSourceStream` may have consumed ring-buffered bytes
     /// into a packet that was then discarded (its read position advanced),
@@ -100,6 +94,7 @@ pub(crate) struct SymphoniaDemuxer {
 /// skips probing when known, the bootstrap `byte_len_handle`, and an
 /// optional `byte_map` over the underlying source.
 pub(crate) struct FileOpen {
+    pub(crate) packet_buffer: ByteBuffer,
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     pub(crate) container: Option<ContainerFormat>,
@@ -135,6 +130,7 @@ impl SymphoniaDemuxer {
     /// fields the demuxer needs (sample rate, channel count).
     pub(crate) fn from_reader_with_layout(
         format_reader: Box<dyn FormatReader>,
+        packet_buffer: ByteBuffer,
         byte_pos_handle: Option<Arc<AtomicU64>>,
         byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     ) -> DecodeResult<Self> {
@@ -150,14 +146,13 @@ impl SymphoniaDemuxer {
         let track_info = build_track_info(&track, &native_params)?;
         let time_base = track.time_base;
         Ok(Self {
-            format_reader,
+            format_reader: Packets::new(format_reader, packet_buffer)?,
             track_id,
             track_info,
             native_params,
             time_base,
             byte_pos_handle,
             byte_map,
-            current_packet: None,
             resume_ts: 0,
             resume_pending: None,
         })
@@ -178,6 +173,7 @@ impl SymphoniaDemuxer {
         R: Read + Seek + Send + Sync + 'static,
     {
         let FileOpen {
+            packet_buffer,
             hint,
             container,
             byte_len_handle,
@@ -196,6 +192,7 @@ impl SymphoniaDemuxer {
         let len_handle = bootstrap.byte_len_handle.clone();
         let demuxer = Self::from_reader_with_layout(
             bootstrap.format_reader,
+            packet_buffer,
             Some(bootstrap.byte_pos_handle),
             byte_map,
         )?;
@@ -237,7 +234,6 @@ impl Demuxer for SymphoniaDemuxer {
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.current_packet = None;
         // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
         // was then discarded, advancing its read position).
         let resume_floor = if let Some(reason) = self.resume_pending {
@@ -261,7 +257,7 @@ impl Demuxer for SymphoniaDemuxer {
             None
         };
         loop {
-            let packet = match self.format_reader.next_packet() {
+            let packet = match self.format_reader.read() {
                 Ok(Some(p)) => p,
                 Ok(None) => return Ok(DemuxOutcome::Eof),
                 Err(SymphoniaError::ResetRequired) => continue,
@@ -274,10 +270,7 @@ impl Demuxer for SymphoniaDemuxer {
                     };
                     // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
                     // position advanced, no packet emitted).
-                    if !matches!(
-                        self.format_reader.format_info().format,
-                        FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
-                    ) {
+                    if !self.format_reader.is_mpeg() {
                         self.resume_pending = Some(reason);
                     }
                     return Ok(DemuxOutcome::Pending(reason));
@@ -286,7 +279,9 @@ impl Demuxer for SymphoniaDemuxer {
             if packet.track_id != self.track_id {
                 continue;
             }
-            if resume_floor.is_some_and(|floor| packet_ends_at_or_before(&packet, floor)) {
+            if resume_floor
+                .is_some_and(|floor| packet_ends_at_or_before(packet.pts, packet.dur, floor))
+            {
                 continue;
             }
             // WHY: This packet was emitted cleanly; the next one must start at its end. Track the resume point in native timebase units so a
@@ -298,8 +293,7 @@ impl Demuxer for SymphoniaDemuxer {
             self.resume_pending = None;
             let pts = self.ts_to_duration(packet.pts);
             let duration = self.dur_to_duration(packet.dur);
-            self.current_packet = Some(packet);
-            let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
+            let data = self.format_reader.data();
             return Ok(DemuxOutcome::Frame(Frame {
                 data,
                 duration,
@@ -362,11 +356,9 @@ impl Demuxer for SymphoniaDemuxer {
     }
 }
 
-fn packet_ends_at_or_before(packet: &Packet, timestamp: i64) -> bool {
-    packet
-        .pts
-        .get()
-        .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX))
+fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i64) -> bool {
+    pts.get()
+        .saturating_add(i64::try_from(dur.get()).unwrap_or(i64::MAX))
         <= timestamp
 }
 
@@ -637,8 +629,8 @@ mod tests {
             Vec::new(),
         );
 
-        assert!(packet_ends_at_or_before(&packet, 2_152));
-        assert!(!packet_ends_at_or_before(&packet, 2_151));
+        assert!(packet_ends_at_or_before(packet.pts, packet.dur, 2_152));
+        assert!(!packet_ends_at_or_before(packet.pts, packet.dur, 2_151));
     }
 
     /// Tail withheld from the WAV fixture so the source publishes a length
@@ -721,8 +713,13 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("WAV fixture must probe");
-        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("WAV demuxer must build")
+        SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            crate::test_pools::pools().get::<u8>(),
+            None,
+            None,
+        )
+        .expect("WAV demuxer must build")
     }
 
     fn track_frames(demuxer: &SymphoniaDemuxer) -> i64 {

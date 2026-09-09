@@ -250,6 +250,18 @@ pub trait Decoder: Send + 'static {
     /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome>;
 
+    /// Prepare storage before entering a checked decode quantum.
+    /// Preparation failures are returned by the following decode call.
+    fn prepare_next_chunk(&mut self) {}
+
+    /// Decode with storage prepared by [`Self::prepare_next_chunk`].
+    ///
+    /// # Errors
+    /// Returns a preparation or decoding error.
+    fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        self.next_chunk()
+    }
+
     /// Seek to a time position.
     ///
     /// On success returns [`DecoderSeekOutcome::Landed`] with the

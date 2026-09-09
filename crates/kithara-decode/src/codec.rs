@@ -53,6 +53,11 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32>;
 
+    /// Reserve output storage before the decode quantum.
+    fn prepare_output(&self, _out: &mut SampleBuffer) -> DecodeResult<()> {
+        Ok(())
+    }
+
     /// Presentation time of the PCM produced by the most recent non-empty
     /// [`Self::decode_frame`] call. Queue codecs override this when output lags
     /// the packet supplied to that call.

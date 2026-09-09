@@ -14,11 +14,11 @@ where
     /// variants without a reader are rebuilt lazily on the next ABR flip).
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        self.segments.release(key);
         if let Some(init) = self.segments.init.as_ref()
             && init.resource_id() == key
         {
             init.state().mark_missing();
+            self.segments.reclaim();
             return Some(-1);
         }
         let (seg_idx, seg) = self
@@ -27,6 +27,7 @@ where
             .enumerate()
             .find(|(_, seg)| seg.resource_id() == key)?;
         seg.state().mark_missing();
+        self.segments.reclaim();
         i32::try_from(seg_idx).ok()
     }
 }

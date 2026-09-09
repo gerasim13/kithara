@@ -391,6 +391,7 @@ impl super::core::ActiveDecode {
         }
         let mut outcome = IncomingPrime::Pending;
         for _ in 0..Consts::PRIME_STEPS_PER_PASS {
+            generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let epoch = generation.installed_at_seek_epoch();

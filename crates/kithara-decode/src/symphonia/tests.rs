@@ -282,3 +282,61 @@ fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eigh
         packet.data[4]
     );
 }
+
+#[kithara::test]
+fn mpa_pooled_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four: &'static [u8]) {
+    let (source, fault_control) = InterruptingSource::new(mpeg_four.to_vec());
+    let (control_source, _) = InterruptingSource::new(mpeg_four.to_vec());
+    let mut control = mpa_reader(control_source);
+    let pools = crate::test_pools::pools();
+    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)), pools.get::<u8>())
+        .expect("pooled reader must open");
+    assert!(packets.is_mpeg());
+    for index in 0..4 {
+        if index == 1 {
+            fault_control.arm_after(128, 2);
+            for _ in 0..2 {
+                match packets.read() {
+                    Err(SymphoniaError::IoError(error)) => {
+                        assert_eq!(error.kind(), ErrorKind::Interrupted);
+                    }
+                    _ => panic!("packet read must return the original interruption"),
+                }
+            }
+        }
+        let expected = next_packet(&mut control);
+        let actual = packets
+            .read()
+            .expect("packet read")
+            .expect("packet present");
+        assert_eq!(actual.track_id, expected.track_id);
+        assert_eq!(actual.pts, expected.pts);
+        assert_eq!(actual.dur, expected.dur);
+        assert_eq!(packets.data(), expected.data.as_ref());
+    }
+    assert!(packets.read().expect("end of stream").is_none());
+}
+
+#[kithara::test]
+fn mpa_pooled_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
+    let (source, _) = InterruptingSource::new(mpeg_eight.to_vec());
+    let (control_source, _) = InterruptingSource::new(mpeg_eight.to_vec());
+    let mut control = mpa_reader(control_source);
+    let pools = crate::test_pools::pools();
+    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)), pools.get::<u8>())
+        .expect("pooled reader must open");
+    let target = 6 * MPEG_FRAME_DUR;
+    let expected_seek = seek_once(&mut control, target);
+    let actual_seek = packets
+        .seek(SeekMode::Accurate, seek_to(target))
+        .expect("pooled seek");
+    assert_eq!(actual_seek.actual_ts, expected_seek.actual_ts);
+    let expected = next_packet(&mut control);
+    let actual = packets
+        .read()
+        .expect("packet read")
+        .expect("packet present");
+    assert_eq!(actual.pts, expected.pts);
+    assert_eq!(actual.dur, expected.dur);
+    assert_eq!(packets.data(), expected.data.as_ref());
+}

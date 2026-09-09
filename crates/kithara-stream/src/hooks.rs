@@ -1,4 +1,4 @@
-use crate::{preroll::PrerollHint, source::PendingReason};
+use crate::{StreamResult, preroll::PrerollHint, source::PendingReason};
 
 /// Lightweight read-side signal fed into [`ReaderEventSink::on_chunk`].
 ///
@@ -38,12 +38,18 @@ pub enum ReaderSeekSignal {
     PastEof,
 }
 
-/// Reader-side event sink invoked by the decoder layer right before it
-/// forwards the inner decoder's typed outcome to the caller.
-///
-/// One call per `next_chunk` / `seek` — granularity is decoder
-/// operations, not byte-level reads.
+/// Source-owned reader preparation and event delivery at decoder-operation boundaries.
+/// Preparation and event flushing run off the real-time core; chunk and seek
+/// signals run on the checked decode core.
 pub trait ReaderEventSink: Send + Sync {
+    /// Prepare source resources before the next decode operation, off the real-time core.
+    ///
+    /// # Errors
+    /// Returns the source error if its requested read resources cannot be opened.
+    fn prepare_read(&mut self) -> StreamResult<()> {
+        Ok(())
+    }
+
     /// Publish any events queued during `on_chunk` / `on_seek`.
     ///
     /// `on_chunk` / `on_seek` run on the worker's forbid-blocking decode

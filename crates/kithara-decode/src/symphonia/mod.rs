@@ -23,3 +23,5 @@ mod tests;
 pub(crate) use codec::SymphoniaCodec;
 pub(crate) use config::SymphoniaConfig;
 pub(crate) use demuxer::{FileOpen, SymphoniaDemuxer};
+
+mod packets;

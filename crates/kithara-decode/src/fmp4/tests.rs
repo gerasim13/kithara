@@ -63,6 +63,29 @@ type DecoderHarness = (
     Arc<AtomicBool>,
 );
 
+#[kithara::test]
+fn prepared_frames_do_not_read_container_bytes(aac_three: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = aac_three;
+    let (mut decoder, reads, record) = make_decoder(blob, segmented);
+    record.store(true, Ordering::Release);
+    for target in [Duration::ZERO, Duration::from_secs(1), Duration::ZERO] {
+        decoder.seek(target).expect("seek");
+        let mut chunks = 0;
+        for _ in 0..128 {
+            decoder.prepare_next_chunk();
+            reads.lock().expect("read log").clear();
+            let outcome = decoder.next_chunk_prepared().expect("prepared decode");
+            assert!(reads.lock().expect("read log").is_empty());
+            match outcome {
+                DecoderChunkOutcome::Chunk(_) => chunks += 1,
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        assert!(chunks > 0, "prepared seek must produce PCM");
+    }
+}
+
 fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let reads: Arc<Mutex<Vec<Range<u64>>>> = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::new(AtomicBool::new(false));

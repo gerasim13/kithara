@@ -88,13 +88,14 @@ pub(crate) struct DecoderGeneration {
 
 impl DecoderGeneration {
     pub(crate) fn new(
-        decoder: Box<dyn Decoder>,
+        mut decoder: Box<dyn Decoder>,
         media_info: Option<MediaInfo>,
         base_offset: u64,
         installed_at_seek_epoch: u64,
         pending_head_skip: Option<ResumeState>,
         gapless_mode: GaplessMode,
     ) -> Self {
+        decoder.prepare_next_chunk();
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
         let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
@@ -220,7 +221,7 @@ impl DecoderGeneration {
 
     #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk_prepared())) {
             Ok(result) => result,
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");

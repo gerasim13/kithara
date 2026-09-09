@@ -403,6 +403,7 @@ where
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
         FileOpen {
+            packet_buffer: config.pools.get::<u8>(),
             container,
             hint: config.hint.clone(),
             byte_len_handle: config.byte_len_handle.clone(),
@@ -776,6 +777,7 @@ where
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
         FileOpen {
+            packet_buffer: config.pools.get::<u8>(),
             container,
             hint: config.hint.clone(),
             byte_len_handle: config.byte_len_handle.clone(),

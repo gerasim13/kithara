@@ -6,7 +6,6 @@
 //! - `Audio` implements [`AudioReader`] for pull-based audio consumers
 
 #![forbid(unsafe_code)]
-#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 mod audio;
 #[cfg(any(test, feature = "mock"))]

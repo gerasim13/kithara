@@ -66,18 +66,15 @@ where
             let local_end = slice_end - init_range.start;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.init_read_at(local_start..local_end, dst)? {
-                Some(n) => {
-                    written += n;
-                    cursor += n as u64;
-                    if n < take {
-                        return Ok(Self::wrap(written));
-                    }
-                    if cursor >= read_end {
-                        return Ok(Self::wrap(written));
-                    }
+            if let Some(n) = self.init_read_at(local_start..local_end, dst)? {
+                written += n;
+                cursor += n as u64;
+                if n < take || cursor >= read_end {
+                    return Ok(Self::wrap(written));
                 }
-                None => return Ok(Self::wrap(written)),
+            } else {
+                self.request_read(cursor);
+                return Ok(Self::wrap(written));
             }
         }
 
@@ -103,6 +100,7 @@ where
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
             let Some(n) = self.segment_read_at(seg_idx, local_start..local_end, dst)? else {
+                self.request_read(cursor);
                 trace!(
                     variant = self.variant,
                     seg_idx,

@@ -17,6 +17,7 @@ use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
     VariantTransition,
 };
+#[cfg(test)]
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
@@ -190,6 +191,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 }
 
 pub(crate) enum DecodeAction {
+    Progress,
     Produced(Fetch<AudioChunk>),
     Pending(WaitingReason),
     TransitionPending,
@@ -231,12 +233,12 @@ impl ActiveDecode {
         )
     }
 
-    pub(crate) fn flush_reader_signals(&mut self) {
+    pub(crate) fn prepare_deferred(&mut self) {
+        self.active.decoder_mut().prepare_next_chunk();
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
     }
 
-    #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.active.next_chunk();
         let (chunks, samples) = self.stats();
@@ -362,7 +364,6 @@ impl ActiveDecode {
         self.blender.reset();
     }
 
-    #[kithara::rtsan_allow_blocking]
     pub(crate) fn seek<T: StreamType>(
         &mut self,
         stream: &SharedStream<T>,
