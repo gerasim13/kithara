@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use kithara_stream::PendingReason;
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use kithara_test_utils::kithara;
 use symphonia::core::{
@@ -15,13 +16,20 @@ use symphonia::core::{
     meta::MetadataOptions,
 };
 
+use crate::{
+    demuxer::{DemuxOutcome, Demuxer},
+    symphonia::SymphoniaDemuxer,
+};
+
 struct Source {
     cursor: Cursor<Vec<u8>>,
     remaining: Arc<AtomicUsize>,
+    reads: Arc<AtomicUsize>,
 }
 
 impl Read for Source {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
         let remaining = self.remaining.load(Ordering::Relaxed);
         if remaining == 0 {
             self.remaining.store(usize::MAX, Ordering::Relaxed);
@@ -52,11 +60,12 @@ impl MediaSource for Source {
     }
 }
 
-fn reader(remaining: Arc<AtomicUsize>) -> Box<dyn FormatReader> {
+fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> Box<dyn FormatReader> {
     let asset = by_name(SignalAsset::M4A_SINE440_60S.name()).expect("MP4 fixture");
     let source = Source {
         cursor: Cursor::new(asset.bytes().to_vec()),
         remaining,
+        reads,
     };
     let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
@@ -74,8 +83,11 @@ fn reader(remaining: Arc<AtomicUsize>) -> Box<dyn FormatReader> {
 #[kithara::test]
 fn mp4_pooled_packets_preserve_bytes_after_short_buffer_and_interruption() {
     let remaining = Arc::new(AtomicUsize::new(usize::MAX));
-    let mut actual = reader(Arc::clone(&remaining));
-    let mut expected = reader(Arc::new(AtomicUsize::new(usize::MAX)));
+    let mut actual = reader(Arc::clone(&remaining), Arc::new(AtomicUsize::new(0)));
+    let mut expected = reader(
+        Arc::new(AtomicUsize::new(usize::MAX)),
+        Arc::new(AtomicUsize::new(0)),
+    );
     let capacity = actual
         .packet_buffer_size()
         .expect("packet capacity")
@@ -105,4 +117,36 @@ fn mp4_pooled_packets_preserve_bytes_after_short_buffer_and_interruption() {
         assert_eq!(packet.data, reference.data.as_ref());
     }
     assert!(interrupted, "source interruption must be exercised");
+}
+
+#[kithara::test]
+fn mp4_prepared_frame_consumption_does_not_read_the_source() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let format = reader(Arc::new(AtomicUsize::new(usize::MAX)), Arc::clone(&reads));
+    let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+        format,
+        crate::test_pools::pools().get::<u8>(),
+        None,
+        None,
+    )
+    .expect("MP4 demuxer");
+    let before = reads.load(Ordering::Relaxed);
+    for _ in 0..128 {
+        demuxer.prepare_frame().expect("prepare packet");
+        let prepared_reads = reads.load(Ordering::Relaxed);
+        assert!(matches!(
+            demuxer.next_frame_prepared().expect("prepared packet"),
+            DemuxOutcome::Frame(_)
+        ));
+        assert_eq!(reads.load(Ordering::Relaxed), prepared_reads);
+        assert!(matches!(
+            demuxer.next_frame_prepared().expect("preparation required"),
+            DemuxOutcome::Pending(PendingReason::Retry)
+        ));
+        assert_eq!(reads.load(Ordering::Relaxed), prepared_reads);
+    }
+    assert!(
+        reads.load(Ordering::Relaxed) > before,
+        "preparation must exercise source reads"
+    );
 }

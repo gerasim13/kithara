@@ -61,6 +61,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
     pub(crate) native_params: AudioCodecParameters,
     format_reader: Packets,
+    prepared: Option<PreparedPacket>,
     byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Live byte cursor of the underlying media source. Populated by
     /// the [`super::super::symphonia::adapter::ReadSeekAdapter`] when
@@ -87,6 +88,12 @@ pub(crate) struct SymphoniaDemuxer {
     /// read-ahead strand (see `next_frame` / `reseek_to_resume`).
     resume_ts: i64,
     track_id: u32,
+}
+
+enum PreparedPacket {
+    Frame { pts: Duration, duration: Duration },
+    Pending(PendingReason),
+    Eof,
 }
 
 /// Inputs to [`SymphoniaDemuxer::open_file`] besides the reader: the
@@ -155,6 +162,7 @@ impl SymphoniaDemuxer {
             byte_map,
             resume_ts: 0,
             resume_pending: None,
+            prepared: None,
         })
     }
 
@@ -231,9 +239,103 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_none() {
+            self.prepared = Some(match self.read_frame()? {
+                DemuxOutcome::Frame(frame) => PreparedPacket::Frame {
+                    pts: frame.pts,
+                    duration: frame.duration,
+                },
+                DemuxOutcome::Pending(reason) => PreparedPacket::Pending(reason),
+                DemuxOutcome::Eof => PreparedPacket::Eof,
+            });
+        }
+        Ok(())
+    }
+
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        Ok(match self.prepared.take() {
+            Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
+                data: self.format_reader.data(),
+                packet_desc: &[],
+                pts,
+                duration,
+            }),
+            Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
+            Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
+            None => DemuxOutcome::Pending(PendingReason::Retry),
+        })
+    }
+
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
+    }
+
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.prepared = None;
+        // WHY: park before target by max(priming warmup, one codec packet) so the trim
+        // guard lands on a packet boundary.
+        let sr = f64::from(self.track_info.sample_rate.max(1));
+        let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
+        let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
+        let backup_duration = Duration::from_secs_f64(priming_secs.max(packet_secs));
+        let effective_target = target.saturating_sub(backup_duration);
+        let seek_to = SeekTo::Time {
+            time: Time::try_new(
+                effective_target.as_secs() as i64,
+                effective_target.subsec_nanos(),
+            )
+            .unwrap_or(Time::ZERO),
+            track_id: Some(self.track_id),
+        };
+        let seeked = self
+            .format_reader
+            .seek(SeekMode::Accurate, seek_to)
+            .map_err(|e| classify_seek_err(&e))?;
+
+        let landed_at = self.ts_to_duration(seeked.actual_ts);
+
+        // WHY: A fresh seek defines the authoritative resume point and clears any pending strand recovery left over from the prior read
+        // position.
+        self.resume_ts = seeked.actual_ts.get();
+        self.resume_pending = None;
+
+        if let Some(duration) = self.track_info.duration
+            && landed_at >= duration
+        {
+            return Ok(DemuxSeekOutcome::PastEof { duration });
+        }
+
+        let landed_byte = self.current_byte();
+        let preroll = match landed_byte {
+            Some(lb) if priming.byte_margin > 0 => {
+                PrerollHint::Required(lb.saturating_sub(priming.byte_margin))
+            }
+            _ => PrerollHint::NotNeeded,
+        };
+        Ok(DemuxSeekOutcome::Landed {
+            landed_at,
+            landed_byte,
+            preroll,
+        })
+    }
+
+    fn track_info(&self) -> &TrackInfo {
+        &self.track_info
+    }
+}
+
+fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i64) -> bool {
+    pts.get()
+        .saturating_add(i64::try_from(dur.get()).unwrap_or(i64::MAX))
+        <= timestamp
+}
+
+impl SymphoniaDemuxer {
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+    fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
         // was then discarded, advancing its read position).
         let resume_floor = if let Some(reason) = self.resume_pending {
@@ -303,66 +405,6 @@ impl Demuxer for SymphoniaDemuxer {
         }
     }
 
-    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: park before target by max(priming warmup, one codec packet) so the trim
-        // guard lands on a packet boundary.
-        let sr = f64::from(self.track_info.sample_rate.max(1));
-        let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
-        let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
-        let backup_duration = Duration::from_secs_f64(priming_secs.max(packet_secs));
-        let effective_target = target.saturating_sub(backup_duration);
-        let seek_to = SeekTo::Time {
-            time: Time::try_new(
-                effective_target.as_secs() as i64,
-                effective_target.subsec_nanos(),
-            )
-            .unwrap_or(Time::ZERO),
-            track_id: Some(self.track_id),
-        };
-        let seeked = self
-            .format_reader
-            .seek(SeekMode::Accurate, seek_to)
-            .map_err(|e| classify_seek_err(&e))?;
-
-        let landed_at = self.ts_to_duration(seeked.actual_ts);
-
-        // WHY: A fresh seek defines the authoritative resume point and clears any pending strand recovery left over from the prior read
-        // position.
-        self.resume_ts = seeked.actual_ts.get();
-        self.resume_pending = None;
-
-        if let Some(duration) = self.track_info.duration
-            && landed_at >= duration
-        {
-            return Ok(DemuxSeekOutcome::PastEof { duration });
-        }
-
-        let landed_byte = self.current_byte();
-        let preroll = match landed_byte {
-            Some(lb) if priming.byte_margin > 0 => {
-                PrerollHint::Required(lb.saturating_sub(priming.byte_margin))
-            }
-            _ => PrerollHint::NotNeeded,
-        };
-        Ok(DemuxSeekOutcome::Landed {
-            landed_at,
-            landed_byte,
-            preroll,
-        })
-    }
-
-    fn track_info(&self) -> &TrackInfo {
-        &self.track_info
-    }
-}
-
-fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i64) -> bool {
-    pts.get()
-        .saturating_add(i64::try_from(dur.get()).unwrap_or(i64::MAX))
-        <= timestamp
-}
-
-impl SymphoniaDemuxer {
     /// Re-seek the reader back to the last authoritative timestamp
     /// (`resume_ts`) after a read-ahead strand. Unlike [`Demuxer::seek`]
     /// this applies no pre-roll back-off and no codec flush — it is a

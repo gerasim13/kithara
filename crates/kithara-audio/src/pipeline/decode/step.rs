@@ -85,6 +85,9 @@ pub(crate) fn tick<T: StreamType>(
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
             }
+            Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
+                return DecodeAction::Progress;
+            }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 return DecodeAction::Pending(WaitingReason::Waiting);
             }

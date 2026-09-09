@@ -422,8 +422,13 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        self.prepare_next_chunk();
-        self.next_chunk_prepared()
+        loop {
+            self.prepare_next_chunk();
+            match self.next_chunk_prepared()? {
+                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+                outcome => return Ok(outcome),
+            }
+        }
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -541,6 +546,18 @@ mod default_priming_tests {
         ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
+    fn prepared_chunk(decoder: &mut dyn Decoder) -> AudioChunk {
+        for _ in 0..ZERO_FRAME_BUDGET {
+            decoder.prepare_next_chunk();
+            match decoder.next_chunk_prepared().expect("prepared decode") {
+                DecoderChunkOutcome::Chunk(chunk) => return chunk,
+                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+                _ => panic!("expected PCM or another prepared packet during warmup"),
+            }
+        }
+        panic!("prepared decode exhausted the codec warmup budget");
+    }
+
     #[kithara::test]
     fn prepared_mp3_decode_preserves_pcm_and_seek(tone_mp3: &'static [u8]) {
         let mut prepared = build_mp3_decoder(tone_mp3);
@@ -564,12 +581,7 @@ mod default_priming_tests {
                 regular.seek(position).expect("regular seek");
             }
             for _ in 0..4 {
-                prepared.prepare_next_chunk();
-                let DecoderChunkOutcome::Chunk(actual) =
-                    prepared.next_chunk_prepared().expect("prepared decode")
-                else {
-                    panic!("expected PCM chunk");
-                };
+                let actual = prepared_chunk(&mut prepared);
                 let DecoderChunkOutcome::Chunk(expected) =
                     regular.next_chunk().expect("regular decode")
                 else {
