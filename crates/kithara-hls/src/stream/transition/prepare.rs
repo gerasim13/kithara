@@ -155,7 +155,7 @@ where
         let reader = OpenedVariantReader::new(plan, reader);
         let outgoing = self.active_session();
         self.sessions
-            .publish_exact_two(Arc::clone(&outgoing), Arc::clone(&session));
+            .publish_exact_two(&mut state, Arc::clone(&outgoing), Arc::clone(&session));
         state.incoming = Some(IncomingSlot {
             claim,
             landing_time,
