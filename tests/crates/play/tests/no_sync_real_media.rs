@@ -173,28 +173,14 @@ struct CapturedAudio {
     start_positions_secs: Vec<f64>,
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(300))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(
     #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
 ) {
     run_real_media_matrix(false, real_media_sources).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(360))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(360)))]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 async fn record_no_sync_real_media_artifacts(
     #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
@@ -1042,6 +1028,16 @@ async fn open_resource(
     resource
 }
 
+/// Consume one block from every deck and let the clock advance by exactly its
+/// duration.
+///
+/// The guard puts that advance on the same clock as the decks' producers, which
+/// are registered pacers: the block period elapses only once they have parked.
+/// Without it the sleep is a real `tokio` timer — the test macro rewrites time
+/// calls in the test body, not in the helpers it calls — and the consumer would
+/// drain the rings at host speed against producers advancing at virtual speed,
+/// making every captured window a property of the machine.
+#[kithara::flash(true)]
 async fn render_paced(
     host: &OfflineHostHarness<TestPools>,
     decks: &[Deck],

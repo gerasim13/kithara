@@ -478,7 +478,7 @@ fn read_token(root: &Path, name: &str) -> Result<String> {
     Ok(token)
 }
 
-pub(super) fn read_secret(path: &Path) -> Result<String> {
+pub(crate) fn read_secret(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -504,7 +504,7 @@ pub(super) fn read_trimmed(path: &Path) -> Result<String> {
     Ok(trimmed.to_owned())
 }
 
-pub(super) fn write_secure(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_secure(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
     #[cfg(unix)]
     {

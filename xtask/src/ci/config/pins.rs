@@ -79,6 +79,7 @@ pub(crate) struct CiPins {
     pub(crate) rtsan_version: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
+    pub(crate) sccache_s3_image: String,
     pub(crate) stable_toolchain: String,
     pub(crate) windows_eval_iso_sha256: String,
     pub(crate) windows_eval_iso_url: String,
@@ -140,6 +141,7 @@ impl CiPins {
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
+            ("sccache_s3_image", self.sccache_s3_image.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
         ] {
