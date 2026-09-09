@@ -182,23 +182,6 @@ impl FormatReader for MpaReader<'_> {
         self.seek_with_buffer(mode, &to, &mut packet_buf)
     }
 
-    fn packet_buffer_size(&self) -> Result<Option<usize>> {
-        Ok(Some(MAX_MPEG_FRAME_SIZE))
-    }
-
-    fn read_packet<'a>(&mut self, buffer: &'a mut [u8]) -> Result<Option<PacketRef<'a>>> {
-        self.next_packet_ref(buffer)
-    }
-
-    fn seek_with_buffer(
-        &mut self,
-        mode: SeekMode,
-        to: SeekTo,
-        buffer: &mut [u8],
-    ) -> Result<SeekedTo> {
-        MpaReader::seek_with_buffer(self, mode, &to, buffer)
-    }
-
     fn tracks(&self) -> &[Track] {
         &self.tracks
     }

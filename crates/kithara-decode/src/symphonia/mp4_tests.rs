@@ -10,7 +10,6 @@ use kithara_stream::PendingReason;
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use kithara_test_utils::kithara;
 use symphonia::core::{
-    errors::Error,
     formats::{FormatOptions, FormatReader, probe::Hint},
     io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
@@ -89,55 +88,11 @@ fn reader_for(
 }
 
 #[kithara::test]
-fn mp4_pooled_packets_preserve_bytes_after_short_buffer_and_interruption() {
-    let remaining = Arc::new(AtomicUsize::new(usize::MAX));
-    let mut actual = reader(Arc::clone(&remaining), Arc::new(AtomicUsize::new(0)));
-    let mut expected = reader(
-        Arc::new(AtomicUsize::new(usize::MAX)),
-        Arc::new(AtomicUsize::new(0)),
-    );
-    let capacity = actual
-        .packet_buffer_size()
-        .expect("packet capacity")
-        .expect("borrowed MP4 packets");
-    let mut buffer = crate::test_pools::pools().get::<u8>();
-    buffer.ensure_len(capacity).expect("pooled packet buffer");
-    assert!(actual.read_packet(&mut []).is_err());
-    remaining.store(17, Ordering::Relaxed);
-    let mut interrupted = false;
-    for _ in 0..128 {
-        let packet = match actual.read_packet(&mut buffer) {
-            Err(Error::IoError(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                interrupted = true;
-                actual
-                    .read_packet(&mut buffer)
-                    .expect("retry interrupted packet")
-            }
-            result => result.expect("borrowed packet"),
-        }
-        .expect("MP4 packet");
-        let reference = expected
-            .next_packet()
-            .expect("owned packet")
-            .expect("MP4 reference");
-        assert_eq!(packet.pts, reference.pts);
-        assert_eq!(packet.dur, reference.dur);
-        assert_eq!(packet.data, reference.data.as_ref());
-    }
-    assert!(interrupted, "source interruption must be exercised");
-}
-
-#[kithara::test]
 fn mp4_prepared_frame_consumption_does_not_read_the_source() {
     let reads = Arc::new(AtomicUsize::new(0));
     let format = reader(Arc::new(AtomicUsize::new(usize::MAX)), Arc::clone(&reads));
-    let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
-        format,
-        crate::test_pools::pools().get::<u8>(),
-        None,
-        None,
-    )
-    .expect("MP4 demuxer");
+    let mut demuxer =
+        SymphoniaDemuxer::from_reader_with_layout(format, None, None).expect("MP4 demuxer");
     let before = reads.load(Ordering::Relaxed);
     for _ in 0..128 {
         demuxer.prepare_frame().expect("prepare packet");
@@ -160,43 +115,48 @@ fn mp4_prepared_frame_consumption_does_not_read_the_source() {
 }
 
 #[kithara::test]
-fn wav_packet_retry_preserves_bytes_and_timestamps_after_partial_read() {
+#[case(SignalAsset::WAV_SINE440_60S)]
+#[case(SignalAsset::M4A_SINE440_60S)]
+fn packet_retry_preserves_bytes_and_timestamps_after_partial_read(#[case] signal: SignalAsset) {
     let remaining = Arc::new(AtomicUsize::new(usize::MAX));
-    let mut actual = reader_for(
-        SignalAsset::WAV_SINE440_60S,
-        Arc::clone(&remaining),
-        Arc::new(AtomicUsize::new(0)),
-    );
-    let mut expected = reader_for(
-        SignalAsset::WAV_SINE440_60S,
-        Arc::new(AtomicUsize::new(usize::MAX)),
-        Arc::new(AtomicUsize::new(0)),
-    );
-    let capacity = actual
-        .packet_buffer_size()
-        .expect("capacity")
-        .expect("borrowed WAV packets");
-    let mut buffer = crate::test_pools::pools()
-        .get_with_len::<u8>(capacity)
-        .expect("packet buffer");
+    let mut actual = SymphoniaDemuxer::from_reader_with_layout(
+        reader_for(
+            signal,
+            Arc::clone(&remaining),
+            Arc::new(AtomicUsize::new(0)),
+        ),
+        None,
+        None,
+    )
+    .expect("actual demuxer");
+    let mut expected = SymphoniaDemuxer::from_reader_with_layout(
+        reader_for(
+            signal,
+            Arc::new(AtomicUsize::new(usize::MAX)),
+            Arc::new(AtomicUsize::new(0)),
+        ),
+        None,
+        None,
+    )
+    .expect("reference demuxer");
     remaining.store(17, Ordering::Relaxed);
     let mut interrupted = false;
     let mut completed = 0;
     for _ in 0..129 {
-        let packet = match actual.read_packet(&mut buffer) {
-            Err(Error::IoError(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+        let packet = match actual.next_frame().expect("packet read") {
+            DemuxOutcome::Pending(_) => {
                 interrupted = true;
                 continue;
             }
-            result => result.expect("packet read").expect("WAV packet"),
+            DemuxOutcome::Frame(frame) => frame,
+            DemuxOutcome::Eof => panic!("unexpected EOF"),
         };
-        let reference = expected
-            .next_packet()
-            .expect("reference read")
-            .expect("reference packet");
+        let DemuxOutcome::Frame(reference) = expected.next_frame().expect("reference read") else {
+            panic!("expected reference packet");
+        };
         assert_eq!(packet.pts, reference.pts);
-        assert_eq!(packet.dur, reference.dur);
-        assert_eq!(packet.data, reference.data.as_ref());
+        assert_eq!(packet.duration, reference.duration);
+        assert_eq!(packet.data, reference.data);
         completed += 1;
         if completed == 128 {
             break;

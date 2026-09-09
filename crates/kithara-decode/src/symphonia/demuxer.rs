@@ -3,7 +3,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_bufpool::ByteBuffer;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
@@ -44,7 +43,7 @@ use symphonia::core::{
 
 use crate::{
     codec::CodecPriming,
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
     symphonia::{
         config::SymphoniaConfig,
@@ -90,18 +89,11 @@ pub(crate) struct SymphoniaDemuxer {
     track_id: u32,
 }
 
-enum PreparedPacket {
-    Frame { pts: Duration, duration: Duration },
-    Pending(PendingReason),
-    Eof,
-}
-
 /// Inputs to [`SymphoniaDemuxer::open_file`] besides the reader: the
 /// format `hint` (file extension), an explicit `container` format that
 /// skips probing when known, the bootstrap `byte_len_handle`, and an
 /// optional `byte_map` over the underlying source.
 pub(crate) struct FileOpen {
-    pub(crate) packet_buffer: ByteBuffer,
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     pub(crate) container: Option<ContainerFormat>,
@@ -137,7 +129,6 @@ impl SymphoniaDemuxer {
     /// fields the demuxer needs (sample rate, channel count).
     pub(crate) fn from_reader_with_layout(
         format_reader: Box<dyn FormatReader>,
-        packet_buffer: ByteBuffer,
         byte_pos_handle: Option<Arc<AtomicU64>>,
         byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     ) -> DecodeResult<Self> {
@@ -153,7 +144,7 @@ impl SymphoniaDemuxer {
         let track_info = build_track_info(&track, &native_params)?;
         let time_base = track.time_base;
         Ok(Self {
-            format_reader: Packets::new(format_reader, packet_buffer)?,
+            format_reader: Packets::new(format_reader),
             track_id,
             track_info,
             native_params,
@@ -181,7 +172,6 @@ impl SymphoniaDemuxer {
         R: Read + Seek + Send + Sync + 'static,
     {
         let FileOpen {
-            packet_buffer,
             hint,
             container,
             byte_len_handle,
@@ -200,7 +190,6 @@ impl SymphoniaDemuxer {
         let len_handle = bootstrap.byte_len_handle.clone();
         let demuxer = Self::from_reader_with_layout(
             bootstrap.format_reader,
-            packet_buffer,
             Some(bootstrap.byte_pos_handle),
             byte_map,
         )?;
@@ -241,14 +230,7 @@ impl Demuxer for SymphoniaDemuxer {
 
     fn prepare_frame(&mut self) -> DecodeResult<()> {
         if self.prepared.is_none() {
-            self.prepared = Some(match self.read_frame()? {
-                DemuxOutcome::Frame(frame) => PreparedPacket::Frame {
-                    pts: frame.pts,
-                    duration: frame.duration,
-                },
-                DemuxOutcome::Pending(reason) => PreparedPacket::Pending(reason),
-                DemuxOutcome::Eof => PreparedPacket::Eof,
-            });
+            self.prepared = Some(self.read_frame()?.into());
         }
         Ok(())
     }
@@ -755,13 +737,8 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("WAV fixture must probe");
-        SymphoniaDemuxer::from_reader_with_layout(
-            format_reader,
-            crate::test_pools::pools().get::<u8>(),
-            None,
-            None,
-        )
-        .expect("WAV demuxer must build")
+        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("WAV demuxer must build")
     }
 
     fn track_frames(demuxer: &SymphoniaDemuxer) -> i64 {

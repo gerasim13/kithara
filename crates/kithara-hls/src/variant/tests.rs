@@ -18,9 +18,9 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, PendingReason, ReadOutcome, ReaderInput, ReaderProfile,
-    ReaderWarmup, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
-    VariantTransition, VariantTransitionId,
+    AudioCodec, ContainerFormat, ReadOutcome, ReaderInput, ReaderProfile, ReaderWarmup,
+    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError, VariantTransition,
+    VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -2890,7 +2890,7 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
 }
 
 #[kithara::test]
-fn preparation_waits_for_available_segment_bytes_before_opening_storage() {
+fn reading_waits_for_available_segment_bytes_before_opening_storage() {
     let ctx = test_ctx(1);
     let v = VariantParts {
         init: None,
@@ -2901,15 +2901,25 @@ fn preparation_waits_for_available_segment_bytes_before_opening_storage() {
     }
     .into_variant(0, &ctx);
     assert!(!v.segments()[0].size().is_exact());
-    v.prepare_read(0).expect("prepare unsized segment");
+    v.read_at(0, &mut [0; 8]).expect("read unsized segment");
     assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
     v.segments()[0].size().set_exact(64);
-    v.prepare_read(0).expect("prepare sized but absent segment");
+    v.read_at(0, &mut [0; 8])
+        .expect("read sized but absent segment");
     assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
 
-    write_seg_bytes(&v, &ctx, 0, 64);
-    settle_seg(&v, &ctx, 0, 64);
-    v.prepare_read(0).expect("prepare settled segment");
+    let key = v.segments()[0].resource_id();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(key, None)
+        .expect("acquire segment")
+    else {
+        panic!("segment resource must be pending");
+    };
+    writer
+        .write_at(0, &[0, 1, 2, 3, 4, 5, 6, 7])
+        .expect("write available prefix");
     let mut bytes = [0; 8];
     assert!(matches!(
         v.read_at(0, &mut bytes).expect("prepared read"),
@@ -2919,30 +2929,22 @@ fn preparation_waits_for_available_segment_bytes_before_opening_storage() {
 }
 
 #[kithara::test]
-fn prepared_reads_defer_segment_replacement_until_preparation() {
+fn reading_across_segment_boundary_opens_each_resource_once() {
     let ctx = test_ctx(2);
     let v = make_var(0, 0, &[64, 64], &ctx);
     for index in 0..2 {
         write_seg_bytes(&v, &ctx, index, 64);
         settle_seg(&v, &ctx, index, 64);
     }
-    v.prepare_read(0).expect("prepare first segment");
-    let opens = v.segments.opens.load(Ordering::Relaxed);
     let mut bytes = [0; 8];
     assert!(matches!(
         v.read_at(0, &mut bytes).expect("first read"),
         ReadOutcome::Bytes(_)
     ));
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let opens = v.segments.opens.load(Ordering::Relaxed);
     assert!(matches!(
-        v.read_at(64, &mut bytes).expect("segment boundary"),
-        ReadOutcome::Pending(PendingReason::Retry)
-    ));
-    assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens);
-    v.prepare_requested_read(0)
-        .expect("prepare requested segment");
-    assert!(matches!(
-        v.read_at(64, &mut bytes).expect("prepared boundary"),
+        v.read_at(64, &mut bytes).expect("next segment"),
         ReadOutcome::Bytes(_)
     ));
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);

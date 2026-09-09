@@ -14,9 +14,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::{
-    AudioCodec, ContainerFormat, SeekObserve, SourcePhase, StreamError, StreamResult,
-};
+use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
 
 use super::{
     cas_anchor::CasAnchorCell,
@@ -188,8 +186,6 @@ where
     /// that handle, and it is the home for the `WS5d` held-resource lease.
     pub(super) scope: kithara_assets::AssetScope<S>,
     held: HeldReaders<S>,
-    pub(super) prepared: AtomicBool,
-    requested: AtomicOptU64,
     /// Store opens the read path performed.
     #[cfg(test)]
     pub(super) opens: std::sync::atomic::AtomicUsize,
@@ -217,8 +213,6 @@ where
             scope,
             init,
             entries,
-            prepared: AtomicBool::new(false),
-            requested: AtomicOptU64::none(),
             held: HeldReaders {
                 init: Mutex::default(),
                 media: Mutex::default(),
@@ -236,68 +230,29 @@ where
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
-        if self.prepared.load(Ordering::Acquire) {
-            let slot = match seg {
-                Segment::Init(_) => &self.held.init,
-                Segment::Media(_) => &self.held.media,
-            };
-            let Ok(held) = slot.try_lock() else {
-                return Ok(None);
-            };
-            return held
-                .as_ref()
-                .filter(|held| {
-                    held.key == *seg.resource_id() && held.revision == seg.state().read_revision()
-                })
-                .map_or(Ok(None), |held| Self::read(&held.reader, range, dst));
+        if range.start < range.end && !seg.contains(&self.scope, range.start..range.start + 1) {
+            return Ok(None);
         }
         let Some(reader) = self.reader(seg)? else {
             return Ok(None);
         };
-        Self::read(&reader, range, dst)
-    }
-
-    fn read(
-        reader: &AssetReader<S>,
-        range: Range<u64>,
-        dst: &mut [u8],
-    ) -> StreamResult<Option<usize>> {
-        if !reader.contains_range(range.clone()) {
-            return Ok(None);
-        }
+        reader
+            .wait_range(range.clone())
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         let n = reader
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
     }
 
-    pub(super) fn reclaim(&self) {
-        for slot in [&self.held.init, &self.held.media] {
-            if let Ok(mut held) = slot.try_lock()
-                && held
-                    .as_ref()
-                    .is_some_and(|held| held.revision != held.state.read_revision())
-            {
-                *held = None;
-            }
-        }
-    }
-
     /// The slot's open resource, opened and held on first use.
     fn reader(&self, seg: &Segment) -> StreamResult<Option<AssetReader<S>>> {
-        let slot = match seg {
-            Segment::Init(_) => &self.held.init,
-            Segment::Media(_) => &self.held.media,
-        };
-        let Ok(mut held) = slot.try_lock() else {
-            return Ok(None);
+        let mut held = match seg {
+            Segment::Init(_) => self.held.init.lock(),
+            Segment::Media(_) => self.held.media.lock(),
         };
         let key = seg.resource_id();
-        let revision = seg.state().read_revision();
-        if let Some(hit) = held
-            .as_ref()
-            .filter(|h| h.key == *key && h.revision == revision && serves(&h.reader))
-        {
+        if let Some(hit) = held.as_ref().filter(|h| h.key == *key && serves(&h.reader)) {
             return Ok(Some(hit.reader.clone()));
         }
         *held = None;
@@ -308,13 +263,21 @@ where
             return Ok(None);
         };
         *held = Some(Held {
-            state: Arc::clone(seg.state()),
-            revision,
             key: key.clone(),
             reader: reader.clone(),
         });
         drop(held);
         Ok(Some(reader))
+    }
+
+    /// Drop the held resource for `key`, so the next read opens it again.
+    pub(super) fn release(&self, key: &ResourceKey) {
+        for slot in [&self.held.init, &self.held.media] {
+            let mut held = slot.lock();
+            if held.as_ref().is_some_and(|h| h.key == *key) {
+                *held = None;
+            }
+        }
     }
 }
 
@@ -327,8 +290,6 @@ struct HeldReaders<S> {
 }
 
 struct Held<S> {
-    state: Arc<SegmentSlotState>,
-    revision: u64,
     reader: AssetReader<S>,
     key: ResourceKey,
 }
@@ -493,35 +454,6 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(super) const NO_SEEK_TAIL: u32 = u32::MAX;
-
-    pub(crate) fn prepare_requested_read(&self, offset: u64) -> StreamResult<()> {
-        let requested = self.segments.requested.take();
-        self.prepare_read(requested.unwrap_or(offset))
-    }
-
-    pub(crate) fn prepare_read(&self, offset: u64) -> StreamResult<()> {
-        self.segments.reclaim();
-        let segment = if self.init_descriptor_at(offset).is_some() {
-            self.segments.init.as_ref()
-        } else {
-            self.find_at_offset(offset)
-                .and_then(|(index, _, _)| self.segments.get(index as usize))
-        };
-        if let Some(segment) = segment
-            && matches!(
-                self.phase_at(offset..offset.saturating_add(1)),
-                SourcePhase::Ready
-            )
-        {
-            self.segments.reader(segment)?;
-        }
-        self.segments.prepared.store(true, Ordering::Release);
-        Ok(())
-    }
-
-    pub(super) fn request_read(&self, offset: u64) {
-        self.segments.requested.store(Some(offset));
-    }
 
     /// Builds per-segment metadata. `#EXT-X-BYTERANGE` supplies an exact
     /// media-segment length when present; all other playlists get a non-exact

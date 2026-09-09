@@ -284,13 +284,11 @@ fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eigh
 }
 
 #[kithara::test]
-fn mpa_pooled_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four: &'static [u8]) {
+fn mpa_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four: &'static [u8]) {
     let (source, fault_control) = InterruptingSource::new(mpeg_four.to_vec());
     let (control_source, _) = InterruptingSource::new(mpeg_four.to_vec());
     let mut control = mpa_reader(control_source);
-    let pools = crate::test_pools::pools();
-    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)), pools.get::<u8>())
-        .expect("pooled reader must open");
+    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)));
     assert!(packets.restores_interrupted_packet());
     for index in 0..4 {
         if index == 1 {
@@ -318,13 +316,11 @@ fn mpa_pooled_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four:
 }
 
 #[kithara::test]
-fn mpa_pooled_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
+fn mpa_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
     let (source, _) = InterruptingSource::new(mpeg_eight.to_vec());
     let (control_source, _) = InterruptingSource::new(mpeg_eight.to_vec());
     let mut control = mpa_reader(control_source);
-    let pools = crate::test_pools::pools();
-    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)), pools.get::<u8>())
-        .expect("pooled reader must open");
+    let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)));
     let target = 6 * MPEG_FRAME_DUR;
     let expected_seek = seek_once(&mut control, target);
     let actual_seek = packets

@@ -265,11 +265,4 @@ impl AtomicOptU64 {
         self.value
             .store(value.unwrap_or(Self::NONE_VALUE), Ordering::Release);
     }
-
-    pub(super) fn take(&self) -> Option<u64> {
-        match self.value.swap(Self::NONE_VALUE, Ordering::AcqRel) {
-            Self::NONE_VALUE => None,
-            value => Some(value),
-        }
-    }
 }

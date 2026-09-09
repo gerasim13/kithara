@@ -151,3 +151,23 @@ pub(crate) enum DemuxSeekOutcome {
     /// total stream duration.
     PastEof { duration: Duration },
 }
+
+/// Timing and pending state for a packet retained in its demuxer's buffer.
+pub(crate) enum PreparedPacket {
+    Frame { pts: Duration, duration: Duration },
+    Pending(PendingReason),
+    Eof,
+}
+
+impl From<DemuxOutcome<'_>> for PreparedPacket {
+    fn from(outcome: DemuxOutcome<'_>) -> Self {
+        match outcome {
+            DemuxOutcome::Frame(frame) => Self::Frame {
+                pts: frame.pts,
+                duration: frame.duration,
+            },
+            DemuxOutcome::Pending(reason) => Self::Pending(reason),
+            DemuxOutcome::Eof => Self::Eof,
+        }
+    }
+}

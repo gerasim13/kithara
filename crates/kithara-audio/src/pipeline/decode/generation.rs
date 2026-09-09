@@ -3,18 +3,22 @@ use std::cell::Cell;
 use std::{
     collections::VecDeque,
     panic::{AssertUnwindSafe, catch_unwind},
+    task::Poll,
 };
 
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    GaplessMode, GaplessProfile,
+    DecoderSeekOutcome, GaplessMode, GaplessProfile,
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::MediaInfo;
 use kithara_test_utils::kithara;
 use tracing::warn;
 
-use crate::pipeline::{gapless::GaplessStage, seek::ResumeState};
+use crate::pipeline::{
+    gapless::GaplessStage,
+    seek::{ResumeState, SeekContext},
+};
 
 #[path = "generation_holdback.rs"]
 mod holdback;
@@ -48,10 +52,17 @@ pub(crate) enum StageOutput {
     Invalid(StageFailure),
 }
 
+#[derive(Default)]
+struct SeekPreparation {
+    requested: Option<SeekContext>,
+    completed: Option<(SeekContext, DecodeResult<DecoderSeekOutcome>)>,
+}
+
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct DecoderGeneration {
     decoder: Box<dyn Decoder>,
+    seek_preparation: SeekPreparation,
     #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
     gapless: GaplessStage,
@@ -100,6 +111,7 @@ impl DecoderGeneration {
         let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
         Self {
             decoder,
+            seek_preparation: SeekPreparation::default(),
             media_info,
             base_offset,
             installed_at_seek_epoch,
@@ -114,6 +126,59 @@ impl DecoderGeneration {
             staged: VecDeque::new(),
             #[cfg(test)]
             staged_scan_count: Cell::new(0),
+        }
+    }
+
+    pub(crate) fn poll_seek(
+        &mut self,
+        request: SeekContext,
+    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
+        if self.has_completed_seek(request)
+            && let Some((_, result)) = self.seek_preparation.completed.take()
+        {
+            return Poll::Ready(result);
+        }
+        self.seek_preparation.requested = Some(request);
+        Poll::Pending
+    }
+
+    pub(crate) fn has_completed_seek(&self, request: SeekContext) -> bool {
+        self.seek_preparation
+            .completed
+            .as_ref()
+            .is_some_and(|(completed, _)| *completed == request)
+    }
+
+    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+        if self
+            .seek_preparation
+            .completed
+            .as_ref()
+            .is_some_and(|(request, _)| request.epoch != live_epoch)
+        {
+            self.seek_preparation.completed = None;
+        }
+        if self
+            .seek_preparation
+            .requested
+            .is_some_and(|request| request.epoch != live_epoch)
+        {
+            self.seek_preparation.requested = None;
+        }
+        if let Some(request) = self.seek_preparation.requested.take() {
+            let result = match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(request.target)))
+            {
+                Ok(result) => result,
+                Err(payload) => {
+                    warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
+                    Err(DecodeError::InvalidData {
+                        detail: "decoder panicked during seek",
+                    })
+                }
+            };
+            self.seek_preparation.completed = Some((request, result));
+        } else if prepare_input && self.seek_preparation.completed.is_none() {
+            self.decoder.prepare_next_chunk();
         }
     }
 
@@ -808,6 +873,34 @@ mod tests {
             1,
             "ready pops and contiguous pushes must use the validated frontier cache"
         );
+    }
+
+    #[kithara::test]
+    fn deferred_seek_only_completes_the_current_epoch() {
+        let mut generation = generation(spec(2, 44_100));
+        let first = SeekContext {
+            target: Duration::from_secs(1),
+            epoch: 1,
+        };
+        let second = SeekContext {
+            target: first.target,
+            epoch: 2,
+        };
+        assert!(generation.poll_seek(first).is_pending());
+        assert!(generation.seek_preparation.completed.is_none());
+        generation.prepare_deferred(first.epoch, false);
+        assert!(generation.poll_seek(second).is_pending());
+        generation.prepare_deferred(second.epoch, false);
+        assert!(matches!(
+            generation.poll_seek(second),
+            Poll::Ready(Ok(DecoderSeekOutcome::Landed { .. }))
+        ));
+        assert!(generation.seek_preparation.completed.is_none());
+
+        assert!(generation.poll_seek(first).is_pending());
+        generation.prepare_deferred(second.epoch, false);
+        assert!(generation.seek_preparation.requested.is_none());
+        assert!(generation.seek_preparation.completed.is_none());
     }
 
     #[kithara::test]

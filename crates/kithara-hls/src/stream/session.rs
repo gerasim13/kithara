@@ -349,11 +349,6 @@ where
         self.variant.phase_at(byte..byte.saturating_add(1))
     }
 
-    pub(crate) fn prepare_read(&self) -> StreamResult<()> {
-        self.variant
-            .prepare_requested_read(self.projected_position().byte)
-    }
-
     /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
     /// wake-free RT probe, `None` the off-RT construction wait that parks on the
     /// readiness gate. The variant plans nothing by itself — the reader driver
@@ -367,7 +362,6 @@ where
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
             None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
-                self.variant.prepare_read(range.start)?;
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,

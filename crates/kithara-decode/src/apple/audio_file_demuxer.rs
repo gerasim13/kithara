@@ -7,14 +7,14 @@ use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
-use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
+use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
 use super::{audio_file::AppleAudioFile, consts::Consts, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
     types::checked_audio_spec,
@@ -58,6 +58,7 @@ pub(crate) struct AppleAudioFileDemuxer {
     frames_per_packet: u32,
     next_packet: u64,
     last_read_len: usize,
+    prepared: Option<PreparedPacket>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +71,7 @@ impl AppleAudioFileDemuxer {
     /// Target ~16 `KiB` per CBR read — large enough to amortise the
     /// source `wait_range` cost on streamed sources (HLS), small enough
     /// to keep the in-flight buffer bounded.
-    const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
+    pub(super) const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
 
     fn audio_spec(&self) -> DecodeResult<AudioSpec> {
         checked_audio_spec(
@@ -240,6 +241,7 @@ impl AppleAudioFileDemuxer {
             cbr_batch_packets,
             read_buf: pools.get_with_len::<u8>(buf_cap)?,
             last_read_len: 0,
+            prepared: None,
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
             byte_len: None,
@@ -250,6 +252,7 @@ impl AppleAudioFileDemuxer {
     /// `AudioFileServices` file-type hint internally. The caller is
     /// expected to have checked [`Self::supports`] (the factory does);
     /// unsupported combinations return [`DecodeError::UnsupportedCodec`].
+
     #[cfg(test)]
     pub(crate) fn open_for_with_mode(
         source: BoxedSource,
@@ -316,7 +319,96 @@ impl Demuxer for AppleAudioFileDemuxer {
         self.track_info.duration
     }
 
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_none() {
+            self.prepared = Some(self.read_frame()?.into());
+        }
+        Ok(())
+    }
+
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        Ok(match self.prepared.take() {
+            Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
+                data: &self.read_buf[..self.last_read_len],
+                packet_desc: if self.cbr_batch_packets.is_some() {
+                    &[]
+                } else {
+                    &self.last_packet_desc_blob
+                },
+                pts,
+                duration,
+            }),
+            Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
+            Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
+            None => DemuxOutcome::Pending(PendingReason::Retry),
+        })
+    }
+
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
+    }
+
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.prepared = None;
+        let spec = self.audio_spec()?;
+        if let Some(total_packets) = self.total_packets {
+            let total_frames = total_packets.saturating_mul(u64::from(self.frames_per_packet));
+            let total_duration = spec
+                .duration_for(total_frames)
+                .unwrap_or(Duration::from_nanos(u64::MAX));
+            if target >= total_duration {
+                return Ok(DemuxSeekOutcome::PastEof {
+                    duration: total_duration,
+                });
+            }
+        }
+
+        if self.total_packets == Some(0) {
+            return Ok(DemuxSeekOutcome::PastEof {
+                duration: Duration::ZERO,
+            });
+        }
+
+        let target_frames = spec.frames_for(target).map_or(usize::MAX, FrameCount::get);
+        let target_frame = u64::try_from(target_frames).map_err(DecodeError::backend)?;
+        let target_packet = target_frame / u64::from(self.frames_per_packet.max(1));
+        let backup = u64::from(priming.packets).min(target_packet);
+        let landed_packet = target_packet.saturating_sub(backup);
+        self.next_packet = landed_packet;
+
+        let landed_frame = landed_packet.saturating_mul(u64::from(self.frames_per_packet));
+        let landed_at = spec
+            .duration_for(landed_frame)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
+
+        // Prefer Apple's own packet→byte mapping so `landed_byte` matches the
+        // offset its packet read seeks to; fall back to a linear estimate from
+        // the live total when the property is unavailable.
+        // Apple's own packet→byte mapping is exact and is the offset its packet
+        // read seeks to, but a size-less open rejects it outright
+        // (`kAudioFileInvalidPacketOffsetError`). That degraded mode — the
+        // streamed MP3 path — falls back to the linear estimate; see
+        // `estimate_landed_byte`.
+        let landed_byte = self
+            .file
+            .packet_to_byte(landed_packet)
+            .or_else(|| self.estimate_landed_byte(landed_at));
+
+        Ok(DemuxSeekOutcome::Landed {
+            landed_at,
+            landed_byte,
+            preroll: PrerollHint::NotNeeded,
+        })
+    }
+
+    fn track_info(&self) -> &TrackInfo {
+        &self.track_info
+    }
+}
+
+impl AppleAudioFileDemuxer {
+    fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         if self
             .total_packets
             .is_some_and(|total_packets| self.next_packet >= total_packets)
@@ -415,62 +507,6 @@ impl Demuxer for AppleAudioFileDemuxer {
 
         self.next_packet = start_packet.saturating_add(1);
         Ok(DemuxOutcome::Frame(frame))
-    }
-
-    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        let spec = self.audio_spec()?;
-        if let Some(total_packets) = self.total_packets {
-            let total_frames = total_packets.saturating_mul(u64::from(self.frames_per_packet));
-            let total_duration = spec
-                .duration_for(total_frames)
-                .unwrap_or(Duration::from_nanos(u64::MAX));
-            if target >= total_duration {
-                return Ok(DemuxSeekOutcome::PastEof {
-                    duration: total_duration,
-                });
-            }
-        }
-
-        if self.total_packets == Some(0) {
-            return Ok(DemuxSeekOutcome::PastEof {
-                duration: Duration::ZERO,
-            });
-        }
-
-        let target_frames = spec.frames_for(target).map_or(usize::MAX, FrameCount::get);
-        let target_frame = u64::try_from(target_frames).map_err(DecodeError::backend)?;
-        let target_packet = target_frame / u64::from(self.frames_per_packet.max(1));
-        let backup = u64::from(priming.packets).min(target_packet);
-        let landed_packet = target_packet.saturating_sub(backup);
-        self.next_packet = landed_packet;
-
-        let landed_frame = landed_packet.saturating_mul(u64::from(self.frames_per_packet));
-        let landed_at = spec
-            .duration_for(landed_frame)
-            .unwrap_or(Duration::from_nanos(u64::MAX));
-
-        // Prefer Apple's own packet→byte mapping so `landed_byte` matches the
-        // offset its packet read seeks to; fall back to a linear estimate from
-        // the live total when the property is unavailable.
-        // Apple's own packet→byte mapping is exact and is the offset its packet
-        // read seeks to, but a size-less open rejects it outright
-        // (`kAudioFileInvalidPacketOffsetError`). That degraded mode — the
-        // streamed MP3 path — falls back to the linear estimate; see
-        // `estimate_landed_byte`.
-        let landed_byte = self
-            .file
-            .packet_to_byte(landed_packet)
-            .or_else(|| self.estimate_landed_byte(landed_at));
-
-        Ok(DemuxSeekOutcome::Landed {
-            landed_at,
-            landed_byte,
-            preroll: PrerollHint::NotNeeded,
-        })
-    }
-
-    fn track_info(&self) -> &TrackInfo {
-        &self.track_info
     }
 }
 
@@ -1021,21 +1057,73 @@ mod tests {
     /// at open), so a correct decoder needs the size exactly once.
     struct CountingSource {
         end_seeks: Arc<AtomicUsize>,
+        calls: Arc<AtomicUsize>,
         inner: Cursor<Vec<u8>>,
     }
 
     impl Read for CountingSource {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
             self.inner.read(buf)
         }
     }
 
     impl Seek for CountingSource {
         fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
             if matches!(pos, SeekFrom::End(_)) {
                 self.end_seeks.fetch_add(1, Ordering::Release);
             }
             self.inner.seek(pos)
+        }
+    }
+
+    #[kithara::test]
+    fn prepared_apple_packet_consumption_does_not_touch_source(tone_wav: &'static [u8]) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut prepared = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(CountingSource {
+                inner: Cursor::new(tone_wav.to_vec()),
+                end_seeks: Arc::default(),
+                calls: Arc::clone(&calls),
+            }),
+            AudioCodec::Pcm,
+            Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
+            None,
+        )
+        .expect("open prepared WAV");
+        let mut direct = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(tone_wav.to_vec())),
+            AudioCodec::Pcm,
+            Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
+            None,
+        )
+        .expect("open reference WAV");
+        for target in [Duration::ZERO, Duration::from_secs(1), Duration::ZERO] {
+            prepared
+                .seek(target, CodecPriming::default())
+                .expect("seek prepared");
+            direct
+                .seek(target, CodecPriming::default())
+                .expect("seek reference");
+            prepared.prepare_frame().expect("prepare packet");
+            let before = calls.load(Ordering::Relaxed);
+            prepared.prepare_frame().expect("preparation is idempotent");
+            let DemuxOutcome::Frame(actual) =
+                prepared.next_frame_prepared().expect("consume packet")
+            else {
+                panic!("expected prepared packet");
+            };
+            let DemuxOutcome::Frame(expected) = direct.next_frame().expect("reference packet")
+            else {
+                panic!("expected reference packet");
+            };
+            assert_eq!(actual.data, expected.data);
+            assert_eq!(actual.pts, expected.pts);
+            assert_eq!(actual.duration, expected.duration);
+            assert_eq!(calls.load(Ordering::Relaxed), before);
         }
     }
 
@@ -1055,6 +1143,7 @@ mod tests {
             Box::new(CountingSource {
                 inner: Cursor::new(bytes),
                 end_seeks: Arc::clone(&end_seeks),
+                calls: Arc::default(),
             }),
             AudioCodec::Flac,
             Some(ContainerFormat::Flac),

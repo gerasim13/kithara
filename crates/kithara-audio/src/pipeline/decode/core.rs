@@ -3,6 +3,7 @@ use std::{
     mem,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicU32, Ordering},
+    task::Poll,
 };
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
@@ -34,7 +35,7 @@ use crate::{
         },
         fetch::Fetch,
         rebuild::RecreateState,
-        seek::{ResumeState, SeekEngine, emit::commit_outcome},
+        seek::{ResumeState, SeekContext, SeekEngine, emit::commit_outcome},
         stream::shared::SharedStream,
         track::{TrackFailure, WaitingReason},
     },
@@ -233,8 +234,8 @@ impl ActiveDecode {
         )
     }
 
-    pub(crate) fn prepare_deferred(&mut self) {
-        self.active.decoder_mut().prepare_next_chunk();
+    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+        self.active.prepare_deferred(live_epoch, prepare_input);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
     }
@@ -362,6 +363,19 @@ impl ActiveDecode {
         self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         self.stage_error = None;
         self.blender.reset();
+    }
+
+    pub(crate) fn poll_seek<T: StreamType>(
+        &mut self,
+        stream: &SharedStream<T>,
+        playhead: &dyn PlayheadWrite,
+        request: SeekContext,
+    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
+        let outcome = self.active.poll_seek(request);
+        if let Poll::Ready(Ok(ref result)) = outcome {
+            commit_outcome(&self.active, stream, playhead, result);
+        }
+        outcome
     }
 
     pub(crate) fn seek<T: StreamType>(

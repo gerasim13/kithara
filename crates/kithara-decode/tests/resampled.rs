@@ -550,17 +550,20 @@ fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]
     )
     .expect("decoder builds");
 
+    assert_eq!(pools.stats().allocated_bytes, 0);
+    decoder.prepare_next_chunk();
     let prepared_bytes = pools.stats().allocated_bytes;
-    assert!(prepared_bytes > 0, "packet storage uses the injected pool");
+    assert!(prepared_bytes > 0, "initial PCM uses the injected pool");
     let chunk: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
-    assert!(
-        pools.stats().allocated_bytes > prepared_bytes,
-        "PCM storage uses the same injected pool"
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        prepared_bytes,
+        "delivering prepared PCM must not allocate another buffer"
     );
 }
 

@@ -27,17 +27,6 @@ use crate::{
     traits::{AudioSource, AudioSourceExt},
 };
 
-#[kithara::hang_watchdog]
-fn step_past_transitions(fixture: &mut RouteFixture) -> TrackStep<AudioChunk> {
-    loop {
-        hang_tick!();
-        match fixture.source.step_track() {
-            TrackStep::StateChanged => fixture.source.flush_deferred(),
-            outcome => return outcome,
-        }
-    }
-}
-
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     request_incoming_plan(&abr)
@@ -202,7 +191,7 @@ async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running(route_pcm: Rou
 
     fixture.source.flush_deferred();
 
-    let TrackStep::Produced(fetch) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must keep producing while the incoming reader is preparing");
     };
     let chunk = produced_data(fetch);
@@ -234,7 +223,7 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
     fixture.source.flush_deferred();
 
     assert!(fixture.source.decode.incoming_is_building(transition));
-    let TrackStep::Produced(fetch) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must keep producing while the incoming decoder is building");
     };
     let chunk = produced_data(fetch);
@@ -259,11 +248,11 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
 async fn raw_decode_head_is_independent_of_downstream_frame_shape(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
 
-    let TrackStep::Produced(first) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(first) = fixture.source.step_track() else {
         panic!("raw source must produce its first chunk");
     };
     let _ = produced_data(first);
-    let TrackStep::Produced(second) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(second) = fixture.source.step_track() else {
         panic!("raw source must produce its second chunk");
     };
     let mut transformed = produced_data(second);
@@ -313,7 +302,14 @@ async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming(route_pcm: Ro
     )
     .await;
 
-    let TrackStep::Produced(fetch) = step_past_transitions(&mut fixture) else {
+    for _ in 0..2 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("gapless trimming must eventually release its first raw output chunk");
     };
     let output = produced_data(fetch);
@@ -352,7 +348,15 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: 
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    let TrackStep::Produced(fetch) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is staged");
     };
     let chunk = produced_data(fetch);
@@ -380,7 +384,15 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    let TrackStep::Produced(fetch) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must emit while the same-spec incoming generation is priming");
     };
     let chunk = produced_data(fetch);
@@ -423,7 +435,15 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    let TrackStep::Produced(outgoing) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is first staged");
     };
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
@@ -445,7 +465,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     let mut expected_offset = chunk_frames;
     let mut post_cut_frames = 0usize;
     while post_cut_frames < 1_024 {
-        let TrackStep::Produced(incoming) = step_past_transitions(&mut fixture) else {
+        let TrackStep::Produced(incoming) = fixture.source.step_track() else {
             panic!("promoted incoming must keep emitting its staged PCM");
         };
         let incoming = produced_data(incoming);
@@ -461,7 +481,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
 #[kithara::test(tokio)]
 async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
-    let TrackStep::Produced(first_outgoing) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
@@ -485,7 +505,7 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(rout
         fixture.source.decode.incoming_frontier(),
         Some(OutgoingFrontier::Awaiting)
     );
-    let TrackStep::Produced(next_outgoing) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(next_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must keep producing until the incoming cut is latched");
     };
     assert_eq!(produced_data(next_outgoing).meta.frame_offset, cut);
@@ -503,7 +523,7 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     let mut fixture =
         route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
             .await;
-    let TrackStep::Produced(first_outgoing) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
@@ -550,7 +570,14 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    let TrackStep::Blocked(_) = step_past_transitions(&mut fixture) else {
+    for _ in 0..3 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
     assert_eq!(
@@ -589,7 +616,7 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     let mut fixture =
         route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
             .await;
-    let TrackStep::Produced(_) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(_) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
     let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
@@ -602,7 +629,14 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     fixture.source.flush_deferred();
-    let TrackStep::Blocked(_) = step_past_transitions(&mut fixture) else {
+    for _ in 0..3 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
     fixture.source.flush_deferred();
@@ -621,7 +655,7 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: Route
     let mut fixture =
         route_signal_source_with_finite_incoming(&route_pcm, Consts::SAMPLE_RATE, INCOMING_CHUNKS)
             .await;
-    let TrackStep::Produced(first_outgoing) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
@@ -657,7 +691,7 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: Route
             .and_then(|info| info.variant_index),
         Some(1)
     );
-    let TrackStep::Produced(incoming) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(incoming) = fixture.source.step_track() else {
         panic!("the hard-cut incoming must continue from its staged exact cut");
     };
     let incoming = produced_data(incoming);
@@ -680,8 +714,16 @@ async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     assert!(matches!(
-        step_past_transitions(&mut fixture),
+        fixture.source.step_track(),
         TrackStep::Produced(_)
     ));
     fixture.source.flush_deferred();
@@ -749,7 +791,15 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
-    let TrackStep::Produced(first_outgoing) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while incoming PCM is first staged");
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
@@ -777,7 +827,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    let TrackStep::Produced(next_outgoing) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(next_outgoing) = fixture.source.step_track() else {
         panic!("publication lock must not interrupt outgoing PCM");
     };
     assert_eq!(
@@ -811,7 +861,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     );
     let expected_offset =
         u64::try_from(Consts::ROUTE_CHUNK_FRAMES.saturating_mul(2)).unwrap_or(u64::MAX);
-    let TrackStep::Produced(incoming) = step_past_transitions(&mut fixture) else {
+    let TrackStep::Produced(incoming) = fixture.source.step_track() else {
         panic!("the restored incoming generation must produce after publication unlock");
     };
     assert_route_signal(&produced_data(incoming), expected_offset);
@@ -830,7 +880,15 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    let TrackStep::Produced(outgoing) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must name the cut before stale publication");
     };
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
@@ -931,7 +989,15 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, first_transition).await;
-    let TrackStep::Produced(outgoing) = step_past_transitions(&mut fixture) else {
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
+    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while the first incoming generation is staged");
     };
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
@@ -1062,8 +1128,16 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     assert!(matches!(
-        step_past_transitions(&mut fixture),
+        fixture.source.step_track(),
         TrackStep::Produced(_)
     ));
     fixture.source.flush_deferred();

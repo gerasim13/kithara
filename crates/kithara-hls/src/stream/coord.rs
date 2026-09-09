@@ -263,11 +263,6 @@ where
         self.variant_serving(range.start).wait_range(range, timeout)
     }
 
-    pub(crate) fn prepare_read(&self) -> StreamResult<()> {
-        let offset = self.position();
-        self.variant_serving(offset).prepare_requested_read(offset)
-    }
-
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
@@ -399,8 +394,6 @@ where
             // the readiness gate until the range resolves, a segment fails, or
             // cancel fires. Event-driven — no wall-clock poll.
             None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
-                self.variant_serving(range.start)
-                    .prepare_read(range.start)?;
                 self.probe_range(range.clone(), Some(Duration::ZERO))
             }),
         }

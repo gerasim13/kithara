@@ -1,7 +1,4 @@
-use std::{
-    io::Error as IoError,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -76,6 +73,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     pending_seek_target: Option<Duration>,
     pools: PoolRegion<S>,
     output: Option<DecodeResult<SampleBuffer>>,
+    prefill: Prefill,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
@@ -100,6 +98,12 @@ pub(crate) struct DecoderRuntime<S> {
     pub(crate) epoch: u64,
 }
 
+enum Prefill {
+    Needed,
+    Buffered(DecodeResult<DecoderChunkOutcome>),
+    Complete,
+}
+
 impl<D, C, S> ComposedDecoder<D, C, S>
 where
     D: Demuxer,
@@ -117,6 +121,7 @@ where
             duration,
             pools: runtime.pools,
             output: None,
+            prefill: Prefill::Needed,
             epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
@@ -127,6 +132,14 @@ where
             head_strip: HeadStrip::default(),
             zero_frame_count: 0,
         }
+    }
+
+    fn decode_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        let output = self.output.take().ok_or(DecodeError::InvalidData {
+            detail: "decoder output was not prepared",
+        })??;
+        self.output = Some(Ok(output));
+        self.next_chunk_inner()
     }
 
     /// Build the output `AudioChunk` from a just-filled pool buffer plus
@@ -405,10 +418,7 @@ where
     }
 
     fn prepare_next_chunk(&mut self) {
-        if let Some(hooks) = self.hooks.as_mut()
-            && let Err(error) = hooks.prepare_read()
-        {
-            self.output = Some(Err(IoError::other(error).into()));
+        if matches!(self.prefill, Prefill::Buffered(_)) {
             return;
         }
         if let Err(error) = self.demuxer.prepare_frame() {
@@ -418,6 +428,9 @@ where
         if self.output.is_none() {
             let mut buffer = self.pools.get::<f32>();
             self.output = Some(self.codec.prepare_output(&mut buffer).map(|()| buffer));
+        }
+        if matches!(self.prefill, Prefill::Needed) {
+            self.prefill = Prefill::Buffered(self.decode_prepared());
         }
     }
 
@@ -432,17 +445,26 @@ where
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        let output = self.output.take().ok_or(DecodeError::InvalidData {
-            detail: "decoder output was not prepared",
-        })??;
-        self.output = Some(Ok(output));
-        let outcome = self.next_chunk_inner()?;
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            let Prefill::Buffered(result) = std::mem::replace(&mut self.prefill, Prefill::Complete)
+            else {
+                unreachable!();
+            };
+            let outcome = result?;
+            if matches!(outcome, DecoderChunkOutcome::Pending(_)) {
+                self.prefill = Prefill::Needed;
+            }
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
+        let outcome = self.decode_prepared()?;
         self.emit_chunk_signal(&outcome);
         Ok(outcome)
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.seek_inner(pos)?;
+        self.prefill = Prefill::Needed;
         self.emit_seek_signal(&outcome);
         Ok(outcome)
     }
@@ -533,13 +555,8 @@ mod default_priming_tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        let demuxer = SymphoniaDemuxer::from_reader_with_layout(
-            format_reader,
-            crate::test_pools::pools().get::<u8>(),
-            None,
-            None,
-        )
-        .expect("BUG: MP3 demuxer should build");
+        let demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("BUG: MP3 demuxer should build");
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
@@ -556,6 +573,73 @@ mod default_priming_tests {
             }
         }
         panic!("prepared decode exhausted the codec warmup budget");
+    }
+
+    #[kithara::test]
+    fn prefilled_mp3_preserves_first_pcm_and_seek(tone_mp3: &'static [u8]) {
+        let mut decoder = build_mp3_decoder(tone_mp3);
+        decoder.prepare_next_chunk();
+        let mut reference = build_mp3_decoder(tone_mp3);
+        for position in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
+            if let Some(position) = position {
+                decoder.seek(position).expect("seek");
+                reference.seek(position).expect("reference seek");
+            }
+            for _ in 0..4 {
+                decoder.prepare_next_chunk();
+                decoder.prepare_next_chunk();
+                let actual = decoder.next_chunk().expect("prefilled decode");
+                let expected = reference.next_chunk().expect("reference decode");
+                assert_same_mp3_output(&actual, &expected);
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn initialized_mp3_reuses_decoder_storage_after_seek(tone_mp3: &'static [u8]) {
+        let mut decoder = build_mp3_decoder(tone_mp3);
+        let mut reference = build_mp3_decoder(tone_mp3);
+        let first = decoder.next_chunk().expect("initial decode");
+        assert!(matches!(first, DecoderChunkOutcome::Chunk(_)));
+        let expected_first = reference.next_chunk().expect("reference initial decode");
+        assert_same_mp3_output(&first, &expected_first);
+        for position in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
+            if let Some(position) = position {
+                decoder.seek(position).expect("seek");
+                reference.seek(position).expect("reference seek");
+            }
+            let mut produced = 0;
+            for _ in 0..4 {
+                decoder.prepare_next_chunk();
+                let chunk = checked_mp3_chunk(&mut decoder).expect("checked decode");
+                reference.prepare_next_chunk();
+                let expected = reference.next_chunk_prepared().expect("reference decode");
+                assert_same_mp3_output(&chunk, &expected);
+                produced += usize::from(matches!(chunk, DecoderChunkOutcome::Chunk(_)));
+            }
+            assert!(produced > 0, "checked calls must produce PCM");
+        }
+    }
+
+    fn assert_same_mp3_output(actual: &DecoderChunkOutcome, expected: &DecoderChunkOutcome) {
+        match (actual, expected) {
+            (DecoderChunkOutcome::Chunk(actual), DecoderChunkOutcome::Chunk(expected)) => {
+                assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
+                assert_eq!(actual.meta.frame_offset, expected.meta.frame_offset);
+                assert_eq!(actual.meta.frames, expected.meta.frames);
+                assert_eq!(&*actual.samples, &*expected.samples);
+            }
+            (
+                DecoderChunkOutcome::Pending(PendingReason::Retry),
+                DecoderChunkOutcome::Pending(PendingReason::Retry),
+            ) => {}
+            _ => panic!("expected matching PCM or packet progress"),
+        }
+    }
+
+    #[kithara::rtsan_forbid_blocking]
+    fn checked_mp3_chunk(decoder: &mut dyn Decoder) -> DecodeResult<DecoderChunkOutcome> {
+        decoder.next_chunk_prepared()
     }
 
     #[kithara::test]
@@ -663,13 +747,8 @@ mod smoke_tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader_with_layout(
-            format_reader,
-            crate::test_pools::pools().get::<u8>(),
-            None,
-            None,
-        )
-        .expect("BUG: MP3 demuxer should build")
+        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("BUG: MP3 demuxer should build")
     }
 
     #[kithara::test]
@@ -744,7 +823,6 @@ mod smoke_tests {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
             Cursor::new(tone_mp3),
             FileOpen {
-                packet_buffer: crate::test_pools::pools().get::<u8>(),
                 hint: Some("mp3".into()),
                 container: None,
                 byte_len_handle: None,

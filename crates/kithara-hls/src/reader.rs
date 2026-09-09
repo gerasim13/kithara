@@ -7,9 +7,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{AbrMode, VariantIndex};
 use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::sync::Arc;
-use kithara_stream::{
-    PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal, StreamResult,
-};
+use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::stream::{HlsCoord, HlsSession};
 
@@ -211,11 +209,6 @@ impl<S> ReaderEventSink for HlsReaderEventSink<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    fn prepare_read(&mut self) -> StreamResult<()> {
-        self.route
-            .map(HlsCoord::prepare_read, HlsSession::prepare_read)
-    }
-
     fn flush(&mut self) {
         self.bus.flush();
     }

@@ -188,7 +188,7 @@ pub(crate) struct AacDecoder {
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
-    reset_error: Option<DecoderError>,
+    reset_error: Option<Error>,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
     /// first successful decode, decremented as each chunk consumes it.
@@ -309,8 +309,8 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn decode_ref(&mut self, packet: &PacketRef<'_>) -> Result<GenericAudioBufferRef<'_>> {
-        if let Some(error) = self.reset_error {
-            return Err(Error::DecodeError(error.message()));
+        if let Some(error) = self.reset_error.take() {
+            return Err(error);
         }
         let mut reader = packet.as_buf_reader();
         let payload = reader.read_buf_bytes_available_ref();
@@ -370,7 +370,10 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn reset(&mut self) {
-        self.reset_error = self.decoder.reset().err();
+        match Self::try_new(&self.codec_params, AudioDecoderOptions::default()) {
+            Ok(codec) => *self = codec,
+            Err(error) => self.reset_error = Some(error),
+        }
         self.buf.clear();
         self.delay_remaining = self.decoder.stream_info().outputDelay;
     }

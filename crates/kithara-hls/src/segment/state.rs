@@ -1,6 +1,6 @@
 use std::sync::{
     Weak,
-    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use bitflags::bitflags;
@@ -64,7 +64,6 @@ pub(crate) struct SegmentSlotState {
     /// acquire succeeds.
     acquire_failures: AtomicU8,
     flags: AtomicU8,
-    read_revision: AtomicU64,
 }
 
 impl SegmentSlotState {
@@ -84,7 +83,6 @@ impl SegmentSlotState {
     }
 
     pub(crate) fn mark_failed(&self) {
-        self.read_revision.fetch_add(1, Ordering::AcqRel);
         self.settle(SlotFlags::FAILED);
     }
 
@@ -93,7 +91,6 @@ impl SegmentSlotState {
     }
 
     pub(crate) fn mark_missing(&self) {
-        self.read_revision.fetch_add(1, Ordering::AcqRel);
         self.settle(SlotFlags::empty());
     }
 
@@ -104,14 +101,9 @@ impl SegmentSlotState {
             .fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
     }
 
-    pub(crate) fn read_revision(&self) -> u64 {
-        self.read_revision.load(Ordering::Acquire)
-    }
-
     pub(crate) fn missing() -> Arc<Self> {
         Arc::new(Self {
             flags: AtomicU8::new(SlotFlags::empty().bits()),
-            read_revision: AtomicU64::new(0),
             acquire_failures: AtomicU8::new(0),
             reader_demand: AtomicBool::new(false),
         })
