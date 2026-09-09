@@ -9649,7 +9649,7 @@ dependencies = [
 [[package]]
 name = "symphonia"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
@@ -9671,7 +9671,7 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-flac"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9682,7 +9682,7 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-mp3"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "lazy_static",
  "log",
@@ -9692,7 +9692,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-aac"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "lazy_static",
  "log",
@@ -9703,7 +9703,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-adpcm"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-core 0.6.0",
@@ -9712,7 +9712,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-alac"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9722,7 +9722,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-pcm"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-core 0.6.0",
@@ -9731,7 +9731,7 @@ dependencies = [
 [[package]]
 name = "symphonia-codec-vorbis"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9741,7 +9741,7 @@ dependencies = [
 [[package]]
 name = "symphonia-common"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-core 0.6.0",
@@ -9764,7 +9764,7 @@ dependencies = [
 [[package]]
 name = "symphonia-core"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
@@ -9778,7 +9778,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-caf"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9788,7 +9788,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-isomp4"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9799,7 +9799,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-mkv"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "lazy_static",
  "log",
@@ -9810,7 +9810,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-ogg"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -9821,7 +9821,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-riff"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "extended",
  "log",
@@ -9844,7 +9844,7 @@ dependencies = [
 [[package]]
 name = "symphonia-metadata"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/Symphonia?rev=790d2e28a6dd250bf770826a2156696993611461#790d2e28a6dd250bf770826a2156696993611461"
+source = "git+https://github.com/gerasim13/Symphonia?rev=4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2#4b8a4f02f5ad779e75c8c1dbf7f5c748bf0fb9e2"
 dependencies = [
  "lazy_static",
  "log",

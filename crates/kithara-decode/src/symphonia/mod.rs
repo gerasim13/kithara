@@ -15,6 +15,8 @@ pub(crate) mod codec;
 pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
+#[cfg(test)]
+mod mp4_tests;
 pub(crate) mod probe;
 pub(crate) mod registry;
 #[cfg(test)]
