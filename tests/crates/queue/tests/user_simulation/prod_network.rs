@@ -207,7 +207,7 @@ async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) 
                 }
             }
         }
-        Action::PlayFor(d) => {
+        Action::RenderFor(d) => {
             let pre = queue.position_seconds().unwrap_or(0.0);
             sleep(*d).await;
             let post = queue.position_seconds().unwrap_or(0.0);

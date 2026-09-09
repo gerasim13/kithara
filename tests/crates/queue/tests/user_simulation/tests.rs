@@ -196,7 +196,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: PreparedTrack, #[c
     run_single(kind, abr, scenarios::seek_forward_unbuffered_repro()).await;
 }
 
-/// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
+/// Bug #6 — backward seek causes silent hang. `RenderFor` watchdog in
 /// the harness panics on stuck position.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
@@ -521,17 +521,17 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: PreparedTracks)
 async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
     // Walk all three with seeks: 0 → seek mid → 1 → seek mid → 2 → seek mid.
     let actions = vec![
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(1),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(2),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
     ];
     run_multi(kinds, actions).await;
 }
