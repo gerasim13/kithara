@@ -6,10 +6,7 @@ use std::{
 use kithara::{
     bufpool::{HasPool, PoolRegion},
     host::{Host, HostConfig, HostLevel, HostOwned, testing::HostProbe},
-    output::{
-        OfflineRenderError, OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink,
-        RenderSinkError,
-    },
+    output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
         maybe_send::MaybeSend,
@@ -31,6 +28,10 @@ use ringbuf::{
 use super::owner::HostOwner;
 
 const CHANNELS: u16 = 2;
+/// Cadence a device-free harness renders itself at when the test is not
+/// pulling the playhead — the audio-device tick an offline session has no
+/// device to receive.
+pub const RENDER_PACE: Duration = Duration::from_millis(10);
 const ENDPOINT_SLACK_SECS: f64 = 0.5;
 const GAIN_FLOOR_SECS: f64 = 0.9;
 
@@ -71,7 +72,20 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub async fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
-        let host = OfflineHostHarness::new(config).await?;
+        Self::open(OfflineHostHarness::new(config).await?, player).await
+    }
+
+    /// Like [`Self::new`], with the Host rendering itself at `interval` so the
+    /// playhead advances while the test waits on state rather than on renders.
+    pub async fn paced(
+        config: HostConfig<S>,
+        player: P,
+        interval: Duration,
+    ) -> Result<Self, PlayError> {
+        Self::open(OfflineHostHarness::paced(config, interval).await?, player).await
+    }
+
+    async fn open(host: OfflineHostHarness<S>, player: P) -> Result<Self, PlayError> {
         let member = host.insert(player).await?;
         Ok(Self { host, member })
     }
@@ -123,22 +137,43 @@ impl<S> OfflineHostHarness<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    /// Build the same offline Host used by product rendering.
+    /// Build the same offline Host used by product rendering. The playhead
+    /// then moves only where the test renders.
     pub async fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+        Self::open(config, None).await
+    }
+
+    /// Like [`Self::new`], plus one render block per `interval` the owner
+    /// thread spends idle. This is the audio-device tick an offline session
+    /// has no device to receive: it lets a test wait on playback state the way
+    /// an app does, instead of pulling every block itself.
+    pub async fn paced(config: HostConfig<S>, interval: Duration) -> Result<Self, PlayError> {
+        Self::open(config, Some(interval)).await
+    }
+
+    async fn open(config: HostConfig<S>, pacing: Option<Duration>) -> Result<Self, PlayError> {
         let spec = AudioSpec::new(CHANNELS, config.sample_rate());
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
-        let pacing = config.pacing();
+        let block = u64::from(max_block_frames.get());
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
-        let off = HostOwner::spawn("offline-host", move || {
+        let start = move || {
             Host::new(config).map(|host| HostState {
                 host,
                 position: owned,
             })
-        })
-        .await?;
+        };
+        let off = match pacing {
+            None => HostOwner::spawn("offline-host", start).await?,
+            Some(interval) => {
+                HostOwner::spawn_paced("offline-host", start, interval, move |state| {
+                    render_forward_on(state, spec, block, block);
+                })
+                .await?
+            }
+        };
         Ok(Self {
             off,
             position,
@@ -216,48 +251,13 @@ where
     }
 
     /// Render `frames` forward from the renderer's own cursor through the
-    /// product offline protocol, at the speed the decoder sustains.
-    ///
-    /// A paced session moves the same cursor from its own tick, so the request
-    /// is re-anchored on the frame the renderer reports instead of a cursor
-    /// this harness alone owns; frames the tick rendered count as rendered.
-    /// Returns the frames the timeline advanced.
+    /// product offline protocol, at the speed the decoder sustains. Returns
+    /// the frames the timeline advanced.
     pub async fn render_forward(&self, frames: u64) -> u64 {
         let spec = self.spec;
         let block = u64::from(self.max_block_frames.get());
         self.off
-            .call(move |state| {
-                let cancel = CancelScope::new(None);
-                let mut cursor = state.position.load(Ordering::Relaxed);
-                let mut rendered = 0;
-                while rendered < frames {
-                    let end = cursor
-                        .checked_add(block.min(frames - rendered))
-                        .expect("offline render timeline fits u64");
-                    let request = OfflineRenderRequest::builder()
-                        .spec(spec)
-                        .frames(cursor..end)
-                        .build();
-                    match state
-                        .host
-                        .render(&request, &cancel.token(), &mut DiscardSink)
-                    {
-                        Ok(report) => {
-                            cursor = end;
-                            rendered += report.frames;
-                        }
-                        Err(OfflineRenderError::RangeUnavailable { current, .. }) => {
-                            rendered += current.saturating_sub(cursor);
-                            cursor = current;
-                        }
-                        Err(error) => {
-                            panic!("render product offline Host forward: {error}")
-                        }
-                    }
-                }
-                state.position.store(cursor, Ordering::Relaxed);
-                rendered
-            })
+            .call(move |state| render_forward_on(state, spec, block, frames))
             .await
     }
 
@@ -335,6 +335,35 @@ where
             .call(move |state| state.host.invalidate_audio_route(reason))
             .await
     }
+}
+
+/// Renders `frames` forward from the cursor the owner thread keeps, in `block`
+/// quanta. Every render of this session runs on that thread, so the session's
+/// own cursor and this one never disagree and a request never needs re-anchoring.
+fn render_forward_on<S>(state: &mut HostState<S>, spec: AudioSpec, block: u64, frames: u64) -> u64
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let cancel = CancelScope::new(None);
+    let mut cursor = state.position.load(Ordering::Relaxed);
+    let mut rendered = 0;
+    while rendered < frames {
+        let end = cursor
+            .checked_add(block.min(frames - rendered))
+            .expect("offline render timeline fits u64");
+        let request = OfflineRenderRequest::builder()
+            .spec(spec)
+            .frames(cursor..end)
+            .build();
+        let report = state
+            .host
+            .render(&request, &cancel.token(), &mut DiscardSink)
+            .unwrap_or_else(|error| panic!("render product offline Host forward: {error}"));
+        cursor = end;
+        rendered += report.frames;
+    }
+    state.position.store(cursor, Ordering::Relaxed);
+    rendered
 }
 
 /// Drops rendered audio: a forward render is taken for the timeline it

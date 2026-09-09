@@ -16,7 +16,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use url::Url;
@@ -88,9 +88,7 @@ async fn stalled_master_playlist_fails_load(
             .build(),
     );
 
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -99,9 +97,10 @@ async fn stalled_master_playlist_fails_load(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

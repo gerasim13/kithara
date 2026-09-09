@@ -30,7 +30,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     user_sim::{actions::Action, scenarios},
 };
 
@@ -102,26 +102,24 @@ fn build_prod_ctx() -> ProdCtx {
 }
 
 async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
-    let session = HostConfig::offline(prod.config.worker.pools().clone())
-        .maybe_pacing(pacing)
-        .build();
+    let session = HostConfig::offline(prod.config.worker.pools().clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
             .worker(prod.config.worker.clone())
             .build(),
     );
-    OfflineQueue::new(
-        session,
-        Queue::new(QueueConfig::builder().player(player).build()),
-    )
-    .await
+    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    match pacing {
+        Some(interval) => OfflineQueue::paced(session, queue, interval).await,
+        None => OfflineQueue::new(session, queue).await,
+    }
     .expect("create product offline queue")
 }
 
 async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
+    let queue = prod_queue(&prod, Some(RENDER_PACE)).await;
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue
@@ -374,7 +372,7 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
+    let queue = prod_queue(&prod, Some(RENDER_PACE)).await;
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
 
@@ -437,7 +435,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
-    let queue = prod_queue(&prod, Some(Duration::from_millis(10))).await;
+    let queue = prod_queue(&prod, Some(RENDER_PACE)).await;
     let q_for_tick = queue.control();
     let mut tick = QueueTicker::spawn(q_for_tick, Duration::from_millis(50));
     let track_id = queue

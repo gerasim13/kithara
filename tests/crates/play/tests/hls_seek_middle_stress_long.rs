@@ -27,7 +27,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
     Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue, QueueTicker},
+    offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -431,10 +431,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(
             .cancel(shutdown_token.child())
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
@@ -442,6 +440,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
                 .cancel(shutdown_token.child())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

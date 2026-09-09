@@ -11,7 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_mp3, temp_dir,
     waits::wait_for_position_event,
 };
@@ -42,9 +42,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
-    let session = HostConfig::offline(session_pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(session_pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -53,7 +51,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -61,6 +59,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

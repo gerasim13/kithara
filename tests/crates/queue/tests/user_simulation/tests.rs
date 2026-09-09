@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -382,18 +382,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let session_config = HostConfig::offline(pools)
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session_config = HostConfig::offline(pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session_config.sample_rate())
             .worker(worker)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

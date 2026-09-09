@@ -15,7 +15,8 @@ pub use app::{AppQueueFixture, LazyAppQueueFixture, app_queue, insecure_app_queu
 #[cfg(not(target_arch = "wasm32"))]
 pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions, offline_queue_fixture};
 pub use host::{
-    MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, offline_gain_window,
+    MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE,
+    offline_gain_window,
 };
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,

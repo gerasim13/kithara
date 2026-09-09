@@ -1,8 +1,6 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-#[cfg(any(test, feature = "probe"))]
-use kithara_platform::time::Instant;
 use kithara_platform::{
     sync::{Arc, mpsc},
     time::Duration,
@@ -45,8 +43,6 @@ struct OfflineSessionTask<S> {
     pools: PoolRegion<S>,
     position: u64,
     state: Option<SessionState<OfflineBackend, S>>,
-    #[cfg(any(test, feature = "probe"))]
-    pacing: Option<(Duration, Instant)>,
 }
 
 pub(crate) struct OfflineTaskConfig<S> {
@@ -55,8 +51,6 @@ pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) max_block_frames: NonZeroU32,
     pub(crate) declick_frames: NonZeroU32,
     pub(crate) declared_latency: Duration,
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) pacing: Option<Duration>,
 }
 
 impl<S> OfflineSessionTask<S>
@@ -124,24 +118,6 @@ where
         }
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    fn tick_pacing(&mut self) -> TickResult {
-        let Some((pacing, deadline)) = self.pacing else {
-            return TickResult::Waiting;
-        };
-        if Instant::now() < deadline {
-            return TickResult::Waiting;
-        }
-        self.pacing = Some((pacing, Instant::now() + pacing));
-        match self.render(self.position, self.max_block_frames.get()) {
-            Ok(_) => TickResult::Progress,
-            Err(error) => {
-                warn!(%error, "paced offline render failed");
-                TickResult::Done
-            }
-        }
-    }
-
     fn tick_position(&self, reply_tx: &mpsc::Sender<u64>) -> TickResult {
         if reply_tx.send(self.position).is_err() {
             warn!("offline position reply receiver dropped");
@@ -178,14 +154,7 @@ where
         match cmd_rx.try_recv() {
             Ok(message) => self.tick_message(message),
             Err(TryRecvError::Disconnected) => TickResult::Done,
-            Err(TryRecvError::Empty) => {
-                #[cfg(any(test, feature = "probe"))]
-                {
-                    self.tick_pacing()
-                }
-                #[cfg(not(any(test, feature = "probe")))]
-                TickResult::Waiting
-            }
+            Err(TryRecvError::Empty) => TickResult::Waiting,
             #[cfg(target_arch = "wasm32")]
             Err(_) => TickResult::Waiting,
         }
@@ -202,20 +171,12 @@ pub(crate) fn spawn<S>(
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    #[cfg(any(test, feature = "probe"))]
-    if config.pacing.is_some_and(|interval| interval.is_zero()) {
-        return Err(PlayError::SessionCategoryUnsupported {
-            reason: "offline pacing interval must be non-zero".to_owned(),
-        });
-    }
     let OfflineTaskConfig {
         pools,
         sample_rate,
         max_block_frames,
         declick_frames,
         declared_latency,
-        #[cfg(any(test, feature = "probe"))]
-        pacing,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
@@ -249,8 +210,6 @@ where
                     Some(max_block_frames),
                     start_stream,
                 )),
-                #[cfg(any(test, feature = "probe"))]
-                pacing: pacing.map(|interval| (interval, Instant::now() + interval)),
             }
         })
         .map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
