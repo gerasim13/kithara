@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, offline_gain_window},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -363,17 +363,16 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
-    // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
-    // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
-    // blocks for the next progress event (parking the virtual clock so the
-    // render worker is live), `end_pos` drains the latest progress buffered
-    // across the window — so the comparison never touches the REAL-clock-gated
-    // tick cache, which goes stale once these waits collapse real time.
+    // BOTH endpoints are event-sourced on the `PlaybackProgress` cadence —
+    // `start_pos` blocks for the next progress event, `end_pos` drains the
+    // latest buffered across the window — so the comparison never touches the
+    // REAL-clock-gated tick cache, which goes stale once these waits collapse
+    // real time. Each cursor read sits beside its own endpoint, so the two
+    // reporting lags cancel instead of adding.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
+    let cursor_start = queue.host().position();
     time::sleep(Duration::from_secs(2)).await;
     // Playback is live across the window, so progress events are buffered:
     // `drain_latest_position` returns the latest of them (the window end)
@@ -386,19 +385,12 @@ async fn local_track_plays_end_to_end(
             .await
             .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
     };
-    let gain = end_pos - start_pos;
-    let pacing = queue.host().pacing().expect("paced offline queue");
-    let gain_window = offline_gain_window(
-        2.0,
-        queue.host().spec().sample_rate,
-        queue.host().max_block_frames(),
-        pacing,
-    );
-    assert!(
-        gain_window.contains(&gain),
-        "position gain out of offline-realtime window [{label}]: got \
-         {gain:.2}s over 2s wall clock (expected {gain_window:?}; \
-         start={start_pos:.2} end={end_pos:.2})"
+    let cursor_end = queue.host().position();
+    assert_playhead_tracks_renderer(
+        end_pos - start_pos,
+        cursor_end - cursor_start,
+        queue.host().spec(),
+        &label,
     );
 
     queue.remove(track_id).expect("remove");

@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU32,
-    ops::{Deref, RangeInclusive},
-};
+use std::{num::NonZeroU32, ops::Deref};
 
 use kithara::{
     bufpool::{HasPool, PoolRegion},
@@ -32,8 +29,11 @@ const CHANNELS: u16 = 2;
 /// pulling the playhead — the audio-device tick an offline session has no
 /// device to receive.
 pub const RENDER_PACE: Duration = Duration::from_millis(10);
-const ENDPOINT_SLACK_SECS: f64 = 0.5;
-const GAIN_FLOOR_SECS: f64 = 0.9;
+/// Slack a playhead-against-cursor comparison needs. The product publishes
+/// `PlaybackProgress` only once the reported position has moved
+/// `PROGRESS_EMIT_MIN_DELTA_MS`, so an endpoint sourced from an event can sit
+/// that far from the cursor snapshot taken beside it.
+const PROGRESS_QUANTUM_SECS: f64 = 0.1;
 
 pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
     match config {
@@ -53,7 +53,6 @@ pub struct OfflineHostHarness<S> {
     position: Arc<AtomicU64>,
     spec: AudioSpec,
     max_block_frames: NonZeroU32,
-    pacing: Option<Duration>,
 }
 
 /// Product Host plus the typed control for one resident test facade.
@@ -179,7 +178,6 @@ where
             position,
             spec,
             max_block_frames,
-            pacing,
         })
     }
 
@@ -277,12 +275,6 @@ where
     #[must_use]
     pub const fn max_block_frames(&self) -> NonZeroU32 {
         self.max_block_frames
-    }
-
-    /// Configured automatic test/probe cadence.
-    #[must_use]
-    pub const fn pacing(&self) -> Option<Duration> {
-        self.pacing
     }
 
     pub async fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
@@ -409,15 +401,30 @@ impl MixTapProbe {
     }
 }
 
-/// Expected playback-position gain for one configured paced offline session.
-#[must_use]
-pub fn offline_gain_window(
-    window_secs: f64,
-    sample_rate: NonZeroU32,
-    block_frames: NonZeroU32,
-    pacing: Duration,
-) -> RangeInclusive<f64> {
-    let rate =
-        (f64::from(block_frames.get()) / f64::from(sample_rate.get())) / pacing.as_secs_f64();
-    GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
+/// Asserts the position the player reported over one measurement window tracks
+/// the frames the renderer put through it. Take `frames` as the difference of
+/// two [`OfflineHostHarness::position`] reads, each beside the endpoint that
+/// produced `gain`.
+///
+/// The two numbers are kept by different owners — the cursor by the offline
+/// renderer, the position by the player — so their agreement is a property of
+/// playback rather than a restatement of the render cadence, and it holds at
+/// whatever cadence the harness renders at.
+///
+/// # Panics
+///
+/// Panics when the playhead and the cursor disagree by more than one progress
+/// quantum, naming both numbers.
+pub fn assert_playhead_tracks_renderer(gain: f64, frames: u64, spec: AudioSpec, label: &str) {
+    let rendered = spec
+        .duration_for(frames)
+        .expect("render cursor advance fits a duration")
+        .as_secs_f64();
+    let drift = gain - rendered;
+    assert!(
+        drift.abs() <= PROGRESS_QUANTUM_SECS,
+        "playhead lost the renderer [{label}]: position gained {gain:.3}s while the renderer \
+         advanced {rendered:.3}s ({frames} frames), a drift of {drift:.3}s over the \
+         {PROGRESS_QUANTUM_SECS}s progress quantum"
+    );
 }
