@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 autotests = false
 
+[package.metadata.cargo-machete]
+ignored = ["serial_test"]
+
 [features]
 harness = []
 flash = ["kithara/flash", "kithara-integration-tests/flash"]

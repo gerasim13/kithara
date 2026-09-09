@@ -65,7 +65,6 @@ futures = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }
-rkyv = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
