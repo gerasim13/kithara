@@ -422,6 +422,10 @@ impl super::core::ActiveDecode {
                 Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                     IncomingPrime::Failed
                 }
+                Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
+                    outcome = IncomingPrime::Advanced;
+                    continue;
+                }
                 Ok(DecoderChunkOutcome::Pending(_)) => IncomingPrime::Pending,
                 Ok(DecoderChunkOutcome::Eof) => {
                     generation.finish_staging();

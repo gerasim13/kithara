@@ -3,7 +3,7 @@ use symphonia::core::{
     errors::Result,
     formats::{
         FormatReader, SeekMode, SeekTo, SeekedTo,
-        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
+        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3, FORMAT_ID_WAVE},
     },
     packet::Packet,
     units::{Duration, Timestamp},
@@ -46,13 +46,13 @@ impl Packets {
         }
     }
 
-    pub(super) fn is_mpeg(&self) -> bool {
+    pub(super) fn restores_interrupted_packet(&self) -> bool {
         matches!(
             match self {
                 Self::Borrowed { reader, .. } | Self::Owned { reader, .. } =>
                     reader.format_info().format,
             },
-            FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
+            FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3 | FORMAT_ID_WAVE
         )
     }
 

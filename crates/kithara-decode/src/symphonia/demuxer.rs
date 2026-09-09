@@ -372,7 +372,7 @@ impl SymphoniaDemuxer {
                     };
                     // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
                     // position advanced, no packet emitted).
-                    if !self.format_reader.is_mpeg() {
+                    if !self.format_reader.restores_interrupted_packet() {
                         self.resume_pending = Some(reason);
                     }
                     return Ok(DemuxOutcome::Pending(reason));

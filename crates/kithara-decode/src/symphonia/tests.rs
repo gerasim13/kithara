@@ -291,7 +291,7 @@ fn mpa_pooled_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four:
     let pools = crate::test_pools::pools();
     let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)), pools.get::<u8>())
         .expect("pooled reader must open");
-    assert!(packets.is_mpeg());
+    assert!(packets.restores_interrupted_packet());
     for index in 0..4 {
         if index == 1 {
             fault_control.arm_after(128, 2);

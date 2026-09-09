@@ -61,7 +61,15 @@ impl MediaSource for Source {
 }
 
 fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> Box<dyn FormatReader> {
-    let asset = by_name(SignalAsset::M4A_SINE440_60S.name()).expect("MP4 fixture");
+    reader_for(SignalAsset::M4A_SINE440_60S, remaining, reads)
+}
+
+fn reader_for(
+    signal: SignalAsset,
+    remaining: Arc<AtomicUsize>,
+    reads: Arc<AtomicUsize>,
+) -> Box<dyn FormatReader> {
+    let asset = by_name(signal.name()).expect("signal fixture");
     let source = Source {
         cursor: Cursor::new(asset.bytes().to_vec()),
         remaining,
@@ -69,7 +77,7 @@ fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> Box<dyn Forma
     };
     let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
-    hint.with_extension("m4a");
+    hint.with_extension(signal.ext());
     symphonia::default::get_probe()
         .probe(
             &hint,
@@ -77,7 +85,7 @@ fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> Box<dyn Forma
             FormatOptions::default(),
             MetadataOptions::default(),
         )
-        .expect("MP4 probe")
+        .expect("signal probe")
 }
 
 #[kithara::test]
@@ -149,4 +157,51 @@ fn mp4_prepared_frame_consumption_does_not_read_the_source() {
         reads.load(Ordering::Relaxed) > before,
         "preparation must exercise source reads"
     );
+}
+
+#[kithara::test]
+fn wav_packet_retry_preserves_bytes_and_timestamps_after_partial_read() {
+    let remaining = Arc::new(AtomicUsize::new(usize::MAX));
+    let mut actual = reader_for(
+        SignalAsset::WAV_SINE440_60S,
+        Arc::clone(&remaining),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut expected = reader_for(
+        SignalAsset::WAV_SINE440_60S,
+        Arc::new(AtomicUsize::new(usize::MAX)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let capacity = actual
+        .packet_buffer_size()
+        .expect("capacity")
+        .expect("borrowed WAV packets");
+    let mut buffer = crate::test_pools::pools()
+        .get_with_len::<u8>(capacity)
+        .expect("packet buffer");
+    remaining.store(17, Ordering::Relaxed);
+    let mut interrupted = false;
+    let mut completed = 0;
+    for _ in 0..129 {
+        let packet = match actual.read_packet(&mut buffer) {
+            Err(Error::IoError(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                interrupted = true;
+                continue;
+            }
+            result => result.expect("packet read").expect("WAV packet"),
+        };
+        let reference = expected
+            .next_packet()
+            .expect("reference read")
+            .expect("reference packet");
+        assert_eq!(packet.pts, reference.pts);
+        assert_eq!(packet.dur, reference.dur);
+        assert_eq!(packet.data, reference.data.as_ref());
+        completed += 1;
+        if completed == 128 {
+            break;
+        }
+    }
+    assert!(interrupted, "must interrupt a source read");
+    assert_eq!(completed, 128);
 }

@@ -217,7 +217,7 @@ fn assert_backend_open_count(
         assert!(
             opens <= bound,
             "full cache must open each segment ~once (no thrash): opens={opens}, \
-             segment_count={segment_count}, bound={bound}"
+             segment_count={segment_count}, bound={bound}, stats={stats:?}"
         );
     } else {
         let bound = segment_count + FULL_CACHE_OPEN_SLACK;

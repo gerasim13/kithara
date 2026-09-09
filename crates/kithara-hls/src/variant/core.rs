@@ -14,7 +14,9 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, SeekObserve, SourcePhase, StreamError, StreamResult,
+};
 
 use super::{
     cas_anchor::CasAnchorCell,
@@ -505,7 +507,12 @@ where
             self.find_at_offset(offset)
                 .and_then(|(index, _, _)| self.segments.get(index as usize))
         };
-        if let Some(segment) = segment {
+        if let Some(segment) = segment
+            && matches!(
+                self.phase_at(offset..offset.saturating_add(1)),
+                SourcePhase::Ready
+            )
+        {
             self.segments.reader(segment)?;
         }
         self.segments.prepared.store(true, Ordering::Release);

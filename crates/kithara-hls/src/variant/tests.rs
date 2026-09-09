@@ -18,9 +18,9 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, ReadOutcome, ReaderInput,
-    ReaderProfile, ReaderWarmup, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase,
-    StreamError, VariantTransition, VariantTransitionId,
+    AudioCodec, ContainerFormat, PendingReason, ReadOutcome, ReaderInput, ReaderProfile,
+    ReaderWarmup, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
+    VariantTransition, VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -2890,6 +2890,35 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
 }
 
 #[kithara::test]
+fn preparation_waits_for_available_segment_bytes_before_opening_storage() {
+    let ctx = test_ctx(1);
+    let v = VariantParts {
+        init: None,
+        segments: vec![make_placeholder_seg(0, 64, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()),
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+    assert!(!v.segments()[0].size().is_exact());
+    v.prepare_read(0).expect("prepare unsized segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+    v.segments()[0].size().set_exact(64);
+    v.prepare_read(0).expect("prepare sized but absent segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+    v.prepare_read(0).expect("prepare settled segment");
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("prepared read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[kithara::test]
 fn prepared_reads_defer_segment_replacement_until_preparation() {
     let ctx = test_ctx(2);
     let v = make_var(0, 0, &[64, 64], &ctx);
@@ -2907,7 +2936,7 @@ fn prepared_reads_defer_segment_replacement_until_preparation() {
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
     assert!(matches!(
         v.read_at(64, &mut bytes).expect("segment boundary"),
-        ReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending))
+        ReadOutcome::Pending(PendingReason::Retry)
     ));
     assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens);
     v.prepare_requested_read(0)
