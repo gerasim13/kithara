@@ -24,7 +24,7 @@ pub enum HlsError {
 ///
 /// All variants describe **reader-side** facts. For HTTP request
 /// lifecycle (enqueue → started → completed/failed/cancelled),
-/// subscribe to [`crate::DownloaderEvent`] on the same bus scope.
+/// subscribe to `DownloaderEvent` on the same bus scope.
 #[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum HlsEvent {

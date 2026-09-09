@@ -1,4 +1,4 @@
-use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
+use kithara_events::AbrMode;
 use kithara_platform::time::Duration;
 use num_traits::AsPrimitive;
 use url::Url;
@@ -55,40 +55,6 @@ impl IntoProbeArg for Duration {
 impl IntoProbeArg for &Url {
     fn into_probe_arg(self) -> u64 {
         0
-    }
-}
-
-impl IntoProbeArg for RequestId {
-    fn into_probe_arg(self) -> u64 {
-        self.get()
-    }
-}
-
-fn request_priority_wire(p: RequestPriority) -> u64 {
-    match p {
-        RequestPriority::High => 0,
-        RequestPriority::Low => 1,
-    }
-}
-
-impl IntoProbeArg for RequestPriority {
-    fn into_probe_arg(self) -> u64 {
-        request_priority_wire(self)
-    }
-}
-
-fn cancel_reason_wire(r: CancelReason) -> u64 {
-    match r {
-        CancelReason::EpochCancel => 0,
-        CancelReason::PeerCancel => 1,
-        CancelReason::DownloaderShutdown => 2,
-        CancelReason::BeforeStart => 3,
-    }
-}
-
-impl IntoProbeArg for CancelReason {
-    fn into_probe_arg(self) -> u64 {
-        cancel_reason_wire(self)
     }
 }
 

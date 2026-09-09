@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
+use kithara_events::AbrMode;
 use kithara_platform::time::Duration;
 use url::Url;
 
@@ -90,44 +90,6 @@ impl IntoProbeArg for &Url {
         let mut hasher = DefaultHasher::new();
         self.as_str().hash(&mut hasher);
         hasher.finish()
-    }
-}
-
-impl IntoProbeArg for RequestId {
-    fn into_probe_arg(self) -> u64 {
-        self.get()
-    }
-}
-
-const fn request_priority_wire(p: RequestPriority) -> u64 {
-    match p {
-        RequestPriority::High => 0,
-        RequestPriority::Low => 1,
-    }
-}
-
-impl IntoProbeArg for RequestPriority {
-    fn into_probe_arg(self) -> u64 {
-        request_priority_wire(self)
-    }
-}
-
-const fn cancel_reason_wire(r: CancelReason) -> u64 {
-    const EPOCH_CANCEL: u64 = 0;
-    const PEER_CANCEL: u64 = 1;
-    const DOWNLOADER_SHUTDOWN: u64 = 2;
-    const BEFORE_START: u64 = 3;
-    match r {
-        CancelReason::EpochCancel => EPOCH_CANCEL,
-        CancelReason::PeerCancel => PEER_CANCEL,
-        CancelReason::DownloaderShutdown => DOWNLOADER_SHUTDOWN,
-        CancelReason::BeforeStart => BEFORE_START,
-    }
-}
-
-impl IntoProbeArg for CancelReason {
-    fn into_probe_arg(self) -> u64 {
-        cancel_reason_wire(self)
     }
 }
 

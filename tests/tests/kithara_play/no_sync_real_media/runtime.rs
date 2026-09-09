@@ -1,11 +1,12 @@
 use kithara::{
     events::{
-        AudioEvent, BusEvent, DecoderEvent, DownloaderEvent, EventReceiver, FileEvent, HlsEvent,
-        ItemEvent, PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
+        AudioEvent, BusEvent, DecoderEvent, EventReceiver, FileEvent, HlsEvent, ItemEvent,
+        PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
     },
     host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{PlayError, PlayerImpl, Resource, SessionError},
+    stream::DownloaderEvent,
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};

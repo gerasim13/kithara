@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::future::join_all;
 use kithara_abr::{Abr, AbrHandle, AbrPeerId};
-use kithara_events::{EventBus, RequestPriority};
+use kithara_events::EventBus;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
@@ -13,6 +13,7 @@ use kithara_platform::{
 };
 
 use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
+use crate::RequestPriority;
 
 /// Channel-path payload: a fully buffered response (headers + body bytes).
 ///
@@ -105,7 +106,7 @@ pub(super) struct InternalCmd {
     /// Stable id allocated by the Downloader on enqueue. Carried in
     /// every `DownloaderEvent` for this fetch's lifecycle so subscribers
     /// can correlate Enqueued → Started → Completed/Failed/Cancelled.
-    pub(super) request_id: kithara_events::RequestId,
+    pub(super) request_id: crate::RequestId,
     pub(super) priority: RequestPriority,
     pub(super) response: ResponseTarget,
 }
@@ -285,7 +286,7 @@ impl PeerHandle {
     }
 
     /// Attach an event bus so the Downloader can publish per-peer
-    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s and the ABR
+    /// [`DownloaderEvent`](crate::DownloaderEvent)s and the ABR
     /// controller can publish [`AbrEvent`](kithara_events::AbrEvent)s to
     /// it. Returns `self` so the call chains naturally after
     /// [`Downloader::register`](super::Downloader::register).

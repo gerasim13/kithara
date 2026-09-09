@@ -26,6 +26,7 @@ mod wake;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
+pub use dl::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use kithara_storage::WaitOutcome;

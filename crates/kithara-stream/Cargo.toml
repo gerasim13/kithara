@@ -20,16 +20,16 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = []
 mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = ["kithara-net/client-reqwest", "kithara-events/client-reqwest", "kithara-abr/client-reqwest"]
-client-wreq = ["kithara-net/client-wreq", "kithara-events/client-wreq", "kithara-abr/client-wreq"]
+client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
+client-wreq = ["kithara-net/client-wreq", "kithara-abr/client-wreq"]
 client-apple = ["kithara-net/client-apple"]
-tls-rustls = ["kithara-net/tls-rustls", "kithara-events/tls-rustls", "kithara-abr/tls-rustls"]
-tls-native = ["kithara-net/tls-native", "kithara-events/tls-native", "kithara-abr/tls-native"]
+tls-rustls = ["kithara-net/tls-rustls", "kithara-abr/tls-rustls"]
+tls-native = ["kithara-net/tls-native", "kithara-abr/tls-native"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-derive = { workspace = true }
-kithara-events = { workspace = true, features = ["abr", "downloader"] }
+kithara-events = { workspace = true, features = ["abr"] }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }

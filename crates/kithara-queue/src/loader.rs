@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::{DownloaderEvent, Envelope, EventBus, ScopeLabel, TrackId, TrackStatus};
+use kithara_events::{Envelope, EventBus, ScopeLabel, TrackId, TrackStatus};
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
@@ -14,6 +14,7 @@ use kithara_platform::{
     },
 };
 use kithara_play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl};
+use kithara_stream::DownloaderEvent;
 use kithara_test_utils::kithara;
 
 use crate::{

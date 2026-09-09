@@ -16,8 +16,7 @@ use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::{Abr, AbrSettings, AbrState};
 use kithara_bufpool::testing::pools as test_pools;
 use kithara_events::{
-    AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, EventBus, VariantDuration,
-    VariantIndex, VariantInfo,
+    AbrEvent, AbrMode, AbrReason, Envelope, EventBus, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
@@ -33,7 +32,7 @@ use super::{
     BodyStream, DemandFn, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority,
     cmd::{FetchCmdBuilder, fetch_cmd_builder},
 };
-use crate::{Activity, SeekState};
+use crate::{Activity, DownloaderEvent, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, DownloaderEvent, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, EventReceiver, QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -16,7 +16,10 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

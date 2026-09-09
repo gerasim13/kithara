@@ -6,18 +6,21 @@ use std::collections::{HashMap, HashSet};
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, DownloaderEvent, HlsEvent, RequestId},
+    events::{AbrMode, AudioEvent, HlsEvent},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant},
+        CancelToken, time,
+        time::{Duration, Instant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        DownloaderEvent, RequestId,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

@@ -1,9 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use kithara_abr::{AbrController, AbrPeerId};
-use kithara_events::{
-    BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
-};
+use kithara_events::{BandwidthSource, EventBus};
 use kithara_net::{HttpClient, NetError, NetObserver, Observer, Retryability};
 use kithara_platform::{
     CancelGroup, CancelToken,
@@ -22,6 +20,7 @@ use super::{
     peer::{InternalCmd, ResponseTarget, SlotEntry},
     response::{BodyStream, FetchResponse},
 };
+use crate::{CancelReason, DownloaderEvent, RequestId, RequestMethod};
 
 struct RequestObserver {
     bus: EventBus,

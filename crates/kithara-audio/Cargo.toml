@@ -14,30 +14,10 @@ default = ["symphonia", "resample-rubato", "client-reqwest", "tls-rustls"]
 probe = []
 mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = [
-    "kithara-stream/client-reqwest",
-    "kithara-events/client-reqwest",
-    "kithara-abr/client-reqwest",
-    "kithara-decode/client-reqwest",
-]
-client-wreq = [
-    "kithara-stream/client-wreq",
-    "kithara-events/client-wreq",
-    "kithara-abr/client-wreq",
-    "kithara-decode/client-wreq",
-]
-tls-rustls = [
-    "kithara-stream/tls-rustls",
-    "kithara-events/tls-rustls",
-    "kithara-abr/tls-rustls",
-    "kithara-decode/tls-rustls",
-]
-tls-native = [
-    "kithara-stream/tls-native",
-    "kithara-events/tls-native",
-    "kithara-abr/tls-native",
-    "kithara-decode/tls-native",
-]
+client-reqwest = ["kithara-stream/client-reqwest", "kithara-abr/client-reqwest", "kithara-decode/client-reqwest"]
+client-wreq = ["kithara-stream/client-wreq", "kithara-abr/client-wreq", "kithara-decode/client-wreq"]
+tls-rustls = ["kithara-stream/tls-rustls", "kithara-abr/tls-rustls", "kithara-decode/tls-rustls"]
+tls-native = ["kithara-stream/tls-native", "kithara-abr/tls-native", "kithara-decode/tls-native"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)

@@ -17,30 +17,10 @@ default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 probe = []
 # HTTP backend forwarding to every kithara-net-reaching dep.
-client-reqwest = [
-    "kithara-net/client-reqwest",
-    "kithara-stream/client-reqwest",
-    "kithara-events/client-reqwest",
-    "kithara-abr/client-reqwest",
-]
-client-wreq = [
-    "kithara-net/client-wreq",
-    "kithara-stream/client-wreq",
-    "kithara-events/client-wreq",
-    "kithara-abr/client-wreq",
-]
-tls-rustls = [
-    "kithara-net/tls-rustls",
-    "kithara-stream/tls-rustls",
-    "kithara-events/tls-rustls",
-    "kithara-abr/tls-rustls",
-]
-tls-native = [
-    "kithara-net/tls-native",
-    "kithara-stream/tls-native",
-    "kithara-events/tls-native",
-    "kithara-abr/tls-native",
-]
+client-reqwest = ["kithara-net/client-reqwest", "kithara-stream/client-reqwest", "kithara-abr/client-reqwest"]
+client-wreq = ["kithara-net/client-wreq", "kithara-stream/client-wreq", "kithara-abr/client-wreq"]
+tls-rustls = ["kithara-net/tls-rustls", "kithara-stream/tls-rustls", "kithara-abr/tls-rustls"]
+tls-native = ["kithara-net/tls-native", "kithara-stream/tls-native", "kithara-abr/tls-native"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }

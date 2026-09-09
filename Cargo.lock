@@ -5018,7 +5018,6 @@ dependencies = [
  "fieldwork",
  "kithara-derive",
  "kithara-events",
- "kithara-net",
  "kithara-platform",
  "kithara-signal",
  "kithara-test-utils",
@@ -5026,7 +5025,6 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "smallvec",
- "url",
  "wasm-bindgen-test",
 ]
 
@@ -5405,6 +5403,7 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-play",
+ "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",

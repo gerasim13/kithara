@@ -2,19 +2,16 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::DownloaderEvent,
     file::FileConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::{self, Duration},
-        tokio,
-    },
+    platform::{CancelToken, sync::Arc, time, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

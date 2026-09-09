@@ -1,10 +1,11 @@
 use std::io;
 
 use bon::Builder;
-use kithara_events::{RequestMethod, RequestPriority};
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use kithara_platform::CancelToken;
 use url::Url;
+
+use crate::{RequestMethod, RequestPriority};
 
 /// Per-command body writer. Downloader calls it for each chunk.
 pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
@@ -29,7 +30,7 @@ pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&Headers>, Option<&NetError>)
 /// `DownloaderConfig::soft_timeout` without completing — the twin of
 /// [`OnCompleteFn`] for the mid-flight "still pending, now slow"
 /// transition. The request keeps running; this is advisory, fired at the
-/// same point that publishes [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow).
+/// same point that publishes [`DownloaderEvent::LoadSlow`](crate::DownloaderEvent::LoadSlow).
 pub type OnSlowFn = Box<dyn FnOnce() + Send>;
 
 /// Per-command live demand probe: does a reader currently block on this

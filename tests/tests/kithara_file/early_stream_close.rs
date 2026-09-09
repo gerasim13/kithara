@@ -7,18 +7,19 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, EventBus, EventReceiver, FileEvent},
+    events::{EventBus, EventReceiver, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
         sync::Arc,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
     stream::{
-        Stream,
+        DownloaderEvent, Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };

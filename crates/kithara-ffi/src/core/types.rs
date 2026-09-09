@@ -1,14 +1,14 @@
 use kithara::{
     events::{
-        AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass,
-        DecodeErrorKind, DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain,
-        KeyFailureStage, KeySource, PlaybackResamplerKind, QueueRepeatMode, ResamplerKind,
-        RouteChangeReason, StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId,
-        TrackStatus as TS,
+        AdvanceReason, AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind,
+        DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
+        PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason,
+        StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
     },
     platform::{sync::Arc, time::Duration},
     play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
     queue::{RepeatMode, Transition},
+    stream::CancelReason,
 };
 
 /// FFI-friendly error type bridging playback failures into platform bindings.

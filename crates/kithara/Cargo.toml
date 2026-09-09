@@ -39,7 +39,6 @@ client-reqwest = [
     "kithara-audio/client-reqwest",
     "kithara-decode/client-reqwest",
     "kithara-encode?/client-reqwest",
-    "kithara-events/client-reqwest",
     "kithara-abr?/client-reqwest",
 ]
 client-wreq = [
@@ -56,7 +55,6 @@ client-wreq = [
     "kithara-audio/client-wreq",
     "kithara-decode/client-wreq",
     "kithara-encode?/client-wreq",
-    "kithara-events/client-wreq",
     "kithara-abr?/client-wreq",
 ]
 tls-rustls = [
@@ -73,7 +71,6 @@ tls-rustls = [
     "kithara-audio/tls-rustls",
     "kithara-decode/tls-rustls",
     "kithara-encode?/tls-rustls",
-    "kithara-events/tls-rustls",
     "kithara-abr?/tls-rustls",
 ]
 tls-native = [
@@ -90,7 +87,6 @@ tls-native = [
     "kithara-audio/tls-native",
     "kithara-decode/tls-native",
     "kithara-encode?/tls-native",
-    "kithara-events/tls-native",
     "kithara-abr?/tls-native",
 ]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.

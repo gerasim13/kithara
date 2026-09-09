@@ -1,9 +1,10 @@
 use kithara::{
     events::{
-        AssetEvent, AudioEvent, DecoderEvent, DjEvent, DownloaderEvent, DrmEvent, EngineEvent,
-        FileEvent, HlsEvent, QueueEvent, SessionEvent,
+        AssetEvent, AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, FileEvent, HlsEvent,
+        QueueEvent, SessionEvent,
     },
     play::PlayerEvent,
+    stream::DownloaderEvent,
 };
 
 use super::event_set::{ItemBusEvent, QueueBusEvent};
@@ -582,18 +583,18 @@ mod tests {
 
     use kithara::{
         events::{
-            AssetEvent, AudioCodecKind, AudioEvent, CancelReason, ContainerKind, DecodeErrorClass,
-            DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent,
-            DownloaderEvent, DrmEvent, EngineEvent, EvictReason, FileEvent, FrameDomain,
-            GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource, MediaTime,
-            PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode, RequestId,
-            ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent, SlotId,
-            StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind, TrackId,
-            TrackRef, TrackStatus,
+            AssetEvent, AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass,
+            DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent, DrmEvent,
+            EngineEvent, EvictReason, FileEvent, FrameDomain, GaplessSpan, HlsEvent, ItemRole,
+            KeyFailureStage, KeySource, MediaTime, PlaybackResamplerKind, PlayerStatus, QueueEvent,
+            QueueRepeatMode, ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent,
+            SlotId, StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind,
+            TrackId, TrackRef, TrackStatus,
         },
         platform::{sync::Arc, time::Duration},
         play::PlayerEvent,
         signal::AudioSpec,
+        stream::{CancelReason, DownloaderEvent, RequestId},
     };
 
     use super::{

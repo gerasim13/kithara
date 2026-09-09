@@ -23,8 +23,6 @@ mod asset;
 mod audio;
 #[cfg(feature = "decoder")]
 mod decoder;
-#[cfg(feature = "downloader")]
-mod downloader;
 #[cfg(feature = "drm")]
 mod drm;
 #[cfg(feature = "file")]
@@ -55,8 +53,6 @@ pub use decoder::{
     DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, ResamplerKind,
 };
 pub use deferred::DeferredBus;
-#[cfg(feature = "downloader")]
-pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 #[cfg(feature = "drm")]
 pub use drm::{DrmEvent, KeyFailureStage, KeySource};
 pub use event::{Event, EventSet};

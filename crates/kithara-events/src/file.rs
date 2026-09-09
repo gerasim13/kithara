@@ -4,8 +4,8 @@ use crate::{AudioCodecKind, ContainerKind, Event};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
-/// Network errors are reported by [`crate::DownloaderEvent::RequestFailed`]
-/// with a typed [`kithara_net::NetError`].
+/// Network errors are reported by `DownloaderEvent::RequestFailed`
+/// with a typed `NetError`.
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileError {
@@ -24,7 +24,7 @@ pub enum FileError {
 ///
 /// All variants describe **reader-side** facts. For HTTP request
 /// lifecycle (enqueue → started → completed/failed/cancelled),
-/// subscribe to [`crate::DownloaderEvent`] on the same bus scope.
+/// subscribe to `DownloaderEvent` on the same bus scope.
 #[derive(Debug, Clone, PartialEq, Eq, Event)]
 #[non_exhaustive]
 pub enum FileEvent {

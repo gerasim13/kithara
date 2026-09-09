@@ -657,14 +657,14 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
+    use kithara_events::{AbrMode, AbrReason, EventBus, VariantIndex};
     use kithara_platform::{
         sync::{Arc, ThreadGate},
         time::Instant,
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl,
+        RequestPriority, SeekControl,
     };
     use unimock::{MockFn, Unimock, matching};
 
