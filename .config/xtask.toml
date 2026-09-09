@@ -191,21 +191,28 @@ when_feature = "symphonia"
 always = ["symphonia"]
 
 # Same shape, one layer down: kithara-play refuses a non-wasm build without an
-# output backend, and cpal is the only one off wasm — backend-web-audio is a
-# browser API. Every crate that forwards the choice inherits the refusal.
+# output backend, and cpal is the only one off wasm — the browser backend comes
+# with the target. Every crate that forwards the choice inherits the refusal.
 [[health.feature_invariants]]
 when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
 # `beat-backend` is the marker beat-nn and beat-dsp share. Selected on its own it
 # names no detector, so the backend refuses the build with compile_error!; the
-# two detectors that do name one stay selectable. `beat-nn-full-int8` inherits
-# the model kithara-beat cannot produce on a runner.
+# two detectors that do name one stay selectable.
 [[health.feature_invariants]]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# Facades forward the neural model choices without exposing beat-backend.
+# The model rule belongs to every crate that offers the choice, and the facade
+# offers it without re-exporting `beat-backend`, so a marker read there reached
+# only the crate the backend lives in. `beat-nn` is the name both carry: it
+# selects the neural detector without selecting its bytes, which the backend
+# refuses with compile_error!. `beat-nn-full-int8` inherits the model
+# kithara-beat cannot produce on a runner; it costs no coverage to leave out,
+# because it compiles the same `include_bytes!(env!(..))` arm `beat-nn-full`
+# does. cargo-hack refuses a feature named by both lists, so what stays
+# mutually exclusive is what is still selectable.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
 never = ["beat-nn", "beat-nn-full-int8"]
