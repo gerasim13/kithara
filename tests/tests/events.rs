@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::events::{Event, EventBus, HlsEvent};
+use kithara::events::{EventBus, HlsEvent};
+use kithara_integration_tests::event::TestEvent;
 
 #[kithara::test]
 fn test_event_bus_publish_subscribe() {
@@ -9,5 +10,5 @@ fn test_event_bus_publish_subscribe() {
     bus.publish(HlsEvent::EndOfStream);
 
     let event = rx.try_recv().map(|env| env.event).ok();
-    assert!(matches!(event, Some(Event::Hls(HlsEvent::EndOfStream))));
+    assert!(matches!(event, Some(TestEvent::Hls(HlsEvent::EndOfStream))));
 }

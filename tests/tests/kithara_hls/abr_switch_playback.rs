@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
+    events::{AbrEvent, AbrReason, EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     host::HostConfig,
@@ -24,6 +24,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, auto,
     bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
     mixed_encrypted, mixed_plain,
@@ -299,7 +300,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         progress_probe.drain(&mut progress_rx);
         loop {
             match hls_rx.try_recv().map(|env| env.event) {
-                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
+                Ok(TestEvent::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
                     switch_seen = true;
                 }
@@ -991,7 +992,7 @@ struct CrossCodecReadStats {
 #[kithara::flash(true)]
 fn read_manual_cross_codec_phase(
     audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
-    hls_rx: &mut EventReceiver,
+    hls_rx: &mut EventReceiver<TestEvent>,
     post_target: u64,
 ) -> CrossCodecReadStats {
     let mut buf = vec![0f32; 4096];
@@ -1008,7 +1009,7 @@ fn read_manual_cross_codec_phase(
 
     while !manual_applied || stats.post_samples < post_target {
         while let Ok(event) = hls_rx.try_recv().map(|envelope| envelope.event) {
-            if let Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) = event {
+            if let TestEvent::Abr(AbrEvent::VariantApplied { to, reason, .. }) = event {
                 let transition = (to.get(), reason);
                 stats.applied_transitions.push(transition);
                 if !manual_applied && transition == (3, AbrReason::ManualOverride) {

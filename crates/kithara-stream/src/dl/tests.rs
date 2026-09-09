@@ -16,7 +16,7 @@ use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::{Abr, AbrSettings, AbrState};
 use kithara_bufpool::testing::pools as test_pools;
 use kithara_events::{
-    AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, Event, EventBus, VariantDuration,
+    AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, EventBus, VariantDuration,
     VariantIndex, VariantInfo,
 };
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
@@ -152,7 +152,7 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     let saw_interval_gate = std::iter::from_fn(|| events.try_recv().ok()).any(|envelope| {
         matches!(
             envelope.event,
-            Event::Abr(AbrEvent::DecisionSkipped {
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
                 reason: AbrReason::MinInterval
             })
         )
@@ -196,7 +196,7 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
             .expect("the first peer event bus remains open");
         if matches!(
             envelope.event,
-            Event::Abr(AbrEvent::DecisionSkipped {
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
                 reason: AbrReason::MinInterval
             })
         ) {
@@ -250,7 +250,7 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
             .expect("the first peer event bus remains open");
         if matches!(
             envelope.event,
-            Event::Abr(AbrEvent::DecisionSkipped {
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
                 reason: AbrReason::MinInterval
             })
         ) {
@@ -278,7 +278,7 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
             .expect("the second peer event bus remains open");
         if matches!(
             envelope.event,
-            Event::Abr(AbrEvent::DecisionSkipped {
+            TestEvent::Abr(AbrEvent::DecisionSkipped {
                 reason: AbrReason::MinInterval
             })
         ) {
@@ -296,7 +296,7 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
     assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
 }
 
-/// Event-driven completion barrier. Each finished fetch calls
+/// TestEvent-driven completion barrier. Each finished fetch calls
 /// [`complete`](Self::complete); the `target`-th completion signals the
 /// waiter parked in [`wait`](Self::wait).
 ///
@@ -1028,7 +1028,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                event: TestEvent::Downloader(DownloaderEvent::LoadSlow { .. }),
                 ..
             })) => {
                 seen_slow = true;
@@ -1073,7 +1073,7 @@ async fn soft_timeout_covers_response_body() {
     while Instant::now() < deadline {
         match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::LoadSlow { .. }),
+                event: TestEvent::Downloader(DownloaderEvent::LoadSlow { .. }),
                 ..
             })) => {
                 seen_slow = true;
@@ -1294,7 +1294,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
         match time::timeout(Duration::from_millis(100), rx.recv()).await {
             Ok(Ok(Envelope {
                 event:
-                    Event::Downloader(DownloaderEvent::RequestRetrying {
+                    TestEvent::Downloader(DownloaderEvent::RequestRetrying {
                         attempt,
                         max_retries,
                         ..
@@ -1304,7 +1304,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
                 saw_retry = attempt == 1 && max_retries == 2;
             }
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::FirstByte { .. }),
+                event: TestEvent::Downloader(DownloaderEvent::FirstByte { .. }),
                 ..
             })) => saw_first_byte = true,
             Ok(Ok(_)) => {}
@@ -1355,15 +1355,15 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
     while Instant::now() < deadline && !(saw_stalled && saw_resumed && saw_exhausted) {
         match time::timeout(Duration::from_millis(100), rx.recv()).await {
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::BodyStalled { consumed, .. }),
+                event: TestEvent::Downloader(DownloaderEvent::BodyStalled { consumed, .. }),
                 ..
             })) => saw_stalled = consumed >= 2,
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::BodyResumed { resume_number, .. }),
+                event: TestEvent::Downloader(DownloaderEvent::BodyResumed { resume_number, .. }),
                 ..
             })) => saw_resumed = resume_number >= 1,
             Ok(Ok(Envelope {
-                event: Event::Downloader(DownloaderEvent::RetryExhausted { consumed, .. }),
+                event: TestEvent::Downloader(DownloaderEvent::RetryExhausted { consumed, .. }),
                 ..
             })) => saw_exhausted = consumed >= 2,
             Ok(Ok(_)) => {}
@@ -1729,4 +1729,10 @@ fn peer_priority_from_handle(_handle: &super::PeerHandle, seek: &SeekState) -> R
     } else {
         RequestPriority::Low
     }
+}
+
+#[derive(Clone, Debug, kithara_events::EventSet)]
+enum TestEvent {
+    Abr(AbrEvent),
+    Downloader(DownloaderEvent),
 }

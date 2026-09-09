@@ -152,7 +152,7 @@ mod tests {
 
     use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{DecodeError, TrackMetadata};
-    use kithara_events::{Envelope, Event, PlayerEvent};
+    use kithara_events::{Envelope, PlayerEvent};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
@@ -257,7 +257,7 @@ mod tests {
         assert!(matches!(
             events.try_recv(),
             Ok(Envelope {
-                event: Event::Player(PlayerEvent::CurrentItemChanged { item: Some(actual) }),
+                event: PlayerEvent::CurrentItemChanged { item: Some(actual) },
                 ..
             }) if actual == id
         ));

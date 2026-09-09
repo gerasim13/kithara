@@ -18,6 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     hls_fixture::HlsStreamBuilder,
     hls_server::{TestServer, test_server},
     rt_cancel, temp_dir,
@@ -49,8 +50,8 @@ async fn test_basic_hls_playback(
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
     let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
-    let mut live_rx = bus.subscribe();
+    let mut events_rx = bus.subscribe::<TestEvent>();
+    let mut live_rx = bus.subscribe::<TestEvent>();
 
     info!("Opening HLS source...");
     let pools = pools();

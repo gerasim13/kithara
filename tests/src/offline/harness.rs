@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     decode::GaplessMode,
-    events::{Event, EventReceiver, PlayerEvent},
+    events::{EventReceiver, PlayerEvent},
     host::{HostConfig, HostOwned},
     platform::{sync::Mutex, tokio::sync::broadcast::error::TryRecvError},
     play::{
@@ -15,10 +15,13 @@ use kithara::{
 };
 
 use super::{OfflineHostHarness, host::offline_pools};
-use crate::bufpool_ext::{TestPools, pools};
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    event::TestEvent,
+};
 
 pub struct OfflinePlayerHarness {
-    events: Mutex<EventReceiver>,
+    events: Mutex<EventReceiver<TestEvent>>,
     host: OfflineHostHarness<TestPools>,
     player: Mutex<Option<PlayerImpl<TestPools>>>,
     player_control: PlayerControl<TestPools>,
@@ -215,7 +218,7 @@ impl OfflinePlayerHarness {
         let mut rx = self.events.lock();
         loop {
             match rx.try_recv().map(|env| env.event) {
-                Ok(Event::Player(event)) => events.push(event),
+                Ok(TestEvent::Player(event)) => events.push(event),
                 Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }

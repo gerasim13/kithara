@@ -24,7 +24,7 @@ use bytes::Bytes;
 use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{Event, EventBus, FileEvent},
+    events::{EventBus, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, time::Duration},
@@ -36,6 +36,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestHttpServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
 };
 
@@ -160,7 +161,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
     let terminal = kithara::platform::time::timeout(Consts::ERROR_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::File(FileEvent::Error { .. })) => return true,
+                Ok(TestEvent::File(FileEvent::Error { .. })) => return true,
                 Ok(_) => {}
                 Err(_) => return false,
             }

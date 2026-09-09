@@ -7,7 +7,7 @@ use kithara_assets::{
     StorageBackend, WriteSide,
 };
 use kithara_events::{
-    AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
+    AudioCodecKind, ContainerKind, Envelope, EventBus, FileEvent, TotalBytesSource,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::CancelScope;
@@ -92,12 +92,12 @@ fn file_source_local_open_publishes_opened_and_size() {
     assert!(matches!(
         opened,
         Envelope {
-            event: Event::File(FileEvent::Opened {
+            event: FileEvent::Opened {
                 codec: Some(AudioCodecKind::Mp3),
                 container: Some(ContainerKind::MpegAudio),
                 total_bytes: Some(11),
                 cached: true,
-            }),
+            },
             ..
         }
     ));
@@ -105,10 +105,10 @@ fn file_source_local_open_publishes_opened_and_size() {
     assert!(matches!(
         total,
         Envelope {
-            event: Event::File(FileEvent::TotalBytesResolved {
+            event: FileEvent::TotalBytesResolved {
                 total_bytes: 11,
                 source: TotalBytesSource::CommittedLen,
-            }),
+            },
             ..
         }
     ));

@@ -1,209 +1,53 @@
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "abr")]
-use crate::AbrEvent;
-#[cfg(feature = "asset")]
-use crate::AssetEvent;
-#[cfg(feature = "audio")]
-use crate::AudioEvent;
-use crate::BusEvent;
-#[cfg(feature = "decoder")]
-use crate::DecoderEvent;
-#[cfg(feature = "downloader")]
-use crate::DownloaderEvent;
-#[cfg(feature = "drm")]
-use crate::DrmEvent;
-#[cfg(feature = "file")]
-use crate::FileEvent;
-#[cfg(feature = "hls")]
-use crate::HlsEvent;
-#[cfg(feature = "queue")]
-use crate::QueueEvent;
-#[cfg(feature = "player")]
-use crate::{DjEvent, EngineEvent, ItemEvent, PlayerEvent, SessionEvent, TransportEvent};
+use kithara_platform::tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
-/// Unified event for the full audio pipeline.
+use crate::{Envelope, EventBus, EventMeta, TopicReceiver};
+
+/// A value that can travel on its own channel.
 ///
-/// Hierarchical: each subsystem has its own variant with a sub-enum.
-/// All variants are feature-gated.
-#[derive(Clone, Debug, derive_more::From)]
-#[non_exhaustive]
-pub enum Event {
-    /// Bus-level synthetic event.
-    Bus(BusEvent),
-    /// Unified downloader event (soft-timeout, progress, completion,
-    /// error). Published by the downloader layer on the peer's bus.
-    #[cfg(feature = "downloader")]
-    Downloader(DownloaderEvent),
-    /// HLS stream event.
-    #[cfg(feature = "hls")]
-    Hls(HlsEvent),
-    /// File stream event.
-    #[cfg(feature = "file")]
-    File(FileEvent),
-    /// Audio pipeline event.
-    #[cfg(feature = "audio")]
-    Audio(AudioEvent),
-    /// Decoder lifecycle event.
-    #[cfg(feature = "decoder")]
-    Decoder(DecoderEvent),
-    /// Player state event.
-    #[cfg(feature = "player")]
-    Player(PlayerEvent),
-    /// Engine lifecycle event.
-    #[cfg(feature = "player")]
-    Engine(EngineEvent),
-    /// Item state event.
-    #[cfg(feature = "player")]
-    Item(ItemEvent),
-    /// Audio session event.
-    #[cfg(feature = "player")]
-    Session(SessionEvent),
-    /// Session transport event.
-    #[cfg(feature = "player")]
-    Transport(TransportEvent),
-    /// DJ feature event.
-    #[cfg(feature = "player")]
-    Dj(DjEvent),
-    /// Asset cache event.
-    #[cfg(feature = "asset")]
-    Asset(AssetEvent),
-    /// Queue-level event (track added/removed/status/current/ended).
-    #[cfg(feature = "queue")]
-    Queue(QueueEvent),
-    /// DRM lifecycle event.
-    #[cfg(feature = "drm")]
-    Drm(DrmEvent),
-    /// ABR controller event.
-    #[cfg(feature = "abr")]
-    Abr(AbrEvent),
+/// Implemented only through `#[derive(Event)]` outside this crate; the
+/// `derivable_event` idiom check denies a hand-written impl anywhere else.
+pub trait Event: Clone + core::fmt::Debug + Send + Sync + 'static {}
+
+/// One or more [`Event`] types a consumer wants on a single receiver.
+///
+/// Every `Event` is a one-member set through the blanket impl below; a
+/// multi-member set is a consumer-local enum with `#[derive(EventSet)]`.
+pub trait EventSet: Sized + Send + 'static {
+    type Receivers: Send;
+
+    fn subscribe(bus: &EventBus) -> Self::Receivers;
+
+    fn recv(
+        rx: &mut Self::Receivers,
+    ) -> impl Future<Output = Result<Envelope<Self>, RecvError>> + Send;
+
+    /// # Errors
+    /// Returns `Empty`, lag information, or `Closed` when all members close.
+    fn try_recv(rx: &mut Self::Receivers) -> Result<Envelope<Self>, TryRecvError>;
+
+    fn publish(bus: &EventBus, meta: EventMeta, event: Self);
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
+impl<E: Event> EventSet for E {
+    type Receivers = TopicReceiver<E>;
 
-    use super::*;
-
-    fn file_is_end_of_stream(event: &FileEvent) -> bool {
-        matches!(event, FileEvent::EndOfStream)
+    fn subscribe(bus: &EventBus) -> Self::Receivers {
+        TopicReceiver::new(bus)
     }
 
-    fn file_is_read_progress_42(event: &FileEvent) -> bool {
-        matches!(
-            event,
-            FileEvent::ReadProgress {
-                position: 42,
-                total: None,
-            }
-        )
+    fn recv(
+        rx: &mut Self::Receivers,
+    ) -> impl Future<Output = Result<Envelope<Self>, RecvError>> + Send {
+        rx.recv()
     }
 
-    #[kithara::test]
-    #[case(FileEvent::EndOfStream, file_is_end_of_stream)]
-    #[case(
-        FileEvent::ReadProgress { position: 42, total: None },
-        file_is_read_progress_42
-    )]
-    fn file_event_into_event(#[case] file_event: FileEvent, #[case] check: fn(&FileEvent) -> bool) {
-        let event: Event = file_event.into();
-        assert!(matches!(event, Event::File(inner) if check(&inner)));
+    fn try_recv(rx: &mut Self::Receivers) -> Result<Envelope<Self>, TryRecvError> {
+        rx.try_recv()
     }
 
-    #[cfg(feature = "hls")]
-    fn hls_is_end_of_stream(event: &HlsEvent) -> bool {
-        matches!(event, HlsEvent::EndOfStream)
-    }
-
-    #[cfg(feature = "hls")]
-    #[kithara::test]
-    #[case(HlsEvent::EndOfStream, hls_is_end_of_stream)]
-    fn hls_event_into_event(#[case] hls_event: HlsEvent, #[case] check: fn(&HlsEvent) -> bool) {
-        let event: Event = hls_event.into();
-        assert!(matches!(event, Event::Hls(inner) if check(&inner)));
-    }
-
-    #[cfg(feature = "audio")]
-    #[kithara::test]
-    fn audio_event_into_event() {
-        let event: Event = AudioEvent::EndOfStream { seek_epoch: 7 }.into();
-        assert!(matches!(
-            event,
-            Event::Audio(AudioEvent::EndOfStream { seek_epoch: 7 })
-        ));
-    }
-
-    #[cfg(feature = "decoder")]
-    #[kithara::test]
-    fn decoder_event_into_event() {
-        let event: Event = DecoderEvent::DecodeError {
-            class: crate::DecodeErrorClass::Other,
-            kind: crate::DecodeErrorKind::InvalidData,
-            codec: None,
-            detail: "invalid data",
-        }
-        .into();
-        assert!(matches!(
-            event,
-            Event::Decoder(DecoderEvent::DecodeError {
-                class: crate::DecodeErrorClass::Other,
-                kind: crate::DecodeErrorKind::InvalidData,
-                codec: None,
-                detail: "invalid data",
-            })
-        ));
-    }
-
-    #[cfg(feature = "player")]
-    #[kithara::test]
-    fn transport_event_into_event() {
-        let event: Event = TransportEvent::TempoCommitted {
-            beats_per_minute: 120.0,
-            revision: 3,
-        }
-        .into();
-        assert!(matches!(
-            event,
-            Event::Transport(TransportEvent::TempoCommitted {
-                beats_per_minute: 120.0,
-                revision: 3,
-            })
-        ));
-    }
-
-    #[cfg(feature = "asset")]
-    #[kithara::test]
-    fn asset_event_into_event() {
-        let event: Event = AssetEvent::Evicted {
-            asset_root: "root".to_string(),
-            reason: crate::EvictReason::Displaced,
-        }
-        .into();
-        assert!(matches!(
-            event,
-            Event::Asset(AssetEvent::Evicted {
-                asset_root,
-                reason: crate::EvictReason::Displaced,
-            }) if asset_root == "root"
-        ));
-    }
-
-    #[cfg(feature = "drm")]
-    #[kithara::test]
-    fn drm_event_into_event() {
-        let event: Event = DrmEvent::KeyFetchFailed {
-            key_host: Some("example.com".to_string()),
-            stage: crate::KeyFailureStage::Network,
-            detail: "network failed".to_string(),
-        }
-        .into();
-        assert!(matches!(
-            event,
-            Event::Drm(DrmEvent::KeyFetchFailed {
-                key_host: Some(host),
-                stage: crate::KeyFailureStage::Network,
-                detail,
-            }) if host == "example.com" && detail == "network failed"
-        ));
+    fn publish(bus: &EventBus, meta: EventMeta, event: Self) {
+        bus.publish_stamped(meta, event);
     }
 }

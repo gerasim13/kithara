@@ -1,4 +1,4 @@
-use crate::TrackId;
+use crate::{Event, TrackId};
 
 /// Why queue navigation advanced away from the previous current track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub enum TrackStatus {
 }
 
 /// Queue-level events emitted by `kithara-queue::Queue`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum QueueEvent {
     /// A new track was appended / inserted at `index`.

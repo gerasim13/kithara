@@ -2,7 +2,7 @@
 
 use kithara_platform::time::Duration;
 
-use crate::SeekEpoch;
+use crate::{Event, SeekEpoch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -112,7 +112,7 @@ pub enum ResamplerKind {
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Event)]
 #[non_exhaustive]
 pub enum DecoderEvent {
     DecoderChanged {

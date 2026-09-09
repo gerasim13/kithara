@@ -6,8 +6,8 @@ use kithara::{
     abr::AbrHandle,
     analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
     events::{
-        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, Event, EventReceiver, MediaTime,
-        PlayerEvent, SessionEvent, SlotId, TrackId, VariantInfo,
+        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, EventReceiver, MediaTime, PlayerEvent,
+        SessionEvent, SlotId, TrackId, VariantInfo,
     },
     platform::{
         CancelToken,
@@ -27,7 +27,11 @@ use kithara::{
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 use tracing::warn;
 
-use crate::{analysis::AnalysisHandle, pools::AppQueueControl, waveform::TrackAnalysis};
+use crate::{
+    analysis::{AnalysisEvent, AnalysisHandle},
+    pools::AppQueueControl,
+    waveform::TrackAnalysis,
+};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -410,7 +414,7 @@ pub(crate) async fn listen(
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     cancel: CancelToken,
-    mut rx: EventReceiver,
+    mut rx: EventReceiver<AnalysisEvent>,
     analysis: AnalysisHandle,
 ) {
     let mut held = HeldAnalysis {
@@ -430,12 +434,12 @@ pub(crate) async fn listen(
                 Ok(Envelope { event, .. }) => {
                     apply_event(&event, &queue, &state);
                     match event {
-                        Event::Queue(QueueEvent::CurrentTrackChanged { .. })
-                        | Event::Engine(EngineEvent::Started)
-                        | Event::Session(SessionEvent::RouteChanged { .. }) => {
+                        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. })
+                        | AnalysisEvent::Engine(EngineEvent::Started)
+                        | AnalysisEvent::Session(SessionEvent::RouteChanged { .. }) => {
                             held.follow(&state).await;
                         }
-                        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
+                        AnalysisEvent::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. }) => {
                             held.follow(&state).await;
                             held.warm(&state).await;
                         }
@@ -533,9 +537,9 @@ fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
-        Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
+        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
             let eq_bands = {
                 let mut st = state.lock();
@@ -549,7 +553,7 @@ pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<
             };
             reapply_eq(queue, &eq_bands);
         }
-        Event::Player(PlayerEvent::RateChanged { rate }) => {
+        AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
             let started = rate > 0.0;
             let mut st = state.lock();
             st.playing = started;
@@ -563,11 +567,11 @@ pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<
         }
         // Session-mix gain deliberately has no event mapping here: `st.volume`
         // is content volume, owned by the player's volume path alone.
-        Event::Player(PlayerEvent::VolumeChanged { volume }) => {
+        AnalysisEvent::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;
         }
-        Event::Queue(
+        AnalysisEvent::Queue(
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
             | QueueEvent::TrackStatusChanged { .. },

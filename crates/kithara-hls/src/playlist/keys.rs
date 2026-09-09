@@ -615,6 +615,12 @@ fn key_host(url: &Url) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[derive(Clone, Debug, kithara_events::EventSet)]
+    enum TestEvent {
+        Drm(DrmEvent),
+        Hls(HlsEvent),
+    }
+
     use std::{
         collections::HashMap,
         convert::Infallible,
@@ -637,7 +643,7 @@ mod tests {
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
         KeyRequestResolver, PreparedKeyRequest,
     };
-    use kithara_events::{DrmEvent, Event, EventBus, KeyFailureStage, KeySource};
+    use kithara_events::{DrmEvent, EventBus, KeyFailureStage, KeySource};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{
         CancelToken,
@@ -851,7 +857,7 @@ mod tests {
         (url, requests, seen, release)
     }
 
-    fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+    fn collect_events(events: &mut kithara_events::EventReceiver<TestEvent>) -> Vec<TestEvent> {
         std::iter::from_fn(|| events.try_recv().ok())
             .map(|envelope| envelope.event)
             .collect()
@@ -979,7 +985,7 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Drm(DrmEvent::KeyAcquired {
+            TestEvent::Drm(DrmEvent::KeyAcquired {
                 key_host: Some(host),
                 source: KeySource::Network,
                 bytes: 16,
@@ -1143,7 +1149,7 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Drm(DrmEvent::KeyFetchFailed {
+            TestEvent::Drm(DrmEvent::KeyFetchFailed {
                 key_host: Some(host),
                 stage: KeyFailureStage::Processor,
                 detail,
@@ -1151,10 +1157,10 @@ mod tests {
         )));
         let hls_error = events
             .into_iter()
-            .find(|event| matches!(event, Event::Hls(HlsEvent::Error { .. })));
+            .find(|event| matches!(event, TestEvent::Hls(HlsEvent::Error { .. })));
         assert!(matches!(
             hls_error,
-            Some(Event::Hls(HlsEvent::Error {
+            Some(TestEvent::Hls(HlsEvent::Error {
                 error: EventHlsError::Decryption(detail),
             })) if detail == "key processor failed"
         ));
@@ -1192,7 +1198,7 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Drm(DrmEvent::KeyAcquired {
+            TestEvent::Drm(DrmEvent::KeyAcquired {
                 key_host: Some(host),
                 source: KeySource::MemCache,
                 bytes: 16,

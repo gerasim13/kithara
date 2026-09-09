@@ -3,7 +3,7 @@
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 
-use crate::SeekEpoch;
+use crate::{Event, SeekEpoch};
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,7 @@ impl SegmentLocation {
 }
 
 /// Events from the audio pipeline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Event)]
 #[non_exhaustive]
 pub enum AudioEvent {
     /// Audio format detected.

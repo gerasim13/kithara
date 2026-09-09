@@ -6,6 +6,8 @@ use kithara_net::NetError;
 use kithara_platform::time::Duration;
 use url::Url;
 
+use crate::Event;
+
 /// Stable id for a single Downloader request.
 ///
 /// Allocated internally by the Downloader's `Registry` when wrapping a
@@ -87,7 +89,7 @@ pub enum CancelReason {
 /// fetches; a root-bus subscriber sees fetches from every peer.
 ///
 /// Every variant for a single fetch carries the same [`RequestId`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Event)]
 #[non_exhaustive]
 pub enum DownloaderEvent {
     /// Request was accepted by the Downloader and placed into a

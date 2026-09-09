@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, TestServerHelper,
     cochlea::percentile_f32,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
 };
@@ -42,7 +43,7 @@ struct DesktopPrepared {
     _temp: TestTempDir,
     harness: OfflinePlayerHarness,
     abr: AbrHandle,
-    events: EventReceiver,
+    events: EventReceiver<TestEvent>,
     capture_frame: i64,
 }
 
@@ -77,7 +78,11 @@ fn desktop_fixture() -> HlsFixtureBuilder {
     }])
 }
 
-fn drain_lifecycle(events: &mut EventReceiver, frame_end: usize, lifecycle: &mut Lifecycle) {
+fn drain_lifecycle(
+    events: &mut EventReceiver<TestEvent>,
+    frame_end: usize,
+    lifecycle: &mut Lifecycle,
+) {
     loop {
         let envelope = match events.try_recv() {
             Ok(envelope) => envelope,
@@ -87,7 +92,7 @@ fn drain_lifecycle(events: &mut EventReceiver, frame_end: usize, lifecycle: &mut
             }
         };
         match envelope.event {
-            Event::Decoder(DecoderEvent::DecoderChanged {
+            TestEvent::Decoder(DecoderEvent::DecoderChanged {
                 backend,
                 cause,
                 codec,
@@ -104,7 +109,7 @@ fn drain_lifecycle(events: &mut EventReceiver, frame_end: usize, lifecycle: &mut
                 channels,
                 variant,
             }),
-            Event::Decoder(DecoderEvent::ResamplerConfigured {
+            TestEvent::Decoder(DecoderEvent::ResamplerConfigured {
                 backend,
                 output_rate,
                 channels,

@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{AbrMode, EventReceiver, QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -20,6 +20,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
     offline::{OfflineQueue, QueueTicker},
@@ -39,7 +40,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<AppPools>,
     id: TrackId,
     target: TrackStatus,
@@ -56,7 +57,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {

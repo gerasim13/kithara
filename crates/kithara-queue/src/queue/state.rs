@@ -14,8 +14,9 @@ use kithara_play::{
     player::{PlayerControl, PlayerControlSource},
 };
 
-use super::types::{
-    AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
+use super::{
+    engine_events::PlayerBusEvent,
+    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
 };
 use crate::{
     config::QueueConfig,
@@ -105,7 +106,7 @@ where
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver>,
+    pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
 }
@@ -375,7 +376,7 @@ pub(crate) mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, EventReceiver, QueueEvent};
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::{Duration, Instant, timeout},
@@ -466,7 +467,7 @@ pub(crate) mod tests {
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
-        rx: &mut EventReceiver,
+        rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
         timeout_ms: u64,
     ) -> bool
@@ -480,10 +481,7 @@ pub(crate) mod tests {
                 return false;
             }
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Envelope {
-                    event: Event::Queue(ev),
-                    ..
-                })) if matches(&ev) => return true,
+                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }

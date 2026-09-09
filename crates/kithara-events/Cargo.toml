@@ -29,12 +29,12 @@ tls-rustls = ["kithara-net?/tls-rustls"]
 tls-native = ["kithara-net?/tls-native"]
 
 [dependencies]
+kithara-derive = { workspace = true }
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true, optional = true }
 
 crossbeam-queue = { workspace = true }
-dashmap = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }

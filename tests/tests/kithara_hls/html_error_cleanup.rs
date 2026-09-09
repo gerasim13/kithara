@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, Event, EventBus},
+    events::{DownloaderEvent, EventBus},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration},
     stream::Stream,
@@ -10,6 +10,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     temp_dir,
 };
 use url::Url;
@@ -194,7 +195,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let retried = time::timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
+                Ok(TestEvent::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
                 Ok(_) => {}
                 Err(_) => break false,
             }

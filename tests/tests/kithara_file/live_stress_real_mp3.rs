@@ -3,7 +3,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
-    events::{DownloaderEvent, Event, FileEvent},
+    events::{DownloaderEvent, FileEvent},
     file::{File, FileConfig},
     platform::{
         sync::Arc,
@@ -18,6 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     served_mp3, temp_dir,
 };
 use tracing::info;
@@ -271,20 +272,20 @@ async fn live_stress_real_mp3_seek_read_cache(
         while let Ok(event) = events.recv().await.map(|env| env.event) {
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
-                Event::File(FileEvent::ReadProgress { .. }) => {
+                TestEvent::File(FileEvent::ReadProgress { .. }) => {
                     locked.read_progress_events = locked.read_progress_events.saturating_add(1);
                 }
-                Event::File(FileEvent::Error { .. }) => {
+                TestEvent::File(FileEvent::Error { .. }) => {
                     locked.errors = locked.errors.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestStarted { .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestStarted { .. }) => {
                     locked.request_started_events = locked.request_started_events.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
                     locked.request_completed_events =
                         locked.request_completed_events.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestFailed { .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
                     locked.errors = locked.errors.saturating_add(1);
                 }
                 _ => {}

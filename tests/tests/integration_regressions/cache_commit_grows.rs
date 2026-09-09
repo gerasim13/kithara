@@ -4,7 +4,7 @@ use std::path::Path;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AssetEvent, DownloaderEvent, Event},
+    events::{AssetEvent, DownloaderEvent},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::OfflineQueue,
     temp_dir,
@@ -29,7 +30,10 @@ struct Transfer {
     saw_first_byte: bool,
 }
 
-async fn observe_transfer(rx: &mut kithara::events::EventReceiver, deadline: Duration) -> Transfer {
+async fn observe_transfer(
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
+    deadline: Duration,
+) -> Transfer {
     let mut transfer = Transfer::default();
     let _ = kithara::platform::time::timeout(deadline, async {
         loop {
@@ -37,15 +41,16 @@ async fn observe_transfer(rx: &mut kithara::events::EventReceiver, deadline: Dur
                 return;
             };
             match envelope.event {
-                Event::Downloader(DownloaderEvent::FirstByte { status: 200, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::FirstByte { status: 200, .. }) => {
                     transfer.saw_first_byte = true;
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted {
-                    bytes_transferred, ..
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                    bytes_transferred,
+                    ..
                 }) => {
                     transfer.completed_bytes = transfer.completed_bytes.max(bytes_transferred);
                 }
-                Event::Asset(AssetEvent::Committed {
+                TestEvent::Asset(AssetEvent::Committed {
                     final_len: Some(final_len),
                     ..
                 }) if final_len > 0 => {
@@ -98,7 +103,7 @@ fn dir_size_bytes(root: &Path) -> u64 {
 
 async fn load_and_observe(
     queue: &QueueControl<TestPools>,
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     handle: &BehaviorHandle,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,

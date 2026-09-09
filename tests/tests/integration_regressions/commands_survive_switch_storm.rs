@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
+    events::{AudioEvent, DownloaderEvent, QueueEvent, RequestId, RequestMethod},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -20,6 +20,7 @@ use kithara::{
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
@@ -66,20 +67,23 @@ fn resource_config(
         .build()
 }
 
-fn drain_active_gets(rx: &mut kithara::events::EventReceiver, active: &mut HashSet<RequestId>) {
+fn drain_active_gets(
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
+    active: &mut HashSet<RequestId>,
+) {
     while let Ok(envelope) = rx.try_recv() {
         match envelope.event {
-            Event::Downloader(DownloaderEvent::RequestEnqueued {
+            TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                 request_id,
                 method: RequestMethod::Get,
                 ..
             }) => {
                 active.insert(request_id);
             }
-            Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. })
-            | Event::Downloader(DownloaderEvent::RequestFailed { request_id, .. })
-            | Event::Downloader(DownloaderEvent::RetryExhausted { request_id, .. })
-            | Event::Downloader(DownloaderEvent::RequestCancelled { request_id, .. }) => {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. })
+            | TestEvent::Downloader(DownloaderEvent::RequestFailed { request_id, .. })
+            | TestEvent::Downloader(DownloaderEvent::RetryExhausted { request_id, .. })
+            | TestEvent::Downloader(DownloaderEvent::RequestCancelled { request_id, .. }) => {
                 active.remove(&request_id);
             }
             _ => {}
@@ -192,7 +196,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
             |event| {
                 matches!(
                     event,
-                    Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == target
+                    TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == target
                 )
             },
             Duration::from_secs(30),
@@ -211,7 +215,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         &mut status_rx,
         "the post-storm seek completing",
         |event| {
-            let Event::Audio(AudioEvent::SeekComplete { position, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::SeekComplete { position, .. }) = event else {
                 return false;
             };
             landed = position.as_secs_f64();
@@ -242,7 +246,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         &mut status_rx,
         "playback carrying on after the post-storm pause and play",
         |event| {
-            let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
                 return false;
             };
             *position_ms as f64 / 1000.0 >= resume_target

@@ -2,10 +2,12 @@
 use std::fmt;
 
 use kithara::{
-    events::{AudioEvent, Event, EventReceiver},
+    events::{AudioEvent, EventReceiver},
     platform::time::{Duration, Instant},
 };
-use kithara_integration_tests::{flash_pace::virtual_pace, offline::OfflinePlayer};
+use kithara_integration_tests::{
+    event::TestEvent, flash_pace::virtual_pace, offline::OfflinePlayer,
+};
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
@@ -60,9 +62,9 @@ pub(crate) struct PlaybackProgressProbe {
 }
 
 impl PlaybackProgressProbe {
-    pub(crate) fn drain(&mut self, rx: &mut EventReceiver) {
+    pub(crate) fn drain(&mut self, rx: &mut EventReceiver<TestEvent>) {
         while let Ok(event) = rx.try_recv().map(|env| env.event) {
-            if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event {
+            if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event {
                 let now = Instant::now();
                 if let Some(last) = self.last_event_at {
                     let gap = now.duration_since(last);

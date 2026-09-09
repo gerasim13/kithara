@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{AudioCodecKind, ContainerKind};
+use crate::{AudioCodecKind, ContainerKind, Event};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
@@ -25,7 +25,7 @@ pub enum FileError {
 /// All variants describe **reader-side** facts. For HTTP request
 /// lifecycle (enqueue → started → completed/failed/cancelled),
 /// subscribe to [`crate::DownloaderEvent`] on the same bus scope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Event)]
 #[non_exhaustive]
 pub enum FileEvent {
     Opened {

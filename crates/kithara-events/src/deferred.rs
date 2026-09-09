@@ -2,7 +2,7 @@ use crossbeam_queue::ArrayQueue;
 use kithara_platform::sync::Arc;
 use portable_atomic::{AtomicU64, Ordering};
 
-use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
+use crate::{BusEvent, EventBus, EventSet, bus::ts_micros};
 
 /// Decode-core → shell hand-off for reader-hook events.
 ///
@@ -12,8 +12,7 @@ use crate::{BusEvent, Envelope, Event, EventBus, EventMeta};
 /// [`flush`](Self::flush) drains it FIFO, stamping each envelope, from the
 /// scheduler's unchecked shell once per pass.
 ///
-/// The element is the narrow per-domain event, converted to [`Event`] only at
-/// publish time, so the ring stays small.
+/// The ring carries a consumer event set, published through each member channel.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeferredBus<E> {
@@ -29,7 +28,7 @@ struct DeferredEvent<E> {
     seq: u64,
 }
 
-impl<E: Into<Event>> DeferredBus<E> {
+impl<E: EventSet> DeferredBus<E> {
     /// Build a deferred sink over `bus` with a fixed ring of `capacity`
     /// slots. `capacity` is clamped to at least one.
     #[must_use]
@@ -51,9 +50,9 @@ impl<E: Into<Event>> DeferredBus<E> {
     /// Drops the event if the ring is full: the only high-volume producer is
     /// monotonic progress, where the next pass's event supersedes a dropped
     /// one, so a drop under burst is self-healing.
-    pub fn enqueue(&self, event: E) {
+    pub fn enqueue<T: Into<E>>(&self, event: T) {
         let pending = DeferredEvent {
-            event,
+            event: event.into(),
             seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
         };
         if self.pending.push(pending).is_err() {
@@ -68,16 +67,8 @@ impl<E: Into<Event>> DeferredBus<E> {
     /// enqueue, carries the producer's order.
     pub fn flush(&self) {
         while let Some(event) = self.pending.pop() {
-            self.bus.publish_envelope(Envelope {
-                meta: EventMeta {
-                    origin: self.bus.scope.id(),
-                    seq: event.seq,
-                    ts_micros: crate::bus::ts_micros(),
-                    deck: self.bus.label.deck,
-                    track: self.bus.label.track,
-                },
-                event: event.event.into(),
-            });
+            let meta = self.bus.meta(event.seq, ts_micros());
+            E::publish(&self.bus, meta, event.event);
         }
         let dropped = self.dropped.swap(0, Ordering::Relaxed);
         if dropped > 0 {
@@ -89,33 +80,30 @@ impl<E: Into<Event>> DeferredBus<E> {
     }
 }
 
-#[cfg(all(test, feature = "file"))]
+#[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{BusEvent, EventMeta, FileEvent};
+    use crate::{BusEvent, Envelope, EventMeta};
 
-    const fn progress(position: u64) -> FileEvent {
-        FileEvent::ReadProgress {
-            position,
-            total: None,
-        }
+    #[derive(Clone, Debug, PartialEq, Eq, crate::Event)]
+    struct Progress(u64);
+
+    const fn progress(position: u64) -> Progress {
+        Progress(position)
     }
 
     #[track_caller]
-    fn assert_progress(event: &Envelope, position: u64) {
-        match &event.event {
-            Event::File(actual) => assert_eq!(*actual, progress(position)),
-            other => panic!("expected file progress event, got {other:?}"),
-        }
+    fn assert_progress(event: &Envelope<Progress>, position: u64) {
+        assert_eq!(event.event, progress(position));
     }
 
     #[kithara::test(tokio)]
     async fn enqueue_holds_until_flush() {
         let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
-        let deferred = DeferredBus::new(bus.clone(), 8);
+        let mut rx = bus.subscribe::<Progress>();
+        let deferred = DeferredBus::<Progress>::new(bus.clone(), 8);
 
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
@@ -135,8 +123,9 @@ mod tests {
     #[kithara::test]
     fn enqueue_drops_when_full_without_blocking() {
         let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
-        let deferred = DeferredBus::new(bus, 2);
+        let mut rx = bus.subscribe::<Progress>();
+        let mut overflow_rx = bus.subscribe::<BusEvent>();
+        let deferred = DeferredBus::<Progress>::new(bus, 2);
 
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
@@ -147,10 +136,9 @@ mod tests {
 
         assert_progress(&rx.try_recv().unwrap(), 1);
         assert_progress(&rx.try_recv().unwrap(), 2);
-        let overflow = rx.try_recv().unwrap();
+        let overflow = overflow_rx.try_recv().unwrap();
         match overflow.event {
-            Event::Bus(BusEvent::Overflow { dropped, .. }) => assert_eq!(dropped, 1),
-            other => panic!("expected overflow event, got {other:?}"),
+            BusEvent::Overflow { dropped, .. } => assert_eq!(dropped, 1),
         }
         assert!(rx.try_recv().is_err(), "earlier events survive in order");
     }
@@ -158,18 +146,18 @@ mod tests {
     #[kithara::test(tokio)]
     async fn flush_stamps_the_publish_time_and_keeps_enqueue_order() {
         let bus = EventBus::new(16);
-        let mut rx = bus.subscribe();
-        let deferred = DeferredBus::new(bus, 4);
+        let mut rx = bus.subscribe::<Progress>();
+        let deferred = DeferredBus::<Progress>::new(bus, 4);
 
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
 
         // Leaving the enqueue tick puts a stamp taken there below `before`.
-        let enqueued = crate::bus::ts_micros();
-        while crate::bus::ts_micros() <= enqueued {}
-        let before = crate::bus::ts_micros();
+        let enqueued = ts_micros();
+        while ts_micros() <= enqueued {}
+        let before = ts_micros();
         deferred.flush();
-        let after = crate::bus::ts_micros();
+        let after = ts_micros();
 
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();

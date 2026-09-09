@@ -5,7 +5,7 @@ use std::{cmp, hash, ops};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use crate::{SlotId, TrackId};
+use crate::{Event, SlotId, TrackId};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -364,7 +364,7 @@ pub enum StretchBackendKind {
     Unknown,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum PlayerEvent {
     StatusChanged {
@@ -428,14 +428,14 @@ pub enum PlayerEvent {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum ItemEvent {
     PlaybackLikelyToKeepUp,
     PlaybackStalled,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum EngineEvent {
     Started,
@@ -466,7 +466,7 @@ pub enum EngineEvent {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum SessionEvent {
     Interruption {
@@ -484,7 +484,7 @@ pub enum SessionEvent {
 }
 
 /// Facts committed by the session transport owner.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Event)]
 #[non_exhaustive]
 pub enum TransportEvent {
     TempoCommitted {
@@ -515,7 +515,7 @@ pub enum PlaybackDirection {
     Reverse,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum DjEvent {
     BpmDetected {

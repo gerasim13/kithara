@@ -1,6 +1,6 @@
 use kithara::{
     abr::AbrMode,
-    events::{AbrEvent, AudioEvent, Envelope, Event, EventReceiver},
+    events::{AbrEvent, AudioEvent, Envelope, EventReceiver},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -10,6 +10,7 @@ use kithara::{
 };
 
 use crate::{
+    core::event_set::ItemBusEvent,
     item::ItemView,
     observer::ItemObserver,
     types::{FfiError, FfiItemEvent, FfiItemStatus},
@@ -34,7 +35,7 @@ impl ItemEventBridge {
 
     fn dispatch(
         observer: &Arc<dyn ItemObserver>,
-        event: &Event,
+        event: &ItemBusEvent,
         duration_seconds: &mut Option<f64>,
         variants: &mut Vec<crate::types::FfiVariant>,
         state: &Arc<Mutex<ItemView>>,
@@ -68,11 +69,11 @@ impl ItemEventBridge {
 
     fn dispatch_variant_events(
         observer: &Arc<dyn ItemObserver>,
-        event: &Event,
+        event: &ItemBusEvent,
         variants: &mut Vec<crate::types::FfiVariant>,
     ) {
         match event {
-            Event::Abr(AbrEvent::VariantsRegistered {
+            ItemBusEvent::Abr(AbrEvent::VariantsRegistered {
                 variants: v,
                 initial,
             }) => {
@@ -110,7 +111,7 @@ impl ItemEventBridge {
                     });
                 }
             }
-            Event::Abr(AbrEvent::ModeChanged {
+            ItemBusEvent::Abr(AbrEvent::ModeChanged {
                 mode: AbrMode::Manual(idx),
             }) => {
                 let Ok(idx_u32) = u32::try_from(idx.get()) else {
@@ -131,7 +132,7 @@ impl ItemEventBridge {
                     });
                 observer.on_event(FfiItemEvent::VariantSelected { variant });
             }
-            Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+            ItemBusEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                 let Ok(idx_u32) = u32::try_from(to.get()) else {
                     tracing::error!(
                         idx = to.get(),
@@ -154,9 +155,9 @@ impl ItemEventBridge {
         }
     }
 
-    fn duration_from_event(event: &Event) -> Option<f64> {
+    fn duration_from_event(event: &ItemBusEvent) -> Option<f64> {
         match event {
-            Event::Audio(AudioEvent::PlaybackProgress {
+            ItemBusEvent::Audio(AudioEvent::PlaybackProgress {
                 total_ms: Some(total_ms),
                 ..
             }) => Some(Self::u64_to_f64(*total_ms)? / Self::MS_PER_SECOND),
@@ -168,7 +169,7 @@ impl ItemEventBridge {
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
-        rx: EventReceiver,
+        rx: EventReceiver<ItemBusEvent>,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
@@ -183,7 +184,7 @@ impl ItemEventBridge {
     }
 
     fn spawn_event_task(
-        mut rx: EventReceiver,
+        mut rx: EventReceiver<ItemBusEvent>,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
@@ -229,12 +230,13 @@ impl Drop for ItemEventBridge {
 mod tests {
     use kithara::{
         abr::{AbrMode, VariantIndex},
-        events::{AbrEvent, AbrReason, Event, FileError, FileEvent, VariantDuration, VariantInfo},
+        events::{AbrEvent, AbrReason, FileError, FileEvent, VariantDuration, VariantInfo},
         platform::sync::{Arc, Mutex},
     };
 
     use super::ItemEventBridge;
     use crate::{
+        core::event_set::ItemBusEvent,
         item::{AudioPlayerItem, ItemView},
         observer::ItemObserver,
         types::{FfiError, FfiItemConfig, FfiItemEvent, FfiVariant},
@@ -276,7 +278,7 @@ mod tests {
     fn dispatch_file_error(observer: &Arc<dyn ItemObserver>, state: &Arc<Mutex<ItemView>>) {
         ItemEventBridge::dispatch(
             observer,
-            &Event::File(FileEvent::Error {
+            &ItemBusEvent::File(FileEvent::Error {
                 error: FileError::Io("boom".into()),
             }),
             &mut None,
@@ -301,12 +303,12 @@ mod tests {
         event: AbrEvent,
         variants: &mut Vec<FfiVariant>,
     ) {
-        ItemEventBridge::dispatch_variant_events(observer, &Event::Abr(event), variants);
+        ItemEventBridge::dispatch_variant_events(observer, &ItemBusEvent::Abr(event), variants);
     }
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
-        let event = Event::File(FileEvent::Error {
+        let event = ItemBusEvent::File(FileEvent::Error {
             error: FileError::Io("boom".into()),
         });
         let error = FfiError::try_from(&event).ok();

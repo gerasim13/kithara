@@ -3,9 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::{
-    DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
-};
+use kithara_events::{DownloaderEvent, Envelope, EventBus, ScopeLabel, TrackId, TrackStatus};
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
@@ -244,12 +242,12 @@ where
         tracks: Arc<Tracks<S>>,
     ) -> std::convert::Infallible {
         let mut rx = match bus {
-            Some(b) => b.subscribe(),
+            Some(b) => b.subscribe::<DownloaderEvent>(),
             None => return std::future::pending().await,
         };
         let mut marked = false;
         while let Ok(Envelope { event: ev, .. }) = rx.recv().await {
-            if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
+            if !marked && matches!(ev, DownloaderEvent::LoadSlow { .. }) {
                 tracks.set_status(id, TrackStatus::Slow);
                 marked = true;
             }
@@ -461,7 +459,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_labels_default_bus_with_track_id() {
         let fixture = LoaderFixtureSpec::default().build();
-        let mut rx = fixture.bus.subscribe();
+        let mut rx = fixture.bus.subscribe::<QueueEvent>();
         let Ok(config) = fixture.loader.build_config(
             TrackId(42),
             TrackSource::Uri("https://example.com/a.mp3".into()),
@@ -552,18 +550,18 @@ mod tests {
             match time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Envelope {
                     event:
-                        Event::Queue(QueueEvent::TrackStatusChanged {
+                        QueueEvent::TrackStatusChanged {
                             id: TrackId(42),
                             status: TrackStatus::Loading,
-                        }),
+                        },
                     ..
                 })) => panic!("invalid config must not emit Loading"),
                 Ok(Ok(Envelope {
                     event:
-                        Event::Queue(QueueEvent::TrackStatusChanged {
+                        QueueEvent::TrackStatusChanged {
                             id: TrackId(42),
                             status: TrackStatus::Failed(_),
-                        }),
+                        },
                     ..
                 })) => saw_failed = true,
                 Ok(Ok(_)) => {}

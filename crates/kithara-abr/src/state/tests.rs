@@ -7,7 +7,7 @@ use std::{
 
 use kithara_events::{
     AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY,
-    Envelope, Event, EventBus, VariantDuration, VariantIndex, VariantInfo,
+    Envelope, EventBus, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
     CancelToken,
@@ -934,9 +934,7 @@ fn throughput_samples_published_with(interval: Duration) -> usize {
     }
 
     std::iter::from_fn(|| rx.try_recv().ok())
-        .filter(|Envelope { event, .. }| {
-            matches!(event, Event::Abr(AbrEvent::ThroughputSample { .. }))
-        })
+        .filter(|Envelope { event, .. }| matches!(event, AbrEvent::ThroughputSample { .. }))
         .count()
 }
 

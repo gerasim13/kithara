@@ -6,8 +6,7 @@ use kithara::{
     bufpool::HasPool,
     decode::DecoderBackend,
     events::{
-        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-        TrackStatus,
+        AbrMode, AudioEvent, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId, TrackStatus,
     },
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -26,6 +25,7 @@ use url::Url;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     user_sim::actions::Action,
@@ -200,7 +200,7 @@ impl SimHarness {
         self.track_ids[idx]
     }
 
-    pub fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe(&self) -> EventReceiver<TestEvent> {
         self.queue.subscribe()
     }
 
@@ -470,9 +470,9 @@ impl SimHarness {
                     return;
                 }
                 match recv_event(&mut rx).await {
-                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(cur) })))
-                        if cur == id =>
-                    {
+                    Ok(Some(TestEvent::Queue(QueueEvent::CurrentTrackChanged {
+                        id: Some(cur),
+                    }))) if cur == id => {
                         return;
                     }
                     Ok(_) => {}
@@ -562,13 +562,13 @@ impl SimHarness {
             match timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
                 Ok(Ok(Some(ev))) => {
                     match &ev {
-                        Event::Audio(AudioEvent::SeekLifecycle {
+                        TestEvent::Audio(AudioEvent::SeekLifecycle {
                             stage: SeekLifecycleStage::SeekApplied,
                             ..
                         }) => {
                             seek_rebase_allowed = true;
                         }
-                        Event::Audio(AudioEvent::SeekComplete { position, .. }) => {
+                        TestEvent::Audio(AudioEvent::SeekComplete { position, .. }) => {
                             seek_rebase_allowed = true;
                             baseline_pos = position.as_secs_f64();
                             last_pos = baseline_pos;
@@ -741,7 +741,9 @@ impl SimHarness {
             let counts_as_playback_tick = match timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
                 // A committed block, or a poll tick that elapsed with no
                 // relevant event: both are one producer opportunity.
-                Ok(Ok(Some(Event::Audio(AudioEvent::PlaybackProgress { .. })))) | Err(_) => true,
+                Ok(Ok(Some(TestEvent::Audio(AudioEvent::PlaybackProgress { .. })))) | Err(_) => {
+                    true
+                }
                 Ok(Ok(Some(_)) | Ok(None)) => false,
                 Ok(Err(_)) => break,
             };
@@ -805,7 +807,7 @@ impl SimHarness {
 /// `Err` is a closed bus (terminal). `recv()` itself parks on the
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
-async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
+async fn recv_event(rx: &mut EventReceiver<TestEvent>) -> Result<Option<TestEvent>, String> {
     use kithara::platform::tokio::sync::broadcast::error::RecvError;
     match rx.recv().await {
         Ok(env) => Ok(Some(env.event)),
@@ -818,8 +820,8 @@ async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
 /// `position_ms as f64` mirrors the established sibling tests
 /// (`local_track_plays`, `hls_seek_near_end_stress`): playback
 /// positions stay far below `2^53` ms, so the cast is exact.
-fn progress_secs(ev: &Event) -> Option<f64> {
-    if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
+fn progress_secs(ev: &TestEvent) -> Option<f64> {
+    if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
         Some(*position_ms as f64 / 1000.0)
     } else {
         None
@@ -837,7 +839,7 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
 async fn await_progress<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
@@ -905,7 +907,7 @@ where
             let Some(ev) = recv_event(&mut rx).await? else {
                 continue;
             };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
+            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
                 && *tid == id
             {
                 match status {

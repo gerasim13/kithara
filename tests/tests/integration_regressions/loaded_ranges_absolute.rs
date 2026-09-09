@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, Event},
+    events::DownloaderEvent,
     file::FileConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -19,6 +19,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
@@ -159,7 +160,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
         &mut transfer_rx,
         "the progressive body finishing its transfer",
         |event| {
-            let Event::Downloader(DownloaderEvent::RequestCompleted {
+            let TestEvent::Downloader(DownloaderEvent::RequestCompleted {
                 bytes_transferred, ..
             }) = event
             else {

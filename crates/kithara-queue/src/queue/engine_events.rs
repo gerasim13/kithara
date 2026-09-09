@@ -2,7 +2,7 @@ use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
+    AdvanceReason, AudioEvent, Envelope, EventSet, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
     TrackId, TrackStatus,
 };
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
@@ -170,24 +170,24 @@ where
         let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
     }
 
-    pub(super) fn process_player_event(&self, ev: &Event) {
+    pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                 self.handle_item_did_play_to_end(item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidFail { item }) => {
                 self.handle_item_did_fail(item);
             }
-            Event::Player(PlayerEvent::CurrentItemChanged { .. }) => {
+            PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
             }
-            Event::Player(PlayerEvent::HandoverRequested { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::HandoverRequested { item }) => {
                 self.handle_handover_requested(item);
             }
-            Event::Audio(AudioEvent::UnderrunStarted { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunStarted { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackStalled);
             }
-            Event::Audio(AudioEvent::UnderrunEnded { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunEnded { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp);
             }
             _ => {}
@@ -237,4 +237,11 @@ mod tests {
             "lag recovery should re-announce the current track"
         );
     }
+}
+
+#[derive(Clone, Debug, EventSet)]
+#[non_exhaustive]
+pub(crate) enum PlayerBusEvent {
+    Player(PlayerEvent),
+    Audio(AudioEvent),
 }

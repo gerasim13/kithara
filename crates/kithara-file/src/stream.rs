@@ -391,7 +391,7 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
-    use kithara_events::{Event, FileEvent};
+    use kithara_events::FileEvent;
     use kithara_platform::time::Duration;
     use tempfile::tempdir;
 
@@ -514,7 +514,7 @@ mod tests {
                 _result = &mut create => panic!("claim wait returned before cancellation"),
                 event = events.recv() => {
                     let event = event.expect("event channel remains open");
-                    if matches!(event.event, Event::File(FileEvent::Error { .. })) {
+                    if matches!(event.event, FileEvent::Error { .. }) {
                         break;
                     }
                 }

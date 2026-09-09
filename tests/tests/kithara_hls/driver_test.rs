@@ -5,7 +5,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AbrEvent, Event, EventBus, HlsEvent},
+    events::{AbrEvent, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -18,6 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     hls_server::{
         TestServer,
         abr::{AbrTestServer, master_playlist},
@@ -138,11 +139,11 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
     spawn(async move {
         while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             match ev {
-                Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch: {} -> {}", from, to);
                     switches_clone.lock().unwrap().push((from, to));
                 }
-                Event::Hls(HlsEvent::EndOfStream) => break,
+                TestEvent::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
             }
         }

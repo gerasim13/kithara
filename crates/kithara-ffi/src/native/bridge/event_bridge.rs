@@ -1,5 +1,5 @@
 use kithara::{
-    events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{Envelope, EventReceiver, QueueEvent, TrackId, TrackStatus},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -12,6 +12,7 @@ use kithara::{
 };
 
 use crate::{
+    core::event_set::QueueBusEvent,
     item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
     pools::FfiQueueControl,
@@ -38,9 +39,9 @@ impl EventBridge {
         observer: &Arc<dyn PlayerObserver>,
         items: &Arc<Mutex<ItemRegistry>>,
         last_current: &Mutex<Option<TrackId>>,
-        event: &Event,
+        event: &QueueBusEvent,
     ) {
-        if let Event::Player(pe) = event {
+        if let QueueBusEvent::Player(pe) = event {
             if let PlayerEvent::CurrentItemChanged { item } = pe {
                 *last_current.lock() = *item;
             }
@@ -51,7 +52,7 @@ impl EventBridge {
             observer.on_event(ffi_event);
             return;
         }
-        if let Event::Queue(qe) = event {
+        if let QueueBusEvent::Queue(qe) = event {
             Self::dispatch_queue_event(observer, items, qe);
             return;
         }
@@ -274,7 +275,7 @@ impl EventBridge {
     /// observer callbacks. Returns a bridge handle; dropping it cancels
     /// the tasks.
     pub(crate) fn spawn(
-        rx: EventReceiver,
+        rx: EventReceiver<QueueBusEvent>,
         observer: Arc<dyn PlayerObserver>,
         queue: FfiQueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
@@ -303,7 +304,7 @@ impl EventBridge {
 
     /// Task that listens for queue events on the unified bus.
     fn spawn_event_task(
-        mut rx: EventReceiver,
+        mut rx: EventReceiver<QueueBusEvent>,
         observer: Arc<dyn PlayerObserver>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
@@ -380,7 +381,7 @@ mod tests {
 
     use kithara::{
         events::{
-            AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
+            AdvanceReason, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
             QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
         },
         platform::{
@@ -393,6 +394,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        core::event_set::ItemBusEvent,
         observer::ItemObserver,
         pools::{self, FfiQueue, FfiWorker},
         types::{FfiItemConfig, FfiItemEvent},
@@ -481,7 +483,7 @@ mod tests {
         (item, observer)
     }
 
-    fn assert_protocol_failure_is_not_duplicated(event: Event, expected_error: &str) {
+    fn assert_protocol_failure_is_not_duplicated(event: ItemBusEvent, expected_error: &str) {
         let root = EventBus::new(16);
         let scoped = root.scoped();
         let item = AudioPlayerItem::new(item_config());
@@ -546,7 +548,7 @@ mod tests {
     #[kithara::test]
     fn hls_protocol_failure_is_not_duplicated_by_queue_status() {
         assert_protocol_failure_is_not_duplicated(
-            Event::Hls(HlsEvent::Error {
+            ItemBusEvent::Hls(HlsEvent::Error {
                 error: HlsError::Playlist("boom".into()),
             }),
             "item failed: playlist: boom",
@@ -556,7 +558,7 @@ mod tests {
     #[kithara::test]
     fn file_protocol_failure_is_not_duplicated_by_queue_status() {
         assert_protocol_failure_is_not_duplicated(
-            Event::File(FileEvent::Error {
+            ItemBusEvent::File(FileEvent::Error {
                 error: FileError::Io("boom".into()),
             }),
             "item failed: io: boom",
@@ -662,14 +664,14 @@ mod tests {
             &observer,
             &items,
             &last_current,
-            &Event::Player(PlayerEvent::CurrentItemChanged { item: Some(id) }),
+            &QueueBusEvent::Player(PlayerEvent::CurrentItemChanged { item: Some(id) }),
         );
         assert_eq!(*last_current.lock(), Some(id));
         EventBridge::dispatch(
             &observer,
             &items,
             &last_current,
-            &Event::Queue(QueueEvent::CurrentTrackChanged { id: None }),
+            &QueueBusEvent::Queue(QueueEvent::CurrentTrackChanged { id: None }),
         );
         assert_eq!(*last_current.lock(), Some(id));
     }
@@ -899,7 +901,7 @@ mod tests {
     }
 
     async fn wait_for_status(
-        events: &mut EventReceiver,
+        events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
         status: TrackStatus,
         timeout_ms: u64,
@@ -908,7 +910,7 @@ mod tests {
             while let Ok(Envelope { event, .. }) = events.recv().await {
                 if matches!(
                     event,
-                    Event::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
+                    QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: ref seen_status })
                         if seen == id && *seen_status == status
                 ) {
                     return true;
@@ -953,7 +955,7 @@ mod tests {
         let mut events = queue.subscribe();
         queue
             .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+            .publish(QueueBusEvent::Player(PlayerEvent::ItemDidPlayToEnd {
                 item: ItemRole::Leading(TrackRef::new(
                     id,
                     SlotId::new(0),

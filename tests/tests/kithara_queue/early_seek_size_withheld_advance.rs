@@ -33,7 +33,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineHostHarness,
+    PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
+    offline::OfflineHostHarness,
 };
 
 use crate::bufpool_ext::{Pools, TestPools, pools};
@@ -311,7 +312,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         let _ = harness.run(&queue, |q| q.tick()).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
-            if let kithara::events::Event::Player(pe) = ev {
+            if let TestEvent::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref item } if item.track().src == target_src => {
                         trigger = Trigger::DidFail;

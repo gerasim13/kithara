@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::SeekEpoch;
+use crate::{Event, SeekEpoch};
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub enum HlsError {
 /// All variants describe **reader-side** facts. For HTTP request
 /// lifecycle (enqueue → started → completed/failed/cancelled),
 /// subscribe to [`crate::DownloaderEvent`] on the same bus scope.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum HlsEvent {
     /// Reader entered a new segment (or first segment after open / seek).

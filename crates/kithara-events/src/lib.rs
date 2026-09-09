@@ -2,6 +2,8 @@
 
 //! Unified event bus for the kithara audio pipeline.
 
+extern crate self as kithara_events;
+
 mod bus;
 mod bus_event;
 mod deferred;
@@ -11,6 +13,7 @@ mod meta;
 mod receiver;
 mod scope;
 mod seek;
+mod topic;
 
 #[cfg(feature = "abr")]
 mod abr;
@@ -56,12 +59,17 @@ pub use deferred::DeferredBus;
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 #[cfg(feature = "drm")]
 pub use drm::{DrmEvent, KeyFailureStage, KeySource};
-pub use event::Event;
+pub use event::{Event, EventSet};
 #[cfg(feature = "file")]
 pub use file::{FileError, FileEvent, TotalBytesSource};
 #[cfg(feature = "hls")]
 pub use hls::{HlsError, HlsEvent};
 pub use ids::{SlotId, TrackId};
+pub use kithara_derive::{Event, EventSet};
+pub use kithara_platform::tokio::{
+    select,
+    sync::broadcast::error::{RecvError, TryRecvError},
+};
 pub use meta::{Envelope, EventMeta, ScopeLabel};
 #[cfg(feature = "player")]
 pub use play::{
@@ -72,6 +80,6 @@ pub use play::{
 };
 #[cfg(feature = "queue")]
 pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
-pub use receiver::EventReceiver;
+pub use receiver::{EventReceiver, TopicReceiver};
 pub use scope::BusScope;
 pub use seek::SeekEpoch;

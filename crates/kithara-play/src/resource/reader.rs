@@ -7,7 +7,7 @@ use kithara_audio::{
 };
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
@@ -322,7 +322,7 @@ impl Resource {
     /// Returns a receiver for all events published to the bus,
     /// including audio, file, and HLS events.
     #[must_use]
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 

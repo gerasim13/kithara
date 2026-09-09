@@ -91,7 +91,7 @@ impl ReaderEventSink for FileReaderEventSink {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{BusEvent, Event};
+    use kithara_events::BusEvent;
     use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
@@ -117,7 +117,7 @@ mod tests {
         burst(&mut sink(bus.clone(), event_capacity), chunks);
         let mut dropped = 0;
         while let Ok(envelope) = rx.try_recv() {
-            if let Event::Bus(BusEvent::Overflow { dropped: count, .. }) = envelope.event {
+            if let BusEvent::Overflow { dropped: count, .. } = envelope.event {
                 dropped += count;
             }
         }

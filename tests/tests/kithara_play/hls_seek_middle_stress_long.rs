@@ -6,7 +6,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
-    events::{AudioEvent, Event, EventReceiver, PlayerEvent},
+    events::{AudioEvent, EventReceiver, PlayerEvent},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -27,6 +27,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
     Xorshift64,
+    event::TestEvent,
     offline::{OfflinePlayer, OfflineQueue, QueueTicker},
     temp_dir,
     waits::{
@@ -129,7 +130,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
 }
 
 async fn observe_playback(
-    mut rx: EventReceiver,
+    mut rx: EventReceiver<TestEvent>,
     initial_rate: f32,
     stop: CancelToken,
 ) -> Result<PlaybackStats, String> {
@@ -140,7 +141,7 @@ async fn observe_playback(
     while !stop.is_cancelled() {
         match timeout(Consts::MONITOR_POLL_INTERVAL, rx.recv()).await {
             Ok(Ok(envelope)) => match envelope.event {
-                Event::Audio(AudioEvent::PlaybackProgress { .. }) => {
+                TestEvent::Audio(AudioEvent::PlaybackProgress { .. }) => {
                     let now = Instant::now();
                     stats.max_progress_gap = stats
                         .max_progress_gap
@@ -148,7 +149,7 @@ async fn observe_playback(
                     stats.progress_events += 1;
                     last_progress = now;
                 }
-                Event::Player(PlayerEvent::RateChanged { rate }) => {
+                TestEvent::Player(PlayerEvent::RateChanged { rate }) => {
                     if (rate - last_rate).abs() > f32::EPSILON {
                         stats.effective_rate_changes += 1;
                         last_rate = rate;
@@ -210,7 +211,7 @@ async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, tar
 
         loop {
             match progress_rx.recv().await.map(|envelope| envelope.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
                     seek_epoch: progress_epoch,
                     ..
                 })) if progress_epoch == seek_epoch => break,

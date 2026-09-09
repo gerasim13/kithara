@@ -235,7 +235,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, ItemRole, PlayerEvent, QueueEvent, SlotId, TrackId, TrackRef};
+    use kithara_events::{ItemRole, PlayerEvent, QueueEvent, SlotId, TrackId, TrackRef};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -250,16 +250,13 @@ mod tests {
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
 
-        queue
-            .player
-            .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Leading(TrackRef::new(
-                    TrackId::allocate(),
-                    SlotId::new(0),
-                    Arc::from(""),
-                )),
-            }));
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                TrackId::allocate(),
+                SlotId::new(0),
+                Arc::from(""),
+            )),
+        });
 
         queue
             .tick()
@@ -278,16 +275,13 @@ mod tests {
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();
 
-        queue
-            .player
-            .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Leading(TrackRef::new(
-                    b,
-                    SlotId::new(0),
-                    Arc::from(format!("test://memory/{}", b.as_u64())),
-                )),
-            }));
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                b,
+                SlotId::new(0),
+                Arc::from(format!("test://memory/{}", b.as_u64())),
+            )),
+        });
 
         queue
             .tick()

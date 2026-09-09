@@ -14,26 +14,21 @@
 
 # kithara-events
 
-Unified event bus for the kithara audio pipeline. Provides a clone-able `EventBus` backed by `tokio::sync::broadcast`, hierarchical `BusScope`, and a feature-gated `Event` enum that aggregates events from every subsystem.
+Typed event bus for the kithara audio pipeline. Each `EventBus` scope owns a broadcast channel per subscribed event type. Consumer-owned `EventSet` enums combine the types a subscriber needs.
 
 ## Usage
 
 ```rust
-use kithara_events::{Event, EventBus, FileEvent};
+use kithara_events::{Event, EventBus};
+
+#[derive(Clone, Debug, Event)]
+struct Progress(u64);
 
 let bus = EventBus::new(64);
-let mut rx = bus.subscribe();
+let mut rx = bus.subscribe::<Progress>();
 
-bus.publish(FileEvent::EndOfStream);
-
-while let Ok(event) = rx.recv().await {
-    match event {
-        Event::File(e) => handle_file(e),
-        Event::Hls(e) => handle_hls(e),
-        Event::Audio(e) => handle_audio(e),
-        _ => {}
-    }
-}
+bus.publish(Progress(42));
+assert_eq!(rx.try_recv()?.event.0, 42);
 ```
 
 ## Key Types
@@ -48,7 +43,7 @@ while let Ok(event) = rx.recv().await {
 
 <tr><td><code>EventReceiver</code></td><td>Subscriber handle returned by <code>EventBus::subscribe()</code></td></tr>
 
-<tr><td><code>Event</code></td><td>Top-level enum — variants are feature-gated</td></tr>
+<tr><td><code>Event</code></td><td>Marker trait for a concrete event type</td></tr>
 
 <tr><td><code>SeekEpoch</code></td><td>Monotonic seek-generation tag carried across subsystems</td></tr>
 
@@ -56,7 +51,6 @@ while let Ok(event) = rx.recv().await {
 
 ## Features
 
-The default feature set exposes the full event surface. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for the
-per-feature table and the optional HTTP/TLS forwarding features.
+Domain event modules are currently feature-gated; the bus and consumer sets are independent of those gates.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for detailed contracts, invariants, and internals.

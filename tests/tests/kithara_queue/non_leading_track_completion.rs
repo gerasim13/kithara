@@ -11,13 +11,14 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
+    events::{ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
     queue::{QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
+    event::TestEvent,
     offline::{
         OfflinePlayerHarness, mean_abs, offline_queue_fixture, resource_from_reader_with_src,
     },
@@ -122,7 +123,7 @@ fn publish_completion(
         Completion::Eof => PlayerEvent::ItemDidPlayToEnd { item },
         Completion::Failure => PlayerEvent::ItemDidFail { item },
     };
-    harness.player().bus().publish(Event::Player(event));
+    harness.player().bus().publish(TestEvent::Player(event));
 }
 
 /// Field log, 2026-08-26: a background HLS slot hit EOF 5 s after the

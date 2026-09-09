@@ -21,7 +21,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ConsumerWakeMode,
-    events::{Event, QueueEvent},
+    events::QueueEvent,
     platform::{
         sync::{Arc, Mutex, mpsc},
         time::{self, Duration},
@@ -37,6 +37,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara, temp_dir,
     test_defaults::Consts as Shared,
     waits::wait_for_event,
@@ -191,7 +192,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         |event| {
             matches!(
                 event,
-                Event::Queue(QueueEvent::NextTrackReady { id, .. }) if *id == ids[0]
+                TestEvent::Queue(QueueEvent::NextTrackReady { id, .. }) if *id == ids[0]
             )
         },
         Duration::from_secs(60),
@@ -221,7 +222,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         |event| {
             matches!(
                 event,
-                Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == ids[1]
+                TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == ids[1]
             )
         },
         Duration::from_secs(60),

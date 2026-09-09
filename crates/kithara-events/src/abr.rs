@@ -2,6 +2,8 @@
 
 use kithara_platform::time::Duration;
 
+use crate::Event;
+
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
 /// `usize` representation of [`AbrMode`].
 const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
@@ -177,7 +179,7 @@ pub struct VariantInfo {
 ///
 /// Published into the peer's track-scoped bus; root-level subscribers see
 /// events for every track, track-scoped subscribers only their own.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum AbrEvent {
     ThroughputSample {
@@ -225,8 +227,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::Event;
-
     #[kithara::test]
     #[case(AbrMode::Auto(None))]
     #[case(AbrMode::Auto(Some(VariantIndex::new(0))))]
@@ -301,20 +301,25 @@ mod tests {
     }
 
     #[kithara::test]
-    fn abr_event_into_event_locked() {
-        let event: Event = AbrEvent::Locked.into();
-        assert!(matches!(event, Event::Abr(AbrEvent::Locked)));
+    fn typed_channel_carries_locked() {
+        let bus = crate::EventBus::default();
+        let mut rx = bus.subscribe::<AbrEvent>();
+        bus.publish(AbrEvent::Locked);
+        let event = rx.try_recv().expect("the event arrives").event;
+        assert!(matches!(event, AbrEvent::Locked));
     }
 
     #[kithara::test]
-    fn abr_event_into_event_variant_applied() {
-        let event: Event = AbrEvent::VariantApplied {
+    fn typed_channel_preserves_variant_applied() {
+        let bus = crate::EventBus::default();
+        let mut rx = bus.subscribe::<AbrEvent>();
+        bus.publish(AbrEvent::VariantApplied {
             from: VariantIndex::new(0),
             to: VariantIndex::new(1),
             reason: AbrReason::UpSwitch,
-        }
-        .into();
-        let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event else {
+        });
+        let event = rx.try_recv().expect("the event arrives").event;
+        let AbrEvent::VariantApplied { from, to, reason } = event else {
             panic!("expected VariantApplied");
         };
         assert_eq!(from, VariantIndex::new(0));

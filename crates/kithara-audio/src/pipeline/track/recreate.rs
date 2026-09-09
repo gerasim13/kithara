@@ -263,21 +263,18 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
             src.seek_engine
                 .record_resume_target(request.seek.epoch, request.seek.target);
             if let Some(ref emit) = src.emit {
-                emit.enqueue(
-                    AudioEvent::SeekLifecycle {
-                        stage: SeekLifecycleStage::SeekApplied,
-                        seek_epoch: request.seek.epoch,
-                        location: SegmentLocation::new(
-                            src.shared_stream
-                                .abr_handle()
-                                .and_then(|handle| handle.current_variant_index()),
-                            None,
-                            None,
-                            None,
-                        ),
-                    }
-                    .into(),
-                );
+                emit.enqueue(AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekApplied,
+                    seek_epoch: request.seek.epoch,
+                    location: SegmentLocation::new(
+                        src.shared_stream
+                            .abr_handle()
+                            .and_then(|handle| handle.current_variant_index()),
+                        None,
+                        None,
+                        None,
+                    ),
+                });
             }
             apply_seek_transition(
                 src,

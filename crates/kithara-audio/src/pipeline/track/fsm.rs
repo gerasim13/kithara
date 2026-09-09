@@ -91,7 +91,7 @@ pub(crate) use waiting_branch;
 
 fn emit_event<T: StreamType>(src: &StreamAudioSource<T>, event: AudioEvent) {
     if let Some(ref emit) = src.emit {
-        emit.enqueue(event.into());
+        emit.enqueue(event);
     }
 }
 

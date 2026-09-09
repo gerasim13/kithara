@@ -4,7 +4,7 @@ use kithara_audio::{
     AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
     mock::AudioSourceMock,
 };
-use kithara_events::{AudioEvent, DeferredBus, Event, EventBus};
+use kithara_events::{AudioEvent, DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -128,7 +128,7 @@ fn decoder_node_eof_under_backpressure() {
 
     node.emit.flush();
     let end_events = std::iter::from_fn(|| events.try_recv().ok())
-        .filter(|envelope| matches!(envelope.event, Event::Audio(AudioEvent::EndOfStream { .. })))
+        .filter(|envelope| matches!(envelope.event, AudioEvent::EndOfStream { .. }))
         .count();
     assert_eq!(end_events, 1, "current-epoch EOF must publish exactly once");
 }
@@ -167,7 +167,7 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
 
     node.emit.flush();
     let end_events = std::iter::from_fn(|| events.try_recv().ok())
-        .filter(|envelope| matches!(envelope.event, Event::Audio(AudioEvent::EndOfStream { .. })))
+        .filter(|envelope| matches!(envelope.event, AudioEvent::EndOfStream { .. }))
         .count();
     assert_eq!(end_events, 1);
 }
@@ -254,15 +254,15 @@ fn worker_telemetry_throttles_immediate_repeats() {
 
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Audio(AudioEvent::BufferHealth {
+        Ok(AudioEvent::BufferHealth {
             buffered_ms: 250,
             decoded_frontier_ms: 350,
             seek_epoch: 0,
-        }))
+        })
     ));
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Audio(AudioEvent::EngineLoad { .. }))
+        Ok(AudioEvent::EngineLoad { .. })
     ));
     assert!(
         events.try_recv().is_err(),
@@ -354,7 +354,7 @@ fn eof_marker_and_deferred_event_keep_the_decode_epoch() {
     node.emit.flush();
     let mut eof_epochs =
         std::iter::from_fn(|| events.try_recv().ok()).filter_map(|envelope| match envelope.event {
-            Event::Audio(AudioEvent::EndOfStream { seek_epoch }) => Some(seek_epoch),
+            AudioEvent::EndOfStream { seek_epoch } => Some(seek_epoch),
             _ => None,
         });
     assert_eq!(eof_epochs.next(), Some(0));

@@ -5,8 +5,8 @@ use kithara_decode::{
 };
 use kithara_events::{
     AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, DeferredBus, Event,
-    EventBus, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
+    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, DeferredBus, EventBus,
+    FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
     SegmentLocation,
 };
 use kithara_platform::{sync::Arc, time::Duration};
@@ -16,7 +16,7 @@ use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, Seek
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
-use super::{ReadOutcome, ThreadWake, WakeSignal};
+use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
 use crate::ConsumerWakeMode;
 
 struct Consts;
@@ -35,7 +35,7 @@ impl Consts {
 /// publish inline: everything a read births is on the bus when that read
 /// returns, and the deferred ring keeps the shell as its only flusher.
 pub(super) struct AudioEvents {
-    emit: Arc<DeferredBus<Event>>,
+    emit: Arc<DeferredBus<AudioLaneEvent>>,
     wake_mode: ConsumerWakeMode,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
@@ -43,7 +43,10 @@ pub(super) struct AudioEvents {
 }
 
 impl AudioEvents {
-    pub(super) const fn new(emit: Arc<DeferredBus<Event>>, wake_mode: ConsumerWakeMode) -> Self {
+    pub(super) const fn new(
+        emit: Arc<DeferredBus<AudioLaneEvent>>,
+        wake_mode: ConsumerWakeMode,
+    ) -> Self {
         Self {
             emit,
             wake_mode,
@@ -77,7 +80,7 @@ impl AudioEvents {
         outcome
     }
 
-    pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<Event>> {
+    pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<AudioLaneEvent>> {
         Arc::new(DeferredBus::new(bus.clone(), Consts::AUDIO_EVENT_CAPACITY))
     }
 
@@ -163,7 +166,7 @@ impl AudioEvents {
     pub(super) fn publish(&mut self, event: AudioEvent) {
         match self.wake_mode {
             ConsumerWakeMode::RealtimeDeferred => {
-                self.emit.enqueue(event.into());
+                self.emit.enqueue(event);
                 self.wake_pending = true;
             }
             ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
@@ -200,13 +203,13 @@ impl AudioEvents {
 }
 
 pub(super) struct ReaderOutputWake {
-    emit: Arc<DeferredBus<Event>>,
+    emit: Arc<DeferredBus<AudioLaneEvent>>,
     thread: Arc<ThreadWake>,
     pending: AtomicBool,
 }
 
 impl ReaderOutputWake {
-    pub(super) fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<Event>>) -> Self {
+    pub(super) fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<AudioLaneEvent>>) -> Self {
         Self {
             emit,
             thread,
@@ -224,7 +227,7 @@ impl WakeSignal for ReaderOutputWake {
     }
 
     fn on_data_available(&self) {
-        self.emit.enqueue(AudioEvent::OutputAvailable.into());
+        self.emit.enqueue(AudioEvent::OutputAvailable);
     }
 
     fn wake(&self) {
@@ -437,7 +440,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{AudioEvent, Event, EventBus};
+    use kithara_events::{AudioEvent, EventBus};
     use kithara_platform::sync::Arc;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{SeekControl, SeekState};
@@ -485,18 +488,18 @@ mod tests {
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::SeekLifecycle {
+            Ok(AudioEvent::SeekLifecycle {
                 seek_epoch,
                 stage: SeekLifecycleStage::OutputCommitted,
                 ..
-            })) if seek_epoch == epoch
+            }) if seek_epoch == epoch
         ));
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::SeekComplete {
+            Ok(AudioEvent::SeekComplete {
                 seek_epoch,
                 position,
-            })) if seek_epoch == epoch && position == target
+            }) if seek_epoch == epoch && position == target
         ));
         assert_eq!(seek.pending_epoch(), None);
     }
@@ -535,7 +538,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::OutputAvailable))
+            Ok(AudioEvent::OutputAvailable)
         ));
 
         tx.try_push(Fetch::data(empty_chunk(&pools), 0))
@@ -551,7 +554,7 @@ mod tests {
         tx.flush_wake_signals();
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::OutputAvailable))
+            Ok(AudioEvent::OutputAvailable)
         ));
     }
 
@@ -596,10 +599,10 @@ mod tests {
 
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::UnderrunStarted {
+            Ok(AudioEvent::UnderrunStarted {
                 position_ms: 321,
                 seek_epoch: 0,
-            }))
+            })
         ));
         assert!(receiver.try_recv().is_err());
 
@@ -607,10 +610,10 @@ mod tests {
         emit.flush();
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::UnderrunEnded {
+            Ok(AudioEvent::UnderrunEnded {
                 position_ms: 321,
                 seek_epoch: 0,
-            }))
+            })
         ));
     }
 }

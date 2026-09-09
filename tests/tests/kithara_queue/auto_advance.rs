@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    events::{AdvanceReason, Event, QueueEvent},
+    events::{AdvanceReason, QueueEvent},
     platform::sync::Arc,
     play::Resource,
     queue::{Queue, QueueConfig, QueueControl, RepeatMode, Transition, test_utils::QueueProbe},
@@ -12,6 +12,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
+    event::TestEvent,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
 use kithara_test_fixtures::integration_fixtures::{
@@ -113,7 +114,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
         assert!(
             !matches!(
                 envelope.event,
-                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+                TestEvent::Queue(QueueEvent::CrossfadeStarted { .. })
             ),
             "a cold select cannot crossfade from an idle player"
         );
@@ -154,7 +155,7 @@ async fn crossfade_started_requires_a_live_predecessor(constant_three: &'static 
         assert!(
             !matches!(
                 envelope.event,
-                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+                TestEvent::Queue(QueueEvent::CrossfadeStarted { .. })
             ),
             "a completed predecessor cannot start a crossfade"
         );
@@ -192,7 +193,7 @@ async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Queue(QueueEvent::RepeatModeChanged {
+        Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
             mode: kithara::events::QueueRepeatMode::One,
         }))
     ));
@@ -248,7 +249,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first(
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Queue(QueueEvent::RepeatModeChanged {
+        Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
             mode: kithara::events::QueueRepeatMode::All,
         }))
     ));
@@ -447,10 +448,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
     constant_loud: &'static [u8],
     constant_quiet: &'static [u8],
 ) {
-    use kithara::{
-        events::{Event, PlayerEvent},
-        platform::tokio::sync::broadcast::error::TryRecvError,
-    };
+    use kithara::{events::PlayerEvent, platform::tokio::sync::broadcast::error::TryRecvError};
 
     const TRACK_SECS: f64 = 1.0;
     const CROSSFADE_SECS: f32 = 0.2;
@@ -495,9 +493,11 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
 
         loop {
             match rx.try_recv().map(|env| env.event) {
-                Ok(Event::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
-                Ok(Event::Player(PlayerEvent::HandoverRequested { .. })) => handover_seen = true,
-                Ok(Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
+                Ok(TestEvent::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
+                Ok(TestEvent::Player(PlayerEvent::HandoverRequested { .. })) => {
+                    handover_seen = true
+                }
+                Ok(TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,
@@ -698,10 +698,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
 /// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
 async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static [u8]) {
-    use kithara::{
-        events::{Event, QueueEvent},
-        platform::tokio::sync::broadcast::error::TryRecvError,
-    };
+    use kithara::{events::QueueEvent, platform::tokio::sync::broadcast::error::TryRecvError};
 
     const TRACK_SECS: f64 = 0.4;
 
@@ -736,7 +733,7 @@ async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static
         let _ = harness.render(BLOCK_FRAMES).await;
         loop {
             match rx.try_recv().map(|env| env.event) {
-                Ok(Event::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
+                Ok(TestEvent::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,

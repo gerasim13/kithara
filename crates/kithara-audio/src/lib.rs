@@ -1,12 +1,12 @@
+#![forbid(unsafe_code)]
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
+
 //! Audio pipeline library with decoding and resampling.
 //!
 //! - [`Audio`] - decoded-audio reader prepared for an external playback scheduler
 //! - [`AudioConfig`] - pipeline configuration
 //! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`AudioReader`] for pull-based audio consumers
-
-#![forbid(unsafe_code)]
-#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 mod audio;
 #[cfg(any(test, feature = "mock"))]
@@ -36,7 +36,7 @@ pub use pipeline::{
 };
 pub use producer::PreloadGate;
 #[doc(hidden)]
-pub use producer::{PreparedAudioLane, ProducerPort};
+pub use producer::{AudioLaneEvent, PreparedAudioLane, ProducerPort};
 pub use traits::{
     AudioControl, AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot,
     AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,

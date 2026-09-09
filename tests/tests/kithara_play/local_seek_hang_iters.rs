@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver},
+    events::{AbrMode, AudioEvent, EventReceiver},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -18,6 +18,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     offline::{OfflinePlayer, WindowStats, rms},
     temp_dir,
 };
@@ -72,7 +73,7 @@ impl Consts {
 /// caller, unchanged.
 async fn render_and_collect(
     player: &mut OfflinePlayer,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     blocks: u32,
     samples_out: &mut Vec<f32>,
     deadline: Instant,
@@ -122,7 +123,7 @@ async fn render_and_collect(
 /// Drain pending bus events without blocking. Keeps the bounded broadcast bus
 /// from lagging while the render loop parks on the virtual clock; a lagged
 /// receiver would otherwise wedge later `try_recv` reads.
-fn drain_events(events: &mut EventReceiver) {
+fn drain_events(events: &mut EventReceiver<TestEvent>) {
     loop {
         match events.try_recv().map(|env| env.event) {
             Ok(_) => continue,
@@ -150,7 +151,7 @@ fn drain_events(events: &mut EventReceiver) {
 /// real backstop).
 async fn render_until_audio(
     player: &mut OfflinePlayer,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     min_position_secs: f64,
     deadline: Instant,
     stage: &str,
@@ -166,7 +167,7 @@ async fn render_until_audio(
         let mut advanced = false;
         loop {
             match events.try_recv().map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if u128::from(position_ms) > min_position_ms {
                         advanced = true;
                     }
@@ -282,7 +283,7 @@ async fn local_seek_middle_hang_iters(
         let mut events = resource.subscribe();
         player.load_and_fadein(resource).await;
 
-        // Event-driven warmup: drive the render pull until the worker has
+        // TestEvent-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),
         // instead of burning a fixed number of blocks that — under flash —
         // can finish before the worker primes the pipeline. Parks the body on

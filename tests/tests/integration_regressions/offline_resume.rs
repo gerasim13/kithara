@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, DownloaderEvent, Event},
+    events::{AudioEvent, DownloaderEvent},
     hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
@@ -19,6 +19,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
@@ -245,7 +246,7 @@ async fn resumes_after_outage(
         |event| {
             matches!(
                 event,
-                Event::Downloader(
+                TestEvent::Downloader(
                     DownloaderEvent::FirstByte { status: 503, .. }
                         | DownloaderEvent::RequestFailed { .. }
                         | DownloaderEvent::RetryExhausted { .. }
@@ -270,7 +271,7 @@ async fn resumes_after_outage(
         &mut rx,
         "playback starving on the exhausted buffer",
         |event| {
-            let Event::Audio(AudioEvent::UnderrunStarted { position_ms, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::UnderrunStarted { position_ms, .. }) = event else {
                 return false;
             };
             starved_at = *position_ms as f64 / 1000.0;

@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use kithara_integration_tests::event::TestEvent;
 #[path = "quality_switch_continuity/continuity.rs"]
 mod continuity;
 #[path = "quality_switch_continuity/desktop.rs"]
@@ -17,7 +18,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{
         AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
-        Event, EventBus, EventReceiver,
+        EventBus, EventReceiver,
     },
     host::HostConfig,
     platform::{
@@ -103,7 +104,7 @@ struct PreparedPlayer {
     _temp: TestTempDir,
     player: OfflinePlayer,
     abr: AbrHandle,
-    events: EventReceiver,
+    events: EventReceiver<TestEvent>,
     capture_frame: i64,
 }
 
@@ -238,7 +239,10 @@ fn target_pcm_frames() -> usize {
     usize::try_from(SAMPLE_RATE).expect("fixture sample rate fits usize") / 4
 }
 
-fn drain_decoder_events(events: &mut EventReceiver, frame_end: usize) -> Vec<DecoderObservation> {
+fn drain_decoder_events(
+    events: &mut EventReceiver<TestEvent>,
+    frame_end: usize,
+) -> Vec<DecoderObservation> {
     let mut decoder_events = Vec::new();
     loop {
         let envelope = match events.try_recv() {
@@ -248,7 +252,7 @@ fn drain_decoder_events(events: &mut EventReceiver, frame_end: usize) -> Vec<Dec
                 panic!("decoder event stream became unreliable at frame {frame_end}: {error}")
             }
         };
-        if let Event::Decoder(DecoderEvent::DecoderChanged {
+        if let TestEvent::Decoder(DecoderEvent::DecoderChanged {
             backend,
             cause,
             codec,

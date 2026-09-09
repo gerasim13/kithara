@@ -10,7 +10,7 @@ use kithara_assets::{
     WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_events::{AbrMode, AbrReason, Event, EventBus, HlsEvent, VariantIndex};
+use kithara_events::{AbrMode, AbrReason, EventBus, HlsEvent, VariantIndex};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -247,7 +247,7 @@ fn queue_has_init(v: &HlsVariant) -> bool {
         .any(|p| matches!(p, PlannedFetch::Init))
 }
 
-fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+fn collect_events(events: &mut kithara_events::EventReceiver<HlsEvent>) -> Vec<HlsEvent> {
     std::iter::from_fn(|| events.try_recv().ok())
         .map(|envelope| envelope.event)
         .collect()
@@ -309,9 +309,9 @@ fn cache_complete_publishes_once_after_full_commit() {
         .filter(|event| {
             matches!(
                 event,
-                Event::Hls(HlsEvent::CacheComplete {
+                HlsEvent::CacheComplete {
                     total_bytes: Some(16),
-                })
+                }
             )
         })
         .count();

@@ -2,7 +2,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AudioEvent, Event, EventBus},
+    events::{AudioEvent, EventBus},
     file::{File, FileConfig},
     platform::time::{self, Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -188,10 +189,10 @@ async fn decoder_file_seek_emits_events(
     loop {
         while let Ok(ev) = events_rx.try_recv().map(|env| env.event) {
             match ev {
-                Event::Audio(AudioEvent::FormatDetected { .. }) => {
+                TestEvent::Audio(AudioEvent::FormatDetected { .. }) => {
                     got_format = true;
                 }
-                Event::Audio(AudioEvent::SeekComplete { .. }) => {
+                TestEvent::Audio(AudioEvent::SeekComplete { .. }) => {
                     got_seek = true;
                 }
                 _ => {}

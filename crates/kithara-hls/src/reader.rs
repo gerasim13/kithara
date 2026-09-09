@@ -256,7 +256,7 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{Event, EventBus};
+    use kithara_events::{EventBus, HlsEvent};
     use kithara_platform::{
         CancelToken,
         sync::{Arc, ThreadGate},
@@ -410,27 +410,27 @@ mod tests {
 
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadStart {
+            Ok(HlsEvent::SegmentReadStart {
                 variant: 0,
                 segment_index: 0,
                 byte_offset: 0,
-            }))
+            })
         ));
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadComplete {
+            Ok(HlsEvent::SegmentReadComplete {
                 variant: 0,
                 segment_index: 0,
                 bytes_read: 100,
-            }))
+            })
         ));
         assert!(matches!(
             events.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Hls(HlsEvent::SegmentReadStart {
+            Ok(HlsEvent::SegmentReadStart {
                 variant: 0,
                 segment_index: 1,
                 byte_offset: 100,
-            }))
+            })
         ));
     }
 }
