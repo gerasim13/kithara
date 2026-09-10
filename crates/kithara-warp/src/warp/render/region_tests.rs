@@ -3,7 +3,7 @@ use std::num::NonZero;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
-use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_sine};
+use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -383,12 +383,12 @@ fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>)
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(#[case] backend: StretchKind) {
+fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
+    #[case] backend: StretchKind,
+    warp_nominal_clicks: Vec<f32>,
+) {
     let frames = NOMINAL * BARS;
-    let mut source = silence(frames);
-    for beat in 0..BARS {
-        add_click(&mut source, beat * NOMINAL + 8192);
-    }
+    let source = warp_nominal_clicks;
     for (mode, bps, interval) in [
         (SyncMode::HostSync, 2.0, NOMINAL),
         (SyncMode::LocalSync, 1.5, NOMINAL * 4 / 3),
