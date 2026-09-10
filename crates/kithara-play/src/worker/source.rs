@@ -1096,10 +1096,11 @@ mod tests {
     ) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
+        let input = vec![0.25; 2_048];
         let source = RawSource {
             chunks: VecDeque::from([
-                chunk_with_frames(&pools, spec, 1_024, 363, 0.25),
-                chunk_with_frames(&pools, spec, 2_048, 1_024, 0.25),
+                chunk_with_frames(&pools, spec, 1_024, 363, &input),
+                chunk_with_frames(&pools, spec, 2_048, 1_024, &input),
             ]),
             head: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
