@@ -473,14 +473,7 @@ impl ProductHarness {
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
-        let render_block_frames = NonZeroU32::new(
-            u32::try_from(block_frames).expect("offline render block count fits u32"),
-        )
-        .expect("offline render block count is non-zero");
-        let session = HostConfig::offline(pools)
-            .sample_rate(sample_rate)
-            .max_block_frames(render_block_frames)
-            .build();
+        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
