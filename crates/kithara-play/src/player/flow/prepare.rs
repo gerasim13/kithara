@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -37,9 +37,22 @@ where
         // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
         if let Some(quantum) = warp.render_quantum_frames() {
-            let shape = stream_shape.ok_or(SessionError::NoContext)?;
-            let (preload, ring) =
-                shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
+            let budget = self.player.core.response_budget_frames;
+            let (preload, ring) = if let Some(shape) = stream_shape {
+                shape.playback_buffers(quantum, budget)?
+            } else {
+                let preload = budget
+                    .get()
+                    .checked_add(1)
+                    .map(|frames| frames / quantum.get())
+                    .and_then(|chunks| chunks.checked_sub(2))
+                    .and_then(NonZeroUsize::new)
+                    .ok_or(SessionError::ResponseGeometryOverflow)?;
+                let ring = preload
+                    .checked_add(1)
+                    .ok_or(SessionError::ResponseGeometryOverflow)?;
+                (preload, ring)
+            };
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -108,8 +121,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use kithara_assets::AssetStore;
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;

@@ -36,6 +36,7 @@ pub struct PlayerResource {
 struct SourceWindow {
     source: Option<SourceSpan>,
     frames: usize,
+    media_frames: u64,
 }
 
 impl SourceWindow {
@@ -46,17 +47,25 @@ impl SourceWindow {
             .map(|span| span.with_render_revision(source.render_revision()))
     }
 
-    fn take(&mut self, frames: usize) -> Option<SourceSpan> {
+    fn take(&mut self, frames: usize) -> (Option<SourceSpan>, u64) {
         let consumed = frames.min(self.frames);
         let taken = self.source_for(consumed);
+        let media_frames = partial_frames(self.media_frames, consumed, self.frames);
         if let (Some(source), Some(taken)) = (self.source, taken) {
             self.source = SourceSpan::new(taken.end(), source.end(), source.sample_rate())
                 .filter(|remaining| remaining.start() < remaining.end())
                 .map(|remaining| remaining.with_render_revision(source.render_revision()));
         }
         self.frames -= consumed;
-        taken
+        self.media_frames -= media_frames;
+        (taken, media_frames)
     }
+}
+
+fn partial_frames(total: u64, frames: usize, span_frames: usize) -> u64 {
+    let numerator = u128::from(total) * u128::try_from(frames).unwrap_or(u128::MAX);
+    let denominator = u128::try_from(span_frames).unwrap_or(u128::MAX);
+    u64::try_from(numerator / denominator).unwrap_or(total)
 }
 
 fn partial_source_end(source: SourceSpan, frames: usize, span_frames: usize) -> Option<u64> {
@@ -150,11 +159,8 @@ impl PlayerResource {
             let mut span = self.source_spans.pop_front()?;
             let consumed = frames.min(span.frames);
             let output_end = output_start.saturating_add(consumed);
-            let source = span.take(consumed);
-            if let Some(source) = source {
-                source_frames =
-                    source_frames.checked_add(source.end().checked_sub(source.start())?)?;
-            }
+            let (source, consumed_source_frames) = span.take(consumed);
+            source_frames = source_frames.checked_add(consumed_source_frames)?;
             match (context, source) {
                 (Some(context), Some(source)) => {
                     kithara::probe_event!(
@@ -207,20 +213,23 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let (n, source) = match self.resource.get_mut().read_planar(&mut planar) {
+            let position_before = self.resource.get().position();
+            let (n, position, source) = match self.resource.get_mut().read_planar(&mut planar) {
                 Ok(kithara_audio::ReadOutcome::Frames {
-                    count, source_span, ..
-                }) => (count.get(), source_span),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, None),
+                    count,
+                    position,
+                    source_span,
+                }) => (count.get(), position, source_span),
+                Ok(kithara_audio::ReadOutcome::Pending { position, .. }) => (0, position, None),
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
                     self.eof_seen = true;
                     eof_reached = true;
-                    (0, None)
+                    (0, position_before, None)
                 }
                 Err(_) => {
                     metrics.record_decode_error();
                     self.failed = true;
-                    (0, None)
+                    (0, position_before, None)
                 }
             };
             if n == 0 {
@@ -233,8 +242,21 @@ impl PlayerResource {
                 self.failed = true;
                 break;
             }
-            self.source_spans
-                .push_back(SourceWindow { source, frames: n });
+            let media_frames = source.map_or_else(
+                || {
+                    let spec = self.resource.get().spec();
+                    spec.frame_at(position)
+                        .ok()
+                        .zip(spec.frame_at(position_before).ok())
+                        .map_or(0, |(end, start)| end.saturating_sub(start))
+                },
+                |span| span.end().saturating_sub(span.start()),
+            );
+            self.source_spans.push_back(SourceWindow {
+                source,
+                frames: n,
+                media_frames,
+            });
             self.write_len += n;
             self.write_pos += n;
         }
@@ -451,16 +473,26 @@ mod tests {
     fn partial_scratch_consumption_preserves_the_render_revision() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
         let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
-        let mut span = SourceWindow { source, frames: 10 };
+        let mut span = SourceWindow {
+            source,
+            frames: 10,
+            media_frames: 30,
+        };
 
         assert_eq!(
             span.take(4),
-            SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7))
+            (
+                SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7)),
+                12
+            )
         );
         assert_eq!(span.source.map(|source| source.start()), Some(112));
         assert_eq!(
             span.take(6),
-            SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7))
+            (
+                SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7)),
+                18
+            )
         );
     }
 }

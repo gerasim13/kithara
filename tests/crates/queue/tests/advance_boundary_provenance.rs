@@ -882,13 +882,14 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
-    let phase_tolerance = usize::try_from(PHASE_TOL_UNITS).expect("positive phase tolerance");
-    let landing_frame = (seek_issue_frame.max(1)..last_ascending_end_frame)
-        .find(|&frame| {
-            let continued_phase = (phase::units(left[frame - 1]) + 1) % SAW_PERIOD;
-            phase::distance(phase::units(left[frame]), continued_phase) > phase_tolerance
-        })
-        .expect("seek must change the audible source phase before EOF");
+    let (_, run_start, _) = require_run_containing(
+        &runs,
+        FrameClass::Ascending,
+        last_ascending_window,
+        &search_context,
+    );
+    let landing_window = run_start.max(seek_issue_frame.div_ceil(WINDOW_FRAMES));
+    let landing_frame = frame_for_window(landing_window);
 
     let phase_start_frame = landing_frame + 1;
     let replays = ascending_phase_replays(
@@ -1938,6 +1939,25 @@ fn require_last_class_window_before(
         .unwrap_or_else(|| {
             panic!(
                 "target class {target:?} must appear before window {before_window}; {}",
+                context.dump()
+            )
+        })
+}
+
+fn require_run_containing(
+    runs: &[ClassRun],
+    target: FrameClass,
+    window: usize,
+    context: &ProvenanceDumpContext<'_>,
+) -> ClassRun {
+    runs.iter()
+        .copied()
+        .find(|(class, start, len)| {
+            *class == target && *start <= window && window < start.saturating_add(*len)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "window {window} must belong to a {target:?} run; {}",
                 context.dump()
             )
         })

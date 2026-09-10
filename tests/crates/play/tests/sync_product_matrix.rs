@@ -47,7 +47,7 @@ use kithara_test_fixtures::{
     },
 };
 
-pub(super) const BLOCK_FRAMES: usize = 512;
+pub(super) const BLOCK_FRAMES: usize = 128;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const START_BPM: f64 = 120.0;
