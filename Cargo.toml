@@ -572,6 +572,9 @@ opt-level = 1
 [profile.test-release.package.kithara-bufpool-tests]
 opt-level = 1
 
+[profile.test-release.package.kithara-core-test-fixtures]
+opt-level = 1
+
 [profile.test-release.package.kithara-decode-tests]
 opt-level = 1
 
