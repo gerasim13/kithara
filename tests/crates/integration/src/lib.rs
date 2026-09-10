@@ -118,4 +118,5 @@ pub use test_server::{
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 
+#[cfg(any(feature = "all", feature = "wasm"))]
 pub mod event;

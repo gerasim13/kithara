@@ -79,7 +79,7 @@ _xtask-ready:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target="${CARGO_TARGET_DIR:-$PWD/target/xtask-self-cache}"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; if [[ "$system" = Linux && -z "${CARGO_TARGET_DIR:-}" ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/xtask-self-cache"; fi; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); export SCCACHE_DIR="$root/sccache" CARGO_HOME="$root/cargo-$system-$arch"; target="$root/target-$system-$arch"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 [no-exit-message]
 [positional-arguments]

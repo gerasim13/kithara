@@ -34,6 +34,7 @@ all = [
     "kithara/backend-cpal",
     "kithara/encode",
     "kithara/fdk-aac",
+    "kithara/ffmpeg",
     "kithara/stretch-bungee",
     "kithara-app/analysis-waveform",
     "kithara-app/beat-nn-small",

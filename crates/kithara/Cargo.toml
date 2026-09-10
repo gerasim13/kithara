@@ -12,6 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = [
     "audio",
+    "backend-cpal",
     "bufpool",
     "decode",
     "events",
