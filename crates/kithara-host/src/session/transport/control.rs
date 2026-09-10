@@ -1,7 +1,6 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_play::TransportEvent;
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis, SessionFrame};
 
 use super::{
@@ -9,6 +8,7 @@ use super::{
         SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitResult,
         TransportCommitStamp, TransportObservation,
     },
+    event::TransportEvent,
     process::converge_transport_restart,
 };
 use crate::{

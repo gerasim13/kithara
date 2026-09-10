@@ -4,7 +4,8 @@ use kithara::{
     audio::{AudioEvent, DecoderEvent},
     file::FileEvent,
     hls::HlsEvent,
-    play::{PlayerEvent, TransportEvent},
+    host::TransportEvent,
+    play::PlayerEvent,
     queue::{ItemEvent, QueueEvent},
     stream::DownloaderEvent,
 };

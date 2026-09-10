@@ -30,7 +30,7 @@ pub use api::{
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
     SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
-    TrackBinding, TrackRef, TransportEvent, TransportRevision, WaitingReason,
+    TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
