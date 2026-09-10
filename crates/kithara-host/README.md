@@ -36,7 +36,7 @@ players with that same schema, while each registered deck retains its existing
 With the `offline` feature, the same `Host<S>` drives its owned graph without an
 audio device and implements `kithara_output::OfflineRenderer` for exact finite
 output-frame ranges. Its offline variant carries the pool, render quantum,
-latency, worker, task, dispatcher, and optional probe pacing budgets.
+latency, worker, task, and dispatcher budgets.
 
 The current crate is a mechanical ownership extraction. Runtime invariants and
 dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).
