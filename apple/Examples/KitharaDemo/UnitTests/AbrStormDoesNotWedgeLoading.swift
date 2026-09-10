@@ -4,8 +4,8 @@ import Kithara
 import Testing
 
 extension IntegrationRegressionsIOS {
-    @Test("An ABR mode storm does not wedge loading")
-    func abrStormDoesNotWedgeLoading() async throws {
+    @Test("ABR storm applies the final manual variant and playback continues")
+    func abrStormAppliesFinalManualVariantAndPlaybackContinues() async throws {
         let cacheURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("abr-storm-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -15,65 +15,92 @@ extension IntegrationRegressionsIOS {
 
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
-            url: try await throttledAbrMasterURL().absoluteString
+            url: try await throttledAbrMasterURL().absoluteString,
+            abrMode: .manual(variantIndex: 0)
         )
         let facts = AbrFacts()
         let variantsCancellable = item.variantsDiscovered.sink { variants in
-            facts.record(variants)
+            facts.recordDiscovered(variants)
         }
-        let readyCancellable = item.readyToPlay.sink {
-            facts.recordReady()
+        let selectedCancellable = item.variantSelected.sink { variant in
+            facts.recordSelected(variant)
+        }
+        let appliedCancellable = item.variantApplied.sink { variant in
+            facts.recordApplied(variant)
+        }
+        let errorCancellable = item.error.sink { error in
+            facts.recordFailure(error)
         }
         defer {
             player.stop()
             try? FileManager.default.removeItem(at: cacheURL)
             _ = variantsCancellable
-            _ = readyCancellable
+            _ = selectedCancellable
+            _ = appliedCancellable
+            _ = errorCancellable
         }
 
         try player.insert(item)
         player.play()
-        try await waitForAbrFact("the four HLS variants to be discovered") {
-            facts.variants.count == 4
+        try await waitForAbrFact("four HLS variants to be discovered", facts: facts) {
+            facts.discovered.count == 4
         }
-
-        let variants = facts.variants
         try #require(
-            !facts.isReady && player.currentTime <= 0.1,
-            """
-            precondition: the throttled media playlist finished \
-            loading before the ABR storm; ready=\(facts.isReady), \
-            current=\(player.currentTime)s
-            """
+            facts.discovered.map(\.index) == [0, 1, 2, 3],
+            "precondition: expected variant indexes 0...3, got \(facts.discovered.map(\.index))"
+        )
+        try await waitForAbrFact("initial Manual(0) to reach the decoder", facts: facts) {
+            facts.applied.contains(0)
+        }
+        try #require(
+            facts.firstApplied == 0,
+            "precondition: initial applied variant must be 0, got \(facts.applied)"
         )
 
-        for round in 0..<16 {
-            if round.isMultiple(of: 2) {
-                let variant = variants[(round / 2) % variants.count]
-                player.setAbrMode(.manual(variantIndex: variant.index))
-            } else {
-                player.setAbrMode(.auto)
+        let caps: [Double] = [96_000, 256_000, 512_000, 512_000]
+        for round in 0..<10 {
+            let variantIndex = round % facts.discovered.count
+            let mode: AbrMode = round.isMultiple(of: 2)
+                ? .manual(variantIndex: variantIndex)
+                : .auto
+            player.setAbrMode(mode)
+            player.updatePeakBitrate(
+                wifi: caps[variantIndex],
+                cellular: caps[variantIndex]
+            )
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        let finalEventOffset = facts.events.count
+        player.setAbrMode(.manual(variantIndex: 3))
+        player.updatePeakBitrate(wifi: 0, cellular: 0)
+
+        try await waitForAbrFact("final Manual(3) to be selected", facts: facts) {
+            facts.events.dropFirst(finalEventOffset).contains(.selected(3))
+        }
+        try await waitForAbrFact("final Manual(3) to reach the decoder", facts: facts) {
+            let events = facts.events.dropFirst(finalEventOffset)
+            guard let selected = events.firstIndex(of: .selected(3)) else {
+                return false
             }
+            return events[events.index(after: selected)...].contains(.applied(3))
         }
-        player.setAbrMode(.auto)
-
-        let advanced = await reachedAbrFact(deadline: .seconds(60)) {
-            player.currentTime > 0.5
-        }
-        #expect(
-            advanced,
-            """
-            playback never advanced after the ABR auto/manual storm \
-            landed during HLS loading; current=\(player.currentTime)s, \
-            rate=\(player.currentRate), ready=\(facts.isReady)
-            """
+        let appliedTime = player.currentTime
+        try #require(
+            appliedTime.isFinite,
+            "currentTime was not finite when Manual(3) reached the decoder"
         )
-        guard advanced else {
-            return
+        try await waitForAbrFact(
+            "playback to advance five seconds after Manual(3) was applied",
+            facts: facts,
+            deadline: .seconds(60)
+        ) {
+            player.currentTime >= appliedTime + 5
         }
-        try await waitForAbrFact("the long HLS duration to settle after playback advanced") {
-            (player.duration ?? 0) >= 180
-        }
+        try #require(
+            facts.failure == nil,
+            "ABR storm ended with a terminal item error: \(facts.failure ?? "none")"
+        )
     }
 
     private func throttledAbrMasterURL() async throws -> URL {
@@ -193,28 +220,21 @@ extension IntegrationRegressionsIOS {
         return rewritten.joined(separator: "\n")
     }
 
-    private func reachedAbrFact(
-        deadline duration: Duration,
-        condition: () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: duration)
-        while clock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        return condition()
-    }
-
     private func waitForAbrFact(
         _ description: String,
+        facts: AbrFacts,
+        deadline duration: Duration = .seconds(30),
         condition: () -> Bool
     ) async throws {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(30))
-        while !condition() {
+        let deadline = clock.now.advanced(by: duration)
+        while true {
+            if let failure = facts.failure {
+                throw AbrTerminalFailure(description: description, failure: failure)
+            }
+            if condition() {
+                return
+            }
             guard clock.now < deadline else {
                 throw AbrFactTimeout(description)
             }
@@ -230,33 +250,87 @@ private struct AbrVariantSpec {
     let initialization: String
 }
 
+private enum AbrEvent: Equatable {
+    case selected(Int)
+    case applied(Int)
+}
+
 private final class AbrFacts: @unchecked Sendable {
     private let lock = NSLock()
-    private var discovered: [Variant] = []
-    private var ready = false
+    private var discoveredVariants: [Variant] = []
+    private var variantEvents: [AbrEvent] = []
+    private var failureDescription: String?
 
-    var variants: [Variant] {
+    var discovered: [Variant] {
         lock.lock()
         defer { lock.unlock() }
-        return discovered
+        return discoveredVariants
     }
 
-    var isReady: Bool {
+    var events: [AbrEvent] {
         lock.lock()
         defer { lock.unlock() }
-        return ready
+        return variantEvents
     }
 
-    func record(_ variants: [Variant]) {
+    var applied: [Int] {
         lock.lock()
         defer { lock.unlock() }
-        discovered = variants
+        return variantEvents.compactMap { event in
+            if case let .applied(index) = event {
+                return index
+            }
+            return nil
+        }
     }
 
-    func recordReady() {
+    var firstApplied: Int? {
         lock.lock()
         defer { lock.unlock() }
-        ready = true
+        return variantEvents.lazy.compactMap { event in
+            if case let .applied(index) = event {
+                return index
+            }
+            return nil
+        }.first
+    }
+
+    var failure: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return failureDescription
+    }
+
+    func recordDiscovered(_ variants: [Variant]) {
+        lock.lock()
+        defer { lock.unlock() }
+        discoveredVariants = variants
+    }
+
+    func recordSelected(_ variant: Variant) {
+        lock.lock()
+        defer { lock.unlock() }
+        variantEvents.append(.selected(variant.index))
+    }
+
+    func recordApplied(_ variant: Variant) {
+        lock.lock()
+        defer { lock.unlock() }
+        variantEvents.append(.applied(variant.index))
+    }
+
+    func recordFailure(_ error: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        failureDescription = String(describing: error)
+    }
+}
+
+private struct AbrTerminalFailure: Error, CustomStringConvertible {
+    let description: String
+
+    init(description: String, failure: String) {
+        self.description = "Item failed while waiting for \(description): \(failure)"
     }
 }
 

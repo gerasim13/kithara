@@ -106,8 +106,12 @@ impl Track<ApplyingSeek> {
             return TrackStep::StateChanged;
         }
         if !src
-            .readiness
-            .source_is_ready_for_apply_seek(&src.shared_stream, applying)
+            .decode
+            .active()
+            .has_completed_seek(applying.request.seek)
+            && !src
+                .readiness
+                .source_is_ready_for_apply_seek(&src.shared_stream, applying)
         {
             let phase = source_phase_for_wait_context(
                 &src.shared_stream,

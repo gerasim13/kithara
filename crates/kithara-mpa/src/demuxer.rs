@@ -18,6 +18,7 @@ use symphonia_core::{
     },
     io::*,
     meta::{Metadata, MetadataLog},
+    packet::PacketRef,
     support_format,
 };
 use tracing::{debug, info, warn};
@@ -166,56 +167,38 @@ impl FormatReader for MpaReader<'_> {
     }
 
     fn next_packet(&mut self) -> Result<Option<Packet>> {
-        let (header, data) = loop {
-            let (header, data) = match read_mpeg_frame(&mut self.reader) {
-                Ok(frame) => frame,
-                Err(Error::IoError(err)) if err.kind() == ErrorKind::UnexpectedEof => {
-                    return Ok(None);
-                }
-                Err(err) => return Err(err),
-            };
-
-            if is_maybe_info_tag(&data, &header) {
-                if try_read_info_tag(&data, &header).is_some() {
-                    warn!("found an unexpected xing tag, discarding");
-                    continue;
-                }
-            } else if is_maybe_vbri_tag(&data, &header)
-                && try_read_vbri_tag(&data, &header).is_some()
-            {
-                warn!("found an unexpected vbri tag, discarding");
-                continue;
-            }
-
-            break (header, data);
-        };
-
-        let pts = self.next_packet_ts;
-        let dur = header.duration();
-
-        self.next_packet_ts = match self.next_packet_ts.checked_add(dur) {
-            Some(ts) => ts,
-            None => return Ok(None),
-        };
-
-        let packet = PacketBuilder::new()
-            .track_id(0)
-            .pts(pts)
-            .trimmed_dur(
-                dur,
-                self.tracks[0]
-                    .num_frames
-                    .map(Duration::from)
-                    .and_then(|dur| dur.timestamp_from(Timestamp::ZERO)),
-            )
-            .data(data)
-            .build();
-
-        Ok(Some(packet))
+        let mut scratch = [0; MAX_MPEG_FRAME_SIZE];
+        Ok(self.next_packet_ref(&mut scratch)?.map(|packet| {
+            let mut owned = Packet::new(packet.track_id, packet.pts, packet.dur, packet.data);
+            owned.dts = packet.dts;
+            owned.trim_start = packet.trim_start;
+            owned.trim_end = packet.trim_end;
+            owned
+        }))
     }
 
     fn seek(&mut self, mode: SeekMode, to: SeekTo) -> Result<SeekedTo> {
-        let required_ts = match to {
+        let mut packet_buf = [0; MAX_MPEG_FRAME_SIZE];
+        self.seek_with_buffer(mode, &to, &mut packet_buf)
+    }
+
+    fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+}
+
+impl<'s> MpaReader<'s> {
+    /// Seeks using caller-provided packet scratch storage.
+    ///
+    /// # Errors
+    /// Returns source, framing, or seek errors.
+    fn seek_with_buffer(
+        &mut self,
+        mode: SeekMode,
+        to: &SeekTo,
+        packet_buf: &mut [u8],
+    ) -> Result<SeekedTo> {
+        let required_ts = match *to {
             SeekTo::Timestamp { ts, .. } => ts,
             SeekTo::Time { time, .. } => {
                 let tb = self.tracks[0]
@@ -254,7 +237,9 @@ impl FormatReader for MpaReader<'_> {
         debug!("seeking to ts={required_ts}");
 
         match mode {
-            SeekMode::Coarse if is_seekable => self.preseek_coarse(required_ts, min_ts, max_ts)?,
+            SeekMode::Coarse if is_seekable => {
+                self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
+            }
             SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
             SeekMode::Coarse => (),
         }
@@ -274,12 +259,59 @@ impl FormatReader for MpaReader<'_> {
         })
     }
 
-    fn tracks(&self) -> &[Track] {
-        &self.tracks
-    }
-}
+    /// Reads a packet into caller-provided bounded storage.
+    ///
+    /// # Errors
+    /// Returns the source or MPEG framing error without advancing a transient read.
+    fn next_packet_ref<'a>(&mut self, packet_buf: &'a mut [u8]) -> Result<Option<PacketRef<'a>>> {
+        let header = loop {
+            let header = match read_mpeg_frame_into(&mut self.reader, packet_buf) {
+                Ok(header) => header,
+                Err(Error::IoError(err)) if err.kind() == ErrorKind::UnexpectedEof => {
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
+            };
 
-impl<'s> MpaReader<'s> {
+            let data = &packet_buf[..MPEG_HEADER_LEN + header.frame_size];
+            if is_maybe_info_tag(data, &header) {
+                if try_read_info_tag(data, &header).is_some() {
+                    warn!("found an unexpected xing tag, discarding");
+                    continue;
+                }
+            } else if is_maybe_vbri_tag(data, &header) && try_read_vbri_tag(data, &header).is_some()
+            {
+                warn!("found an unexpected vbri tag, discarding");
+                continue;
+            }
+
+            break header;
+        };
+
+        let pts = self.next_packet_ts;
+        let dur = header.duration();
+
+        self.next_packet_ts = match self.next_packet_ts.checked_add(dur) {
+            Some(ts) => ts,
+            None => return Ok(None),
+        };
+
+        let packet = PacketBuilder::new()
+            .track_id(0)
+            .pts(pts)
+            .trimmed_dur(
+                dur,
+                self.tracks[0]
+                    .num_frames
+                    .map(Duration::from)
+                    .and_then(|dur| dur.timestamp_from(Timestamp::ZERO)),
+            )
+            .data_by_ref(&packet_buf[..MPEG_HEADER_LEN + header.frame_size])
+            .build_packet_ref();
+
+        Ok(Some(packet))
+    }
+
     /// Seeks the media source stream back to the start of the first packet if the required
     /// timestamp is in the past.
     fn preseek_accurate(&mut self, required_ts: Timestamp, min_ts: Timestamp) -> Result<()> {
@@ -301,6 +333,7 @@ impl<'s> MpaReader<'s> {
         required_ts: Timestamp,
         min_ts: Timestamp,
         max_ts: Option<Timestamp>,
+        packet_buf: &mut [u8],
     ) -> Result<()> {
         let audio_byte_len = match self.reader.byte_len() {
             Some(byte_len) => u128::from(byte_len - self.first_packet_pos),
@@ -329,7 +362,7 @@ impl<'s> MpaReader<'s> {
                 .map_err(|_| Error::SeekError(SeekErrorKind::OutOfRange))?,
         ))?;
 
-        let (header, _) = read_mpeg_frame_strict(&mut self.reader)?;
+        let header = read_mpeg_frame_strict_into(&mut self.reader, packet_buf)?;
 
         let audio_byte_pos = u128::from(self.reader.pos() - self.first_packet_pos);
 
@@ -448,7 +481,9 @@ impl<'s> MpaReader<'s> {
     /// Returns a decode error when no MPEG frame can be synchronised, or the
     /// underlying I/O error when the source cannot be read.
     pub fn try_new(mut mss: MediaSourceStream<'s>, opts: FormatOptions) -> Result<Self> {
-        let (header, packet) = read_mpeg_frame_strict(&mut mss)?;
+        let mut packet = [0; MAX_MPEG_FRAME_SIZE];
+        let header = read_mpeg_frame_strict_into(&mut mss, &mut packet)?;
+        let packet = &packet[..MPEG_HEADER_LEN + header.frame_size];
         let format_info = match header.layer {
             MpegLayer::Layer1 => &FormatInfos::MP1,
             MpegLayer::Layer2 => &FormatInfos::MP2,
@@ -466,7 +501,7 @@ impl<'s> MpaReader<'s> {
 
         track.with_codec_params(CodecParameters::Audio(codec_params));
 
-        if let Some(info_tag) = try_read_info_tag(&packet, &header) {
+        if let Some(info_tag) = try_read_info_tag(packet, &header) {
             if let Some(lame_tag) = info_tag.lame {
                 track
                     .with_delay(lame_tag.enc_delay)
@@ -482,7 +517,7 @@ impl<'s> MpaReader<'s> {
 
                 track.with_num_frames(num_frames.saturating_sub(u64::from(discard)));
             }
-        } else if let Some(vbri_tag) = try_read_vbri_tag(&packet, &header) {
+        } else if let Some(vbri_tag) = try_read_vbri_tag(packet, &header) {
             info!("using vbri header for duration");
 
             let num_frames = u64::from(vbri_tag.num_mpeg_frames) * u64::from(header.num_frames());
@@ -544,11 +579,14 @@ fn roll_back_transient<T>(
 }
 
 /// Reads an MPEG frame and returns the header and buffer.
-fn read_mpeg_frame(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHeader, Vec<u8>)> {
+fn read_mpeg_frame_into(
+    reader: &mut MediaSourceStream<'_>,
+    packet: &mut [u8],
+) -> Result<FrameHeader> {
     let start = reader.pos();
     reader.ensure_seekback_buffer(MAX_MPEG_FRAME_SIZE);
 
-    let result = read_mpeg_frame_inner(reader);
+    let result = read_mpeg_frame_inner(reader, packet);
 
     match result {
         Err(Error::IoError(err))
@@ -564,7 +602,10 @@ fn read_mpeg_frame(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHeader, V
     }
 }
 
-fn read_mpeg_frame_inner(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHeader, Vec<u8>)> {
+fn read_mpeg_frame_inner(
+    reader: &mut MediaSourceStream<'_>,
+    packet: &mut [u8],
+) -> Result<FrameHeader> {
     let (header, header_word) = loop {
         let sync = header::sync_frame(reader)?;
 
@@ -575,22 +616,29 @@ fn read_mpeg_frame_inner(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHea
         warn!("invalid mpeg audio header");
     };
 
-    let mut packet = vec![0u8; MPEG_HEADER_LEN + header.frame_size];
+    let packet_len = MPEG_HEADER_LEN + header.frame_size;
+    if packet_len > packet.len() {
+        return decode_error("mpa: MPEG frame exceeds the format maximum");
+    }
     packet[0..MPEG_HEADER_LEN].copy_from_slice(&header_word.to_be_bytes());
 
-    let mut body = &mut packet[MPEG_HEADER_LEN..];
+    let mut body = &mut packet[MPEG_HEADER_LEN..packet_len];
     while !body.is_empty() {
         let read = reader.read_buf(body)?;
         body = &mut body[read..];
     }
 
-    Ok((header, packet))
+    Ok(header)
 }
 
 /// Reads an MPEG frame and checks if the next frame begins after the packet.
-fn read_mpeg_frame_strict(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHeader, Vec<u8>)> {
+fn read_mpeg_frame_strict_into(
+    reader: &mut MediaSourceStream<'_>,
+    packet: &mut [u8],
+) -> Result<FrameHeader> {
     loop {
-        let (header, packet) = read_mpeg_frame(reader)?;
+        let header = read_mpeg_frame_into(reader, packet)?;
+        let packet_len = MPEG_HEADER_LEN + header.frame_size;
 
         let pos = reader.pos();
 
@@ -598,16 +646,16 @@ fn read_mpeg_frame_strict(reader: &mut MediaSourceStream<'_>) -> Result<(FrameHe
             && (!header::is_frame_header_word_synced(sync)
                 || !is_frame_header_similar(&header, sync))
         {
-            warn!("skipping junk at {} bytes", pos - packet.len() as u64);
+            warn!("skipping junk at {} bytes", pos - packet_len as u64);
 
             // WHY: Resume one byte into the rejected candidate to avoid selecting it again.
-            reader.seek_buffered_rev(packet.len() + MPEG_HEADER_LEN - 1);
+            reader.seek_buffered_rev(packet_len + MPEG_HEADER_LEN - 1);
             continue;
         }
 
         reader.seek_buffered(pos);
 
-        break Ok((header, packet));
+        break Ok(header);
     }
 }
 

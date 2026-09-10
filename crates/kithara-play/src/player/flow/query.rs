@@ -41,11 +41,7 @@ impl<S> PlayerRuntime<S> {
 
     /// Get EQ gain for a band in dB.
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = self.slot()?;
-        self.core
-            .engine
-            .slot_eq(slot_id)
-            .and_then(|eq| eq.gain(band))
+        self.core.engine.eq().and_then(|eq| eq.gain(band))
     }
 
     /// Single coherent read of the active slot's live playback scalars.

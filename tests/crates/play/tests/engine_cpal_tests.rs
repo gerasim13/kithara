@@ -63,7 +63,6 @@ impl Drop for CpalGraphSession {
 }
 
 impl SessionDispatcher<TestPools> for CpalGraphSession {
-    #[kithara::allow_block]
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx

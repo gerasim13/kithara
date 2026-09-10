@@ -118,9 +118,18 @@ where
             grid_id,
             bus,
             eq_layout,
+            gate_smoothing,
             pools,
             sample_rate,
-        } => match register_player(state, grid_id, bus, eq_layout, pools, sample_rate) {
+        } => match register_player(
+            state,
+            grid_id,
+            bus,
+            eq_layout,
+            pools,
+            sample_rate,
+            gate_smoothing,
+        ) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -221,9 +230,8 @@ where
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
-            let measured = measured_stream_shape(state).map(|shape| shape.sample_rate.get());
             trace_stream_info(state, "query-sample-rate");
-            Reply::SampleRate(SessionSampleRate::new(measured, state.sample_rate_hint))
+            Reply::SampleRate(sample_rate(state))
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
@@ -238,7 +246,12 @@ fn measured_stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Opti
         .map(|info| StreamShape::new(info.max_block_frames, info.sample_rate))
 }
 
-fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
+pub(super) fn sample_rate<B: AudioBackend, S>(state: &SessionState<B, S>) -> SessionSampleRate {
+    let measured = measured_stream_shape(state).map(|shape| shape.sample_rate.get());
+    SessionSampleRate::new(measured, state.sample_rate_hint)
+}
+
+pub(super) fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> Option<StreamShape> {
     measured_stream_shape(state).or_else(|| {
         Some(StreamShape::new(
             state.requested_max_block_frames?,
@@ -304,6 +317,8 @@ fn unregister_player<B: AudioBackend, S>(
         .started;
     if started {
         lifecycle::stop_player(state, player_id)?;
+    } else if state.ctx.is_some() {
+        lifecycle::shutdown_if_idle(state)?;
     }
     state
         .graph
@@ -364,6 +379,7 @@ pub(super) fn handle_update_error<B: AudioBackend, S>(
     match err {
         UpdateError::StreamStoppedUnexpectedly(reason) => {
             state.stream_needs_restart = true;
+            state.publish_root();
             warn!(
                 ?reason,
                 "session stream stopped unexpectedly; restarting audio stream"
@@ -428,6 +444,7 @@ pub(super) fn restart_stream<B: AudioBackend, S>(
     state.reserved_session_grid = None;
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
+    state.publish_root();
     trace_stream_info(state, "restart-stream");
     debug!(
         sample_rate,
@@ -478,6 +495,7 @@ mod tests {
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
+    use kithara_play::DEFAULT_GATE_SMOOTHING;
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
@@ -610,6 +628,7 @@ mod tests {
             sample_rate,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
+            gate_smoothing: DEFAULT_GATE_SMOOTHING,
             pools: pools(),
         }
     }
@@ -620,7 +639,7 @@ mod tests {
             state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) {
-            Reply::PlayerRegistered(id) => id,
+            Reply::PlayerRegistered(registered) => registered.id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
@@ -770,12 +789,13 @@ mod tests {
     fn detach_is_rejected_while_the_graph_projection_is_live() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let Reply::PlayerRegistered(player_id) = run_cmd(
+        let Reply::PlayerRegistered(registered) = run_cmd(
             &mut state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("fixture player is registered")
         };
+        let player_id = registered.id;
         let detach = |state: &TestState| SyncOperation::Topology {
             base: state.root.topology().expect("fixture topology").stamp(),
             operations: Box::new([TopologyOperation::Detach { member: grid_id }]),
@@ -961,6 +981,27 @@ mod tests {
         };
         assert_eq!(measured.max_block_frames.get(), 512);
         assert_eq!(measured.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
+        assert_eq!(state.root_view.stream_shape(), Some(measured));
+        restart_stream(&mut state, 48_000).expect("restart stream");
+        assert_eq!(
+            state
+                .root_view
+                .stream_shape()
+                .expect("published shape")
+                .sample_rate
+                .get(),
+            48_000
+        );
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id }),
+            Reply::Ok
+        ));
+        let stopped = state
+            .root_view
+            .stream_shape()
+            .expect("configured shape after stop");
+        assert_eq!(stopped.max_block_frames.get(), 128);
+        assert_eq!(stopped.sample_rate.get(), 48_000);
     }
 
     #[kithara::test]
@@ -1265,12 +1306,13 @@ mod tests {
             ),
             HostReply::Ok
         ));
-        let Reply::PlayerRegistered(player_id) = run_cmd(
+        let Reply::PlayerRegistered(registered) = run_cmd(
             &mut state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("player registration must succeed")
         };
+        let player_id = registered.id;
 
         start_player_cmd(&mut state, player_id);
 

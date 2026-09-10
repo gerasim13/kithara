@@ -46,11 +46,12 @@ use crate::{
             retire::Retired,
             state::BuildId,
         },
-        seek::{SeekContext, SeekRequest},
+        seek::{ApplySeekState, SeekContext, SeekMode, SeekRequest},
         source::StreamAudioSource,
         stream::shared::SharedStream,
         track::{
-            self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
+            self, ApplyingSeek, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep,
+            WaitingReason,
         },
     },
     test_pools::{Pools, pools, sample_buffer},
@@ -83,11 +84,16 @@ impl Consts {
 pub(super) struct TestDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
     id: u64,
+    preparations: Arc<AtomicU64>,
 }
 
 impl TestDecoder {
     pub(super) fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
-        Self { drops, id }
+        Self {
+            drops,
+            id,
+            preparations: Arc::new(AtomicU64::new(0)),
+        }
     }
 }
 
@@ -98,6 +104,10 @@ impl Drop for TestDecoder {
 }
 
 impl Decoder for TestDecoder {
+    fn prepare_next_chunk(&mut self) {
+        self.preparations.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
     }
@@ -2069,6 +2079,101 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
 
     source.flush_deferred();
     assert_eq!(drops.lock().as_slice(), &[2]);
+}
+
+#[kithara::test(tokio)]
+async fn deferred_preparation_does_not_read_before_seek_is_applied() {
+    let RebuildFixture {
+        mut source, drops, ..
+    } = test_source(0).await;
+    let decoder = TestDecoder::new(2, drops);
+    let preparations = decoder.preparations.clone();
+    source.decode.replace_active(DecoderGeneration::new(
+        Box::new(decoder),
+        Some(media_info(0)),
+        0,
+        0,
+        None,
+        GaplessMode::Disabled,
+    ));
+    let target = Duration::from_secs(3);
+    let epoch = source.seek.begin(target);
+    let seek = SeekContext { target, epoch };
+    source.prepare_deferred();
+    assert_eq!(
+        preparations.swap(0, Ordering::Relaxed),
+        1,
+        "the current decode phase still needs input until the seek is dispatched"
+    );
+    source.update_state(
+        Track::<ApplyingSeek>::new(ApplySeekState {
+            request: SeekRequest {
+                seek,
+                emit_request: false,
+            },
+            mode: SeekMode::Direct {
+                target_byte: Some(32),
+            },
+        })
+        .erase(),
+    );
+
+    source.prepare_deferred();
+    assert_eq!(
+        preparations.load(Ordering::Relaxed),
+        0,
+        "preparing old input can move the reader away from the pending seek anchor"
+    );
+    assert!(
+        source
+            .decode
+            .poll_seek(&source.shared_stream, source.playhead.as_ref(), seek)
+            .is_pending()
+    );
+    source.prepare_deferred();
+    assert!(
+        source.decode.active().has_completed_seek(seek),
+        "seek execution must remain available while packet preparation is stopped"
+    );
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+}
+
+#[kithara::test(tokio)]
+async fn completed_seek_is_consumed_when_landing_bytes_are_no_longer_ready(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let target = Duration::from_millis(10);
+    let epoch = fixture.source.seek.begin(target);
+    let seek = SeekContext { target, epoch };
+    let source = &mut fixture.source;
+    assert!(
+        source
+            .decode
+            .poll_seek(&source.shared_stream, source.playhead.as_ref(), seek)
+            .is_pending()
+    );
+    source.flush_deferred();
+    *fixture.phase.lock() = SourcePhase::Waiting;
+    fixture.source.update_state(
+        Track::<ApplyingSeek>::new(ApplySeekState {
+            request: SeekRequest {
+                seek,
+                emit_request: false,
+            },
+            mode: SeekMode::Direct {
+                target_byte: Some(32),
+            },
+        })
+        .erase(),
+    );
+
+    assert!(matches!(
+        fixture.source.step_track(),
+        TrackStep::StateChanged
+    ));
+    assert!(matches!(
+        fixture.source.state,
+        CurrentFsm::AwaitingResume(_)
+    ));
 }
 
 #[kithara::test(tokio)]

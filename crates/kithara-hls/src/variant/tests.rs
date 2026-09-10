@@ -2890,6 +2890,68 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     writer.commit(Some(len)).expect("commit segment");
 }
 
+#[kithara::test]
+fn reading_waits_for_available_segment_bytes_before_opening_storage() {
+    let ctx = test_ctx(1);
+    let v = VariantParts {
+        init: None,
+        segments: vec![make_placeholder_seg(0, 64, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()),
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+    assert!(!v.segments()[0].size().is_exact());
+    v.read_at(0, &mut [0; 8]).expect("read unsized segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+    v.segments()[0].size().set_exact(64);
+    v.read_at(0, &mut [0; 8])
+        .expect("read sized but absent segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+
+    let key = v.segments()[0].resource_id();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(key, None)
+        .expect("acquire segment")
+    else {
+        panic!("segment resource must be pending");
+    };
+    writer
+        .write_at(0, &[0, 1, 2, 3, 4, 5, 6, 7])
+        .expect("write available prefix");
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("prepared read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[kithara::test]
+fn reading_across_segment_boundary_opens_each_resource_once() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[64, 64], &ctx);
+    for index in 0..2 {
+        write_seg_bytes(&v, &ctx, index, 64);
+        settle_seg(&v, &ctx, index, 64);
+    }
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("first read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let opens = v.segments.opens.load(Ordering::Relaxed);
+    assert!(matches!(
+        v.read_at(64, &mut bytes).expect("next segment"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens + 1);
+}
+
 /// A chunked run over one slot opens its resource once.
 #[kithara::test]
 fn reading_a_segment_in_chunks_opens_its_resource_once() {

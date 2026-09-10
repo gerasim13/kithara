@@ -592,10 +592,7 @@ where
     }
 
     fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.sessions.incoming_session().is_some_and(|session| {
-            session.transition() == Some(transition)
-                && session.wait_phase() == SourcePhase::WaitingDemand
-        })
+        self.sessions.transition_demand_in_flight(transition)
     }
 }
 
@@ -649,7 +646,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::{
         io::{ErrorKind, Read},
         num::NonZeroU64,
@@ -683,7 +680,8 @@ mod tests {
     type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
 
-    fn switch_coord() -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
+    pub(in crate::stream) fn switch_coord()
+    -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         switch_coord_with_reason(AbrReason::ManualOverride)
     }
 
@@ -832,7 +830,7 @@ mod tests {
         (coord, bus, ctx, abr_state)
     }
 
-    fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
+    pub(in crate::stream) fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
         ReaderProfile::new(
             ReaderInput::Incremental,
             ReaderWarmup::None,
@@ -849,7 +847,7 @@ mod tests {
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
     }
 
-    fn prepare_incoming(
+    pub(in crate::stream) fn prepare_incoming(
         coord: &TestHlsCoord,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {

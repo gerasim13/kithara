@@ -47,6 +47,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TestE
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus,
             eq_layout: Vec::new(),
+            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })

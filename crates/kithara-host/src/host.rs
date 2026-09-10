@@ -305,7 +305,7 @@ impl<S> Host<S> {
             SessionEpoch::new(0),
             SyncMemberKind::Group,
         );
-        let view = RootView::new(&group);
+        let view = RootView::new(&group, sample_rate);
         Ok(SessionRoot {
             sample_rate,
             group,

@@ -15,7 +15,9 @@ use kithara_integration_tests::{
     Xorshift64,
     event::TestEvent,
     kithara,
-    offline::{AppQueueFixture, insecure_app_queue, offline_gain_window},
+    offline::{
+        AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue, offline_gain_window,
+    },
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
@@ -369,22 +371,18 @@ async fn track_plays_end_to_end(
         );
     }
 
+    // Each cursor read sits beside its own position read, so the reporting lag
+    // the two endpoints carry cancels instead of adding.
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
+    let cursor_start = ctx.queue.host().position();
     time::sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
-    let gain = end_pos - start_pos;
-    let pacing = ctx.queue.host().pacing().expect("paced offline queue");
-    let gain_window = offline_gain_window(
-        2.0,
-        ctx.queue.host().spec().sample_rate,
-        ctx.queue.host().max_block_frames(),
-        pacing,
-    );
-    assert!(
-        gain_window.contains(&gain),
-        "position gain out of offline-realtime window [{url}]: got \
-         {gain:.2}s over 2s wall clock (expected {gain_window:?}; start=\
-         {start_pos:.2} end={end_pos:.2})",
+    let cursor_end = ctx.queue.host().position();
+    assert_playhead_tracks_renderer(
+        end_pos - start_pos,
+        cursor_end - cursor_start,
+        ctx.queue.host().spec(),
+        url,
     );
 
     ctx.queue.remove(track_id).expect("remove");

@@ -75,3 +75,49 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
          crates/kithara-decode/src/symphonia/aac_fdk.rs.",
     );
 }
+
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+async fn aac_seek_to_start_discards_previous_signal_history(
+    #[future(awt)] aac: (TestServerHelper, Vec<u8>),
+) {
+    let (_server, bytes) = aac;
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes),
+        Some("aac"),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
+            .build(),
+    )
+    .expect("probe AAC decoder");
+    let first =
+        AudioChunk::try_from(decoder.next_chunk().expect("first decode")).expect("first PCM chunk");
+    for _ in 0..8 {
+        decoder.next_chunk().expect("advance decoder history");
+    }
+    for _ in 0..2 {
+        decoder.seek(Duration::ZERO).expect("seek to start");
+        let replay = AudioChunk::try_from(decoder.next_chunk().expect("decode after reset"))
+            .expect("replayed PCM chunk");
+        assert_eq!(
+            first.samples.len(),
+            replay.samples.len(),
+            "replayed chunk length"
+        );
+        let mismatch = first
+            .samples
+            .iter()
+            .zip(replay.samples.iter())
+            .enumerate()
+            .find(|(_, (a, b))| a != b);
+        let max_error = first
+            .samples
+            .iter()
+            .zip(replay.samples.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            mismatch.is_none(),
+            "first differing sample: {mismatch:?}; max error {max_error}"
+        );
+    }
+}

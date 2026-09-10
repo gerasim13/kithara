@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const WORKSPACE_DEBT_THRESHOLD: u64 = 100;
 
 pub(super) struct Revision {
@@ -55,7 +55,14 @@ pub(super) fn collect(
     let adapted = adapters::collect(ctx, &revision.directory, &selection.name, args, stages)?;
     findings.extend(adapted.findings);
     let debt_units = findings.iter().map(|finding| finding.debt_units).sum();
-    let tool_coverage = tool_coverage(args, ctx, stages, &adapted.coverage);
+    let mut tool_coverage = tool_coverage(args, ctx, stages, &adapted.coverage);
+    tool_coverage.push(ToolCoverage {
+        tool: "lcom4".to_owned(),
+        status: CoverageStatus::Executed,
+        owner: Some("cohesion".to_owned()),
+        note: "Native source-level diagnostic; limitations and unresolved ownership are recorded in lcom4.notes.".to_owned(),
+        evidence_artifacts: vec!["assessment.json".to_owned()],
+    });
     let evidence_gaps = tool_coverage
         .iter()
         .filter(|coverage| coverage.status == CoverageStatus::EvidenceGap)
@@ -94,7 +101,20 @@ pub(super) fn collect(
     );
     let output_directory =
         output_directory(&ctx.root, &revision.directory, args.profile, args.depth);
+    let selected_module = args
+        .module
+        .as_deref()
+        .and_then(|module| module.split_once("::"));
+    let lcom4 = crate::cohesion::collect(
+        ctx,
+        args.profile == AssessmentProfile::Complete,
+        args.krate
+            .as_deref()
+            .or_else(|| selected_module.map(|(package, _)| package)),
+        selected_module.map(|(_, module)| module),
+    )?;
     Ok(Assessment {
+        lcom4,
         schema_version: SCHEMA_VERSION,
         revision: revision.directory,
         content_digest: revision.digest,

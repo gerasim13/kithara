@@ -531,39 +531,20 @@ fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) ->
     }
 }
 
-fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
-    for (band, &gain) in eq_bands.iter().enumerate() {
-        let _ = queue.set_eq_gain(band, f32::from(gain));
-    }
-}
-
 pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
         AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            let eq_bands = {
-                let mut st = state.lock();
-                st.current_track_index = current_index;
-                st.track_name = current_index
-                    .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
-                    .unwrap_or_default();
-                st.selected_variant = None;
-                st.is_seeking = false;
-                st.eq_bands.clone()
-            };
-            reapply_eq(queue, &eq_bands);
+            let mut st = state.lock();
+            st.current_track_index = current_index;
+            st.track_name = current_index
+                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                .unwrap_or_default();
+            st.selected_variant = None;
+            st.is_seeking = false;
         }
         AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
-            let started = rate > 0.0;
-            let mut st = state.lock();
-            st.playing = started;
-            let eq_bands = started.then(|| st.eq_bands.clone());
-            drop(st);
-            // Playback just started on an active slot -- push the desired EQ
-            // down so gains set before play take effect.
-            if let Some(eq_bands) = eq_bands {
-                reapply_eq(queue, &eq_bands);
-            }
+            state.lock().playing = rate > 0.0;
         }
         // Session-mix gain deliberately has no event mapping here: `st.volume`
         // is content volume, owned by the player's volume path alone.
@@ -777,12 +758,21 @@ mod tests {
         first.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
+        host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
+            .await;
+        queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         queue
             .bus()
             .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
         let second = answer_subscribe(&mut requests, track_id).await;
         second.send_replace(Some(progress(2)));
         wait_for_revision(&state, 2).await;
+        assert_eq!(
+            queue.eq_gain(0),
+            Some(-6.0),
+            "event mirrors preserve the deck EQ"
+        );
+        assert!(state.lock().playing, "the rate event reaches the UI");
 
         drop(first);
         cancel.cancel();

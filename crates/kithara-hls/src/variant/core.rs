@@ -230,6 +230,9 @@ where
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
+        if range.start < range.end && !seg.contains(&self.scope, range.start..range.start + 1) {
+            return Ok(None);
+        }
         let Some(reader) = self.reader(seg)? else {
             return Ok(None);
         };

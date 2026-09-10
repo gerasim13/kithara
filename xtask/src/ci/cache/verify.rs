@@ -9,17 +9,7 @@ use anyhow::{Context, Result, ensure};
 use tempfile::TempDir;
 use tracing::info;
 
-use crate::ci::host::read_secret;
-
-const CLIENT_KEYS: [&str; 7] = [
-    "SCCACHE_BUCKET",
-    "SCCACHE_ENDPOINT",
-    "SCCACHE_REGION",
-    "SCCACHE_S3_USE_SSL",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_EC2_METADATA_DISABLED",
-];
+use super::client_environment;
 
 struct Probe {
     root: TempDir,
@@ -85,31 +75,6 @@ fn require_success(output: &Output) -> Result<()> {
     Ok(())
 }
 
-fn environment(body: &str) -> Result<BTreeMap<String, String>> {
-    let mut environment = BTreeMap::new();
-    for line in body.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .context("invalid cache environment entry")?;
-        ensure!(
-            CLIENT_KEYS.contains(&key),
-            "unexpected cache environment key"
-        );
-        ensure!(!value.is_empty(), "empty cache environment value");
-        ensure!(
-            environment
-                .insert(key.to_owned(), value.to_owned())
-                .is_none(),
-            "duplicate cache environment key"
-        );
-    }
-    ensure!(
-        environment.len() == CLIENT_KEYS.len(),
-        "incomplete cache environment"
-    );
-    Ok(environment)
-}
-
 fn require_counter(stats: &str, name: &str, expected: usize) -> Result<()> {
     let count = stats
         .lines()
@@ -130,7 +95,7 @@ pub(super) fn run(env_file: &Path) -> Result<()> {
         root: tempfile::Builder::new()
             .prefix("ci-cache-")
             .tempdir_in("/tmp")?,
-        environment: environment(&read_secret(env_file)?)?,
+        environment: client_environment(env_file)?,
     };
     fs::create_dir(probe.root.path().join("out"))?;
     for name in ["seed", "target"] {
@@ -165,18 +130,21 @@ pub(super) fn run(env_file: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     #[test]
     fn cache_probe_rejects_process_environment_injection() {
-        assert!(environment("PATH=/tmp").is_err());
-        assert!(
-            environment(
-                "SCCACHE_BUCKET=one
-SCCACHE_BUCKET=two"
-            )
-            .is_err()
-        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.env");
+        fs::write(&path, "PATH=/tmp").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(client_environment(&path).is_err());
+        fs::write(&path, "SCCACHE_BUCKET=one\nSCCACHE_BUCKET=two").unwrap();
+        assert!(client_environment(&path).is_err());
+        fs::write(&path, "SCCACHE_BUCKET=one\\two").unwrap();
+        assert!(client_environment(&path).is_err());
     }
 
     #[test]

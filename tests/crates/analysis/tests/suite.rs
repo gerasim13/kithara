@@ -1,3 +1,4 @@
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]

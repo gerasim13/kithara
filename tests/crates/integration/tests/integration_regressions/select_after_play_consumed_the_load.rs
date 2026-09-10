@@ -77,7 +77,10 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 Reply::Ok
             }
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+                Reply::PlayerRegistered(kithara::play::session::RegisteredPlayer {
+                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
+                    eq: SharedEq::new(10),
+                })
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));

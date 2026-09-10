@@ -582,7 +582,16 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     }
 
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
-        self.decode.flush_reader_signals();
+        let live_epoch = self.seek_obs.epoch();
+        let prepare_input = match &self.state {
+            CurrentFsm::Decoding(_) | CurrentFsm::AwaitingResume(_) => true,
+            CurrentFsm::WaitingForSource(track) => matches!(
+                track.data().context,
+                WaitContext::Playback | WaitContext::PostSeek(_)
+            ),
+            _ => false,
+        };
+        self.decode.prepare_deferred(live_epoch, prepare_input);
         if let Some(chunk) = self.decode.take_rejected_chunk() {
             ChunkRetire::retire(&self.retired, chunk);
         }

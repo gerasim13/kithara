@@ -425,7 +425,12 @@ pub(crate) mod tests {
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
-                Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
+                Cmd::RegisterPlayer { .. } => {
+                    Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
+                        id: 1,
+                        eq: SharedEq::new(10),
+                    })
+                }
                 Cmd::AllocateSlot { .. } => {
                     let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                     let (inputs, control) = slot_channels(SharedEq::new(10));

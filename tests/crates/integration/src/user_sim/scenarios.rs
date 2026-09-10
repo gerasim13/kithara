@@ -5,102 +5,102 @@ use crate::user_sim::actions::Action;
 
 const SCRIPTED_FORWARD_BACK_END: &[Action] = &[
     Action::SeekRatio(0.9),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.1),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.5),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 const SEEK_FORWARD_UNBUFFERED: &[Action] = &[
-    Action::PlayFor(Duration::from_millis(500)),
+    Action::RenderFor(Duration::from_millis(500)),
     Action::SeekRatio(0.85),
-    Action::PlayFor(Duration::from_millis(1500)),
+    Action::RenderFor(Duration::from_millis(1500)),
 ];
 const SEEK_BACKWARD: &[Action] = &[
-    Action::PlayFor(Duration::from_millis(800)),
+    Action::RenderFor(Duration::from_millis(800)),
     Action::SeekRatio(0.6),
-    Action::PlayFor(Duration::from_millis(1000)),
+    Action::RenderFor(Duration::from_millis(1000)),
     Action::SeekRatio(0.15),
-    Action::PlayFor(Duration::from_millis(1500)),
+    Action::RenderFor(Duration::from_millis(1500)),
 ];
 const SEEK_NEAR_END: &[Action] = &[
-    Action::PlayFor(Duration::from_millis(500)),
+    Action::RenderFor(Duration::from_millis(500)),
     Action::SeekNearEnd(0.97),
-    Action::PlayFor(Duration::from_millis(800)),
+    Action::RenderFor(Duration::from_millis(800)),
 ];
 const SEEK_BACKWARD_AFTER_LONG_PLAY: &[Action] = &[
     Action::SeekRatio(0.85),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
     Action::SeekRatio(0.15),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 const SEEK_BACKWARD_AFTER_NATURAL_EOF: &[Action] = &[
     Action::SeekNearEnd(0.97),
-    Action::PlayFor(Duration::from_secs(4)),
+    Action::RenderFor(Duration::from_secs(4)),
     Action::SeekRatio(0.30),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 const LONG_PLAY_THEN_SEEK_BACKWARD: &[Action] = &[
     Action::RenderFor(Duration::from_secs(30)),
     Action::SeekRatio(0.15),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
 ];
 const LONG_PLAY_THEN_SEEK_FORWARD: &[Action] = &[
     Action::RenderFor(Duration::from_secs(30)),
     Action::SeekRatio(0.85),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
 ];
 const SWITCH_TRACK_THEN_SEEK: &[Action] = &[
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
     Action::SelectAt(1),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.5),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 const BOUNCE_BETWEEN_TRACKS_WITH_SEEKS: &[Action] = &[
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.5),
-    Action::PlayFor(Duration::from_millis(800)),
+    Action::RenderFor(Duration::from_millis(800)),
     Action::SelectAt(1),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.4),
-    Action::PlayFor(Duration::from_millis(800)),
+    Action::RenderFor(Duration::from_millis(800)),
     Action::SelectAt(0),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.7),
-    Action::PlayFor(Duration::from_millis(800)),
+    Action::RenderFor(Duration::from_millis(800)),
     Action::SelectAt(1),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 const LONG_PLAY_THEN_SWITCH_THEN_SEEK: &[Action] = &[
-    Action::PlayFor(Duration::from_secs(15)),
+    Action::RenderFor(Duration::from_secs(15)),
     Action::SelectAt(1),
     Action::SeekRatio(0.4),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
 ];
 const AUTO_ABR_UPSWITCH_THEN_SEEK_BURST: &[Action] = &[
-    Action::PlayFor(Duration::from_secs(15)),
+    Action::RenderFor(Duration::from_secs(15)),
     Action::SeekRatio(0.50),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
     Action::SeekRatio(0.20),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
     Action::SeekRatio(0.80),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
     Action::SeekRatio(0.35),
-    Action::PlayFor(Duration::from_secs(3)),
+    Action::RenderFor(Duration::from_secs(3)),
 ];
 const SEEK_STORM: &[Action] = &[
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
     Action::SeekRatio(0.5),
-    Action::PlayFor(Duration::from_millis(300)),
+    Action::RenderFor(Duration::from_millis(300)),
     Action::SeekRatio(0.2),
-    Action::PlayFor(Duration::from_millis(300)),
+    Action::RenderFor(Duration::from_millis(300)),
     Action::SeekRatio(0.7),
-    Action::PlayFor(Duration::from_millis(300)),
+    Action::RenderFor(Duration::from_millis(300)),
     Action::SeekRatio(0.1),
-    Action::PlayFor(Duration::from_millis(300)),
+    Action::RenderFor(Duration::from_millis(300)),
     Action::SeekRatio(0.6),
-    Action::PlayFor(Duration::from_secs(2)),
+    Action::RenderFor(Duration::from_secs(2)),
 ];
 
 /// The "scripted" scenario from the Player Robustness plan
@@ -127,7 +127,7 @@ pub fn seek_forward_unbuffered_repro() -> Vec<Action> {
 /// Targeted repro for Bug #6 — backward seek causes silent hang. The
 /// scenario warms up, jumps forward, plays again, then jumps back
 /// to a region that *should* already be buffered. Hang shows as
-/// `position stuck` in `PlayFor`.
+/// `position stuck` in `RenderFor`.
 pub fn seek_backward_repro() -> Vec<Action> {
     SEEK_BACKWARD.to_vec()
 }
@@ -215,14 +215,14 @@ pub fn seek_storm() -> Vec<Action> {
 ///
 /// Pause/Resume pairs are emitted together so the queue never spends
 /// long in the paused state (which would trip the `is_playing` guard
-/// inside `PlayFor`).
+/// inside `RenderFor`).
 pub fn random_seed(seed: u64, len: usize) -> Vec<Action> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut out = Vec::with_capacity(len + 1);
     // Always start with a small warm-up so the first action sees a
     // playing track (the harness `enter_track` warm-up is half a second,
     // a deliberate minimum).
-    out.push(Action::PlayFor(Duration::from_millis(700)));
+    out.push(Action::RenderFor(Duration::from_millis(700)));
     for _ in 0..len {
         let pick: u8 = rng.random_range(0..10);
         match pick {
@@ -234,31 +234,31 @@ pub fn random_seed(seed: u64, len: usize) -> Vec<Action> {
                 let ratio: f64 = rng.random_range(0.05..0.90);
                 out.push(Action::SeekRatio(ratio));
                 let play_ms: u64 = rng.random_range(800..2_500);
-                out.push(Action::PlayFor(Duration::from_millis(play_ms)));
+                out.push(Action::RenderFor(Duration::from_millis(play_ms)));
             }
             4 => {
                 let ratio: f64 = rng.random_range(0.95..0.99);
                 out.push(Action::SeekNearEnd(ratio));
-                out.push(Action::PlayFor(Duration::from_millis(800)));
+                out.push(Action::RenderFor(Duration::from_millis(800)));
             }
             5 => {
                 out.push(Action::Pause);
                 out.push(Action::Resume);
                 let play_ms: u64 = rng.random_range(500..1_500);
-                out.push(Action::PlayFor(Duration::from_millis(play_ms)));
+                out.push(Action::RenderFor(Duration::from_millis(play_ms)));
             }
             6 => {
                 let q: usize = rng.random_range(0..4);
                 out.push(Action::SetQuality(q));
-                out.push(Action::PlayFor(Duration::from_millis(1_000)));
+                out.push(Action::RenderFor(Duration::from_millis(1_000)));
             }
             7 => {
                 out.push(Action::QualityAuto);
-                out.push(Action::PlayFor(Duration::from_millis(1_000)));
+                out.push(Action::RenderFor(Duration::from_millis(1_000)));
             }
             _ => {
                 let play_ms: u64 = rng.random_range(800..2_000);
-                out.push(Action::PlayFor(Duration::from_millis(play_ms)));
+                out.push(Action::RenderFor(Duration::from_millis(play_ms)));
             }
         }
     }

@@ -9,6 +9,8 @@ use kithara_stream::{
     StreamSeekPastEof,
 };
 use kithara_test_utils::kithara;
+#[cfg(test)]
+use symphonia::core::packet::Packet;
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -35,20 +37,17 @@ use symphonia::core::{
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{
-        FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType,
-        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
-    },
-    packet::Packet,
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
 
 use crate::{
     codec::CodecPriming,
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
     symphonia::{
         config::SymphoniaConfig,
+        packets::Packets,
         probe::{ReaderBootstrap, new_direct, probe_with_seek},
     },
 };
@@ -60,19 +59,14 @@ pub(crate) struct SymphoniaDemuxer {
     /// decoder for codecs whose generic [`AudioCodec`] enum representation
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
     pub(crate) native_params: AudioCodecParameters,
-    format_reader: Box<dyn FormatReader>,
+    format_reader: Packets,
+    prepared: Option<PreparedPacket>,
     byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Live byte cursor of the underlying media source. Populated by
     /// the [`super::super::symphonia::adapter::ReadSeekAdapter`] when
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
-    /// Latest packet handed to [`Demuxer::next_frame`]. Held so the
-    /// returned `Frame<'_>` can borrow the packet's `Box<[u8]>` payload
-    /// directly — Symphonia owns the allocation, we don't clone it.
-    /// Replaced (and the previous packet dropped) on every successful
-    /// `next_frame` call.
-    current_packet: Option<Packet>,
     /// Pending reason retained while recovering an interrupted packet read.
     /// Symphonia's `MediaSourceStream` may have consumed ring-buffered bytes
     /// into a packet that was then discarded (its read position advanced),
@@ -150,16 +144,16 @@ impl SymphoniaDemuxer {
         let track_info = build_track_info(&track, &native_params)?;
         let time_base = track.time_base;
         Ok(Self {
-            format_reader,
+            format_reader: Packets::new(format_reader),
             track_id,
             track_info,
             native_params,
             time_base,
             byte_pos_handle,
             byte_map,
-            current_packet: None,
             resume_ts: 0,
             resume_pending: None,
+            prepared: None,
         })
     }
 
@@ -234,82 +228,34 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
-    #[kithara::probe]
-    #[kithara::measure(label = "decode.symphonia.demux")]
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        self.current_packet = None;
-        // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
-        // was then discarded, advancing its read position).
-        let resume_floor = if let Some(reason) = self.resume_pending {
-            match self.reseek_to_resume() {
-                Ok(()) => {
-                    self.resume_pending = None;
-                    Some(self.resume_ts)
-                }
-                Err(error) => {
-                    if pending_reason(&error).is_some() {
-                        return Ok(DemuxOutcome::Pending(reason));
-                    }
-                    let failure = classify_seek_err(&error);
-                    if resume_point_is_past_the_end(&failure) {
-                        return Ok(DemuxOutcome::Eof);
-                    }
-                    return Err(failure);
-                }
-            }
-        } else {
-            None
-        };
-        loop {
-            let packet = match self.format_reader.next_packet() {
-                Ok(Some(p)) => p,
-                Ok(None) => return Ok(DemuxOutcome::Eof),
-                Err(SymphoniaError::ResetRequired) => continue,
-                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
-                    return Ok(DemuxOutcome::Eof);
-                }
-                Err(error) => {
-                    let Some(reason) = pending_reason(&error) else {
-                        return Err(DecodeError::backend(error));
-                    };
-                    // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
-                    // position advanced, no packet emitted).
-                    if !matches!(
-                        self.format_reader.format_info().format,
-                        FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
-                    ) {
-                        self.resume_pending = Some(reason);
-                    }
-                    return Ok(DemuxOutcome::Pending(reason));
-                }
-            };
-            if packet.track_id != self.track_id {
-                continue;
-            }
-            if resume_floor.is_some_and(|floor| packet_ends_at_or_before(&packet, floor)) {
-                continue;
-            }
-            // WHY: This packet was emitted cleanly; the next one must start at its end. Track the resume point in native timebase units so a
-            // strand re-seek round-trips exactly to this boundary.
-            self.resume_ts = packet
-                .pts
-                .get()
-                .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX));
-            self.resume_pending = None;
-            let pts = self.ts_to_duration(packet.pts);
-            let duration = self.dur_to_duration(packet.dur);
-            self.current_packet = Some(packet);
-            let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
-            return Ok(DemuxOutcome::Frame(Frame {
-                data,
-                duration,
-                pts,
-                packet_desc: &[],
-            }));
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_none() {
+            self.prepared = Some(self.read_frame()?.into());
         }
+        Ok(())
+    }
+
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        Ok(match self.prepared.take() {
+            Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
+                data: self.format_reader.data(),
+                packet_desc: &[],
+                pts,
+                duration,
+            }),
+            Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
+            Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
+            None => DemuxOutcome::Pending(PendingReason::Retry),
+        })
+    }
+
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.prepared = None;
         // WHY: park before target by max(priming warmup, one codec packet) so the trim
         // guard lands on a packet boundary.
         let sr = f64::from(self.track_info.sample_rate.max(1));
@@ -362,15 +308,85 @@ impl Demuxer for SymphoniaDemuxer {
     }
 }
 
-fn packet_ends_at_or_before(packet: &Packet, timestamp: i64) -> bool {
-    packet
-        .pts
-        .get()
-        .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX))
+fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i64) -> bool {
+    pts.get()
+        .saturating_add(i64::try_from(dur.get()).unwrap_or(i64::MAX))
         <= timestamp
 }
 
 impl SymphoniaDemuxer {
+    #[kithara::probe]
+    #[kithara::measure(label = "decode.symphonia.demux")]
+    fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
+        // was then discarded, advancing its read position).
+        let resume_floor = if let Some(reason) = self.resume_pending {
+            match self.reseek_to_resume() {
+                Ok(()) => {
+                    self.resume_pending = None;
+                    Some(self.resume_ts)
+                }
+                Err(error) => {
+                    if pending_reason(&error).is_some() {
+                        return Ok(DemuxOutcome::Pending(reason));
+                    }
+                    let failure = classify_seek_err(&error);
+                    if resume_point_is_past_the_end(&failure) {
+                        return Ok(DemuxOutcome::Eof);
+                    }
+                    return Err(failure);
+                }
+            }
+        } else {
+            None
+        };
+        loop {
+            let packet = match self.format_reader.read() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(DemuxOutcome::Eof),
+                Err(SymphoniaError::ResetRequired) => continue,
+                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
+                    return Ok(DemuxOutcome::Eof);
+                }
+                Err(error) => {
+                    let Some(reason) = pending_reason(&error) else {
+                        return Err(DecodeError::backend(error));
+                    };
+                    // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
+                    // position advanced, no packet emitted).
+                    if !self.format_reader.restores_interrupted_packet() {
+                        self.resume_pending = Some(reason);
+                    }
+                    return Ok(DemuxOutcome::Pending(reason));
+                }
+            };
+            if packet.track_id != self.track_id {
+                continue;
+            }
+            if resume_floor
+                .is_some_and(|floor| packet_ends_at_or_before(packet.pts, packet.dur, floor))
+            {
+                continue;
+            }
+            // WHY: This packet was emitted cleanly; the next one must start at its end. Track the resume point in native timebase units so a
+            // strand re-seek round-trips exactly to this boundary.
+            self.resume_ts = packet
+                .pts
+                .get()
+                .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX));
+            self.resume_pending = None;
+            let pts = self.ts_to_duration(packet.pts);
+            let duration = self.dur_to_duration(packet.dur);
+            let data = self.format_reader.data();
+            return Ok(DemuxOutcome::Frame(Frame {
+                data,
+                duration,
+                pts,
+                packet_desc: &[],
+            }));
+        }
+    }
+
     /// Re-seek the reader back to the last authoritative timestamp
     /// (`resume_ts`) after a read-ahead strand. Unlike [`Demuxer::seek`]
     /// this applies no pre-roll back-off and no codec flush — it is a
@@ -637,8 +653,8 @@ mod tests {
             Vec::new(),
         );
 
-        assert!(packet_ends_at_or_before(&packet, 2_152));
-        assert!(!packet_ends_at_or_before(&packet, 2_151));
+        assert!(packet_ends_at_or_before(packet.pts, packet.dur, 2_152));
+        assert!(!packet_ends_at_or_before(packet.pts, packet.dur, 2_151));
     }
 
     /// Tail withheld from the WAV fixture so the source publishes a length

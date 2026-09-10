@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    task::Poll,
+};
 
 use kithara_decode::DecodeError;
 use kithara_events::DeferredBus;
@@ -157,12 +160,13 @@ impl SeekEngine {
             AnchorPlan::Seek => {}
         }
         update_len(ctx.decode, ctx.stream);
-        match ctx
-            .decode
-            .seek(ctx.stream, ctx.playhead, request.seek.target)
-        {
-            Ok(_) => self.applied(request, Some(anchor_value), ctx),
-            Err(error) => SeekRecovery::new(
+        match ctx.decode.poll_seek(ctx.stream, ctx.playhead, request.seek) {
+            Poll::Pending => SeekTransition::Apply(ApplySeekState {
+                mode: SeekMode::Anchor(anchor_value),
+                request,
+            }),
+            Poll::Ready(Ok(_)) => self.applied(request, Some(anchor_value), ctx),
+            Poll::Ready(Err(error)) => SeekRecovery::new(
                 request,
                 request.seek.target,
                 anchor_value.byte_offset,
@@ -188,12 +192,19 @@ impl SeekEngine {
             });
         }
         update_len(ctx.decode, ctx.stream);
-        match ctx
-            .decode
-            .seek(ctx.stream, ctx.playhead, request.seek.target)
-        {
-            Ok(_) => self.applied(request, None, ctx),
-            Err(error) => {
+        match ctx.decode.poll_seek(ctx.stream, ctx.playhead, request.seek) {
+            Poll::Pending => SeekTransition::Apply(ApplySeekState {
+                mode: SeekMode::Direct {
+                    target_byte: estimate_target_byte(
+                        ctx.decode.active(),
+                        ctx.stream,
+                        request.seek.target,
+                    ),
+                },
+                request,
+            }),
+            Poll::Ready(Ok(_)) => self.applied(request, None, ctx),
+            Poll::Ready(Err(error)) => {
                 let offset = ctx.decode.active().base_offset();
                 let target =
                     estimate_target_byte(ctx.decode.active(), ctx.stream, request.seek.target);
