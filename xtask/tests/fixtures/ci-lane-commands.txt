@@ -2297,50 +2297,34 @@
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-firefox / branch
   <require os> linux

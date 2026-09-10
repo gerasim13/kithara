@@ -67,6 +67,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
+    && test "$(dpkg-query -W -f='${Version}' chromium)" = \
+            "$(dpkg-query -W -f='${Version}' chromium-driver)" \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian ships CMake 3.25, and a vendored native dependency requires 3.30 or

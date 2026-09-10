@@ -1346,14 +1346,6 @@ cache_group = "linux"
 label = "Web browser"
 os = "linux"
 tools = ["chromium", "chromedriver", "just"]
-pinned = [
-  { tool = "chromium", args = [
-    "--version",
-  ], pin = "chromium_version" },
-  { tool = "chromedriver", args = [
-    "--version",
-  ], pin = "chromium_version" },
-]
 program = "just"
 steps = [
   { args = [

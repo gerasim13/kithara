@@ -441,13 +441,10 @@ fn report_lane(
 ) -> Result<()> {
     let process = Process::recording(
         root,
-        Recording::default()
-            .with_reply(
-                tools.program("xcodebuild"),
-                &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-            )
-            .with_reply("chromium", &ci_config.pins.chromium_version)
-            .with_reply("chromedriver", &ci_config.pins.chromium_version),
+        Recording::default().with_reply(
+            tools.program("xcodebuild"),
+            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+        ),
     );
     let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
     let recorded = process
@@ -689,14 +686,11 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let version = ci_config.pins.chromium_version.clone();
                 let recording = Recording::default()
                     .with_reply(
                         project.tools.program("xcodebuild"),
                         &format!("Xcode {}", ci_config.pins.expected_xcode_version),
                     )
-                    .with_reply("chromium", &version)
-                    .with_reply("chromedriver", &version)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
                     .with_reply("xcrun", r#"{"testNodes":[]}"#);
