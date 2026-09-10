@@ -1,5 +1,7 @@
 //! Test-only helpers shared by the `ci` suites.
 
+#[cfg(unix)]
+use std::process::Command;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -28,4 +30,18 @@ pub(crate) fn install_double(bin: &Path, role: &str) -> PathBuf {
     let destination = bin.join(format!("{role}{}", std::env::consts::EXE_SUFFIX));
     fs::copy(&source, &destination).expect("install the fake tool");
     destination
+}
+
+#[cfg(unix)]
+#[test]
+fn executable_alias_preserves_the_tool_role() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let executable = install_double(directory.path(), "launchctl");
+    assert!(executable.is_file());
+    let status = Command::new(executable)
+        .arg("bootout")
+        .env("KITHARA_TEST_RULES", "launchctl:bootout:*=7,*:*:*=9")
+        .status()
+        .expect("execute the published tool alias");
+    assert_eq!(status.code(), Some(7));
 }

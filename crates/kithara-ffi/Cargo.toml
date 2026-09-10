@@ -72,7 +72,16 @@ dev = []
 test = ["kithara/probe", "dep:cpal"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["assets", "queue"] }
+kithara = { workspace = true, default-features = false, features = [
+    "assets",
+    "bufpool",
+    "events",
+    "platform",
+    "play",
+    "queue",
+    "stream",
+    "test-utils",
+] }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
@@ -112,9 +121,10 @@ uuid = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
     "analysis-waveform",
-    "backend-web-audio",
+    "audio",
     "beat-dsp",
     "hls",
+    "host",
     "resample-rubato",
     "symphonia",
     "webcodecs",
@@ -159,17 +169,11 @@ tempfile = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara-test-fixtures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [[test]]
 name = "web-observer"
 path = "src/web/observer/tests.rs"
-required-features = ["wasm"]
-
-[[test]]
-name = "web-analysis"
-path = "src/web/analysis/tests.rs"
 required-features = ["wasm"]
 
 [lints]

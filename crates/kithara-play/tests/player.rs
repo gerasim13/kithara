@@ -1,8 +1,10 @@
 use std::num::NonZeroU32;
 
+use kithara_audio::SeekOutcome;
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_decode::GaplessMode;
 use kithara_events::Envelope;
+use kithara_platform::time::Duration;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
     SelectTransition, StretchControls, effects::eq::generate_log_spaced_bands, mock,
@@ -297,13 +299,6 @@ fn host_rejects_a_player_built_for_another_sample_rate() {
 }
 
 #[kithara::test]
-fn seek_seconds_without_slot_returns_not_ready() {
-    let player = player();
-    let err = player.seek_seconds(1.0).expect_err("must error");
-    assert!(matches!(err, PlayError::NotReady));
-}
-
-#[kithara::test]
 fn select_item_out_of_range_returns_typed_error() {
     let player = player();
     let err = player
@@ -342,4 +337,57 @@ fn select_item_on_consumed_slot_errors_without_bookkeeping() {
         0,
         "bookkeeping must not move on a failed select"
     );
+}
+
+/// A player with nothing loaded still owns the position it is handed;
+/// discarding it is what makes a restored position play from zero.
+#[kithara::test]
+fn seek_seconds_without_slot_holds_the_start_position() {
+    let player = player();
+
+    let outcome = player.seek_seconds(12.0).expect("must accept");
+
+    assert!(matches!(
+        outcome,
+        SeekOutcome::Landed { target, landed_at }
+            if target == Duration::from_secs(12) && landed_at == target
+    ));
+    assert_eq!(player.position_seconds(), Some(12.0));
+}
+
+/// A seek the player answered `Landed` must read back where the host draws
+/// its progress from. Holding the target in a private field and still
+/// reporting no position is what leaves a restored podcast at the head of
+/// its track and makes every further scrub look dead.
+#[kithara::test]
+fn a_held_start_position_is_readable_at_the_position_readout() {
+    let player = player();
+
+    player.seek_seconds(12.0).expect("must accept");
+
+    assert_eq!(player.position_seconds(), Some(12.0));
+}
+
+/// The held target is the latest one handed over, not the first: a host
+/// resets to zero before it restores a stored position.
+#[kithara::test]
+fn held_start_position_keeps_the_latest_target() {
+    let player = player();
+
+    player.seek_seconds(0.0).expect("must accept");
+    player.seek_seconds(30.0).expect("must accept");
+
+    assert_eq!(player.position_seconds(), Some(30.0));
+}
+
+/// The held target names a place in the queued item, so it must not
+/// outlive the queue and land on whatever is seeded next.
+#[kithara::test]
+fn clearing_the_queue_drops_the_held_start_position() {
+    let player = player();
+    player.seek_seconds(30.0).expect("must accept");
+
+    player.remove_all_items();
+
+    assert_eq!(player.position_seconds(), None);
 }

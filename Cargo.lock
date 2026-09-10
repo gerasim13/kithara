@@ -4644,6 +4644,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-abr-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "serial_test",
+]
+
+[[package]]
 name = "kithara-analysis"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4675,6 +4685,16 @@ dependencies = [
  "tracing",
  "unimock",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-analysis-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -4710,6 +4730,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "kithara-app-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "num-traits",
  "url",
 ]
 
@@ -4770,6 +4802,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-assets-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bytes",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "rkyv",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "kithara-audio"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4817,6 +4862,21 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "kithara-audio-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "assert_no_alloc",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "serde",
+ "serial_test",
+ "tempfile",
 ]
 
 [[package]]
@@ -4872,6 +4932,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-broadcast-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bytes",
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "url",
+]
+
+[[package]]
 name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4891,6 +4964,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-bufpool-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-test-utils",
+ "serial_test",
 ]
 
 [[package]]
@@ -4934,6 +5016,23 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "kithara-decode-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "futures",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "reqwest",
+ "serial_test",
+ "tempfile",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -5010,6 +5109,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-encode-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+]
+
+[[package]]
 name = "kithara-events"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5023,6 +5132,15 @@ dependencies = [
  "portable-atomic",
  "smallvec",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-events-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-events",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -5041,7 +5159,6 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
- "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
@@ -5060,6 +5177,41 @@ dependencies = [
  "unimock",
  "url",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "kithara-ffi-web-analysis-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "js-sys",
+ "kithara",
+ "kithara-ffi",
+ "kithara-test-fixtures",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "kithara-ffi-web-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "gloo-timers",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thirtyfour",
+ "tracing",
+ "tracing-wasm",
+ "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -5099,6 +5251,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-file-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serial_test",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "kithara-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -5109,6 +5278,20 @@ dependencies = [
  "libfuzzer-sys",
  "tempfile",
  "url",
+]
+
+[[package]]
+name = "kithara-harness-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "js-sys",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "serial_test",
+ "tempfile",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -5152,6 +5335,23 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-hls-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bytes",
+ "gloo-timers",
+ "hex",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "serial_test",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -5215,7 +5415,6 @@ dependencies = [
  "rand 0.10.2",
  "reqwest",
  "ringbuf 0.5.0",
- "rkyv",
  "serde",
  "serde_json",
  "serial_test",
@@ -5229,7 +5428,6 @@ dependencies = [
  "tower-http 0.7.0",
  "tracing",
  "tracing-log",
- "tracing-subscriber",
  "tracing-wasm",
  "unimock",
  "url",
@@ -5291,6 +5489,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-net-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+ "unimock",
+ "url",
+]
+
+[[package]]
 name = "kithara-output"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5333,6 +5545,14 @@ dependencies = [
  "wasm_safe_thread",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "kithara-platform-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-test-utils",
 ]
 
 [[package]]
@@ -5387,6 +5607,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-play-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "cochlea-features",
+ "firewheel",
+ "futures",
+ "hex",
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "reqwest",
+ "ringbuf 0.5.0",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "kithara-queue"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5409,6 +5653,26 @@ dependencies = [
  "serde_yaml_ng",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-queue-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "aes",
+ "bytes",
+ "kithara",
+ "kithara-app",
+ "kithara-devtools",
+ "kithara-integration-tests",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "reqwest",
+ "serial_test",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -5490,6 +5754,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-storage-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-utils",
+]
+
+[[package]]
 name = "kithara-stream"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5525,6 +5798,16 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
+]
+
+[[package]]
+name = "kithara-stream-tests"
+version = "0.0.1-alpha4"
+dependencies = [
+ "futures",
+ "kithara",
+ "kithara-test-utils",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5609,7 +5892,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "backtrace",
  "fieldwork",
- "kithara-events",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",

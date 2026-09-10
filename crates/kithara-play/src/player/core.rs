@@ -6,7 +6,10 @@ use std::num::NonZeroUsize;
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use kithara_warp::WarpConfig;
 use tracing::debug;
 
@@ -47,6 +50,10 @@ pub(crate) struct PlayerCore<S> {
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker<S>,
     pub(crate) params: PlayerParams,
+    /// Where the current item must start when it reaches a processor.
+    /// Set by a seek that arrives before the player holds a slot, consumed
+    /// by the load that starts playback.
+    pub(crate) start_position: Mutex<Option<Duration>>,
     pub(crate) warp: WarpConfig,
     /// Player-level underrun policy copied into every prepared resource.
     pub(crate) block_on_underrun: bool,
@@ -142,6 +149,8 @@ impl<S> PlayerRuntime<S> {
         self.unarm_next();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);
+        // The item the held start position belongs to is gone with the queue.
+        *self.core.start_position.lock() = None;
         let _ = self.send_to_slot(PlayerCmd::Clear);
         self.enter_stopped();
         debug!("all items removed");
