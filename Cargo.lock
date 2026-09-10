@@ -4650,7 +4650,6 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-utils",
- "serial_test",
 ]
 
 [[package]]
@@ -5289,7 +5288,6 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-utils",
- "serial_test",
  "tempfile",
  "wasm-bindgen",
  "web-sys",
@@ -5900,6 +5898,7 @@ dependencies = [
  "rtsan-standalone",
  "serde",
  "serde_json",
+ "serial_test",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",

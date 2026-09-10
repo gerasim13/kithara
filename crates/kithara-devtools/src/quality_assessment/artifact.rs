@@ -123,6 +123,7 @@ fn markdown(assessment: &Assessment, root: &Path, budgets: &QualityRenderBudgets
     output.push_str(verdict_guidance(assessment));
     append_comparison(&mut output, assessment);
     append_signals(&mut output, assessment, budgets);
+    super::lcom::append(&mut output, &assessment.lcom4, budgets.findings);
     append_coverage(&mut output, assessment);
     append_stages(&mut output, assessment);
     append_findings(&mut output, assessment, budgets);

@@ -11,6 +11,9 @@ extern crate self as kithara_test_utils;
 /// `::kithara_test_utils::kithara_platform::flash::…` for its body-injected
 /// flash wrapping.
 pub use kithara_platform;
+/// Native serialization runtime used by generated test wrappers.
+#[cfg(not(target_arch = "wasm32"))]
+pub use serial_test;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
