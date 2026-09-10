@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_abr::AbrPeerId;
-use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::{Arc, Notify, RwLock},
@@ -24,6 +24,7 @@ use super::{
     downloader::{DownloaderInner, RegisteredPeerEntry},
     peer::{InternalCmd, Peer, ResponseTarget, SlotEntry},
 };
+use crate::{DownloaderEvent, RequestId, RequestPriority};
 
 /// Push a fetch command onto its priority slot — the moment a request
 /// becomes eligible for dispatch. Wakes the urgent slot (`High`/`High`

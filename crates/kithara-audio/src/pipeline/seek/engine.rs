@@ -4,27 +4,30 @@ use std::{
 };
 
 use kithara_decode::DecodeError;
-use kithara_events::{DeferredBus, Event, SeekLifecycleStage};
+use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{PlayheadWrite, SeekControl, SeekObserve, SourceSeekAnchor, StreamType};
 use tracing::{trace, warn};
 
-use crate::pipeline::{
-    decode::{
-        core::ActiveDecode,
-        format::{FormatDecision, detect},
-        gate::ReadinessGate,
+use crate::{
+    AudioLaneEvent, SeekLifecycleStage,
+    pipeline::{
+        decode::{
+            core::ActiveDecode,
+            format::{FormatDecision, detect},
+            gate::ReadinessGate,
+        },
+        rebuild::{RecreateCause, RecreateNext, RecreateState},
+        seek::{
+            anchor::{self, AnchorPlan},
+            emit::{emit, land_eof, location, update_len},
+            recover::SeekRecovery,
+            skip::estimate_target_byte,
+            state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
+        },
+        stream::shared::SharedStream,
+        track::{WaitContext, WaitingReason},
     },
-    rebuild::{RecreateCause, RecreateNext, RecreateState},
-    seek::{
-        anchor::{self, AnchorPlan},
-        emit::{emit, land_eof, location, update_len},
-        recover::SeekRecovery,
-        skip::estimate_target_byte,
-        state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
-    },
-    stream::shared::SharedStream,
-    track::{WaitContext, WaitingReason},
 };
 
 #[derive(fieldwork::Fieldwork)]
@@ -42,7 +45,7 @@ pub(crate) struct SeekApplyCtx<'a, T: StreamType> {
     pub(crate) observe: &'a dyn SeekObserve,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) seek: &'a dyn SeekControl,
-    pub(crate) emit: Option<&'a DeferredBus<Event>>,
+    pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
 }
 
 pub(crate) enum SeekTransition {

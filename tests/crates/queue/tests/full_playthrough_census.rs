@@ -26,18 +26,22 @@ use std::{
 
 use kithara::{
     encode::EncoderFactory,
-    events::{AdvanceReason, Event, QueueEvent, TrackId},
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
     play::{Resource, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition,
+        test_utils::QueueProbe,
+    },
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     cochlea::CochleaReport,
+    event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
@@ -383,11 +387,11 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
 
         while let Ok(envelope) = receiver.try_recv() {
             match envelope.event {
-                Event::Queue(QueueEvent::CurrentTrackAdvance { id, reason }) => {
+                TestEvent::Queue(QueueEvent::CurrentTrackAdvance { id, reason }) => {
                     log.advances.push((id, reason));
                 }
-                Event::Queue(QueueEvent::CrossfadeStarted { .. }) => log.crossfades += 1,
-                Event::Queue(QueueEvent::QueueEnded) => log.ended = true,
+                TestEvent::Queue(QueueEvent::CrossfadeStarted { .. }) => log.crossfades += 1,
+                TestEvent::Queue(QueueEvent::QueueEnded) => log.ended = true,
                 _ => {}
             }
         }

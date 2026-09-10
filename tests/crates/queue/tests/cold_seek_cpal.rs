@@ -2,7 +2,7 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,10 +13,10 @@ use kithara::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{kithara, offline::QueueTicker, temp_dir};
+use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};
 use kithara_test_utils::off_thread::OffThread;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -34,7 +34,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
@@ -51,7 +51,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {

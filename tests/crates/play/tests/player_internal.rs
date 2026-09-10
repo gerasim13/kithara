@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara::{
     self,
     audio::ConsumerWakeMode,
-    events::{Event, EventBus, EventReceiver, TrackId},
+    events::{EventBus, EventReceiver, TrackId},
     platform::sync::{Arc, Mutex},
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
@@ -23,6 +23,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::{MockReader, TestPcmReader},
+    event::TestEvent,
     test_defaults::Consts,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -159,13 +160,16 @@ fn default_player_config() -> PlayerConfig<TestPools> {
         .build()
 }
 
-fn drain_player_events(player: &PlayerImpl<TestPools>, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
+fn drain_player_events(
+    player: &PlayerImpl<TestPools>,
+    rx: &mut EventReceiver<TestEvent>,
+) -> Vec<PlayerEvent> {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     player.process_notifications();
     let mut events = Vec::new();
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Player(event)) => events.push(event),
+            Ok(TestEvent::Player(event)) => events.push(event),
             Ok(_) => continue,
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
@@ -276,7 +280,7 @@ async fn player_advance_emits_event(constant_half: &'static [u8]) {
     let event = rx.try_recv().map(|env| env.event);
     assert!(matches!(
         event,
-        Ok(Event::Player(PlayerEvent::CurrentItemChanged))
+        Ok(TestEvent::Player(PlayerEvent::CurrentItemChanged { .. }))
     ));
 }
 
@@ -291,7 +295,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
     let first = drain_player_events(&player, &mut rx);
     let first_count = first
         .iter()
-        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged { .. }))
         .count();
     assert_eq!(
         first_count, 1,
@@ -302,7 +306,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
     let second = drain_player_events(&player, &mut rx);
     let second_count = second
         .iter()
-        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged { .. }))
         .count();
     assert_eq!(
         second_count, 0,
@@ -360,7 +364,7 @@ fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u
     let after = drain_player_events(&player, &mut rx);
     let announces = after
         .iter()
-        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged { .. }))
         .count();
     assert_eq!(
         announces, 0,
@@ -386,7 +390,7 @@ fn replacing_current_item_re_announces_on_next_play(constant_half: &'static [u8]
     let after = drain_player_events(&player, &mut rx);
     let announces = after
         .iter()
-        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged { .. }))
         .count();
     assert_eq!(
         announces, 1,
@@ -499,7 +503,7 @@ fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) 
     let mut saw_changed = false;
     for _ in 0..8 {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Player(PlayerEvent::CurrentItemChanged)) => saw_changed = true,
+            Ok(TestEvent::Player(PlayerEvent::CurrentItemChanged { .. })) => saw_changed = true,
             Ok(_) => continue,
             Err(_) => break,
         }

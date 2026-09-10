@@ -1,10 +1,9 @@
-use kithara_events::{AbrMode, AbrReason, VariantIndex, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{kithara, probe::IntoProbeArg};
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
-use crate::controller::AbrSettings;
+use crate::{AbrMode, AbrReason, VariantIndex, VariantInfo, controller::AbrSettings};
 
 /// Outcome of an ABR decision step.
 ///

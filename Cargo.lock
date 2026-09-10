@@ -4626,6 +4626,7 @@ dependencies = [
  "bon",
  "dashmap",
  "delegate",
+ "derive_more",
  "fieldwork",
  "humantime-serde",
  "kithara-derive",
@@ -4714,6 +4715,7 @@ dependencies = [
  "kithara-assets",
  "kithara-derive",
  "kithara-encode",
+ "kithara-events",
  "kithara-record",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5122,20 +5124,14 @@ name = "kithara-events"
 version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
- "dashmap",
- "delegate",
  "derive_more",
  "fieldwork",
- "kithara-events",
- "kithara-net",
+ "kithara-derive",
  "kithara-platform",
- "kithara-signal",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "num-traits",
  "portable-atomic",
  "smallvec",
- "url",
  "wasm-bindgen-test",
 ]
 
@@ -5144,6 +5140,7 @@ name = "kithara-events-tests"
 version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
+ "kithara-events",
  "kithara-test-utils",
 ]
 
@@ -5160,6 +5157,10 @@ dependencies = [
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-audio",
+ "kithara-events",
+ "kithara-file",
+ "kithara-hls",
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
@@ -5407,6 +5408,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-devtools",
+ "kithara-events",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "memory-stats",
@@ -5647,6 +5649,7 @@ dependencies = [
  "kithara-events",
  "kithara-platform",
  "kithara-play",
+ "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
@@ -5892,7 +5895,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "backtrace",
  "fieldwork",
- "kithara-events",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",

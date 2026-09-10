@@ -1,9 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -11,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
-    queue::{Queue, QueueConfig, QueueControl, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -20,6 +21,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -39,7 +41,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<AppPools>,
     id: TrackId,
     target: TrackStatus,
@@ -56,7 +58,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {

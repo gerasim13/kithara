@@ -4,18 +4,19 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
-        ReadOutcome, RubatoBackend,
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
+        ConsumerWakeMode, DecoderChangeCause, DecoderEvent, ReadOutcome, RubatoBackend,
+        SeekLifecycleStage,
     },
-    events::{AudioEvent, DecoderChangeCause, DecoderEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, SeekEpoch, Stream},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     reads::{blocking_audio, read_to_eof, read_until_samples},
@@ -171,7 +172,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         let envelope = events.recv().await.expect("decoder event bus remains open");
         if matches!(
             envelope.event,
-            Event::Decoder(DecoderEvent::DecoderChanged {
+            TestEvent::Decoder(DecoderEvent::DecoderChanged {
                 cause: DecoderChangeCause::HostRateChange,
                 ..
             })
@@ -228,7 +229,7 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
@@ -254,7 +255,7 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
             time::sleep(Duration::from_millis(20)).await;
         }
         while let Ok(envelope) = events.try_recv() {
-            if let Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event
+            if let TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event
                 && seek_epoch == expected_epoch
             {
                 saw_complete = true;
@@ -324,7 +325,7 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
         let mut captured = None;
         while Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if let Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+            if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::SeekRequest,
                 seek_epoch,
                 ..
@@ -391,7 +392,7 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 last_complete = Some(seek_epoch);
                 if seek_epoch >= highest_expected {
                     break;
@@ -405,7 +406,7 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     // loop drains its own subscriber queue; events already delivered before
     // the deadline still count toward the contract.
     while let Ok(envelope) = events.try_recv() {
-        if let Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event {
+        if let TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event {
             last_complete = Some(seek_epoch);
         }
     }

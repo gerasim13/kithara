@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::{Event, SlotId, TrackId};
+use crate::{SlotId, TrackId};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ScopeLabel {
@@ -30,7 +30,16 @@ pub struct EventMeta {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct Envelope {
-    pub event: Event,
+pub struct Envelope<E> {
+    pub event: E,
     pub meta: EventMeta,
+}
+
+impl<E> Envelope<E> {
+    pub fn map<T, F: FnOnce(E) -> T>(self, f: F) -> Envelope<T> {
+        Envelope {
+            event: f(self.event),
+            meta: self.meta,
+        }
+    }
 }

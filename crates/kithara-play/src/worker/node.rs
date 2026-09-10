@@ -1,7 +1,8 @@
 use kithara_audio::{
-    AudioSource, Fetch, PreloadGate, PreparedAudioLane, ProducerPort, TrackStep, WaitingReason,
+    AudioEvent, AudioLaneEvent, AudioSource, Fetch, PreloadGate, PreparedAudioLane, ProducerPort,
+    TrackStep, WaitingReason,
 };
-use kithara_events::{AudioEvent, DeferredBus, Event};
+use kithara_events::DeferredBus;
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant},
@@ -27,7 +28,7 @@ pub(super) struct DecoderRuntime {
 
 /// Play-owned node that drives one still-concrete audio source.
 pub(crate) struct DecoderNode<S> {
-    emit: Arc<DeferredBus<Event>>,
+    emit: Arc<DeferredBus<AudioLaneEvent>>,
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek_obs: Arc<dyn SeekObserve>,
@@ -77,14 +78,11 @@ impl<S> DecoderNode<S> {
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        self.emit.enqueue(
-            AudioEvent::BufferHealth {
-                buffered_ms,
-                decoded_frontier_ms,
-                seek_epoch: self.runtime.seek_epoch,
-            }
-            .into(),
-        );
+        self.emit.enqueue(AudioEvent::BufferHealth {
+            buffered_ms,
+            decoded_frontier_ms,
+            seek_epoch: self.runtime.seek_epoch,
+        });
     }
 
     fn maybe_emit_engine_load(&mut self, now: Instant) {
@@ -100,14 +98,11 @@ impl<S> DecoderNode<S> {
         }
         self.runtime.last_engine_load_emit = Some(now);
         let snapshot = load.snapshot();
-        self.emit.enqueue(
-            AudioEvent::EngineLoad {
-                load: snapshot.load(),
-                ms_per_chunk: snapshot.ms(),
-                realtime_factor: snapshot.realtime(),
-            }
-            .into(),
-        );
+        self.emit.enqueue(AudioEvent::EngineLoad {
+            load: snapshot.load(),
+            ms_per_chunk: snapshot.ms(),
+            realtime_factor: snapshot.realtime(),
+        });
     }
 
     fn maybe_emit_worker_telemetry(&mut self, now: Instant) {
@@ -240,7 +235,7 @@ where
                 self.port.push_direct(marker);
                 self.complete_preload();
                 self.emit
-                    .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch }.into());
+                    .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch });
                 self.runtime.eof_sent = true;
                 TickResult::Progress
             }

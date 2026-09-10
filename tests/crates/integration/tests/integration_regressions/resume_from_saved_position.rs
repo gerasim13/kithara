@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, Event, TrackId},
+    audio::AudioEvent,
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -13,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_short_mp3, temp_dir,
@@ -168,7 +170,7 @@ async fn playback_starts_from_the_seeked_position(
         |event| {
             matches!(
                 event,
-                Event::Audio(AudioEvent::SeekComplete { position, .. })
+                TestEvent::Audio(AudioEvent::SeekComplete { position, .. })
                     if (position.as_secs_f64() - saved).abs() < 1.0
             )
         },
@@ -182,7 +184,7 @@ async fn playback_starts_from_the_seeked_position(
         &mut second_rx,
         "first playback progress after saved-position seek",
         |event| {
-            let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
                 return false;
             };
             resumed_at = Some(*position_ms as f64 / 1000.0);

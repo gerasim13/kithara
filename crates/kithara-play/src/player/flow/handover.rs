@@ -247,12 +247,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
+    #[derive(Clone, Debug, kithara_events::EventSet)]
+    enum TestEvent {
+        Engine(EngineEvent),
+        Player(PlayerEvent),
+    }
+
+    use kithara_events::Envelope;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig, mock,
+        PlayWorker, PlayWorkerConfig,
+        api::{EngineEvent, PlayerEvent},
+        mock,
         player::PlayerConfig,
         test_pools::{TestPools, pools},
     };
@@ -304,7 +312,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(Envelope {
-                event: Event::Engine(EngineEvent::CrossfadeStarted { .. }),
+                event: TestEvent::Engine(EngineEvent::CrossfadeStarted { .. }),
                 ..
             })
         ));
@@ -312,7 +320,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(Envelope {
-                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                event: TestEvent::Player(PlayerEvent::CurrentItemChanged { .. }),
                 ..
             })
         ));

@@ -7,24 +7,26 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, Event, EventBus, EventReceiver, FileEvent},
-    file::{File, FileConfig, FileSrc},
+    events::{EventBus, EventReceiver},
+    file::{File, FileConfig, FileEvent, FileSrc},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
         sync::Arc,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
     stream::{
-        Stream,
+        DownloaderEvent, Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
 };
 
 struct Consts;
@@ -50,7 +52,7 @@ fn clean_temp_dir() -> TestTempDir {
 /// `RequestFailed` (premature EOF vs the advertised Content-Length); either
 /// one means the partial cache is now on disk. `rx` must be subscribed
 /// BEFORE the stream starts downloading so the terminal publish is not raced.
-async fn wait_for_download_terminal(rx: &mut EventReceiver, within: Duration) -> bool {
+async fn wait_for_download_terminal(rx: &mut EventReceiver<TestEvent>, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -61,9 +63,9 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver, within: Duration) ->
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
-            Ok(Ok(Event::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
-            Ok(Ok(Event::File(FileEvent::Error { .. }))) => return true,
+            Ok(Ok(TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
+            Ok(Ok(TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
+            Ok(Ok(TestEvent::File(FileEvent::Error { .. }))) => return true,
             Ok(Ok(_)) => {}
             Ok(Err(_)) | Err(_) => return false,
         }

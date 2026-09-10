@@ -1,7 +1,8 @@
-use kithara_events::BandwidthSource;
 use kithara_platform::{sync::Mutex, time::Duration};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
+
+use crate::BandwidthSource;
 
 #[derive(Clone, Debug)]
 struct Ewma {
@@ -147,11 +148,11 @@ impl Estimator for ThroughputEstimator {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::BandwidthSource;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::BandwidthSource;
 
     #[kithara::test]
     fn cache_hit_sets_high_initial_bps() {

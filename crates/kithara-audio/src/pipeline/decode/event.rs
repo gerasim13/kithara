@@ -1,14 +1,15 @@
 use kithara_decode::DecoderBackend;
-use kithara_events::{
-    AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, FrameDomain,
-};
+use kithara_events::DeferredBus;
 use kithara_signal::AudioSpec;
 use kithara_stream::MediaInfo;
 
 use super::DecoderGeneration;
-use crate::audio::event::{
-    DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
-    map_playback_resampler_kind, map_resampler_kind,
+use crate::{
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, FrameDomain,
+    audio::event::{
+        DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
+        map_playback_resampler_kind, map_resampler_kind,
+    },
 };
 
 pub(crate) struct GenerationInstalled<'a> {
@@ -22,7 +23,7 @@ pub(crate) struct GenerationInstalled<'a> {
 }
 
 pub(crate) fn enqueue_generation_installed(
-    emit: &DeferredBus<Event>,
+    emit: &DeferredBus<AudioLaneEvent>,
     installed: &GenerationInstalled<'_>,
 ) {
     let &GenerationInstalled {
@@ -39,21 +40,18 @@ pub(crate) fn enqueue_generation_installed(
     let media_info = generation.media_info();
     let spec = decoder.spec();
     let track_info = decoder.track_info();
-    emit.enqueue(
-        decoder_changed_event(DecoderChangedEventData {
-            backend,
-            media_info,
-            spec,
-            epoch,
-            cause,
-            duration,
-            track_info: &track_info,
-            base_offset: generation.base_offset(),
-        })
-        .into(),
-    );
+    emit.enqueue(decoder_changed_event(DecoderChangedEventData {
+        backend,
+        media_info,
+        spec,
+        epoch,
+        cause,
+        duration,
+        track_info: &track_info,
+        base_offset: generation.base_offset(),
+    }));
     if let Some(event) = decoder_gapless_event(media_info, spec, &track_info, FrameDomain::Output) {
-        emit.enqueue(Event::from(event));
+        emit.enqueue(event);
     }
     if let Some(event) = decoder_resampler_event(
         media_info,
@@ -62,7 +60,7 @@ pub(crate) fn enqueue_generation_installed(
         playback_resampler_backend,
         recreates_on_route,
     ) {
-        emit.enqueue(Event::from(event));
+        emit.enqueue(event);
     }
     if let Some(event) = playback_resampler_event(
         media_info,
@@ -70,7 +68,7 @@ pub(crate) fn enqueue_generation_installed(
         host_sample_rate,
         playback_resampler_backend,
     ) {
-        emit.enqueue(Event::from(event));
+        emit.enqueue(event);
     }
 }
 

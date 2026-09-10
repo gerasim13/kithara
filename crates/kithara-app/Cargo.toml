@@ -75,6 +75,7 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-events = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 

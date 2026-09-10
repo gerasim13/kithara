@@ -46,9 +46,13 @@ impl ItemQueue {
     /// from the last announced item, so a `play()` resume of the same item
     /// stays quiet.
     pub(crate) fn announce_current_item(&self, index: usize) {
-        if self.playlist.lock().mark_announced(index) {
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
+        let mut playlist = self.playlist.lock();
+        if !playlist.mark_announced(index) {
+            return;
         }
+        let item = playlist.item_id(index);
+        drop(playlist);
+        self.bus.publish(PlayerEvent::CurrentItemChanged { item });
     }
 
     pub(crate) fn clear_item(&self, index: usize) {
@@ -157,12 +161,13 @@ mod tests {
 
     use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{DecodeError, TrackMetadata};
-    use kithara_events::{Envelope, Event, PlayerEvent};
+    use kithara_events::Envelope;
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::api::PlayerEvent;
 
     struct EofReader {
         spec: AudioSpec,
@@ -244,10 +249,17 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn announce_deduplicates_current_item_event() {
+    #[case(false)]
+    #[case(true)]
+    fn announce_carries_the_item_identity(#[case] loaded: bool) {
         let bus = EventBus::default();
         let mut events = bus.subscribe();
         let queue = ItemQueue::new(bus);
+        let id = TrackId::from(7_u64);
+        queue.insert(resource("identity"), id, None);
+        if loaded {
+            assert!(queue.playlist.lock().take(0).is_some());
+        }
 
         queue.announce_current_item(0);
         queue.announce_current_item(0);
@@ -255,9 +267,9 @@ mod tests {
         assert!(matches!(
             events.try_recv(),
             Ok(Envelope {
-                event: Event::Player(PlayerEvent::CurrentItemChanged),
+                event: PlayerEvent::CurrentItemChanged { item: Some(actual) },
                 ..
-            })
+            }) if actual == id
         ));
         assert!(events.try_recv().is_err());
     }

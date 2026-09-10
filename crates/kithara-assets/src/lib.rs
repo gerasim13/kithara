@@ -7,6 +7,7 @@
 mod backend;
 mod decorator;
 mod error;
+mod event;
 pub mod index;
 mod layout;
 mod resource;
@@ -20,6 +21,7 @@ pub use decorator::{
     ProcessedWriter, ProcessingAssets, ResourceProcessor,
 };
 pub use error::{AssetsError, AssetsResult};
+pub use event::{AssetEvent, EvictReason};
 #[doc(hidden)]
 pub use index::pending_resource::{
     PendingResourceCleanupError, ResourceAttachment, ResourceLease, WriterEpoch, WriterHandle,

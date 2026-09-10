@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use kithara::{
-    events::{AbrEvent, AdvanceReason, AudioEvent, Event, EventReceiver},
+    abr::AbrEvent,
+    audio::AudioEvent,
+    events::EventReceiver,
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -11,11 +13,12 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, deinterleave_left},
     temp_dir,
@@ -1557,13 +1560,13 @@ async fn drive_app_layer_crossfade_advance(
 }
 
 fn drain_variant_applied_events(
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     committed_variant: &mut Option<usize>,
     record: bool,
 ) {
     loop {
         match events.try_recv().map(|env| env.event) {
-            Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+            Ok(TestEvent::Abr(AbrEvent::VariantApplied { to, .. })) => {
                 let target = to.get();
                 if record && (target == 1 || committed_variant.is_none()) {
                     *committed_variant = Some(target);
@@ -1594,7 +1597,9 @@ async fn render_seek_near_end_until_b_with_postroll(
 
         loop {
             match events.try_recv().map(|envelope| envelope.event) {
-                Ok(Event::Audio(AudioEvent::SeekComplete { .. })) if seek_issue_frame.is_some() => {
+                Ok(TestEvent::Audio(AudioEvent::SeekComplete { .. }))
+                    if seek_issue_frame.is_some() =>
+                {
                     seek_complete_frame.get_or_insert(progress.rendered_frames());
                 }
                 Ok(_) => {}

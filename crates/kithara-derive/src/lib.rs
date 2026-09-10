@@ -3,10 +3,13 @@
 //! `lib.rs` holds only the `#[proc_macro_derive]` entry points Rust requires in
 //! a crate root and delegates to the module that owns each expansion.
 
+mod event;
+mod event_set;
 mod patch;
 mod ranged;
 
 use proc_macro::TokenStream;
+use syn::{DeriveInput, Error, parse_macro_input};
 
 /// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
 /// document may say about a configuration struct, and the `apply` that merges
@@ -37,4 +40,22 @@ pub fn patch(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Ranged, attributes(ranged))]
 pub fn ranged(input: TokenStream) -> TokenStream {
     ranged::expand(input)
+}
+
+/// Implements the marker trait for a concrete event struct or enum.
+#[proc_macro_derive(Event)]
+pub fn event(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    event::derive(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Implements a consumer set of concrete event types.
+#[proc_macro_derive(EventSet)]
+pub fn event_set(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    event_set::derive(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
 }

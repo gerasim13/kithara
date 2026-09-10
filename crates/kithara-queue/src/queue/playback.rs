@@ -1,12 +1,11 @@
 use kithara_bufpool::HasPool;
-use kithara_events::TrackStatus;
 use kithara_play::{PlayError, SeekOutcome};
 
 use super::{
     QueueControl,
     types::{CachedPosition, PendingSelect, PlaybackView, Transition},
 };
-use crate::error::QueueError;
+use crate::{error::QueueError, event::TrackStatus};
 
 impl<S> QueueControl<S>
 where
@@ -222,7 +221,7 @@ where
             /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
             /// events to act on `ItemDidPlayToEnd` (filtered) and forward
             /// `CurrentItemChanged` as
-            /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+            /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
             ///
             /// # Errors
             /// Forwards `PlayError` from `PlayerImpl::tick`.
@@ -235,13 +234,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, ItemRole, PlayerEvent, QueueEvent, SlotId, TrackId, TrackRef};
+    use kithara_events::{SlotId, TrackId};
     use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
-    use crate::queue::{
-        state::tests::make_queue,
-        types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
+    use crate::{
+        event::QueueEvent,
+        queue::{
+            state::tests::make_queue,
+            types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
+        },
     };
 
     #[kithara::test(tokio)]
@@ -250,16 +253,13 @@ mod tests {
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
 
-        queue
-            .player
-            .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Leading(TrackRef::new(
-                    TrackId::allocate(),
-                    SlotId::new(0),
-                    Arc::from(""),
-                )),
-            }));
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                TrackId::allocate(),
+                SlotId::new(0),
+                Arc::from(""),
+            )),
+        });
 
         queue
             .tick()
@@ -278,16 +278,13 @@ mod tests {
         queue.lock_navigation_mut().finish();
         let mut rx = queue.subscribe();
 
-        queue
-            .player
-            .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Leading(TrackRef::new(
-                    b,
-                    SlotId::new(0),
-                    Arc::from(format!("test://memory/{}", b.as_u64())),
-                )),
-            }));
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                b,
+                SlotId::new(0),
+                Arc::from(format!("test://memory/{}", b.as_u64())),
+            )),
+        });
 
         queue
             .tick()

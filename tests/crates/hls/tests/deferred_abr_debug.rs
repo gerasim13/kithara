@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     hls_server::{TestServer, test_server},
     rt_cancel, temp_dir,
 };
@@ -73,7 +74,7 @@ async fn debug_sequential_read(
     info!("Test server URL: {}", url);
 
     let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
+    let mut events_rx = bus.subscribe::<TestEvent>();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

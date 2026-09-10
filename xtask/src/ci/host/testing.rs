@@ -1,11 +1,11 @@
 //! Test-only helpers shared by the `ci` suites.
 
+#[cfg(unix)]
+use std::process::Command;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(unix)]
-use std::{os::unix::fs::symlink, process::Command};
 
 /// Put the workspace's `fake-tool` where the code under test will look.
 ///
@@ -28,9 +28,6 @@ pub(crate) fn install_double(bin: &Path, role: &str) -> PathBuf {
     );
     fs::create_dir_all(bin).expect("create the tool directory");
     let destination = bin.join(format!("{role}{}", std::env::consts::EXE_SUFFIX));
-    #[cfg(unix)]
-    symlink(&source, &destination).expect("link the fake tool");
-    #[cfg(not(unix))]
     fs::copy(&source, &destination).expect("install the fake tool");
     destination
 }
@@ -40,7 +37,7 @@ pub(crate) fn install_double(bin: &Path, role: &str) -> PathBuf {
 fn executable_alias_preserves_the_tool_role() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let executable = install_double(directory.path(), "launchctl");
-    assert!(executable.is_symlink());
+    assert!(executable.is_file());
     let status = Command::new(executable)
         .arg("bootout")
         .env("KITHARA_TEST_RULES", "launchctl:bootout:*=7,*:*:*=9")

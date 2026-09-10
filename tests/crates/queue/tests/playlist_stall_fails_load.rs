@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
@@ -11,11 +11,13 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    event::TestEvent,
+    kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
@@ -24,7 +26,7 @@ use url::Url;
 use crate::bufpool_ext::{TestPools, pools};
 
 async fn wait_for_failed(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
@@ -40,7 +42,7 @@ async fn wait_for_failed(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 match status {

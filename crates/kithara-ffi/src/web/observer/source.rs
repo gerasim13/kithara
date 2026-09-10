@@ -1,16 +1,21 @@
 use js_sys::Reflect;
 use kithara::{
-    events::{Envelope, Event, EventReceiver, QueueEvent},
+    events::{Envelope, EventReceiver},
     platform::{
         time::{Duration, sleep},
         tokio::{sync::broadcast::error::RecvError, task::spawn as task_spawn},
     },
+    queue::QueueEvent,
 };
 use wasm_bindgen::JsValue;
 use web_sys::{BroadcastChannel, console};
 
 use super::{encode::encode, encode_item::encode_item_event};
-use crate::{pools::FfiQueueControl, types::FfiPlayerEvent};
+use crate::{
+    core::event_set::{ItemBusEvent, QueueBusEvent},
+    pools::FfiQueueControl,
+    types::FfiPlayerEvent,
+};
 
 /// `BroadcastChannel` name carrying structured player events from the
 /// worker to the main-thread [`router`](crate::web::observer::router).
@@ -21,7 +26,11 @@ pub(crate) const EVENT_CHANNEL: &str = "kithara-events";
 /// [`EVENT_CHANNEL`]. Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
 pub(crate) fn spawn(queue: &FfiQueueControl) {
-    let rx = queue.subscribe();
+    let rx = queue.subscribe::<QueueBusEvent>();
+    let item_rx = queue.subscribe::<ItemBusEvent>();
+    task_spawn(async move {
+        run_items(item_rx).await;
+    });
     task_spawn(async move {
         run(rx).await;
     });
@@ -59,7 +68,7 @@ fn spawn_duration_poll(queue: &FfiQueueControl) {
     });
 }
 
-async fn run(mut rx: EventReceiver) {
+async fn run(mut rx: EventReceiver<QueueBusEvent>) {
     let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
         console::warn_1(&JsValue::from_str(
             "kithara: BroadcastChannel unavailable in worker; event bridge disabled",
@@ -68,11 +77,49 @@ async fn run(mut rx: EventReceiver) {
     };
     loop {
         match rx.recv().await {
-            Ok(Envelope { event, meta, .. }) => {
+            Ok(Envelope { event, .. }) => {
                 mirror_current_track(&event);
                 if let Some(ffi) = to_ffi(&event) {
                     let _ = channel.post_message(&encode(&ffi));
                 }
+            }
+            Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Closed) => break,
+        }
+    }
+}
+
+/// Keep the main-thread current-track read-back
+/// ([`WorkerBridge::current_track_id`](crate::web::bridge::WorkerBridge))
+/// in sync by mirroring the worker's current-track cursor into the shared
+/// atomic on every relevant queue event.
+fn mirror_current_track(event: &QueueBusEvent) {
+    match event {
+        QueueBusEvent::Queue(QueueEvent::CurrentTrackChanged { id }) => {
+            crate::web::bridge::set_current_track_id(*id);
+        }
+        QueueBusEvent::Queue(QueueEvent::QueueEnded) => {
+            crate::web::bridge::set_current_track_id(None);
+        }
+        _ => {}
+    }
+}
+
+fn to_ffi(event: &QueueBusEvent) -> Option<FfiPlayerEvent> {
+    match event {
+        QueueBusEvent::Player(pe) => FfiPlayerEvent::try_from(pe).ok(),
+        QueueBusEvent::Queue(qe) => FfiPlayerEvent::try_from(qe).ok(),
+        _ => FfiPlayerEvent::try_from(event).ok(),
+    }
+}
+
+async fn run_items(mut rx: EventReceiver<ItemBusEvent>) {
+    let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+        return;
+    };
+    loop {
+        match rx.recv().await {
+            Ok(Envelope { event, meta, .. }) => {
                 if let Ok(item_ffi) = crate::types::FfiItemEvent::try_from(&event)
                     && let Some(track) = meta.track
                 {
@@ -93,29 +140,5 @@ async fn run(mut rx: EventReceiver) {
             Err(RecvError::Lagged(_)) => {}
             Err(RecvError::Closed) => break,
         }
-    }
-}
-
-/// Keep the main-thread current-track read-back
-/// ([`WorkerBridge::current_track_id`](crate::web::bridge::WorkerBridge))
-/// in sync by mirroring the worker's current-track cursor into the shared
-/// atomic on every relevant queue event.
-fn mirror_current_track(event: &Event) {
-    match event {
-        Event::Queue(QueueEvent::CurrentTrackChanged { id }) => {
-            crate::web::bridge::set_current_track_id(*id);
-        }
-        Event::Queue(QueueEvent::QueueEnded) => {
-            crate::web::bridge::set_current_track_id(None);
-        }
-        _ => {}
-    }
-}
-
-fn to_ffi(event: &Event) -> Option<FfiPlayerEvent> {
-    match event {
-        Event::Player(pe) => FfiPlayerEvent::try_from(pe).ok(),
-        Event::Queue(qe) => FfiPlayerEvent::try_from(qe).ok(),
-        _ => FfiPlayerEvent::try_from(event).ok(),
     }
 }

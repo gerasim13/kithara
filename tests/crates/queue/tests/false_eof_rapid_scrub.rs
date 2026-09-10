@@ -2,13 +2,14 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{Event, EventReceiver, PlayerEvent},
+    events::{EventReceiver, PlayerEvent},
     hls::AbrMode,
     platform::time::{Duration, Instant, timeout},
     queue::{QueueControl, Transition},
 };
 use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
+    event::TestEvent,
     kithara,
     offline::{AppQueueFixture, insecure_app_queue},
     waits::wait_for_loader_done_event,
@@ -91,7 +92,7 @@ fn count_build_chunks(recorder: &Recorder) -> usize {
 #[derive(Debug, Clone)]
 struct TimedEvent {
     elapsed: Duration,
-    event: Event,
+    event: TestEvent,
 }
 
 /// What the engine did with the queue during the observation window.
@@ -135,7 +136,7 @@ enum AdvanceTrigger {
 
 struct ScrubObservation<'a> {
     queue: &'a QueueControl<AppPools>,
-    rx: &'a mut EventReceiver,
+    rx: &'a mut EventReceiver<TestEvent>,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,
     started_at: Instant,
@@ -212,12 +213,12 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let Event::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                if let TestEvent::Player(PlayerEvent::ItemDidFail { item }) = &ev
                     && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);
                 }
-                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                if let TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
                     && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);

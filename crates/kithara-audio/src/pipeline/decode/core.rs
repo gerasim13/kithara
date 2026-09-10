@@ -11,7 +11,7 @@ use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
 };
-use kithara_events::{DeferredBus, Event};
+use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -25,6 +25,7 @@ use tracing::{debug, warn};
 #[cfg(test)]
 use crate::pipeline::decode::transition::OutgoingFrontier;
 use crate::{
+    AudioLaneEvent,
     pipeline::{
         blend::GaplessBlender,
         decode::{
@@ -187,7 +188,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
     pub(crate) stream: &'a SharedStream<T>,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) seek_observe: &'a dyn SeekObserve,
-    pub(crate) emit: Option<&'a DeferredBus<Event>>,
+    pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
     pub(crate) resume: Option<&'a mut ResumeState>,
 }
 
@@ -433,7 +434,7 @@ impl ActiveDecode {
             pub(crate) fn track(
                 &mut self,
                 chunk: &AudioChunk,
-                emit: Option<&DeferredBus<Event>>,
+                emit: Option<&DeferredBus<AudioLaneEvent>>,
             );
         }
         to self.blender {

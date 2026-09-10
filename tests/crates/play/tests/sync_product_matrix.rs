@@ -5,7 +5,7 @@ use std::{env, io, num::NonZeroU32};
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
-    events::{TrackId, TrackStatus},
+    events::TrackId,
     hls::AbrMode,
     host::{Host, HostConfig, HostOwned},
     output::{OfflineRenderRequest, OfflineRenderer},
@@ -18,7 +18,7 @@ use kithara::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc, Tempo,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{
@@ -440,7 +440,7 @@ impl ProductHarness {
         audible_deck: usize,
     ) -> Self {
         let prepared = prepared_sources(provider).await;
-        let mut harness = Self::build(case, &prepared, audible_deck, BLOCK_FRAMES, false).await;
+        let mut harness = Self::build(case, &prepared, audible_deck, BLOCK_FRAMES, true).await;
         let (_, server, _) = prepared;
         harness.server = Some(server);
         harness

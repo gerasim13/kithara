@@ -36,6 +36,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_display: DerivableConfig,
     #[serde(default)]
+    pub(crate) derivable_event: DerivableEventConfig,
+    #[serde(default)]
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
@@ -81,6 +83,24 @@ pub(crate) struct DerivableConfig {
 impl Default for DerivableConfig {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DerivableEventConfig {
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) unforwarded: Vec<String>,
+}
+
+impl Default for DerivableEventConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            unforwarded: Vec::new(),
+        }
     }
 }
 

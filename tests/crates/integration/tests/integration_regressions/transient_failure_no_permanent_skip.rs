@@ -2,18 +2,23 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
+    audio::AudioEvent,
+    events::TrackId,
     hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir,
-    bufpool_ext::pools,
+    bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
@@ -165,7 +170,7 @@ async fn transient_failure_does_not_kill_the_track(
         |event| {
             matches!(
                 event,
-                Event::Downloader(
+                TestEvent::Downloader(
                     DownloaderEvent::FirstByte { status: 503, .. }
                         | DownloaderEvent::RequestFailed { .. }
                         | DownloaderEvent::RetryExhausted { .. }
@@ -189,7 +194,7 @@ async fn transient_failure_does_not_kill_the_track(
         &mut rx,
         "playback carrying on past the transient failure",
         |event| match event {
-            Event::Queue(QueueEvent::TrackLoadFailed {
+            TestEvent::Queue(QueueEvent::TrackLoadFailed {
                 id,
                 auto_skipped: true,
                 ..
@@ -197,11 +202,13 @@ async fn transient_failure_does_not_kill_the_track(
                 skipped_to = Some(target);
                 true
             }
-            Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == fallback => {
+            TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) })
+                if *id == fallback =>
+            {
                 skipped_to = Some(fallback);
                 true
             }
-            Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) => {
+            TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) => {
                 *position_ms as f64 / 1000.0 >= recovery_target
             }
             _ => false,

@@ -5,8 +5,7 @@ use hls_m3u8::{
     tags::VariantStream as HlsVariantStreamTag,
     types::{DecryptionKey as HlsDecryptionKey, EncryptionMethod as HlsEncryptionMethod},
 };
-use kithara_abr::VariantInfo;
-use kithara_events::{VariantDuration, VariantIndex};
+use kithara_abr::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::{time::Duration, traits::FromWithParams};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;

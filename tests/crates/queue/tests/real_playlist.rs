@@ -1,18 +1,23 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::{AbrMode, AdvanceReason, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::{
         time::{Duration, sleep, timeout},
         tokio::sync::OnceCell,
     },
-    queue::{QueueControl, TrackSource, Transition},
+    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_app::{document::Config, pools::AppPools};
 use kithara_integration_tests::{
-    Xorshift64, kithara,
-    offline::{AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue},
+    Xorshift64,
+    event::TestEvent,
+    kithara,
+    offline::{
+        AppQueueFixture, assert_playhead_tracks_renderer, insecure_app_queue, offline_gain_window,
+    },
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
@@ -45,7 +50,7 @@ async fn shared_test_ctx() -> &'static AppQueueFixture {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<AppPools>,
     track_id: TrackId,
     target: TrackStatus,
@@ -67,7 +72,7 @@ async fn wait_for_status(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
+            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
                 && id == track_id
             {
                 match &status {
@@ -384,7 +389,7 @@ async fn track_plays_end_to_end(
 }
 
 async fn wait_for_queue_event<F>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     mut pred: F,
     deadline: Duration,
 ) -> Option<QueueEvent>
@@ -395,7 +400,7 @@ where
     let res = timeout(deadline, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
+                Ok(TestEvent::Queue(ev)) if pred(&ev) => return Some(ev),
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return None,
@@ -773,7 +778,7 @@ struct Seam {
 /// because that is when a listener first hears the outgoing track go.
 async fn seam_out_of(
     queue: &QueueControl<AppPools>,
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     outgoing: TrackId,
     deadline: Duration,
 ) -> Seam {
@@ -787,13 +792,13 @@ async fn seam_out_of(
         loop {
             match rx.try_recv() {
                 Ok(envelope) => match envelope.event {
-                    Event::Queue(QueueEvent::CurrentTrackAdvance { id, reason: why })
+                    TestEvent::Queue(QueueEvent::CurrentTrackAdvance { id, reason: why })
                         if id != Some(outgoing) =>
                     {
                         reason = Some(why);
                         left = true;
                     }
-                    Event::Queue(QueueEvent::CrossfadeStarted { .. }) => left = true,
+                    TestEvent::Queue(QueueEvent::CrossfadeStarted { .. }) => left = true,
                     _ => {}
                 },
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,

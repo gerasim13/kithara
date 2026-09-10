@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::AssetStore,
-    events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    audio::AudioEvent,
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -11,11 +12,12 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -37,7 +39,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
@@ -54,7 +56,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {
@@ -140,7 +142,7 @@ enum PostSeekProgress {
 /// `PlaybackProgress`. A wall-clock `sleep`-poll would burn virtual time
 /// without ever interleaving the worker's progress.
 async fn wait_for_post_seek_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     pos_before: f64,
     budget: Duration,
@@ -158,7 +160,7 @@ async fn wait_for_post_seek_progress(
         let mut last: Option<f64> = None;
         loop {
             let pos = match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     position_ms as f64 / 1000.0
                 }
                 Ok(_) => continue,
@@ -191,7 +193,7 @@ async fn wait_for_post_seek_progress(
 }
 
 async fn observe_seek_advance_or_panic(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     mut tick_handle: QueueTicker,
     seek_target: f64,

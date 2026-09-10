@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -384,7 +384,7 @@ impl<S> EngineImpl<S> {
         self.session.stream_shape()
     }
 
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 

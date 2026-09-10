@@ -4,8 +4,8 @@
 use std::{fs::File, io::Write, num::NonZeroU32, path::Path};
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

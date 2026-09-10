@@ -6,22 +6,20 @@ use kithara_assets::{
     AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, ReadSide, ResourceKey,
     StorageBackend, WriteSide,
 };
-use kithara_events::{
-    AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
-};
+use kithara_events::{Envelope, EventBus};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::CancelScope;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{StorageError, WaitOutcome};
 use kithara_stream::{
-    AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
-    SourceError as StreamSourceError, SourcePhase, StreamError,
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PlayheadState, ReadOutcome,
+    SeekState, Source, SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 
 use super::source::{FileLocalConfig, FileSource};
 use crate::{
-    File,
+    File, FileEvent, TotalBytesSource,
     coord::FileCoord,
     test_pools::{TestPools, pools},
 };
@@ -92,12 +90,12 @@ fn file_source_local_open_publishes_opened_and_size() {
     assert!(matches!(
         opened,
         Envelope {
-            event: Event::File(FileEvent::Opened {
-                codec: Some(AudioCodecKind::Mp3),
-                container: Some(ContainerKind::MpegAudio),
+            event: FileEvent::Opened {
+                codec: Some(AudioCodec::Mp3),
+                container: Some(ContainerFormat::MpegAudio),
                 total_bytes: Some(11),
                 cached: true,
-            }),
+            },
             ..
         }
     ));
@@ -105,10 +103,10 @@ fn file_source_local_open_publishes_opened_and_size() {
     assert!(matches!(
         total,
         Envelope {
-            event: Event::File(FileEvent::TotalBytesResolved {
+            event: FileEvent::TotalBytesResolved {
                 total_bytes: 11,
                 source: TotalBytesSource::CommittedLen,
-            }),
+            },
             ..
         }
     ));

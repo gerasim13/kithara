@@ -1,7 +1,6 @@
-use kithara_events::VariantInfo;
 use kithara_platform::time::Duration;
 
-use crate::controller::AbrSettings;
+use crate::{VariantInfo, controller::AbrSettings};
 
 /// Snapshot of the inputs an [`AbrState`](super::AbrState) needs to make a decision.
 pub struct AbrView<'a> {

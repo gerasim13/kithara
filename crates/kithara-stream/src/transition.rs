@@ -1,5 +1,6 @@
-use kithara_abr::AbrTicket;
-use kithara_events::{SeekEpoch, VariantIndex};
+use kithara_abr::{AbrTicket, VariantIndex};
+
+use crate::seek::SeekEpoch;
 
 /// Result of publishing an audio-approved incoming variant.
 #[must_use]
@@ -115,8 +116,7 @@ impl VariantTransition {
 
 #[cfg(test)]
 mod tests {
-    use kithara_abr::{AbrState, PendingAbrDecision};
-    use kithara_events::{AbrMode, AbrReason, VariantIndex};
+    use kithara_abr::{AbrMode, AbrReason, AbrState, PendingAbrDecision, VariantIndex};
     use kithara_test_utils::kithara;
 
     use super::*;

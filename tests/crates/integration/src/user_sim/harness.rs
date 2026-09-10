@@ -1,14 +1,12 @@
 use std::path::Path;
 
 use kithara::{
-    abr::AbrHandle,
+    abr::{AbrHandle, AbrMode},
     assets::{AssetStore, StorageBackend},
+    audio::{AudioEvent, SeekLifecycleStage},
     bufpool::HasPool,
     decode::DecoderBackend,
-    events::{
-        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-        TrackStatus,
-    },
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -20,13 +18,14 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
         SeekOutcome,
     },
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     user_sim::actions::Action,
@@ -227,7 +226,7 @@ impl SimHarness {
         self.track_ids[idx]
     }
 
-    pub fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe(&self) -> EventReceiver<TestEvent> {
         self.queue.subscribe()
     }
 
@@ -530,13 +529,13 @@ impl SimHarness {
             loop {
                 match rx.try_recv() {
                     Ok(envelope) => match &envelope.event {
-                        Event::Audio(AudioEvent::SeekLifecycle {
+                        TestEvent::Audio(AudioEvent::SeekLifecycle {
                             stage: SeekLifecycleStage::SeekApplied,
                             ..
                         }) => {
                             seek_rebase_allowed = true;
                         }
-                        Event::Audio(AudioEvent::SeekComplete { position, .. }) => {
+                        TestEvent::Audio(AudioEvent::SeekComplete { position, .. }) => {
                             seek_rebase_allowed = true;
                             baseline_pos = position.as_secs_f64();
                             last_pos = baseline_pos;
@@ -733,7 +732,7 @@ impl SimHarness {
 /// `Err` is a closed bus (terminal). `recv()` itself parks on the
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
-async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
+async fn recv_event(rx: &mut EventReceiver<TestEvent>) -> Result<Option<TestEvent>, String> {
     match rx.recv().await {
         Ok(env) => Ok(Some(env.event)),
         Err(RecvError::Lagged(_)) => Ok(None),
@@ -745,8 +744,8 @@ async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
 /// `position_ms as f64` mirrors the established sibling tests
 /// (`local_track_plays`, `hls_seek_near_end_stress`): playback
 /// positions stay far below `2^53` ms, so the cast is exact.
-fn progress_secs(ev: &Event) -> Option<f64> {
-    if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
+fn progress_secs(ev: &TestEvent) -> Option<f64> {
+    if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
         Some(*position_ms as f64 / 1000.0)
     } else {
         None
@@ -764,7 +763,7 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
 async fn await_progress<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
@@ -832,7 +831,7 @@ where
             let Some(ev) = recv_event(&mut rx).await? else {
                 continue;
             };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
+            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
                 && *tid == id
             {
                 match status {

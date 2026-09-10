@@ -6,7 +6,6 @@ use kithara_warp::{BeatGridId, BeatGridRevision, RegionPlan, RegionPlanSlot, Seg
 
 use crate::resource::Resource;
 
-/// The asset grid a deck published for one queued track.
 #[derive(Clone, Debug)]
 pub(crate) struct TrackGrid {
     pub(crate) id: BeatGridId,
@@ -14,8 +13,6 @@ pub(crate) struct TrackGrid {
     pub(crate) segments: SegmentSet,
 }
 
-/// What the deck knows about one queued track beyond its resource: the Warp
-/// slot of its loaded lane, the region plan for the deck tempo, its grid.
 #[derive(Default)]
 struct TrackState {
     slot: Option<Arc<RegionPlanSlot>>,
@@ -29,11 +26,34 @@ pub(crate) struct QueuedResource {
     pub(crate) item_id: TrackId,
 }
 
+struct Slot {
+    resource: Option<Resource>,
+    item_id: TrackId,
+}
+
+impl From<QueuedResource> for Slot {
+    fn from(queued: QueuedResource) -> Self {
+        Self {
+            item_id: queued.item_id,
+            resource: Some(queued.resource),
+        }
+    }
+}
+
+impl Slot {
+    fn take(&mut self) -> Option<QueuedResource> {
+        self.resource.take().map(|resource| QueuedResource {
+            resource,
+            item_id: self.item_id,
+        })
+    }
+}
+
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct Playlist {
     last_announced: Option<usize>,
-    items: Vec<Option<QueuedResource>>,
+    items: Vec<Option<Slot>>,
     tracks: BTreeMap<TrackId, TrackState>,
     #[field(get, set, vis = "pub(crate)")]
     current: usize,
@@ -65,8 +85,6 @@ impl Playlist {
         }
     }
 
-    /// Records the Warp slot of a track taken for load and installs the plan
-    /// already computed for it.
     pub(crate) fn track_loaded(&mut self, item: TrackId, slot: Option<Arc<RegionPlanSlot>>) {
         let Some(slot) = slot else {
             return;
@@ -84,7 +102,6 @@ impl Playlist {
         self.tracks.entry(item).or_default().grid = Some(grid);
     }
 
-    /// Stores the plan for one track and installs it into its loaded lane.
     pub(crate) fn set_track_plan(&mut self, item: TrackId, plan: Option<Arc<RegionPlan>>) {
         let track = self.tracks.entry(item).or_default();
         if let Some(slot) = &track.slot {
@@ -93,14 +110,28 @@ impl Playlist {
         track.plan = plan;
     }
 
+    pub(crate) fn has_resource(&self, index: usize) -> bool {
+        self.items
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_some_and(|slot| slot.resource.is_some())
+    }
+
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
         let pos = at.map_or(self.items.len(), |i| i.min(self.items.len()));
-        self.items.insert(pos, Some(q));
+        self.items.insert(pos, Some(q.into()));
         pos
     }
 
     pub(crate) fn is_announced(&self, index: usize) -> bool {
         self.last_announced == Some(index)
+    }
+
+    pub(crate) fn item_id(&self, index: usize) -> Option<TrackId> {
+        self.items
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|queued| queued.item_id)
     }
 
     pub(crate) fn mark_announced(&mut self, index: usize) -> bool {
@@ -114,7 +145,7 @@ impl Playlist {
             return None;
         }
 
-        let removed = self.items.remove(index);
+        let removed = self.items.remove(index).and_then(|mut slot| slot.take());
         if let Some(removed) = &removed {
             self.tracks.remove(&removed.item_id);
         }
@@ -132,7 +163,7 @@ impl Playlist {
 
     pub(crate) fn replace(&mut self, index: usize, q: QueuedResource) {
         if let Some(slot) = self.items.get_mut(index) {
-            *slot = Some(q);
+            *slot = Some(q.into());
             if self.last_announced == Some(index) {
                 self.last_announced = None;
             }
@@ -143,15 +174,16 @@ impl Playlist {
         self.items.resize_with(count, || None);
     }
 
+    pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource> {
+        self.items
+            .get_mut(index)
+            .and_then(Option::as_mut)
+            .and_then(Slot::take)
+    }
+
     delegate::delegate! {
         to self.items {
-            #[expr($.is_some_and(Option::is_some))]
-            #[call(get)]
-            pub(crate) fn has_resource(&self, index: usize) -> bool;
             pub(crate) const fn len(&self) -> usize;
-            #[expr($.and_then(Option::take))]
-            #[call(get_mut)]
-            pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource>;
         }
     }
 }

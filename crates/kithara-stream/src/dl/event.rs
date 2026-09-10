@@ -2,8 +2,10 @@
 
 use std::num::NonZeroU64;
 
+use kithara_events::Event;
 use kithara_net::NetError;
 use kithara_platform::time::Duration;
+use kithara_test_utils::probe::IntoProbeArg;
 use url::Url;
 
 /// Stable id for a single Downloader request.
@@ -29,11 +31,14 @@ impl RequestId {
     }
 }
 
+impl IntoProbeArg for RequestId {
+    fn into_probe_arg(self) -> u64 {
+        self.get()
+    }
+}
+
 /// HTTP method of a Downloader request.
-///
-/// Lives in `kithara-events` (not `kithara-stream`) because both the
-/// command type and the lifecycle events refer to it; keeping it next
-/// to the events avoids the dependency cycle.
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum RequestMethod {
     /// HTTP GET, streaming body. Default — used for large downloads
@@ -59,11 +64,18 @@ pub enum RequestPriority {
     Low = 1,
 }
 
+impl IntoProbeArg for RequestPriority {
+    fn into_probe_arg(self) -> u64 {
+        self as u64
+    }
+}
+
 /// Why a fetch was cancelled.
 ///
 /// Distinguishes the cancel paths so subscribers can tell e.g. a
 /// seek-driven epoch flush from a peer drop or a downloader-wide
 /// shutdown.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelReason {
     /// The protocol's epoch cancel token fired (e.g. HLS bumped
@@ -80,6 +92,12 @@ pub enum CancelReason {
     BeforeStart,
 }
 
+impl IntoProbeArg for CancelReason {
+    fn into_probe_arg(self) -> u64 {
+        self as u64
+    }
+}
+
 /// Events emitted by the unified downloader layer.
 ///
 /// Published on the **peer's bus scope**, set via
@@ -87,7 +105,7 @@ pub enum CancelReason {
 /// fetches; a root-bus subscriber sees fetches from every peer.
 ///
 /// Every variant for a single fetch carries the same [`RequestId`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Event)]
 #[non_exhaustive]
 pub enum DownloaderEvent {
     /// Request was accepted by the Downloader and placed into a

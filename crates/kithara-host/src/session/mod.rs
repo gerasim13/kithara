@@ -20,6 +20,7 @@ pub(crate) use protocol::{
     Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
 };
 pub(crate) use state::RootView;
+pub use transport::TransportEvent;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::{
     bridge_duration_secs, bridge_is_playing, bridge_position_secs, remote, tick_and_poll_remote,

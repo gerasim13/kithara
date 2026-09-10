@@ -1,9 +1,10 @@
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
+use kithara_events::{EventReceiver, EventSet, TrackId};
 
 use super::QueueControl;
 use crate::{
+    event::{QueueEvent, QueueRepeatMode},
     navigation::RepeatMode,
     track::{TrackEntry, TrackRecord, TrackSource},
 };
@@ -51,10 +52,10 @@ where
     }
 
     /// Subscribe to the unified event stream:
-    /// [`QueueEvent`](kithara_events::QueueEvent) + underlying player /
+    /// [`QueueEvent`](crate::event::QueueEvent) + underlying player /
     /// audio / hls / file events.
     #[must_use]
-    pub fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 
@@ -102,7 +103,7 @@ where
             #[must_use]
             #[expr($?.current_variant())]
             #[call(current_abr_handle)]
-            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
+            pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo>;
             /// Whether the queue is empty.
             #[must_use]
             #[expr($.is_empty())]

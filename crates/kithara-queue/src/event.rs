@@ -1,4 +1,4 @@
-use crate::TrackId;
+use kithara_events::{Event, TrackId};
 
 /// Why queue navigation advanced away from the previous current track.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub enum TrackStatus {
 }
 
 /// Queue-level events emitted by `kithara-queue::Queue`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum QueueEvent {
     /// A new track was appended / inserted at `index`.
@@ -85,4 +85,30 @@ pub enum QueueEvent {
     /// to fade from a currently-playing track to the newly selected one.
     /// UIs can use `duration_seconds` to drive a progress indicator.
     CrossfadeStarted { duration_seconds: f32 },
+}
+
+#[derive(Clone, Debug, Event)]
+#[non_exhaustive]
+pub enum ItemEvent {
+    PlaybackLikelyToKeepUp,
+    PlaybackStalled,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn queue_and_item_events_are_owned_by_kithara_queue() {
+        assert_eq!(
+            ::core::any::type_name::<QueueEvent>(),
+            "kithara_queue::event::QueueEvent"
+        );
+        assert_eq!(
+            ::core::any::type_name::<ItemEvent>(),
+            "kithara_queue::event::ItemEvent"
+        );
+    }
 }

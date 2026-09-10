@@ -484,14 +484,15 @@ fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
-    use kithara_events::{AssetEvent, Event, EventBus, EvictReason};
+    use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
-        AssetResourceState, AssetWriter, AssetsError, ResourceAcquisition, ResourceKey,
+        AssetEvent, AssetResourceState, AssetWriter, AssetsError, EvictReason, ResourceAcquisition,
+        ResourceKey,
         decorator::Capabilities,
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
@@ -518,7 +519,7 @@ mod tests {
         }
     }
 
-    fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+    fn collect_events(events: &mut kithara_events::EventReceiver<AssetEvent>) -> Vec<AssetEvent> {
         std::iter::from_fn(|| events.try_recv().ok())
             .map(|envelope| envelope.event)
             .collect()
@@ -539,11 +540,11 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Asset(AssetEvent::Committed {
+            AssetEvent::Committed {
                 asset_root,
                 rel_path,
                 final_len: Some(4),
-            }) if asset_root == ROOT && rel_path == "seg.m4s"
+            } if asset_root == ROOT && rel_path == "seg.m4s"
         )));
     }
 
@@ -598,11 +599,11 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Asset(AssetEvent::Failed {
+            AssetEvent::Failed {
                 asset_root,
                 rel_path,
                 reason,
-            }) if asset_root == ROOT && rel_path == "seg.m4s" && reason == "fixture failure"
+            } if asset_root == ROOT && rel_path == "seg.m4s" && reason == "fixture failure"
         )));
     }
 
@@ -629,10 +630,10 @@ mod tests {
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::Asset(AssetEvent::Evicted {
+            AssetEvent::Evicted {
                 asset_root,
                 reason: EvictReason::QuotaAssets,
-            }) if asset_root == "asset-a"
+            } if asset_root == "asset-a"
         )));
     }
 
