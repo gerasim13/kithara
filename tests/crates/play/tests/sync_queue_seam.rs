@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
     events::TrackId,
-    platform::time::Duration,
+    platform::{time::Duration, tokio::task::spawn_blocking},
     warp::{AssetAxis, BeatGridState, SyncAdmission},
 };
 use kithara_integration_tests::{
@@ -180,11 +180,15 @@ fn assert_in_phase(label: &str, slices: &[&[f32]], bpm: f64, marked: bool) {
 /// counts differ by the overlap and are judged by `assert_in_phase`. The
 /// candidate ends where the stream ends: the capture budget's tail is silence
 /// by construction, not a dropout.
-fn assert_continuous(label: &str, candidate: &[f32], solo: &[f32]) {
-    let candidate = CochleaReport::measure(candidate, Fixture::CHANNELS, Fixture::SAMPLE_RATE);
-    let solo = CochleaReport::measure(solo, Fixture::CHANNELS, Fixture::SAMPLE_RATE);
-    let failures = time_stretch_failures(label, &candidate, &solo);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+async fn assert_continuous(label: &'static str, candidate: Vec<f32>, solo: Vec<f32>) {
+    spawn_blocking(move || {
+        let candidate = CochleaReport::measure(&candidate, Fixture::CHANNELS, Fixture::SAMPLE_RATE);
+        let solo = CochleaReport::measure(&solo, Fixture::CHANNELS, Fixture::SAMPLE_RATE);
+        let failures = time_stretch_failures(label, &candidate, &solo);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    })
+    .await
+    .expect("continuity analysis task");
 }
 
 /// One track alone from `from_secs`, `frames` output frames at `rate`: the
@@ -284,13 +288,14 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
     let played = usize::try_from((b.last - origin) * i64::from(Fixture::CHANNELS))
         .expect("stream end fits usize");
     let fade = (f64::from(Fixture::FADE_SECS) * f64::from(Fixture::SAMPLE_RATE)).round() as i64;
-    assert_continuous(
-        "seam off",
-        &pcm[..played],
-        &solo_pair([stretch_to(124.0, 124.0), stretch_to(132.0, 132.0)]).await,
-    );
     let (before, _) = seam_window(&pcm, b_first, fade, 2 * bar_frames(124.0));
     let (_, after) = seam_window(&pcm, b_first, fade, 2 * bar_frames(132.0));
+    assert_continuous(
+        "seam off",
+        pcm[..played].to_vec(),
+        solo_pair([stretch_to(124.0, 124.0), stretch_to(132.0, 132.0)]).await,
+    )
+    .await;
     assert_in_phase("seam off, house before the seam", &[&before], 124.0, true);
     assert_in_phase("seam off, techno after the fade", &[&after], 132.0, true);
     for (index, name) in Fixture::HOUSE_THEN_TECHNO.iter().enumerate() {
