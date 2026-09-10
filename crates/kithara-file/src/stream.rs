@@ -5,7 +5,7 @@ use kithara_assets::{
     ResourceAttachment, ResourceKey,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_events::{EventBus, FileError, FileEvent};
+use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
@@ -17,6 +17,7 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use crate::{
+    FileError, FileEvent,
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
@@ -391,7 +392,6 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
-    use kithara_events::FileEvent;
     use kithara_platform::time::Duration;
     use tempfile::tempdir;
 

@@ -24,8 +24,8 @@ use bytes::Bytes;
 use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{EventBus, FileEvent},
-    file::{File, FileConfig, FileSrc},
+    events::EventBus,
+    file::{File, FileConfig, FileEvent, FileSrc},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, time::Duration},
     stream::{

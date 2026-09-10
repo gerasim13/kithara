@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-use crate::{AudioCodecKind, ContainerKind, Event};
+use kithara_events::{Event, SeekEpoch};
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
@@ -29,8 +30,8 @@ pub enum FileError {
 #[non_exhaustive]
 pub enum FileEvent {
     Opened {
-        codec: Option<AudioCodecKind>,
-        container: Option<ContainerKind>,
+        codec: Option<AudioCodec>,
+        container: Option<ContainerFormat>,
         total_bytes: Option<u64>,
         cached: bool,
     },
@@ -53,7 +54,7 @@ pub enum FileEvent {
     ReaderSeek {
         from_offset: u64,
         to_offset: u64,
-        seek_epoch: crate::SeekEpoch,
+        seek_epoch: SeekEpoch,
     },
     /// Non-network error specific to the file stream.
     Error {

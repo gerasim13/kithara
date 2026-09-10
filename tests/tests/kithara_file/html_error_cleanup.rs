@@ -2,8 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{EventBus, FileEvent},
-    file::{File, FileConfig},
+    events::EventBus,
+    file::{File, FileConfig, FileEvent},
     platform::{
         CancelToken,
         time::{Duration, Instant, timeout},

@@ -230,9 +230,9 @@ impl Drop for ItemEventBridge {
 mod tests {
     use kithara::{
         abr::{AbrEvent, AbrMode, AbrReason, VariantDuration, VariantIndex, VariantInfo},
-        events::{FileError, FileEvent},
         platform::sync::{Arc, Mutex},
     };
+    use kithara_file::{FileError, FileEvent};
 
     use super::ItemEventBridge;
     use crate::{

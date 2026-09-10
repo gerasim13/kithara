@@ -4,13 +4,14 @@ use kithara::{
         AdvanceReason, AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind,
         DecoderBackend, DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource,
         PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason,
-        StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
+        StretchBackendKind, TrackFailureKind, TrackId, TrackStatus as TS,
     },
     platform::{sync::Arc, time::Duration},
     play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
     queue::{RepeatMode, Transition},
-    stream::CancelReason,
+    stream::{AudioCodec, CancelReason, ContainerFormat},
 };
+use kithara_file::TotalBytesSource;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -531,6 +532,23 @@ impl From<AudioCodecKind> for FfiAudioCodecKind {
     }
 }
 
+impl From<AudioCodec> for FfiAudioCodecKind {
+    fn from(value: AudioCodec) -> Self {
+        match value {
+            AudioCodec::AacLc => Self::AacLc,
+            AudioCodec::AacHe => Self::AacHe,
+            AudioCodec::AacHeV2 => Self::AacHeV2,
+            AudioCodec::Mp3 => Self::Mp3,
+            AudioCodec::Flac => Self::Flac,
+            AudioCodec::Vorbis => Self::Vorbis,
+            AudioCodec::Opus => Self::Opus,
+            AudioCodec::Alac => Self::Alac,
+            AudioCodec::Pcm => Self::Pcm,
+            AudioCodec::Adpcm => Self::Adpcm,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiContainerKind {
@@ -561,6 +579,23 @@ impl From<ContainerKind> for FfiContainerKind {
             ContainerKind::Caf => Self::Caf,
             ContainerKind::Mkv => Self::Mkv,
             _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+        }
+    }
+}
+
+impl From<ContainerFormat> for FfiContainerKind {
+    fn from(value: ContainerFormat) -> Self {
+        match value {
+            ContainerFormat::Mp4 => Self::Mp4,
+            ContainerFormat::Fmp4 => Self::Fmp4,
+            ContainerFormat::MpegTs => Self::MpegTs,
+            ContainerFormat::MpegAudio => Self::MpegAudio,
+            ContainerFormat::Adts => Self::Adts,
+            ContainerFormat::Flac => Self::Flac,
+            ContainerFormat::Wav => Self::Wav,
+            ContainerFormat::Ogg => Self::Ogg,
+            ContainerFormat::Caf => Self::Caf,
+            ContainerFormat::Mkv => Self::Mkv,
         }
     }
 }

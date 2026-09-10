@@ -1,12 +1,13 @@
 use kithara::{
     assets::AssetEvent,
     events::{
-        AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, FileEvent, HlsEvent, QueueEvent,
+        AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, HlsEvent, QueueEvent,
         SessionEvent,
     },
     play::PlayerEvent,
     stream::DownloaderEvent,
 };
+use kithara_file::FileEvent;
 
 use super::event_set::{ItemBusEvent, QueueBusEvent};
 use crate::types::{
@@ -587,17 +588,17 @@ mod tests {
         events::{
             AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
             DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent, DrmEvent, EngineEvent,
-            FileEvent, FrameDomain, GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource,
-            MediaTime, PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode,
-            ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent, SlotId,
-            StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind, TrackId,
-            TrackRef, TrackStatus,
+            FrameDomain, GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource, MediaTime,
+            PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode, ResamplerKind,
+            RouteChangeReason, RouteDescription, SessionEvent, SlotId, StretchBackendKind,
+            TimeControlStatus, TrackFailureKind, TrackId, TrackRef, TrackStatus,
         },
         platform::{sync::Arc, time::Duration},
         play::PlayerEvent,
         signal::AudioSpec,
         stream::{CancelReason, DownloaderEvent, RequestId},
     };
+    use kithara_file::{FileEvent, TotalBytesSource};
 
     use super::{
         FfiError, FfiItemEvent, FfiPlayerEvent, ItemBusEvent, NotForwarded, QueueBusEvent,

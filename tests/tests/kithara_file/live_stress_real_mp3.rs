@@ -3,8 +3,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
-    events::FileEvent,
-    file::{File, FileConfig},
+    file::{File, FileConfig, FileEvent},
     platform::{
         sync::Arc,
         thread,

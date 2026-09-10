@@ -7,8 +7,8 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{EventBus, EventReceiver, FileEvent},
-    file::{File, FileConfig, FileSrc},
+    events::{EventBus, EventReceiver},
+    file::{File, FileConfig, FileEvent, FileSrc},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,

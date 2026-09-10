@@ -381,8 +381,8 @@ mod tests {
 
     use kithara::{
         events::{
-            AdvanceReason, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
-            QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
+            AdvanceReason, EventBus, HlsError, HlsEvent, ItemRole, QueueEvent, QueueRepeatMode,
+            SlotId, TrackId, TrackRef, TrackStatus,
         },
         platform::{
             sync::{Arc, Mutex},
@@ -391,6 +391,7 @@ mod tests {
         play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
         queue::{QueueConfig, test_utils::QueueProbe},
     };
+    use kithara_file::{FileError, FileEvent};
 
     use super::*;
     use crate::{

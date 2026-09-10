@@ -21,8 +21,6 @@ mod audio;
 mod decoder;
 #[cfg(feature = "drm")]
 mod drm;
-#[cfg(feature = "file")]
-mod file;
 #[cfg(feature = "hls")]
 mod hls;
 #[cfg(feature = "player")]
@@ -45,8 +43,6 @@ pub use deferred::DeferredBus;
 #[cfg(feature = "drm")]
 pub use drm::{DrmEvent, KeyFailureStage, KeySource};
 pub use event::{Event, EventSet};
-#[cfg(feature = "file")]
-pub use file::{FileError, FileEvent, TotalBytesSource};
 #[cfg(feature = "hls")]
 pub use hls::{HlsError, HlsEvent};
 pub use ids::{SlotId, TrackId};

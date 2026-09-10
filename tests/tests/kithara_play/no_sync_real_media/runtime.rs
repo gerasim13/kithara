@@ -1,8 +1,9 @@
 use kithara::{
     events::{
-        AudioEvent, BusEvent, DecoderEvent, EventReceiver, FileEvent, HlsEvent, ItemEvent,
+        AudioEvent, BusEvent, DecoderEvent, EventReceiver, HlsEvent, ItemEvent,
         PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
     },
+    file::FileEvent,
     host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{PlayError, PlayerImpl, Resource, SessionError},
