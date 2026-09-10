@@ -82,7 +82,7 @@ pub(crate) fn derive(input: &DeriveInput) -> Result<TokenStream> {
         }
     });
 
-    let attempts = members.iter().map(|Member { variant, index, .. }| {
+    let polls = members.iter().map(|Member { variant, index, .. }| {
         quote! {
             match rx.#index.try_recv() {
                 ::core::result::Result::Ok(envelope) => {
@@ -141,7 +141,7 @@ pub(crate) fn derive(input: &DeriveInput) -> Result<TokenStream> {
                 ::kithara_events::TryRecvError,
             > {
                 let mut open = false;
-                #(#attempts)*
+                #(#polls)*
                 if open {
                     ::core::result::Result::Err(::kithara_events::TryRecvError::Empty)
                 } else {
