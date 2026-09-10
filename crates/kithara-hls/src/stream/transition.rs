@@ -93,11 +93,7 @@ where
     }
 
     pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession<S>>> {
-        self.transition
-            .lock()
-            .incoming
-            .as_ref()
-            .map(|slot| Arc::clone(&slot.session))
+        self.publication.load().second.as_ref().map(Arc::clone)
     }
 
     fn publish_exact_one(&self, session: Arc<HlsSession<S>>) {
