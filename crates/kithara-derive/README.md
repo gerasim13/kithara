@@ -73,12 +73,40 @@ Without `default`, neither `DEFAULT` nor `Default` exists. The inverse `From`
 always unwraps the value. Declaring crates must depend on `serde`; `Serialize`
 is never generated.
 
+### Events
+
+`Event` implements the event marker for a concrete struct or enum. It refuses
+unions and all type, lifetime, or const parameters. `EventSet` accepts a nonempty
+concrete enum whose variants each wrap one event type in a tuple field.
+
+```rust
+use kithara_derive::{Event, EventSet};
+
+#[derive(Clone, Debug, Event)]
+enum PlaybackEvent {
+    Started,
+    Stopped,
+}
+
+#[derive(Clone, Debug, EventSet)]
+enum ObserverEvent {
+    Playback(PlaybackEvent),
+}
+```
+
+Both expansions require a direct `kithara-events` dependency. `EventSet` emits
+its own `From` implementations: do not also derive `derive_more::From`. Variant
+order determines receive priority; closed channels do not block live members,
+and lag is returned to the caller.
+
 ## Key Types
 
 Derive macros:
 
 - `#[derive(Patch)]` — generates `<Struct>Patch` and `<Struct>::apply`
 - `#[derive(Ranged)]` — generates bounded scalar construction and deserialization
+- `#[derive(Event)]` — registers a concrete event type
+- `#[derive(EventSet)]` — generates a consumer adapter over event channels
 
 Field attributes:
 

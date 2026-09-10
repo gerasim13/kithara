@@ -5,7 +5,8 @@ use kithara::{
 };
 use kithara_integration_tests::abr_fixtures::state as fresh_state;
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn auto_commit_flips_active_variant() {
     let state = fresh_state(0);
     state.request_target(VariantIndex::new(3), AbrReason::AlreadyOptimal);
@@ -39,7 +40,8 @@ async fn auto_commit_flips_active_variant() {
     );
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn manual_set_mode_uses_same_commit_path() {
     let state = fresh_state(0);
     state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
@@ -60,7 +62,8 @@ async fn manual_set_mode_uses_same_commit_path() {
     assert_eq!(state.mode(), AbrMode::Manual(VariantIndex::new(2)));
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn peek_pending_decision_returns_none_during_seek() {
     let state = fresh_state(0);
     state.request_target(VariantIndex::new(2), AbrReason::AlreadyOptimal);
@@ -92,7 +95,8 @@ async fn peek_pending_decision_returns_none_during_seek() {
     assert_eq!(resumed.target(), VariantIndex::new(2));
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[serial_test::serial]
 async fn no_op_switch_never_surfaces_a_decision() {
     // A no-op pending (target == current) must NOT surface — peek returns
     // None so apply_decision never fires. `AbrDecision::changed()` is the

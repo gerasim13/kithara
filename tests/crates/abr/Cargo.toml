@@ -24,6 +24,7 @@ kithara = { workspace = true, features = ["abr", "events", "platform", "probe"] 
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+serial_test = { workspace = true }
 
 [lints]
 workspace = true

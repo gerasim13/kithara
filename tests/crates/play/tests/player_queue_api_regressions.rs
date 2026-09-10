@@ -89,7 +89,8 @@ async fn auto_advance_starts_next_track_without_explicit_play(
 
         if harness.player().current_index() == 1 && second_current_item_changed.is_none() {
             second_current_item_changed = events.iter().find_map(|timed| {
-                matches!(&timed.event, PlayerEvent::CurrentItemChanged).then_some(timed.frame_end)
+                matches!(&timed.event, PlayerEvent::CurrentItemChanged { .. })
+                    .then_some(timed.frame_end)
             });
         }
 

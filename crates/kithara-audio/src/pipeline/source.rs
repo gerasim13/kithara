@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara_decode::ChunkRetire;
-use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
+use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -18,6 +18,7 @@ pub(crate) use crate::pipeline::{
     stream::shared::SharedStream,
 };
 use crate::{
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, TrackFailureKind,
     pipeline::{
         decode::{
             gate::ReadinessGate,
@@ -62,7 +63,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
-    pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
+    pub(crate) emit: Option<Arc<DeferredBus<AudioLaneEvent>>>,
     pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
@@ -177,13 +178,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let CurrentFsm::Failed(handle) = &new
             && let Some(ref emit) = self.emit
         {
-            emit.enqueue(
-                AudioEvent::TrackFailed {
-                    failure: map_track_failure_kind(handle.data()),
-                    seek_epoch: self.seek_obs.epoch(),
-                }
-                .into(),
-            );
+            emit.enqueue(AudioEvent::TrackFailed {
+                failure: map_track_failure_kind(handle.data()),
+                seek_epoch: self.seek_obs.epoch(),
+            });
         }
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;
@@ -222,6 +220,33 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let Some(generation) = self.decode.discard_incoming() {
             self.retired.retire_generation(generation);
         }
+    }
+
+    /// Drops the in-flight transition an applied seek superseded.
+    ///
+    /// `VariantTransitionId` binds a transition to the seek epoch that minted
+    /// it, and `SeekPrepare::prepare` already dropped the source's half of one
+    /// minted earlier. The local half outlives that: its generation holds a
+    /// latched pre-seek `OutgoingFrontier` that the repositioned outgoing
+    /// generation never reaches, so `transition_holds_output` would hold every
+    /// decode output against a promotion that can no longer be proven. The
+    /// pending ABR intent survives, exactly as it does on the source side, so
+    /// the new epoch can mint its own transition.
+    pub(super) fn discard_superseded_incoming(&mut self, epoch: u64) {
+        let Some(transition) = self
+            .decode
+            .incoming_transition()
+            .filter(|transition| transition.id().seek_epoch() != epoch)
+        else {
+            return;
+        };
+        debug!(
+            epoch,
+            latched_frontier = ?self.decode.incoming_frontier(),
+            ?transition,
+            "seek superseded a variant transition: discarding the incoming half"
+        );
+        self.discard_local_incoming();
     }
 
     fn prepare_incoming_transition(
@@ -584,7 +609,16 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     }
 
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
-        self.decode.flush_reader_signals();
+        let live_epoch = self.seek_obs.epoch();
+        let prepare_input = match &self.state {
+            CurrentFsm::Decoding(_) | CurrentFsm::AwaitingResume(_) => true,
+            CurrentFsm::WaitingForSource(track) => matches!(
+                track.data().context,
+                WaitContext::Playback | WaitContext::PostSeek(_)
+            ),
+            _ => false,
+        };
+        self.decode.prepare_deferred(live_epoch, prepare_input);
         if let Some(chunk) = self.decode.take_rejected_chunk() {
             ChunkRetire::retire(&self.retired, chunk);
         }

@@ -1,11 +1,14 @@
 use kithara::{
-    events::{
-        AssetEvent, AudioEvent, DecoderEvent, DjEvent, DownloaderEvent, DrmEvent, EngineEvent,
-        Event, FileEvent, HlsEvent, QueueEvent, SessionEvent,
-    },
-    play::PlayerEvent,
+    assets::AssetEvent,
+    play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
+    queue::QueueEvent,
+    stream::DownloaderEvent,
 };
+use kithara_audio::{AudioEvent, DecoderEvent};
+use kithara_file::FileEvent;
+use kithara_hls::{DrmEvent, HlsEvent};
 
+use super::event_set::{ItemBusEvent, QueueBusEvent};
 use crate::types::{
     FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode,
     FfiRouteChangeReason, FfiStretchBackendKind, FfiTrackStatus, duration_to_seconds,
@@ -14,48 +17,48 @@ use crate::types::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotForwarded;
 
-impl TryFrom<&Event> for FfiItemEvent {
+impl TryFrom<&ItemBusEvent> for FfiItemEvent {
     type Error = NotForwarded;
 
-    fn try_from(event: &Event) -> Result<Self, NotForwarded> {
+    fn try_from(event: &ItemBusEvent) -> Result<Self, NotForwarded> {
         match event {
-            Event::Decoder(e) => Self::try_from(e),
-            Event::Audio(e) => Self::try_from(e),
-            Event::Hls(e) => Self::try_from(e),
-            Event::Downloader(e) => Self::try_from(e),
-            Event::File(e) => Self::try_from(e),
-            Event::Drm(e) => Self::try_from(e),
+            ItemBusEvent::Decoder(e) => Self::try_from(e),
+            ItemBusEvent::Audio(e) => Self::try_from(e),
+            ItemBusEvent::Hls(e) => Self::try_from(e),
+            ItemBusEvent::Downloader(e) => Self::try_from(e),
+            ItemBusEvent::File(e) => Self::try_from(e),
+            ItemBusEvent::Drm(e) => Self::try_from(e),
             _ => Err(NotForwarded),
         }
     }
 }
 
-impl TryFrom<&Event> for FfiPlayerEvent {
+impl TryFrom<&QueueBusEvent> for FfiPlayerEvent {
     type Error = NotForwarded;
 
-    fn try_from(event: &Event) -> Result<Self, NotForwarded> {
+    fn try_from(event: &QueueBusEvent) -> Result<Self, NotForwarded> {
         match event {
-            Event::Engine(e) => Self::try_from(e),
-            Event::Session(e) => Self::try_from(e),
-            Event::Dj(e) => Self::try_from(e),
-            Event::Asset(e) => Self::try_from(e),
+            QueueBusEvent::Engine(e) => Self::try_from(e),
+            QueueBusEvent::Session(e) => Self::try_from(e),
+            QueueBusEvent::Dj(e) => Self::try_from(e),
+            QueueBusEvent::Asset(e) => Self::try_from(e),
             _ => Err(NotForwarded),
         }
     }
 }
 
-impl TryFrom<&Event> for FfiError {
+impl TryFrom<&ItemBusEvent> for FfiError {
     type Error = NotForwarded;
 
-    fn try_from(event: &Event) -> Result<Self, NotForwarded> {
+    fn try_from(event: &ItemBusEvent) -> Result<Self, NotForwarded> {
         match event {
-            Event::File(FileEvent::Error { error }) => Ok(Self::ItemFailed {
+            ItemBusEvent::File(FileEvent::Error { error }) => Ok(Self::ItemFailed {
                 reason: error.to_string(),
             }),
-            Event::Hls(HlsEvent::Error { error }) => Ok(Self::ItemFailed {
+            ItemBusEvent::Hls(HlsEvent::Error { error }) => Ok(Self::ItemFailed {
                 reason: error.to_string(),
             }),
-            Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
+            ItemBusEvent::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
                 Ok(Self::ItemFailed {
                     reason: error.to_string(),
                 })
@@ -580,22 +583,29 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroU64};
 
     use kithara::{
-        events::{
-            AssetEvent, AudioCodecKind, AudioEvent, CancelReason, ContainerKind, DecodeErrorClass,
-            DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent,
-            DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason, FileEvent, FrameDomain,
-            GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource, MediaTime,
-            PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode, RequestId,
-            ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent, SlotId,
-            StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind, TrackId,
-            TrackRef, TrackStatus,
+        assets::{AssetEvent, EvictReason},
+        audio::{
+            AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
+            DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
+            TrackFailureKind,
         },
+        events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
-        play::PlayerEvent,
+        play::{
+            DjEvent, EngineEvent, ItemRole, MediaTime, PlayerEvent, PlayerStatus,
+            RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
+            TimeControlStatus, TrackRef,
+        },
+        queue::{QueueEvent, QueueRepeatMode, TrackStatus},
         signal::AudioSpec,
+        stream::{AudioCodec, CancelReason, ContainerFormat, DownloaderEvent, RequestId},
     };
+    use kithara_file::{FileEvent, TotalBytesSource};
+    use kithara_hls::{DrmEvent, HlsEvent, KeyFailureStage, KeySource};
 
-    use super::{FfiError, FfiItemEvent, FfiPlayerEvent, NotForwarded};
+    use super::{
+        FfiError, FfiItemEvent, FfiPlayerEvent, ItemBusEvent, NotForwarded, QueueBusEvent,
+    };
     use crate::types::{
         FfiAdvanceReason, FfiAudioCodecKind, FfiCancelReason, FfiContainerKind,
         FfiDecodeErrorClass, FfiDecodeErrorKind, FfiDecoderBackend, FfiDecoderChangeCause,
@@ -631,26 +641,26 @@ mod tests {
     #[kithara::test]
     fn event_routes_every_forwarded_domain() {
         let item_events = [
-            Event::Decoder(DecoderEvent::ResamplerConfigured {
+            ItemBusEvent::Decoder(DecoderEvent::ResamplerConfigured {
                 backend: ResamplerKind::Rubato,
                 input_rate: 44_100,
                 output_rate: 48_000,
                 channels: 2,
                 bypassed: false,
             }),
-            Event::Audio(AudioEvent::DecoderReady {
+            ItemBusEvent::Audio(AudioEvent::DecoderReady {
                 base_offset: 17,
                 variant: Some(2),
             }),
-            Event::Hls(HlsEvent::CacheComplete {
+            ItemBusEvent::Hls(HlsEvent::CacheComplete {
                 total_bytes: Some(1024),
             }),
-            Event::Downloader(DownloaderEvent::RequestStarted {
+            ItemBusEvent::Downloader(DownloaderEvent::RequestStarted {
                 request_id: request_id(1),
                 wait_in_queue: Duration::from_millis(250),
             }),
-            Event::File(FileEvent::CacheComplete { total_bytes: 2048 }),
-            Event::Drm(DrmEvent::SegmentDecryptFailed {
+            ItemBusEvent::File(FileEvent::CacheComplete { total_bytes: 2048 }),
+            ItemBusEvent::Drm(DrmEvent::SegmentDecryptFailed {
                 variant: 3,
                 segment_index: 4,
                 detail: "bad key".into(),
@@ -661,18 +671,18 @@ mod tests {
         }
 
         let player_events = [
-            Event::Engine(EngineEvent::Started),
-            Event::Session(SessionEvent::RouteChanged {
+            QueueBusEvent::Engine(EngineEvent::Started),
+            QueueBusEvent::Session(SessionEvent::RouteChanged {
                 reason: RouteChangeReason::Override,
                 previous_route: RouteDescription::default(),
             }),
-            Event::Dj(DjEvent::KeylockChanged { on: true }),
-            Event::Asset(AssetEvent::Committed {
+            QueueBusEvent::Dj(DjEvent::KeylockChanged { on: true }),
+            QueueBusEvent::Asset(AssetEvent::Committed {
                 asset_root: "cache".into(),
                 rel_path: "track/file".into(),
                 final_len: Some(99),
             }),
-            Event::Asset(AssetEvent::Failed {
+            QueueBusEvent::Asset(AssetEvent::Failed {
                 asset_root: "cache".into(),
                 rel_path: "track/file".into(),
                 reason: "disk full".into(),
@@ -683,11 +693,11 @@ mod tests {
         }
 
         assert!(matches!(
-            FfiItemEvent::try_from(&Event::Engine(EngineEvent::Started)),
+            FfiItemEvent::try_from(&ItemBusEvent::Audio(AudioEvent::OutputAvailable)),
             Err(NotForwarded)
         ));
         assert!(matches!(
-            FfiPlayerEvent::try_from(&Event::Audio(AudioEvent::OutputAvailable)),
+            FfiPlayerEvent::try_from(&QueueBusEvent::Queue(QueueEvent::QueueEnded)),
             Err(NotForwarded)
         ));
     }
@@ -698,8 +708,8 @@ mod tests {
             (
                 DecoderEvent::DecoderChanged {
                     backend: DecoderBackend::Apple,
-                    codec: Some(AudioCodecKind::AacLc),
-                    container: Some(ContainerKind::Fmp4),
+                    codec: Some(AudioCodec::AacLc),
+                    container: Some(ContainerFormat::Fmp4),
                     sample_rate: 48_000,
                     channels: 2,
                     bit_depth: Some(24),
@@ -738,7 +748,7 @@ mod tests {
                 DecoderEvent::DecodeError {
                     class: DecodeErrorClass::Interrupted,
                     kind: DecodeErrorKind::InvalidData,
-                    codec: Some(AudioCodecKind::Flac),
+                    codec: Some(AudioCodec::Flac),
                     detail: "truncated frame",
                 },
                 |event| {
@@ -758,7 +768,7 @@ mod tests {
                     leading_frames: 1024,
                     trailing_frames: 256,
                     domain: FrameDomain::Output,
-                    codec: Some(AudioCodecKind::Alac),
+                    codec: Some(AudioCodec::Alac),
                     sample_rate: 44_100,
                 },
                 |event| {
@@ -1206,7 +1216,7 @@ mod tests {
             assert!(preserves_contract(&event), "unexpected event: {event:?}");
         }
         assert!(matches!(
-            FfiPlayerEvent::try_from(&PlayerEvent::CurrentItemChanged),
+            FfiPlayerEvent::try_from(&PlayerEvent::CurrentItemChanged { item: None }),
             Err(NotForwarded)
         ));
     }
@@ -1237,7 +1247,7 @@ mod tests {
             (
                 QueueEvent::CurrentTrackAdvance {
                     id: Some(id),
-                    reason: kithara::events::AdvanceReason::NaturalEof,
+                    reason: kithara::queue::AdvanceReason::NaturalEof,
                 },
                 |event| matches!(event, FfiPlayerEvent::CurrentItemAdvanced { item_id: Some(item_id), reason: FfiAdvanceReason::NaturalEof } if *item_id == TrackId::from(21_u64)),
             ),
@@ -1489,7 +1499,7 @@ mod tests {
         assert!(matches!(
             FfiPlayerEvent::try_from(&DjEvent::BpmDetected {
                 slot: SlotId::new(7),
-                info: kithara::events::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
+                info: kithara::play::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
             }),
             Ok(FfiPlayerEvent::DjBpmDetected {
                 slot: 7,
@@ -1566,7 +1576,7 @@ mod tests {
 
     #[kithara::test]
     fn event_to_ffi_error_maps_request_failed() {
-        let event = Event::Downloader(DownloaderEvent::RequestFailed {
+        let event = ItemBusEvent::Downloader(DownloaderEvent::RequestFailed {
             request_id: request_id(13),
             error: kithara::net::NetError::Network("boom".into()),
             retryable: false,

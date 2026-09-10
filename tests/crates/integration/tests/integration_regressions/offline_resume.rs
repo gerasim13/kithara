@@ -1,21 +1,26 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, DownloaderEvent, Event},
-    hls::{AbrMode, HlsConfigPatch},
+    audio::AudioEvent,
+    hls::HlsConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
-    bufpool_ext::pools,
+    bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -188,16 +193,15 @@ async fn resumes_after_outage(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -240,7 +244,7 @@ async fn resumes_after_outage(
         |event| {
             matches!(
                 event,
-                Event::Downloader(
+                TestEvent::Downloader(
                     DownloaderEvent::FirstByte { status: 503, .. }
                         | DownloaderEvent::RequestFailed { .. }
                         | DownloaderEvent::RetryExhausted { .. }
@@ -265,7 +269,7 @@ async fn resumes_after_outage(
         &mut rx,
         "playback starving on the exhausted buffer",
         |event| {
-            let Event::Audio(AudioEvent::UnderrunStarted { position_ms, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::UnderrunStarted { position_ms, .. }) = event else {
                 return false;
             };
             starved_at = *position_ms as f64 / 1000.0;

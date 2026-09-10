@@ -4,26 +4,32 @@
 use std::collections::{HashMap, HashSet};
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId},
+    hls::HlsEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant},
+        CancelToken, time,
+        time::{Duration, Instant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        DownloaderEvent, RequestId,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     waits::wait_for_loader_done,
 };
@@ -105,9 +111,7 @@ async fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -116,7 +120,7 @@ async fn build_queue_with_tick(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -124,6 +128,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -145,12 +150,12 @@ struct PostSeekObservation {
     /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
     /// actually called `Seek::seek` on the stream (not just that
     /// `SeekControl::begin` ran).
-    reader_seek: Option<Event>,
+    reader_seek: Option<TestEvent>,
     /// First `SegmentReadStart` after `seek_at`. The discriminating
     /// signal: a healthy seek path emits this with `segment_index ≈
     /// target`; a broken one emits it with `segment_index ∈ [0..3]`
     /// because the reader is still chewing through the prefix.
-    first_segment_read_start: Option<Event>,
+    first_segment_read_start: Option<TestEvent>,
     /// `RequestId`s of `RequestEnqueued` after `seek_at` whose URL
     /// resolves to a prefix segment (`segment_index < target -
     /// WARMUP_TOLERANCE`). Hard cap.
@@ -242,10 +247,12 @@ async fn hls_seek_near_end_skips_prefix(
     let _ = time::timeout(Consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+                Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, ..
+                })) => {
                     pre_seek_enqueued.insert(request_id);
                 }
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
                     if position_ms > 0 =>
                 {
                     break;
@@ -262,7 +269,7 @@ async fn hls_seek_near_end_skips_prefix(
     // enqueued baseline is complete before the seek fires.
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+            Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
@@ -338,7 +345,7 @@ async fn hls_seek_near_end_skips_prefix(
         .max()
         .expect("seek_epoch field present on seek_epoch_reset probe");
 
-    let Some(Event::Hls(HlsEvent::ReaderSeek {
+    let Some(TestEvent::Hls(HlsEvent::ReaderSeek {
         to_offset,
         seek_epoch: reader_seek_epoch,
         segment_index,
@@ -413,7 +420,7 @@ async fn hls_seek_near_end_skips_prefix(
          scheduler did not emit a FetchCmd for the seek target"
     );
 
-    let Some(Event::Hls(HlsEvent::SegmentReadStart {
+    let Some(TestEvent::Hls(HlsEvent::SegmentReadStart {
         segment_index: first_seg,
         ..
     })) = observation.first_segment_read_start
@@ -440,7 +447,7 @@ async fn hls_seek_near_end_skips_prefix(
         Consts::MAX_CONCURRENT,
     );
 
-    // Event-driven progress contract: the new epoch must START a download
+    // TestEvent-driven progress contract: the new epoch must START a download
     // (`RequestStarted`) within the bounded observation window. A seek that
     // dropped silently, or a target left permanently starved behind stale
     // fetches that never free a slot, would never start one. Asserting the
@@ -462,7 +469,7 @@ async fn hls_seek_near_end_skips_prefix(
 }
 
 async fn observe_post_seek(
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
@@ -489,19 +496,21 @@ async fn observe_post_seek(
         loop {
             match rx.recv().await {
                 Ok(env) => match &env.event {
-                    Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
+                    TestEvent::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
                         if obs.reader_seek.is_none() {
                             target_segment = *segment_index;
                             obs.reader_seek = Some(env.event.clone());
                         }
                     }
-                    Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
+                    TestEvent::Hls(HlsEvent::SegmentReadStart { .. }) => {
                         if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
                             obs.first_segment_read_start = Some(env.event.clone());
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
+                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id,
+                        url,
+                        ..
                     }) => {
                         if !pre_seek_enqueued.contains(request_id) {
                             new_epoch_enqueued.insert(*request_id);
@@ -514,7 +523,7 @@ async fn observe_post_seek(
                             }
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestStarted {
+                    TestEvent::Downloader(DownloaderEvent::RequestStarted {
                         request_id,
                         wait_in_queue,
                     }) if obs.target_started_wait.is_none()

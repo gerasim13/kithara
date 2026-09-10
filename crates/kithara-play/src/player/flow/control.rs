@@ -1,10 +1,9 @@
-use kithara_events::RouteDescription;
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, SessionEvent, SlotId},
+    api::{RouteChangeReason, RouteDescription, SessionEvent, SlotId},
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -36,13 +35,7 @@ impl<S> PlayerRuntime<S> {
 
     /// Reset EQ gains to 0 dB for all bands.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
-        let slot_id = self.slot().ok_or(PlayError::NoActiveSlot)?;
-        let eq = self
-            .core
-            .engine
-            .slot_eq(slot_id)
-            .ok_or(PlayError::SlotNotFound(slot_id))?;
-        eq.reset();
+        let eq = self.core.engine.eq().ok_or(PlayError::EngineNotRunning)?;
         for band in 0..eq.len() {
             self.core.engine.set_master_eq_gain(band, 0.0)?;
         }
@@ -76,14 +69,7 @@ impl<S> PlayerRuntime<S> {
 
     /// Set EQ gain for a band in dB.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let slot_id = self.slot().ok_or(PlayError::NoActiveSlot)?;
-        let eq = self
-            .core
-            .engine
-            .slot_eq(slot_id)
-            .ok_or(PlayError::SlotNotFound(slot_id))?;
         let gain_db = GainDb::from(gain_db);
-        eq.set_gain(band, gain_db)?;
         self.core
             .engine
             .set_master_eq_gain(band, f32::from(gain_db))

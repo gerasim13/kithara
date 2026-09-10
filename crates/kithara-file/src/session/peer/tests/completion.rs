@@ -4,7 +4,7 @@ use super::*;
 fn cancelled_full_invalid_response_relinquishes_without_file_error() {
     let (store, key, inner, writer) = fresh_session(None);
     let epoch = writer.epoch();
-    let mut events = inner.source.bus.subscribe();
+    let mut events = inner.source.bus.subscribe::<FileEvent>();
     inner.source.coord.set_total_bytes(Some(4));
     assert!(matches!(
         epoch.write_at(0, b"done"),
@@ -134,7 +134,7 @@ fn open_ended_resume_without_total_stays_active() {
 fn initial_zero_progress_transient_fails_session() {
     let (store, key, inner, writer) = fresh_session(None);
     let epoch = writer.epoch();
-    let mut events = inner.source.bus.subscribe();
+    let mut events = inner.source.bus.subscribe::<FileEvent>();
 
     inner.finalize_fetch(
         &epoch,
@@ -153,7 +153,7 @@ fn initial_zero_progress_transient_fails_session() {
     assert!(matches!(
         events.try_recv(),
         Ok(Envelope {
-            event: Event::File(FileEvent::Error { .. }),
+            event: FileEvent::Error { .. },
             ..
         })
     ));
@@ -224,16 +224,14 @@ fn terminal_reader_wake_settles_file_before_worker_wake() {
     }));
     inner.arm_reader_waker();
     inner.source.coord.set_total_bytes(Some(4));
-    let mut events = inner.source.bus.subscribe();
+    let mut events = inner.source.bus.subscribe::<FileEvent>();
 
     let completion = thread::spawn(move || epoch.commit(Some(4)));
     entered.wait();
     let mut settled_before_wake = false;
     while let Ok(envelope) = events.try_recv() {
-        settled_before_wake |= matches!(
-            envelope.event,
-            Event::File(FileEvent::CacheComplete { total_bytes: 4 })
-        );
+        settled_before_wake |=
+            matches!(envelope.event, FileEvent::CacheComplete { total_bytes: 4 });
     }
     release.wait();
     assert!(matches!(

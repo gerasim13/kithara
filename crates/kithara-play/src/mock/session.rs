@@ -35,7 +35,10 @@ impl<S> SessionDispatcher<S> for SessionMock {
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+                Reply::PlayerRegistered(crate::session::RegisteredPlayer {
+                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
+                    eq: SharedEq::new(10),
+                })
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));

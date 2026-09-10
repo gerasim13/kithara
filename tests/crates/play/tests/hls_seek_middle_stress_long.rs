@@ -5,8 +5,9 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, Event, EventReceiver, PlayerEvent},
+    events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -18,8 +19,8 @@ use kithara::{
         },
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
+        ResourceConfig, ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
@@ -27,7 +28,8 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,
     Xorshift64,
-    offline::{OfflinePlayer, OfflineQueue, QueueTicker},
+    event::TestEvent,
+    offline::{OfflinePlayer, OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -129,7 +131,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
 }
 
 async fn observe_playback(
-    mut rx: EventReceiver,
+    mut rx: EventReceiver<TestEvent>,
     initial_rate: f32,
     stop: CancelToken,
 ) -> Result<PlaybackStats, String> {
@@ -140,7 +142,7 @@ async fn observe_playback(
     while !stop.is_cancelled() {
         match timeout(Consts::MONITOR_POLL_INTERVAL, rx.recv()).await {
             Ok(Ok(envelope)) => match envelope.event {
-                Event::Audio(AudioEvent::PlaybackProgress { .. }) => {
+                TestEvent::Audio(AudioEvent::PlaybackProgress { .. }) => {
                     let now = Instant::now();
                     stats.max_progress_gap = stats
                         .max_progress_gap
@@ -148,7 +150,7 @@ async fn observe_playback(
                     stats.progress_events += 1;
                     last_progress = now;
                 }
-                Event::Player(PlayerEvent::RateChanged { rate }) => {
+                TestEvent::Player(PlayerEvent::RateChanged { rate }) => {
                     if (rate - last_rate).abs() > f32::EPSILON {
                         stats.effective_rate_changes += 1;
                         last_rate = rate;
@@ -210,7 +212,7 @@ async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, tar
 
         loop {
             match progress_rx.recv().await.map(|envelope| envelope.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
                     seek_epoch: progress_epoch,
                     ..
                 })) if progress_epoch == seek_epoch => break,
@@ -431,10 +433,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(
             .cancel(shutdown_token.child())
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
@@ -442,6 +442,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
                 .cancel(shutdown_token.child())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

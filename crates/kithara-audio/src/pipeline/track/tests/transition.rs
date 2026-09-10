@@ -1,6 +1,6 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_decode::{DecodeError, DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
-use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -16,10 +16,11 @@ use super::rebuild::{
     route_signal_source_with_gapless_eof, route_signal_source_with_gaps,
 };
 use crate::{
+    DecoderChangeCause, DecoderEvent,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
-        seek::{SeekContext, SeekRequest, engine::SeekTransition},
+        seek::{ResumeState, SeekContext, SeekRequest, engine::SeekTransition},
         track::{
             AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep, fsm::apply_seek_transition,
         },
@@ -155,6 +156,50 @@ async fn eof_transition_retires_staged_incoming_and_aborts_variant(route_pcm: Ro
 
     assert!(fixture.source.decode.incoming_transition().is_none());
     assert_eq!(fixture.control.aborted_transition(), Some(transition));
+    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+}
+
+#[kithara::test(tokio)]
+async fn an_applied_seek_retires_the_incoming_its_epoch_superseded(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert!(fixture.source.decode.incoming_is_priming(transition));
+
+    let target = Duration::from_secs(1);
+    let epoch = fixture.source.shared_stream.seek_control().begin(target);
+    assert_ne!(
+        epoch,
+        transition.id().seek_epoch(),
+        "the fixture seek must supersede the epoch that minted the transition"
+    );
+    apply_seek_transition(
+        &mut fixture.source,
+        SeekTransition::Applied {
+            epoch,
+            resume: ResumeState {
+                seek: SeekContext { target, epoch },
+                ..Default::default()
+            },
+        },
+    );
+
+    assert!(matches!(
+        fixture.source.state,
+        CurrentFsm::AwaitingResume(_)
+    ));
+    assert!(fixture.source.decode.incoming_transition().is_none());
+    assert!(!fixture.source.decode.transition_holds_output());
+    assert_eq!(fixture.control.aborted_transition(), None);
+
+    fixture.source.flush_deferred();
+
     assert_eq!(fixture.drops.lock().as_slice(), &[99]);
 }
 
@@ -302,6 +347,13 @@ async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming(route_pcm: Ro
     )
     .await;
 
+    for _ in 0..2 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("gapless trimming must eventually release its first raw output chunk");
     };
@@ -341,6 +393,14 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: 
             .and_then(|info| info.variant_index),
         Some(0)
     );
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is staged");
     };
@@ -369,6 +429,14 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must emit while the same-spec incoming generation is priming");
     };
@@ -412,6 +480,14 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is first staged");
     };
@@ -539,6 +615,13 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
 
+    for _ in 0..3 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
@@ -591,6 +674,13 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     fixture.source.flush_deferred();
+    for _ in 0..3 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
@@ -669,6 +759,14 @@ async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     assert!(matches!(
         fixture.source.step_track(),
         TrackStep::Produced(_)
@@ -738,6 +836,14 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while incoming PCM is first staged");
     };
@@ -819,6 +925,14 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must name the cut before stale publication");
     };
@@ -920,6 +1034,14 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, first_transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while the first incoming generation is staged");
     };
@@ -1051,6 +1173,14 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 
     fixture.source.flush_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
+    // Retain the 882-frame join after the first 256-frame output packet.
+    for _ in 0..4 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.flush_deferred();
+    }
     assert!(matches!(
         fixture.source.step_track(),
         TrackStep::Produced(_)
@@ -1061,11 +1191,11 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
     while let Ok(envelope) = events.try_recv() {
         changed |= matches!(
             envelope.event,
-            Event::Decoder(DecoderEvent::DecoderChanged {
+            DecoderEvent::DecoderChanged {
                 cause: DecoderChangeCause::VariantSwitch,
                 variant: Some(1),
                 ..
-            })
+            }
         );
     }
     assert!(changed);

@@ -3,9 +3,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},

@@ -1,27 +1,33 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    task::Poll,
+};
 
 use kithara_decode::DecodeError;
-use kithara_events::{DeferredBus, Event, SeekLifecycleStage};
+use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{PlayheadWrite, SeekControl, SeekObserve, SourceSeekAnchor, StreamType};
 use tracing::{trace, warn};
 
-use crate::pipeline::{
-    decode::{
-        core::ActiveDecode,
-        format::{FormatDecision, detect},
-        gate::ReadinessGate,
+use crate::{
+    AudioLaneEvent, SeekLifecycleStage,
+    pipeline::{
+        decode::{
+            core::ActiveDecode,
+            format::{FormatDecision, detect},
+            gate::ReadinessGate,
+        },
+        rebuild::{RecreateCause, RecreateNext, RecreateState},
+        seek::{
+            anchor::{self, AnchorPlan},
+            emit::{emit, land_eof, location, update_len},
+            recover::SeekRecovery,
+            skip::estimate_target_byte,
+            state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
+        },
+        stream::shared::SharedStream,
+        track::{WaitContext, WaitingReason},
     },
-    rebuild::{RecreateCause, RecreateNext, RecreateState},
-    seek::{
-        anchor::{self, AnchorPlan},
-        emit::{emit, land_eof, location, update_len},
-        recover::SeekRecovery,
-        skip::estimate_target_byte,
-        state::{ApplySeekState, ResumeState, SeekMode, SeekRequest},
-    },
-    stream::shared::SharedStream,
-    track::{WaitContext, WaitingReason},
 };
 
 #[derive(fieldwork::Fieldwork)]
@@ -39,7 +45,7 @@ pub(crate) struct SeekApplyCtx<'a, T: StreamType> {
     pub(crate) observe: &'a dyn SeekObserve,
     pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) seek: &'a dyn SeekControl,
-    pub(crate) emit: Option<&'a DeferredBus<Event>>,
+    pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
 }
 
 pub(crate) enum SeekTransition {
@@ -154,12 +160,13 @@ impl SeekEngine {
             AnchorPlan::Seek => {}
         }
         update_len(ctx.decode, ctx.stream);
-        match ctx
-            .decode
-            .seek(ctx.stream, ctx.playhead, request.seek.target)
-        {
-            Ok(_) => self.applied(request, Some(anchor_value), ctx),
-            Err(error) => SeekRecovery::new(
+        match ctx.decode.poll_seek(ctx.stream, ctx.playhead, request.seek) {
+            Poll::Pending => SeekTransition::Apply(ApplySeekState {
+                mode: SeekMode::Anchor(anchor_value),
+                request,
+            }),
+            Poll::Ready(Ok(_)) => self.applied(request, Some(anchor_value), ctx),
+            Poll::Ready(Err(error)) => SeekRecovery::new(
                 request,
                 request.seek.target,
                 anchor_value.byte_offset,
@@ -185,12 +192,19 @@ impl SeekEngine {
             });
         }
         update_len(ctx.decode, ctx.stream);
-        match ctx
-            .decode
-            .seek(ctx.stream, ctx.playhead, request.seek.target)
-        {
-            Ok(_) => self.applied(request, None, ctx),
-            Err(error) => {
+        match ctx.decode.poll_seek(ctx.stream, ctx.playhead, request.seek) {
+            Poll::Pending => SeekTransition::Apply(ApplySeekState {
+                mode: SeekMode::Direct {
+                    target_byte: estimate_target_byte(
+                        ctx.decode.active(),
+                        ctx.stream,
+                        request.seek.target,
+                    ),
+                },
+                request,
+            }),
+            Poll::Ready(Ok(_)) => self.applied(request, None, ctx),
+            Poll::Ready(Err(error)) => {
                 let offset = ctx.decode.active().base_offset();
                 let target =
                     estimate_target_byte(ctx.decode.active(), ctx.stream, request.seek.target);

@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, Event, TrackId},
+    audio::AudioEvent,
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -13,8 +14,9 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_short_mp3, temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -32,11 +34,10 @@ async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<
             ))
             .build(),
     );
-    OfflineQueue::new(
-        HostConfig::offline(pools.clone())
-            .pacing(Duration::from_millis(10))
-            .build(),
+    OfflineQueue::paced(
+        HostConfig::offline(pools.clone()).build(),
         Queue::new(QueueConfig::builder().player(player).store(store).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue")
@@ -169,7 +170,7 @@ async fn playback_starts_from_the_seeked_position(
         |event| {
             matches!(
                 event,
-                Event::Audio(AudioEvent::SeekComplete { position, .. })
+                TestEvent::Audio(AudioEvent::SeekComplete { position, .. })
                     if (position.as_secs_f64() - saved).abs() < 1.0
             )
         },
@@ -183,7 +184,7 @@ async fn playback_starts_from_the_seeked_position(
         &mut second_rx,
         "first playback progress after saved-position seek",
         |event| {
-            let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
+            let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = event else {
                 return false;
             };
             resumed_at = Some(*position_ms as f64 / 1000.0);

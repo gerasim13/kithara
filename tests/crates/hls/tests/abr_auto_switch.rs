@@ -17,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::read_to_eof,
@@ -100,7 +101,7 @@ async fn abr_auto_switch_during_playback(
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
-    let mut events_rx = bus.subscribe();
+    let mut events_rx = bus.subscribe::<TestEvent>();
     spawn(async move {
         use kithara::platform::tokio::sync::broadcast::error::RecvError;
         loop {

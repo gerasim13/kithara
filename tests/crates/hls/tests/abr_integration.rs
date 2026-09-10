@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    abr::{AbrController, AbrMode, AbrSettings},
-    events::{VariantDuration, VariantIndex, VariantInfo},
+    abr::{AbrController, AbrMode, AbrSettings, VariantDuration, VariantIndex, VariantInfo},
     hls::{ParsedMaster, parse_master_playlist},
     platform::time::Duration,
 };

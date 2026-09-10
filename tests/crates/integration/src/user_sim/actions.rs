@@ -30,12 +30,9 @@ pub enum Action {
     Pause,
     /// `play()`.
     Resume,
-    /// Let the engine render for `at_least` wall-clock duration. Asserts
-    /// the reported position advances during the window — Bug #6 (silent
-    /// hang after backward-seek) lives here.
-    PlayFor(Duration),
-    /// Drive the offline backend for this much media time without making the
-    /// test wait for the same wall-clock duration.
+    /// Advance the playhead by `at_least` of audio, rendering it rather than
+    /// waiting out the same wall-clock duration. Asserts the reported position
+    /// really advances — Bug #6 (silent hang after backward-seek) lives here.
     RenderFor(Duration),
 }
 
@@ -51,7 +48,6 @@ impl Action {
             Self::QualityAuto => "QualityAuto".into(),
             Self::Pause => "Pause".into(),
             Self::Resume => "Resume".into(),
-            Self::PlayFor(d) => format!("PlayFor({}ms)", d.as_millis()),
             Self::RenderFor(d) => format!("RenderFor({}ms)", d.as_millis()),
         }
     }

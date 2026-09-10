@@ -4,8 +4,9 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,14 +14,15 @@ use kithara::{
         time::{self, Duration, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -125,9 +127,7 @@ async fn build_queue_with_tick_cf(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -137,7 +137,7 @@ async fn build_queue_with_tick_cf(
             .crossfade_duration(crossfade_seconds)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -145,6 +145,7 @@ async fn build_queue_with_tick_cf(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -196,13 +197,13 @@ async fn wait_for_loader_done(
 /// instead of hanging.
 #[kithara::flash(true)]
 async fn wait_for_current_track(
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     expected: TrackId,
     deadline: Duration,
 ) {
     let wait = async {
         while let Ok(ev) = rx.recv().await.map(|env| env.event) {
-            if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
+            if let TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
                 && id == expected
             {
                 return;

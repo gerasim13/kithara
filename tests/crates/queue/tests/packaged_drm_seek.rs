@@ -1,9 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -11,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
-    queue::{Queue, QueueConfig, QueueControl, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -20,9 +21,10 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
@@ -39,7 +41,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<AppPools>,
     id: TrackId,
     target: TrackStatus,
@@ -56,7 +58,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {
@@ -145,18 +147,17 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .store(store)
         .build();
 
-    let session_config = HostConfig::offline(session_pools)
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session_config = HostConfig::offline(session_pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session_config.sample_rate())
             .worker(worker)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

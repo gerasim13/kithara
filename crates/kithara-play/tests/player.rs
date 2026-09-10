@@ -3,11 +3,12 @@ use std::num::NonZeroU32;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_decode::GaplessMode;
-use kithara_events::{Envelope, Event, PlayerEvent, PlayerStatus};
+use kithara_events::Envelope;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
-    StretchControls, effects::eq::generate_log_spaced_bands, mock, player::PlayerControlSource,
+    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
+    SelectTransition, StretchControls, effects::eq::generate_log_spaced_bands, mock,
+    player::PlayerControlSource,
 };
 use kithara_test_utils::kithara;
 use kithara_warp::WarpConfig;
@@ -104,7 +105,7 @@ fn player_prefetch_duration() {
 #[kithara::test]
 fn player_events_subscribe() {
     let player = player();
-    let mut rx = player.subscribe();
+    let mut rx = player.subscribe::<PlayerEvent>();
     player.set_volume(0.5);
     let event = rx.try_recv();
     assert!(event.is_ok());
@@ -189,7 +190,7 @@ fn player_config_builder() {
 #[kithara::test(tokio)]
 async fn synchronous_player_events_remain_in_order() {
     let player = player();
-    let mut rx = player.subscribe();
+    let mut rx = player.subscribe::<PlayerEvent>();
 
     player.set_volume(0.5);
     player.set_muted(true);
@@ -200,14 +201,14 @@ async fn synchronous_player_events_remain_in_order() {
     assert!(matches!(
         e1,
         Ok(Envelope {
-            event: Event::Player(PlayerEvent::VolumeChanged { .. }),
+            event: PlayerEvent::VolumeChanged { .. },
             ..
         })
     ));
     assert!(matches!(
         e2,
         Ok(Envelope {
-            event: Event::Player(PlayerEvent::MuteChanged { .. }),
+            event: PlayerEvent::MuteChanged { .. },
             ..
         })
     ));
@@ -237,7 +238,7 @@ fn position_seconds_idle_is_none() {
 #[kithara::test]
 fn set_rate_without_rt_does_not_emit_rate_changed() {
     let player = player();
-    let mut rx = player.subscribe();
+    let mut rx = player.subscribe::<PlayerEvent>();
     player.set_rate(2.0);
     assert!(rx.try_recv().is_err());
 }

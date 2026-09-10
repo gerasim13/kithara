@@ -6,7 +6,7 @@ use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, HlsEvent};
+use kithara_events::DeferredBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, WaitGate},
@@ -24,6 +24,7 @@ use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
+    HlsEvent,
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx},
 };
@@ -591,10 +592,7 @@ where
     }
 
     fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.sessions.incoming_session().is_some_and(|session| {
-            session.transition() == Some(transition)
-                && session.wait_phase() == SourcePhase::WaitingDemand
-        })
+        self.sessions.transition_demand_in_flight(transition)
     }
 }
 
@@ -648,23 +646,26 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::{
         io::{ErrorKind, Read},
         num::NonZeroU64,
         sync::OnceLock,
     };
 
-    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState, PendingAbrClaim};
+    use kithara_abr::{
+        Abr, AbrController, AbrMock, AbrMode, AbrReason, AbrSettings, AbrState, PendingAbrClaim,
+        VariantIndex,
+    };
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
+    use kithara_events::EventBus;
     use kithara_platform::{
         sync::{Arc, ThreadGate},
         time::Instant,
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl,
+        RequestPriority, SeekControl,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -679,7 +680,8 @@ mod tests {
     type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
 
-    fn switch_coord() -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
+    pub(in crate::stream) fn switch_coord()
+    -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         switch_coord_with_reason(AbrReason::ManualOverride)
     }
 
@@ -828,7 +830,7 @@ mod tests {
         (coord, bus, ctx, abr_state)
     }
 
-    fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
+    pub(in crate::stream) fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {
         ReaderProfile::new(
             ReaderInput::Incremental,
             ReaderWarmup::None,
@@ -845,7 +847,7 @@ mod tests {
         abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
     }
 
-    fn prepare_incoming(
+    pub(in crate::stream) fn prepare_incoming(
         coord: &TestHlsCoord,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {

@@ -117,3 +117,5 @@ pub use test_server::{
     SegmentGateHandle,
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
+
+pub mod event;

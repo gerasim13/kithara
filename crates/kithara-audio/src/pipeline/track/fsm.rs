@@ -1,7 +1,6 @@
 use std::mem;
 
 use kithara_decode::DecodeError;
-use kithara_events::AudioEvent;
 use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::warn;
@@ -12,10 +11,13 @@ use super::{
     phase::{Track, TrackPhase, sealed},
     start_recreating_decoder, start_route_change_recreate_if_needed,
 };
-use crate::pipeline::{
-    fetch::Fetch,
-    seek::{SeekContext, SeekRequest, emit::preempt_target, engine::SeekTransition},
-    source::StreamAudioSource,
+use crate::{
+    AudioEvent,
+    pipeline::{
+        fetch::Fetch,
+        seek::{SeekContext, SeekRequest, emit::preempt_target, engine::SeekTransition},
+        source::StreamAudioSource,
+    },
 };
 
 /// Type-erased FSM phase stored by the track coordinator.
@@ -91,7 +93,7 @@ pub(crate) use waiting_branch;
 
 fn emit_event<T: StreamType>(src: &StreamAudioSource<T>, event: AudioEvent) {
     if let Some(ref emit) = src.emit {
-        emit.enqueue(event.into());
+        emit.enqueue(event);
     }
 }
 
@@ -113,6 +115,7 @@ pub(super) fn apply_seek_transition<T: StreamType>(
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), epoch);
             src.decode.notify_seek(&src.retired);
+            src.discard_superseded_incoming(epoch);
             src.update_state(Track::<AwaitingResume>::new(resume).erase());
         }
         SeekTransition::AtEof { epoch } => {

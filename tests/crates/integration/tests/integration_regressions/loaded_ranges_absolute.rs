@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, Event},
     file::FileConfigPatch,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -13,13 +12,17 @@ use kithara::{
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -113,16 +116,15 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
-        HostConfig::offline(pools)
-            .pacing(Duration::from_millis(10))
-            .build(),
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
                 .player(player)
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -158,7 +160,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
         &mut transfer_rx,
         "the progressive body finishing its transfer",
         |event| {
-            let Event::Downloader(DownloaderEvent::RequestCompleted {
+            let TestEvent::Downloader(DownloaderEvent::RequestCompleted {
                 bytes_transferred, ..
             }) = event
             else {

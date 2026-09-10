@@ -2,9 +2,11 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,14 +15,15 @@ use kithara::{
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker, offline_gain_window},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -91,11 +94,11 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
 /// empty buffer means (a live-playback window waits for the next event; a
 /// PAUSE window — where progress is silent by design — reads the frozen
 /// `Queue::position_seconds()` explicitly).
-fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
+fn drain_latest_position(rx: &mut EventReceiver<TestEvent>) -> Option<f64> {
     let mut latest: Option<f64> = None;
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 latest = Some(position_ms as f64 / 1000.0);
             }
             Ok(_) => {}
@@ -107,12 +110,12 @@ fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
 }
 
 async fn receive_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     mut lagged: impl FnMut() -> Option<f64>,
 ) -> Result<f64, String> {
     loop {
         match rx.recv().await.map(|env| env.event) {
-            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 return Ok(position_ms as f64 / 1000.0);
             }
             Ok(_) => {}
@@ -132,7 +135,10 @@ async fn receive_progress(
 /// anchors a window endpoint to the SAME event clock as `drain_latest_position`
 /// instead of the REAL-clock-gated tick cache. A buffered event already
 /// past is fine — it is still event-sourced and on the render cadence.
-async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> Result<f64, String> {
+async fn next_progress_position(
+    rx: &mut EventReceiver<TestEvent>,
+    deadline: Duration,
+) -> Result<f64, String> {
     timeout(deadline, receive_progress(rx, || None))
         .await
         .map_err(|_| format!("no PlaybackProgress within {deadline:?}"))?
@@ -144,7 +150,7 @@ async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> R
 /// whose REAL `sleep` would not park the engine. The fast-path seed keeps
 /// the first sample aligned with the current head.
 async fn sample_positions_via_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     count: usize,
     deadline: Duration,
@@ -186,9 +192,7 @@ async fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -197,7 +201,7 @@ async fn build_queue_with_tick(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -205,6 +209,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -364,42 +369,26 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
-    // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
-    // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
-    // blocks for the next progress event (parking the virtual clock so the
-    // render worker is live), `end_pos` drains the latest progress buffered
-    // across the window — so the comparison never touches the REAL-clock-gated
-    // tick cache, which goes stale once these waits collapse real time.
+    // Both endpoints are built the same way — discard the backlog, block for
+    // a FRESH `PlaybackProgress`, read the cursor beside it — because
+    // `assert_playhead_tracks_renderer` spends its whole slack on the
+    // difference of the two reporting lags, and only identical sourcing makes
+    // that difference cancel.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
+    let cursor_start = queue.host().position();
     time::sleep(Duration::from_secs(2)).await;
-    // Playback is live across the window, so progress events are buffered:
-    // `drain_latest_position` returns the latest of them (the window end)
-    // without touching the tick-cache fallback. The explicit
-    // `next_progress_position` guard covers the rare empty-buffer race so
-    // `end_pos` is always event-sourced, never the stale cache.
-    let end_pos = match drain_latest_position(&mut rx) {
-        Some(pos) => pos,
-        None => next_progress_position(&mut rx, Duration::from_secs(10))
-            .await
-            .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
-    };
-    let gain = end_pos - start_pos;
-    let pacing = queue.host().pacing().expect("paced offline queue");
-    let gain_window = offline_gain_window(
-        2.0,
-        queue.host().spec().sample_rate,
-        queue.host().max_block_frames(),
-        pacing,
-    );
-    assert!(
-        gain_window.contains(&gain),
-        "position gain out of offline-realtime window [{label}]: got \
-         {gain:.2}s over 2s wall clock (expected {gain_window:?}; \
-         start={start_pos:.2} end={end_pos:.2})"
+    let _ = drain_latest_position(&mut rx);
+    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
+    let cursor_end = queue.host().position();
+    assert_playhead_tracks_renderer(
+        end_pos - start_pos,
+        cursor_end - cursor_start,
+        queue.host().spec(),
+        &label,
     );
 
     queue.remove(track_id).expect("remove");
@@ -408,7 +397,7 @@ async fn local_track_plays_end_to_end(
 }
 
 async fn wait_for_queue_event<F>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     mut pred: F,
     deadline: Duration,
 ) -> Option<QueueEvent>
@@ -418,7 +407,7 @@ where
     timeout(deadline, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Queue(ev)) => {
+                Ok(TestEvent::Queue(ev)) => {
                     if pred(&ev) {
                         return Some(ev);
                     }

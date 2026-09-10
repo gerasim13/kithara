@@ -75,6 +75,7 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true }
+kithara-events = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -129,7 +130,7 @@ kithara = { workspace = true, default-features = false, features = ["apple", "cl
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["probe", "ui-capture"] }
+kithara = { workspace = true, default-features = false, features = ["offline", "probe", "ui-capture"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }

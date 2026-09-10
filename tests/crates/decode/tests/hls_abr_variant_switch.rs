@@ -5,15 +5,17 @@ use std::{
 };
 
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
-    events::{AbrEvent, Event, EventBus, HlsEvent},
-    hls::{AbrMode, Hls, HlsConfig},
+    events::EventBus,
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{CancelToken, sync::Arc, time::Duration, tokio, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
@@ -77,14 +79,14 @@ async fn test_abr_variant_switch_no_byte_glitches(
     tokio::task::spawn(async move {
         while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
             match ev {
-                Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch detected: {} -> {}", from, to);
                     variant_switches_clone
                         .lock()
                         .unwrap()
                         .push((from.get(), to.get()));
                 }
-                Event::Hls(HlsEvent::EndOfStream) => break,
+                TestEvent::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
             }
         }
@@ -260,7 +262,7 @@ async fn test_abr_variant_switch_with_seek_backward(
 
     tokio::task::spawn(async move {
         while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
-            if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
+            if let TestEvent::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
                 println!("Variant switch: {} -> {}", from, to);
                 variant_switches_clone.lock().unwrap().push((from, to));
             }

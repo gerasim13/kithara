@@ -276,15 +276,15 @@ impl<T: StreamType> Read for SharedStream<T> {
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
-    delegate! {
-        to self.inner.lock() {
-            /// Always the blocking [`Stream::seek`]. The construction gate
-            /// picks the read mode, not the seek mode: a decoder seeks past
-            /// residual lateness in steady state too, and a probe seek there
-            /// answers not-ready to a caller that can only ask again. Staying
-            /// off the blocking path is `OffsetReader`'s own choice, made by
-            /// naming `probe_seek`.
-            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        if self
+            .construction_gate
+            .as_ref()
+            .is_some_and(ConstructionGate::is_armed)
+        {
+            self.inner.lock().seek(pos)
+        } else {
+            self.probe_seek(pos)
         }
     }
 }

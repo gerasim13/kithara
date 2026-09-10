@@ -4,13 +4,13 @@ use std::{
     thread,
 };
 
-use kithara_abr::AbrState;
+use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_assets::{
     AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
     WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_events::{AbrMode, AbrReason, Event, EventBus, HlsEvent, VariantIndex};
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -27,6 +27,7 @@ use url::Url;
 
 use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
+    HlsEvent,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -247,7 +248,7 @@ fn queue_has_init(v: &HlsVariant) -> bool {
         .any(|p| matches!(p, PlannedFetch::Init))
 }
 
-fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+fn collect_events(events: &mut kithara_events::EventReceiver<HlsEvent>) -> Vec<HlsEvent> {
     std::iter::from_fn(|| events.try_recv().ok())
         .map(|envelope| envelope.event)
         .collect()
@@ -309,9 +310,9 @@ fn cache_complete_publishes_once_after_full_commit() {
         .filter(|event| {
             matches!(
                 event,
-                Event::Hls(HlsEvent::CacheComplete {
+                HlsEvent::CacheComplete {
                     total_bytes: Some(16),
-                })
+                }
             )
         })
         .count();
@@ -2887,6 +2888,68 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     let bytes: Vec<u8> = (0..len).map(|b| b.to_le_bytes()[0]).collect();
     writer.write_at(0, &bytes).expect("write segment");
     writer.commit(Some(len)).expect("commit segment");
+}
+
+#[kithara::test]
+fn reading_waits_for_available_segment_bytes_before_opening_storage() {
+    let ctx = test_ctx(1);
+    let v = VariantParts {
+        init: None,
+        segments: vec![make_placeholder_seg(0, 64, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()),
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+    assert!(!v.segments()[0].size().is_exact());
+    v.read_at(0, &mut [0; 8]).expect("read unsized segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+    v.segments()[0].size().set_exact(64);
+    v.read_at(0, &mut [0; 8])
+        .expect("read sized but absent segment");
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), 0);
+
+    let key = v.segments()[0].resource_id();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(key, None)
+        .expect("acquire segment")
+    else {
+        panic!("segment resource must be pending");
+    };
+    writer
+        .write_at(0, &[0, 1, 2, 3, 4, 5, 6, 7])
+        .expect("write available prefix");
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("prepared read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[kithara::test]
+fn reading_across_segment_boundary_opens_each_resource_once() {
+    let ctx = test_ctx(2);
+    let v = make_var(0, 0, &[64, 64], &ctx);
+    for index in 0..2 {
+        write_seg_bytes(&v, &ctx, index, 64);
+        settle_seg(&v, &ctx, index, 64);
+    }
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("first read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let opens = v.segments.opens.load(Ordering::Relaxed);
+    assert!(matches!(
+        v.read_at(64, &mut bytes).expect("next segment"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(v.segments.opens.load(Ordering::Relaxed), opens + 1);
 }
 
 /// A chunked run over one slot opens its resource once.

@@ -1,8 +1,7 @@
-use kithara_events::{AbrProgressSnapshot, VariantInfo};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
-use crate::state::AbrState;
+use crate::{AbrProgressSnapshot, VariantInfo, state::AbrState};
 
 /// Protocol-agnostic interface the shared [`AbrController`](crate::AbrController)
 /// uses to drive per-peer decisions.

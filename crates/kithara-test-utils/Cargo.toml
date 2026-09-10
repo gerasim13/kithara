@@ -15,14 +15,13 @@ hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
 probe = ["dep:backtrace", "dep:usdt", "tracing-subscriber/env-filter"]
-# HTTP backend forwarding (kithara-net reached via kithara-events).
-client-reqwest = ["kithara-events/client-reqwest"]
-client-wreq = ["kithara-events/client-wreq"]
-tls-rustls = ["kithara-events/tls-rustls"]
-tls-native = ["kithara-events/tls-native"]
+# HTTP backend forwarding.
+client-reqwest = []
+client-wreq = []
+tls-rustls = []
+tls-native = []
 
 [dependencies]
-kithara-events = { workspace = true, default-features = false, features = ["abr", "downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 

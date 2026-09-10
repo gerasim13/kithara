@@ -1,13 +1,14 @@
 use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
+use kithara_events::TrackId;
 use kithara_platform::tokio::task;
 use kithara_play::{Resource, SelectTransition};
 use tracing::{debug, warn};
 
 use crate::{
     error::QueueError,
+    event::{AdvanceReason, QueueEvent, TrackStatus},
     queue::{QueueControl, types::SelectPhase},
 };
 

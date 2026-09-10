@@ -5,7 +5,6 @@ use std::{env, io, num::NonZeroU32};
 use kithara::{
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
-    events::TrackStatus,
     hls::AbrMode,
     host::{Host, HostConfig, HostOwned},
     output::{OfflineRenderRequest, OfflineRenderer},
@@ -17,7 +16,7 @@ use kithara::{
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{

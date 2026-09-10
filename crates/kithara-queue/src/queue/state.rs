@@ -14,8 +14,9 @@ use kithara_play::{
     player::{PlayerControl, PlayerControlSource},
 };
 
-use super::types::{
-    AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
+use super::{
+    engine_events::PlayerBusEvent,
+    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
 };
 use crate::{
     config::QueueConfig,
@@ -34,7 +35,7 @@ pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 ///
 /// Owns a [`PlayerImpl`] and a private async track loader, plus
 /// queue-level state (ordered tracks, navigation, pending-select).
-/// Publishes [`QueueEvent`](kithara_events::QueueEvent) on the shared
+/// Publishes [`QueueEvent`](crate::event::QueueEvent) on the shared
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
 #[doc(hidden)]
@@ -55,7 +56,7 @@ where
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
     /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
     ///
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
@@ -105,7 +106,7 @@ where
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver>,
+    pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
 }
@@ -337,7 +338,7 @@ where
             pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
             pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
-            pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
+            pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
         }
         to self.crossfade_armed_for {
             #[call(load)]
@@ -375,7 +376,7 @@ pub(crate) mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::{Duration, Instant, timeout},
@@ -388,7 +389,10 @@ pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools};
+    use crate::{
+        event::QueueEvent,
+        test_pools::{TestPools, pools},
+    };
 
     pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(sample_rate) => sample_rate,
@@ -421,7 +425,12 @@ pub(crate) mod tests {
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
-                Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
+                Cmd::RegisterPlayer { .. } => {
+                    Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
+                        id: 1,
+                        eq: SharedEq::new(10),
+                    })
+                }
                 Cmd::AllocateSlot { .. } => {
                     let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                     let (inputs, control) = slot_channels(SharedEq::new(10));
@@ -466,7 +475,7 @@ pub(crate) mod tests {
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
-        rx: &mut EventReceiver,
+        rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
         timeout_ms: u64,
     ) -> bool
@@ -480,10 +489,7 @@ pub(crate) mod tests {
                 return false;
             }
             match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Envelope {
-                    event: Event::Queue(ev),
-                    ..
-                })) if matches(&ev) => return true,
+                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }

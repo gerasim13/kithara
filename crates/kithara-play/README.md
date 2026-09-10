@@ -82,7 +82,7 @@ to the single `decoder` field.
   key-lock, and backend changes apply live, mid-track. Render quantum and rate
   smoothing remain optional frame-based Warp settings.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
-  `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
+  `engine.subscribe()` (`PlayerEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
 - **Queue auto-advance:** `PlayerImpl` publishes `PrefetchRequested` /
   `HandoverRequested`; `kithara-queue::Queue` disables the built-in linear policy

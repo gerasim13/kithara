@@ -3,9 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::{
-    DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
-};
+use kithara_events::{Envelope, EventBus, ScopeLabel, TrackId};
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
@@ -16,11 +14,13 @@ use kithara_platform::{
     },
 };
 use kithara_play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl};
+use kithara_stream::DownloaderEvent;
 use kithara_test_utils::kithara;
 
 use crate::{
     attempts::{LoadClass, Ticket},
     error::QueueError,
+    event::TrackStatus,
     track::{TrackSource, Tracks},
 };
 
@@ -244,12 +244,12 @@ where
         tracks: Arc<Tracks<S>>,
     ) -> std::convert::Infallible {
         let mut rx = match bus {
-            Some(b) => b.subscribe(),
+            Some(b) => b.subscribe::<DownloaderEvent>(),
             None => return std::future::pending().await,
         };
         let mut marked = false;
         while let Ok(Envelope { event: ev, .. }) = rx.recv().await {
-            if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
+            if !marked && matches!(ev, DownloaderEvent::LoadSlow { .. }) {
                 tracks.set_status(id, TrackStatus::Slow);
                 marked = true;
             }
@@ -266,7 +266,7 @@ mod tests {
     };
 
     use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_events::{EventBus, QueueEvent};
+    use kithara_events::EventBus;
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
@@ -275,6 +275,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        event::QueueEvent,
         test_pools::{TestPools, pools},
         track::TrackRecord,
     };
@@ -461,7 +462,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_labels_default_bus_with_track_id() {
         let fixture = LoaderFixtureSpec::default().build();
-        let mut rx = fixture.bus.subscribe();
+        let mut rx = fixture.bus.subscribe::<QueueEvent>();
         let Ok(config) = fixture.loader.build_config(
             TrackId(42),
             TrackSource::Uri("https://example.com/a.mp3".into()),
@@ -552,18 +553,18 @@ mod tests {
             match time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Envelope {
                     event:
-                        Event::Queue(QueueEvent::TrackStatusChanged {
+                        QueueEvent::TrackStatusChanged {
                             id: TrackId(42),
                             status: TrackStatus::Loading,
-                        }),
+                        },
                     ..
                 })) => panic!("invalid config must not emit Loading"),
                 Ok(Ok(Envelope {
                     event:
-                        Event::Queue(QueueEvent::TrackStatusChanged {
+                        QueueEvent::TrackStatusChanged {
                             id: TrackId(42),
                             status: TrackStatus::Failed(_),
-                        }),
+                        },
                     ..
                 })) => saw_failed = true,
                 Ok(Ok(_)) => {}

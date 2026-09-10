@@ -1,10 +1,10 @@
-use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::EventBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
 use super::{PreloadGate, SeekOutcome};
-use crate::traits::SeekBegin;
+use crate::{AudioEvent, SeekLifecycleStage, SegmentLocation, traits::SeekBegin};
 
 /// The control-plane half of a seek: rebuilds the source's byte space, publishes a lifecycle event,
 /// nudges the peer and wakes the worker. Each takes a lock, so the audio thread only runs

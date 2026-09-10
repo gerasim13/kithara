@@ -7,7 +7,7 @@ use bon::{Builder, bon};
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -25,7 +25,7 @@ use super::{
     seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
-    HlsError, HlsResult,
+    HlsError, HlsEvent, HlsResult,
     config::{DEFAULT_ACQUIRE_ATTEMPT_BUDGET, DEFAULT_DOWNLOAD_BATCH_SIZE, SizeProbeMethod},
     playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
@@ -230,6 +230,9 @@ where
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
+        if range.start < range.end && !seg.contains(&self.scope, range.start..range.start + 1) {
+            return Ok(None);
+        }
         let Some(reader) = self.reader(seg)? else {
             return Ok(None);
         };

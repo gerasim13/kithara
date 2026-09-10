@@ -1,12 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::time::{Duration, timeout},
-    queue::QueueControl,
+    queue::{QueueControl, QueueEvent, TrackStatus},
 };
 use kithara_app::{pools::AppPools, sources::build_source};
-use kithara_integration_tests::{kithara, offline::LazyAppQueueFixture};
+use kithara_integration_tests::{event::TestEvent, kithara, offline::LazyAppQueueFixture};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -59,7 +59,7 @@ fn install_tracing() {
 }
 
 async fn wait_for_terminal(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<AppPools>,
     track_id: TrackId,
     deadline: Duration,
@@ -80,7 +80,7 @@ async fn wait_for_terminal(
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
+            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
                 && id == track_id
             {
                 tracing::info!(?status, "DRM trace: status change");

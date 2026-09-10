@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason};
-use kithara_events::{DeferredBus, Event, EventBus};
+use kithara_audio::{
+    AudioLaneEvent, AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason,
+};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
@@ -137,7 +139,7 @@ where
         source,
         port,
         preload_chunks,
-        emit: Arc::new(DeferredBus::<Event>::new(EventBus::new(8), 8)),
+        emit: Arc::new(DeferredBus::<AudioLaneEvent>::new(EventBus::new(8), 8)),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         preload_gate: Arc::clone(&preload_gate),
         runtime: DecoderRuntime {

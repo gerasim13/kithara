@@ -4,9 +4,10 @@
 use std::collections::HashSet;
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, DownloaderEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -15,12 +16,17 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    stream::{
+        DownloaderEvent,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker},
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
+    kithara,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use kithara_test_utils::probe::capture as probe_capture;
@@ -64,9 +70,7 @@ async fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -75,7 +79,7 @@ async fn build_queue_with_tick(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -83,6 +87,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -117,7 +122,7 @@ fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
 }
 
 async fn observe_until_loaded(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
     master_url: &Url,
@@ -127,14 +132,16 @@ async fn observe_until_loaded(
     timeout(Consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
+                Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id,
+                    url,
+                    ..
                 })) => {
                     if is_variant_media_playlist(&url, master_url) {
                         variant_request_ids.insert(request_id.get());
                     }
                 }
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged { id, status }))
+                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }))
                     if id == track_id =>
                 {
                     match status {

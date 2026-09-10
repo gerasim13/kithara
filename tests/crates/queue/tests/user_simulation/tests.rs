@@ -4,8 +4,8 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -196,7 +196,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: PreparedTrack, #[c
     run_single(kind, abr, scenarios::seek_forward_unbuffered_repro()).await;
 }
 
-/// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
+/// Bug #6 — backward seek causes silent hang. `RenderFor` watchdog in
 /// the harness panics on stuck position.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
@@ -382,18 +382,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let session_config = HostConfig::offline(pools)
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session_config = HostConfig::offline(pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session_config.sample_rate())
             .worker(worker)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -521,17 +520,17 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: PreparedTracks)
 async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
     // Walk all three with seeks: 0 → seek mid → 1 → seek mid → 2 → seek mid.
     let actions = vec![
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(1),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_millis(800)),
+        Action::RenderFor(Duration::from_millis(800)),
         Action::SelectAt(2),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
         Action::SeekRatio(0.5),
-        Action::PlayFor(Duration::from_secs(2)),
+        Action::RenderFor(Duration::from_secs(2)),
     ];
     run_multi(kinds, actions).await;
 }

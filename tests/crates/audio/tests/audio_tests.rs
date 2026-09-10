@@ -4,20 +4,21 @@ use std::{fs::File, io::Write};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    decode::{GaplessMode, SilenceTrimParams},
-    events::{
-        AudioEvent, DecoderBackend, DecoderChangeCause, DecoderEvent, Event, EventBus,
-        EventReceiver, SeekEpoch, SeekLifecycleStage,
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderBackend,
+        DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
     },
+    decode::{GaplessMode, SilenceTrimParams},
+    events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
-    stream::{ContainerFormat, MediaInfo},
+    stream::{ContainerFormat, MediaInfo, SeekEpoch},
 };
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     reads::blocking_audio,
 };
@@ -44,11 +45,14 @@ async fn wait_for_frames<R: AudioRead>(audio: &mut R, budget: Duration) -> usize
 }
 
 /// Drains events until a `SeekLifecycle::SeekRequest` arrives, returning its epoch.
-async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) -> SeekEpoch {
+async fn await_seek_request_epoch(
+    events: &mut EventReceiver<TestEvent>,
+    budget: Duration,
+) -> SeekEpoch {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
@@ -115,7 +119,7 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
     let expected_backend = DecoderBackend::Symphonia;
 
     match events.try_recv().map(|env| env.event) {
-        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+        Ok(TestEvent::Decoder(DecoderEvent::DecoderChanged {
             backend,
             sample_rate,
             channels,
@@ -286,7 +290,7 @@ async fn test_audio_playback_progress_uses_output_commit(wav_1024: NamedTempFile
     let mut saw_progress = false;
     let deadline = Instant::now() + Duration::from_millis(300);
     while Instant::now() < deadline {
-        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress {
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
             position_ms,
             total_ms,
             seek_epoch,
@@ -325,7 +329,7 @@ async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut matched_epoch = None;
     while Instant::now() < deadline {
-        if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
+        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
             time::timeout(Duration::from_millis(40), events.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
@@ -354,7 +358,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv().map(|env| env.event) {
-        if matches!(event, Event::Audio(AudioEvent::SeekComplete { .. })) {
+        if matches!(event, TestEvent::Audio(AudioEvent::SeekComplete { .. })) {
             saw_seek_complete_before_read = true;
             break;
         }
@@ -382,7 +386,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,
                 ..
@@ -390,7 +394,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(wav_176400: NamedTe
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_output_committed = true;
             }
-            Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 assert_eq!(seek_epoch, expected_epoch);
                 saw_seek_complete = true;
                 break;

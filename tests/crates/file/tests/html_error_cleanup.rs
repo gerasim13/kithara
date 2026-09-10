@@ -2,17 +2,18 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{DownloaderEvent, Event, EventBus, FileEvent},
-    file::{File, FileConfig},
+    events::EventBus,
+    file::{File, FileConfig, FileEvent},
     platform::{
         CancelToken,
         time::{Duration, Instant, timeout},
     },
-    stream::Stream,
+    stream::{DownloaderEvent, Stream},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     temp_dir,
 };
 
@@ -49,7 +50,7 @@ fn collect_cache_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// synchronously in the validator-reject path and a late subscriber
 /// would race the publish.
 async fn wait_for_download_terminal(
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     within: Duration,
 ) -> bool {
     let deadline = Instant::now() + within;
@@ -61,9 +62,9 @@ async fn wait_for_download_terminal(
         let recv = timeout(remaining, rx.recv());
         match recv.await {
             Ok(Ok(env)) => match env.event {
-                Event::Downloader(DownloaderEvent::RequestFailed { .. }) => return true,
-                Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => return true,
-                Event::File(FileEvent::Error { .. }) => return true,
+                TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => return true,
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => return true,
+                TestEvent::File(FileEvent::Error { .. }) => return true,
                 _ => {}
             },
             Ok(Err(_)) | Err(_) => return false,
@@ -169,7 +170,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let retried = time::timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
+                Ok(TestEvent::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
                 Ok(_) => {}
                 Err(_) => break false,
             }

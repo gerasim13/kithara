@@ -3,11 +3,13 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    events::{Event, EventBus, EventReceiver, TransportEvent},
+    events::{EventBus, EventReceiver},
+    host::TransportEvent,
     platform::tokio::sync::broadcast::error::TryRecvError,
     play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo},
 };
 use kithara_integration_tests::{
+    event::TestEvent,
     kithara,
     ring::{ManualRingConfig, ManualRingSession},
 };
@@ -37,7 +39,7 @@ fn expect_ok(reply: Reply) {
     }
 }
 
-fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
+fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TestEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
     match session
@@ -45,6 +47,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus,
             eq_layout: Vec::new(),
+            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })
@@ -56,11 +59,11 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
     }
 }
 
-fn drain_transport_events(events: &mut EventReceiver) -> Vec<TransportEvent> {
+fn drain_transport_events(events: &mut EventReceiver<TestEvent>) -> Vec<TransportEvent> {
     let mut transport = Vec::new();
     loop {
         match events.try_recv().map(|envelope| envelope.event) {
-            Ok(Event::Transport(event)) => transport.push(event),
+            Ok(TestEvent::Transport(event)) => transport.push(event),
             Ok(_) => {}
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(_)) => continue,
@@ -99,7 +102,7 @@ fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
 
 fn commit_initial_transport(
     session: &ManualRingSession,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
 ) -> SessionTransportSnapshot {
     set_tempo(session, 120.0);
     session

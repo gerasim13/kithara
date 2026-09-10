@@ -1,40 +1,36 @@
 use std::path::Path;
 
 use kithara::{
-    abr::AbrHandle,
+    abr::{AbrHandle, AbrMode},
     assets::{AssetStore, StorageBackend},
+    audio::{AudioEvent, SeekLifecycleStage},
     bufpool::HasPool,
     decode::DecoderBackend,
-    events::{
-        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-        TrackStatus,
-    },
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, timeout},
+        time::{Duration, timeout},
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
         SeekOutcome,
     },
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
     user_sim::actions::Action,
 };
 
-/// Worst-case wall-clock budget for any single action. Anything longer
-/// is treated as a hang — matches the "no hang" invariant from the
-/// player robustness plan.
-pub const ACTION_BUDGET: Duration = Duration::from_secs(8);
 /// Tolerance window around the seek target. The reader snaps to
 /// keyframe / segment boundaries, so an exact match is not realistic.
 pub const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
@@ -44,15 +40,22 @@ pub const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
 /// tolerance so the post-seek decode can chew through any residual
 /// audio before EOF without the harness misclassifying it as a bug.
 pub const NATURAL_EOF_WINDOW_S: f64 = 3.0;
-/// Tick interval driving the loop polling helpers.
-const POLL_INTERVAL: Duration = Duration::from_millis(40);
-/// Consecutive no-progress producer-tick wakes before a stuck playhead is a
-/// SILENT HANG. At one wake per [`POLL_INTERVAL`] (40 ms) this is the ~3 s
-/// window the panic messages name.
-const STAGNATION_TICKS: u32 = 75;
-/// Producer-tick wakes a quality switch is given to land before the harness
-/// stops waiting for it.
-const SWITCH_PROGRESS_TICKS: u32 = 200;
+/// Product render blocks one harness turn takes before it re-reads the
+/// playhead and ticks the queue, the way an app update loop would. At
+/// 512-frame blocks and 44.1 kHz one turn carries ~0.186 s of audio.
+const RENDER_BATCH_BLOCKS: u64 = 16;
+/// How much audio past the request a `RenderFor` may render before it stops
+/// waiting for the playhead: a live engine reaches the target well inside it.
+const RENDER_OVERRUN: u64 = 2;
+/// Render turns one action may spend waiting for the state it asked for — a
+/// seek landing, a track handover, the entry warmup, a quality switch. The
+/// 8 s wall budget this replaces bought exactly 800 paced 512-frame blocks,
+/// which is the 9.29 s of audio 50 turns render.
+const ACTION_TURNS: u32 = 50;
+/// Consecutive turns with no playhead advance before a stuck playhead is a
+/// SILENT HANG. 2.97 s of rendered audio, against the 3.48 s the 3 s wall
+/// window allowed at the paced cadence: the detector is tighter, not looser.
+const STAGNATION_TURNS: u32 = 16;
 
 /// `SimHarness` is the integration-test entry point for the user
 /// simulation scenarios. It owns a `Queue + Player + Downloader` triple
@@ -115,14 +118,13 @@ impl SimHarness {
                 root: cache_path.into(),
             })
             .build();
-        let session_config = HostConfig::offline(pools.clone())
-            .pacing(Duration::from_millis(10))
-            .build();
+        let session_config = HostConfig::offline(pools.clone()).build();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(session_config.sample_rate())
                 .worker(worker)
+                .block_on_underrun(true)
                 .build(),
         );
         let queue_owner = OfflineQueue::new(
@@ -196,11 +198,35 @@ impl SimHarness {
         self.queue_owner.host().run(move || f(&queue)).await
     }
 
+    /// One turn of the app update loop: render a batch through the product
+    /// offline renderer, then tick the queue so the playhead it publishes
+    /// reflects what the sink consumed. Returns the frames the renderer
+    /// advanced by — the queue's cached position only moves inside `tick`.
+    async fn render_step(&self) -> u64 {
+        let batch = u64::from(self.queue_owner.host().max_block_frames().get())
+            .saturating_mul(RENDER_BATCH_BLOCKS);
+        let rendered = self.queue_owner.host().render_forward(batch).await;
+        let _ = self.run(QueueControl::tick).await;
+        rendered
+    }
+
+    /// Render turns until `done` sees the state it waits for, at most `turns`
+    /// of them. Returns whether it landed.
+    async fn render_until(&self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
+        for _ in 0..turns {
+            if done(self) {
+                return true;
+            }
+            self.render_step().await;
+        }
+        done(self)
+    }
+
     pub fn track_id(&self, idx: usize) -> TrackId {
         self.track_ids[idx]
     }
 
-    pub fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe(&self) -> EventReceiver<TestEvent> {
         self.queue.subscribe()
     }
 
@@ -217,9 +243,16 @@ impl SimHarness {
             .await
             .unwrap_or_else(|e| panic!("enter_track[{idx}] load: {e}"));
 
-        wait_for_position_at_least(&self.queue, warmup.as_secs_f64(), Duration::from_secs(15))
-            .await
-            .unwrap_or_else(|e| panic!("enter_track[{idx}] warmup: {e}"));
+        let warmup_secs = warmup.as_secs_f64();
+        let warmed = self
+            .render_until(ACTION_TURNS, |harness| harness.position() >= warmup_secs)
+            .await;
+        assert!(
+            warmed,
+            "enter_track[{idx}] warmup: position stayed at {:.2}s below {warmup_secs:.2}s \
+             across {ACTION_TURNS} render turns",
+            self.position()
+        );
 
         self.last_known_codec = self.current_codec();
     }
@@ -237,7 +270,7 @@ impl SimHarness {
             Action::QualityAuto => self.do_quality_auto().await,
             Action::Pause => self.do_pause().await,
             Action::Resume => self.do_resume().await,
-            Action::PlayFor(d) | Action::RenderFor(d) => self.do_play_for(d).await,
+            Action::RenderFor(d) => self.do_render_for(d).await,
         }
     }
 
@@ -342,26 +375,23 @@ impl SimHarness {
             }
         }
 
-        // Settle on the seek by awaiting the player's own
-        // `PlaybackProgress` events (production-truth sink commits)
-        // until the reported position lands within tolerance of the
-        // target. `recv()` parks on the virtual clock, so the engine
-        // advances time + renders the post-seek blocks while we wait;
-        // `ACTION_BUDGET` is a virtual deadline that still fails a real
-        // hang loudly. Per-event we re-check the Failed + track-flip
-        // invariants so a false-EOF auto-advance is surfaced as the
-        // SPURIOUS AUTO-ADVANCE panic below rather than as a misleading
-        // settle timeout.
-        let mut rx = self.queue.subscribe();
-        // Highest position observed while still on the pre-seek track.
-        // On a flip this is the seek's landing point on the *old*
-        // track — for a legitimate near-end EOF that is ≈ `duration`,
-        // so the carve-out below classifies it correctly instead of
-        // mis-reading the new track's reset-to-0 position.
+        // Settle on the seek by driving the product renderer forward: each
+        // turn renders a batch and ticks the queue, so the playhead the queue
+        // publishes is the audio the sink actually consumed. `ACTION_TURNS`
+        // bounds the work one settle may cost and still fails a real hang
+        // loudly. Per turn we re-check the Failed + track-flip invariants so a
+        // false-EOF auto-advance is surfaced as the SPURIOUS AUTO-ADVANCE
+        // panic below rather than as a misleading settle timeout.
+        //
+        // `last_old_pos` is the highest position observed while still on the
+        // pre-seek track. On a flip this is the seek's landing point on the
+        // *old* track — for a legitimate near-end EOF that is ≈ `duration`, so
+        // the carve-out below classifies it correctly instead of mis-reading
+        // the new track's reset-to-0 position.
         let mut last_old_pos = pre_pos;
-        let settle = async {
-            loop {
-                if let Some(entry) = pre_track.and_then(|id| self.queue.track(id))
+        let settled = self
+            .render_until(ACTION_TURNS, |harness| {
+                if let Some(entry) = pre_track.and_then(|id| harness.queue.track(id))
                     && let TrackStatus::Failed(err) = &entry.status
                 {
                     panic!("[{action_label}] track entered Failed during seek: {err}");
@@ -373,50 +403,22 @@ impl SimHarness {
                 // Superpowered-style revive: the cursor flips None→the revived
                 // track by design. Keep waiting for the seek target instead, so
                 // the revive is validated by actually reaching it.
-                if pre_track.is_some() && self.current_track_id() != pre_track {
-                    return None;
+                if pre_track.is_some() && harness.current_track_id() != pre_track {
+                    return true;
                 }
-                let cur = self.position();
+                let cur = harness.position();
                 last_old_pos = cur;
-                if (cur - target).abs() <= SEEK_TARGET_TOLERANCE_S {
-                    return Some(cur);
-                }
-                let ev = match recv_event(&mut rx).await {
-                    Ok(Some(ev)) => ev,
-                    // Recoverable lag — keep waiting.
-                    Ok(None) => continue,
-                    // Bus closed (queue/player dropped): nothing more to
-                    // wait on. Surface as unsettled rather than spin.
-                    Err(_) => return None,
-                };
-                if let Some(p) = progress_secs(&ev) {
-                    if self.current_track_id() == pre_track {
-                        last_old_pos = p;
-                    }
-                    if (p - target).abs() <= SEEK_TARGET_TOLERANCE_S {
-                        return Some(p);
-                    }
-                }
-            }
-        };
-        let landed = match timeout(ACTION_BUDGET, settle).await {
-            Ok(Some(cur)) => cur,
-            Ok(None) => last_old_pos,
-            Err(_) => {
-                if let Some(entry) = pre_track.and_then(|id| self.queue.track(id))
-                    && let TrackStatus::Failed(err) = &entry.status
-                {
-                    panic!("[{action_label}] track entered Failed during seek: {err}");
-                }
-                let post = self.position();
-                panic!(
-                    "[{action_label}] HANG: seek to {target:.2}s never settled \
-                     within {budget:?} (pre={pre_pos:.2}s, post={post:.2}s, \
-                     dur={duration:.2}s)",
-                    budget = ACTION_BUDGET
-                );
-            }
-        };
+                (cur - target).abs() <= SEEK_TARGET_TOLERANCE_S
+            })
+            .await;
+        assert!(
+            settled,
+            "[{action_label}] HANG: seek to {target:.2}s never settled across \
+             {ACTION_TURNS} render turns (pre={pre_pos:.2}s, post={post:.2}s, \
+             dur={duration:.2}s)",
+            post = self.position()
+        );
+        let landed = last_old_pos;
 
         // Only a flip OFF a live pre-seek track can be a spurious auto-advance
         // (Bug #5). A revive from an already-ended queue (`pre_track == None`,
@@ -456,31 +458,17 @@ impl SimHarness {
         wait_for_loaded(&self.queue, id, Duration::from_secs(20))
             .await
             .unwrap_or_else(|e| panic!("[SelectAt({bounded})] load: {e}"));
-        // Wait for the player to actually become this track — the
-        // engine handover happens after `Loaded` via the
-        // `CurrentItemChanged` notification, surfaced on the bus as
-        // `QueueEvent::CurrentTrackChanged`. Awaiting that event (which
-        // parks on the virtual clock) confirms the engine is now serving
-        // the new track. Without this step `do_play_for` captures
-        // `pre_pos` from the *previous* track, racing the handover.
-        let mut rx = self.queue.subscribe();
-        let switch_wait = async {
-            loop {
-                if self.current_track_id() == Some(id) {
-                    return;
-                }
-                match recv_event(&mut rx).await {
-                    Ok(Some(Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(cur) })))
-                        if cur == id =>
-                    {
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(_) => return,
-                }
-            }
-        };
-        let _ = timeout(Duration::from_secs(5), switch_wait).await;
+        // Drive turns until the player actually becomes this track — the
+        // engine handover happens after `Loaded` and reaches the queue cursor
+        // on a later tick. Without this step `do_render_for` captures
+        // `pre_pos` from the *previous* track, racing the handover. A handover
+        // that never arrives is left to the next action's own oracle, the way
+        // the wall-clock wait it replaces was.
+        let _ = self
+            .render_until(ACTION_TURNS, |harness| {
+                harness.current_track_id() == Some(id)
+            })
+            .await;
         // Refresh codec snapshot — picking a different track legitimately
         // changes the codec, so this is a reset, not an assertion.
         self.last_known_codec = self.current_codec();
@@ -497,9 +485,11 @@ impl SimHarness {
         // `position()`/`is_playing()`, which race the queue cursor at EOF.
         let pre_dur = self.duration();
         let bounded = idx % 4;
-        // Subscribe BEFORE the mode change so no post-switch
-        // `PlaybackProgress` event can slip through between the switch
-        // and the first `recv()`.
+        // Subscribe BEFORE the mode change so no seek-lifecycle event can
+        // slip through between the switch and the first drain: the switch
+        // re-anchors the decoder with a seek, and the new anchor is what
+        // keeps a legitimate backward rebase from reading as a stuck
+        // playhead.
         let mut rx = self.queue.subscribe();
         if let Err(e) = handle.set_mode(AbrMode::manual(bounded)) {
             // Out-of-bounds is acceptable — fixtures with fewer
@@ -510,11 +500,11 @@ impl SimHarness {
         }
         let mut baseline_pos = pre_pos;
         let mut last_pos = pre_pos;
-        let mut no_progress_ticks: u32 = 0;
-        let mut switch_ticks: u32 = 0;
+        let mut stagnant_turns: u32 = 0;
+        let mut turns: u32 = 0;
         let mut seek_rebase_allowed = false;
 
-        while switch_ticks < SWITCH_PROGRESS_TICKS {
+        while turns < ACTION_TURNS {
             if pre_track.is_some() && self.current_track_id() != pre_track {
                 if self.current_track_id().is_none()
                     && pre_dur > 0.0
@@ -536,75 +526,51 @@ impl SimHarness {
                 panic!("[SetQuality({bounded})] track Failed mid-switch: {err}");
             }
 
+            loop {
+                match rx.try_recv() {
+                    Ok(envelope) => match &envelope.event {
+                        TestEvent::Audio(AudioEvent::SeekLifecycle {
+                            stage: SeekLifecycleStage::SeekApplied,
+                            ..
+                        }) => {
+                            seek_rebase_allowed = true;
+                        }
+                        TestEvent::Audio(AudioEvent::SeekComplete { position, .. }) => {
+                            seek_rebase_allowed = true;
+                            baseline_pos = position.as_secs_f64();
+                            last_pos = baseline_pos;
+                            stagnant_turns = 0;
+                        }
+                        _ => {}
+                    },
+                    Err(TryRecvError::Lagged(_)) => {}
+                    Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                }
+            }
+
             let cur = self.position();
             if seek_rebase_allowed && cur + 1.0 < baseline_pos {
                 baseline_pos = cur;
             }
             if cur + 1.0 < last_pos || cur > last_pos + 0.05 {
                 last_pos = cur;
-                no_progress_ticks = 0;
+                stagnant_turns = 0;
             }
             if cur > baseline_pos + 0.1 || self.at_natural_eof() {
                 self.last_known_codec = self.current_codec();
                 return;
             }
-            if no_progress_ticks >= STAGNATION_TICKS {
+            if stagnant_turns >= STAGNATION_TURNS {
                 panic!(
                     "[SetQuality({bounded})] HANG: position stuck after switch \
                      (pre_pos={pre_pos:.2}s, baseline={baseline_pos:.2}s, \
-                      last={last_pos:.2}s, post={cur:.2}s, \
-                      observed_ticks={switch_ticks})"
+                      last={last_pos:.2}s, post={cur:.2}s, observed_turns={turns})"
                 );
             }
 
-            let mut counts_as_playback_tick = false;
-            let mut progressed = false;
-            match timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
-                Ok(Ok(Some(ev))) => {
-                    match &ev {
-                        Event::Audio(AudioEvent::SeekLifecycle {
-                            stage: SeekLifecycleStage::SeekApplied,
-                            ..
-                        }) => {
-                            seek_rebase_allowed = true;
-                        }
-                        Event::Audio(AudioEvent::SeekComplete { position, .. }) => {
-                            seek_rebase_allowed = true;
-                            baseline_pos = position.as_secs_f64();
-                            last_pos = baseline_pos;
-                            progressed = true;
-                        }
-                        _ => {}
-                    }
-                    if let Some(p) = progress_secs(&ev) {
-                        counts_as_playback_tick = true;
-                        if seek_rebase_allowed && p + 1.0 < baseline_pos {
-                            baseline_pos = p;
-                        }
-                        if p + 1.0 < last_pos || p > last_pos + 0.05 {
-                            last_pos = p;
-                            progressed = true;
-                        }
-                        if p > baseline_pos + 0.1 {
-                            self.last_known_codec = self.current_codec();
-                            return;
-                        }
-                    }
-                }
-                Ok(Ok(None)) => {}
-                Ok(Err(_)) => break,
-                Err(_) => {
-                    counts_as_playback_tick = true;
-                }
-            }
-            if counts_as_playback_tick {
-                switch_ticks = switch_ticks.saturating_add(1);
-                if progressed {
-                    no_progress_ticks = 0;
-                } else {
-                    no_progress_ticks = no_progress_ticks.saturating_add(1);
-                }
-            }
+            self.render_step().await;
+            turns = turns.saturating_add(1);
+            stagnant_turns = stagnant_turns.saturating_add(1);
         }
 
         if !self.at_natural_eof() {
@@ -624,7 +590,7 @@ impl SimHarness {
             panic!(
                 "[SetQuality({bounded})] HANG: position did not clear pre-switch point \
                  (pre_pos={pre_pos:.2}s, baseline={baseline_pos:.2}s, post={:.2}s, \
-                  last={last_pos:.2}s, ticks={switch_ticks})",
+                  last={last_pos:.2}s, turns={turns})",
                 self.position()
             );
         }
@@ -635,14 +601,10 @@ impl SimHarness {
         let Some(handle) = self.current_abr_handle() else {
             return;
         };
-        let mut rx = self.queue.subscribe();
         let _ = handle.set_mode(AbrMode::Auto(None));
-        // Park briefly (virtual clock) for the mode to apply rather
-        // than a fixed sleep that may fire before the engine reacts.
-        let settle = async {
-            let _ = recv_event(&mut rx).await;
-        };
-        let _ = timeout(Duration::from_millis(100), settle).await;
+        // One turn of work for the mode to apply, rather than a fixed sleep
+        // that may fire before the engine reacts.
+        self.render_step().await;
     }
 
     async fn do_pause(&mut self) {
@@ -653,148 +615,113 @@ impl SimHarness {
         self.run(QueueControl::play).await;
     }
 
-    async fn do_play_for(&mut self, at_least: Duration) {
+    /// Advance the playhead by rendering through the product offline renderer
+    /// instead of waiting out `at_least` of paced playback.
+    ///
+    /// The session blocks its reads on a producer-ring underrun, so a render
+    /// turn advances the playhead by exactly what it renders and the action
+    /// costs what the decode costs — the same under the virtual and the real
+    /// clock. A decode that stops is then a render that parks, which
+    /// `recv_outcome_blocking`'s own hang watchdog owns; what is left here is
+    /// the wall-clock oracles on the work axis: a playhead that stops
+    /// advancing across [`STAGNATION_TURNS`] turns, a playhead that ends short
+    /// of the request, and a track that flips before its end.
+    async fn do_render_for(&mut self, at_least: Duration) {
+        let target = at_least.as_secs_f64();
+        let budget = self
+            .queue_owner
+            .host()
+            .spec()
+            .frame_at(at_least)
+            .expect("render target fits the offline timeline")
+            .saturating_mul(RENDER_OVERRUN);
+
         let mut pre_pos = self.position();
         let pre_track = self.current_track_id();
         let duration = self.duration();
-        let started = Instant::now();
-
-        // Allow up to 2x the requested wall clock so we accept some
-        // jitter, but anything beyond that with no progress is a hang.
-        // Under flash these are virtual deadlines.
-        let wall_budget = at_least * 2;
+        let mut rendered: u64 = 0;
         let mut last_pos = pre_pos;
-        // No-progress is counted in producer-tick *wakes*, not virtual wall
-        // time: under flash a quiescent virtual clock can jump past a 3s
-        // window in a single tick while the producer simply has not been
-        // re-ticked yet, tripping a false SILENT HANG. Each loop wake (a
-        // delivered bus event OR a `POLL_INTERVAL` poll tick) is one real
-        // producer opportunity; counting consecutive no-progress wakes keys
-        // the detector on observed producer state instead of a clock the
-        // virtual engine fast-forwards past.
-        let mut no_progress_ticks: u32 = 0;
+        let mut stagnant_turns: u32 = 0;
 
-        // Drive the watchdog off current playback opportunities instead of a
-        // blind `sleep` cadence: `PlaybackProgress` proves the sink committed a
-        // block, and a `POLL_INTERVAL` timeout proves one queue tick elapsed
-        // with no relevant bus event. Unrelated preload/download events from a
-        // next track are deliberately ignored; they are not producer chances
-        // for the current playhead.
-        let mut rx = self.queue.subscribe();
-        while started.elapsed() < wall_budget {
+        while rendered < budget {
             if let Some(id) = pre_track
                 && let Some(entry) = self.queue.track(id)
                 && let TrackStatus::Failed(err) = &entry.status
             {
                 panic!(
-                    "[PlayFor({}ms)] track Failed mid-play: {err}",
+                    "[RenderFor({}ms)] track Failed mid-render: {err}",
                     at_least.as_millis()
                 );
             }
             let cur = self.position();
-            // Track switch detection: position can drop after SelectAt
-            // (new track reports from 0 once it starts producing). The
-            // PlayFor watchdog is measuring progress on whichever track
-            // is *now* playing, so rebase `pre_pos` and `last_pos` to
-            // the post-switch baseline rather than mistakenly comparing
-            // against the previous track's high-water mark.
+            // Position can drop after a track switch (the new track reports
+            // from 0 once it starts producing), so rebase the baseline rather
+            // than compare against the previous track's high-water mark.
             if cur + 1.0 < pre_pos {
                 pre_pos = cur;
                 last_pos = cur;
-                no_progress_ticks = 0;
+                stagnant_turns = 0;
             }
             if cur > last_pos + 0.05 {
                 last_pos = cur;
-                no_progress_ticks = 0;
+                stagnant_turns = 0;
             }
             if self.is_playing() {
-                if cur - pre_pos >= at_least.as_secs_f64() * 0.9 {
-                    // Made the requested progress — done.
+                if cur - pre_pos >= target * 0.9 {
                     return;
                 }
-                // Reached natural EOF — legitimate stop. Don't keep
-                // waiting for a budget we'll never satisfy.
                 if duration > 0.0 && (duration - cur).abs() < 0.5 {
                     return;
                 }
-                if no_progress_ticks >= STAGNATION_TICKS
-                    && self.position() < pre_pos + 0.1
+                if stagnant_turns >= STAGNATION_TURNS
+                    && cur < pre_pos + 0.1
                     && (duration <= 0.0 || (duration - cur).abs() >= NATURAL_EOF_WINDOW_S)
                 {
                     panic!(
-                        "[PlayFor({}ms)] SILENT HANG: position stuck at {cur:.3}s for 3s+ \
-                         (pre={pre_pos:.3}s, target_advance={target:.3}s, dur={duration:.3}s)",
-                        at_least.as_millis(),
-                        target = at_least.as_secs_f64()
+                        "[RenderFor({}ms)] SILENT HANG: position stuck at {cur:.3}s across \
+                         {STAGNATION_TURNS} render turns (pre={pre_pos:.3}s, \
+                         target_advance={target:.3}s, dur={duration:.3}s, \
+                         rendered={rendered} frames)",
+                        at_least.as_millis()
                     );
                 }
             }
-            // Park for the next bus event, but never longer than one
-            // `POLL_INTERVAL` — so a track that emits no further progress
-            // events still wakes once per producer tick, and each such wake is
-            // one no-progress observation the SILENT HANG above counts. The
-            // outer `while started.elapsed() < wall_budget` bounds the total.
-            // Both are virtual under flash.
-            // A closed bus delivers `Err` instantly; without breaking we
-            // would busy-spin and (under flash) freeze the virtual clock.
-            // Stop watching and fall through to the post-loop checks.
-            let counts_as_playback_tick = match timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
-                // A committed block, or a poll tick that elapsed with no
-                // relevant event: both are one producer opportunity.
-                Ok(Ok(Some(Event::Audio(AudioEvent::PlaybackProgress { .. })))) | Err(_) => true,
-                Ok(Ok(Some(_)) | Ok(None)) => false,
-                Ok(Err(_)) => break,
-            };
-            if counts_as_playback_tick {
-                // One more current-playback opportunity elapsed without
-                // progress (progress resets this to 0 at the top of the loop).
-                no_progress_ticks = no_progress_ticks.saturating_add(1);
-            }
+            rendered = rendered.saturating_add(self.render_step().await);
+            stagnant_turns = stagnant_turns.saturating_add(1);
         }
 
         let post = self.position();
         let advance = post - pre_pos;
-        let target = at_least.as_secs_f64();
-        // Treat reaching natural EOF as a legitimate completion of a
-        // shorter-than-requested PlayFor. Only panic on PARTIAL HANG
-        // when post position is well below duration.
         let reached_eof = duration > 0.0 && (duration - post).abs() < 0.5;
         if !reached_eof && advance < target * 0.5 {
             panic!(
-                "[PlayFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s in {wall:?} \
-                 (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, dur={duration:.3}s)",
+                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s across {rendered} \
+                 rendered frames (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, \
+                 dur={duration:.3}s, playing={playing}, \
+                 player_status={player_status:?}, track_status={track_status:?}, \
+                 engine_load={engine_load:?})",
                 at_least.as_millis(),
-                wall = wall_budget
+                playing = self.is_playing(),
+                player_status = self.queue.status(),
+                track_status = pre_track
+                    .and_then(|id| self.queue.track(id))
+                    .map(|entry| entry.status),
+                engine_load = self.queue.engine_load(),
             );
         }
-        // Verify no spurious auto-advance during the window: if the
-        // current_track flipped without crossing the natural EOF, the
-        // queue auto-advanced too early.
+
         if let Some(pre_id) = pre_track
             && self.current_track_id() != Some(pre_id)
+            && advance < target - NATURAL_EOF_WINDOW_S
         {
-            let pre_entry = self.queue.track(pre_id);
-            // The track that flipped away may already have been popped
-            // off the navigation cursor, so `self.duration()` now reports
-            // the *new* current's duration (or 0). Read the duration we
-            // captured before the action ran instead — pre_entry holds a
-            // snapshot of the lost track's loader state but not its
-            // duration; fall back to `post` + 0.5s as a permissive guard
-            // (anything beyond `NATURAL_EOF_WINDOW_S` past `pre_pos +
-            // requested_play` is bug territory).
-            let expected_advance = at_least.as_secs_f64();
-            let advanced = post - pre_pos;
-            if advanced < expected_advance - NATURAL_EOF_WINDOW_S {
-                panic!(
-                    "[PlayFor({}ms)] SPURIOUS AUTO-ADVANCE: track flipped from \
-                     {pre_id:?} to {:?} at position {post:.2}s after only \
-                     {advanced:.2}s of playback (requested {expected_advance:.2}s). \
-                     pre_status={:?}",
-                    at_least.as_millis(),
-                    self.current_track_id(),
-                    pre_entry.map(|e| e.status)
-                );
-            }
+            panic!(
+                "[RenderFor({}ms)] SPURIOUS AUTO-ADVANCE: track flipped from {pre_id:?} to \
+                 {:?} at position {post:.2}s after only {advance:.2}s of playback \
+                 (requested {target:.2}s). pre_status={:?}",
+                at_least.as_millis(),
+                self.current_track_id(),
+                self.queue.track(pre_id).map(|entry| entry.status),
+            );
         }
     }
 }
@@ -805,8 +732,7 @@ impl SimHarness {
 /// `Err` is a closed bus (terminal). `recv()` itself parks on the
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
-async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
+async fn recv_event(rx: &mut EventReceiver<TestEvent>) -> Result<Option<TestEvent>, String> {
     match rx.recv().await {
         Ok(env) => Ok(Some(env.event)),
         Err(RecvError::Lagged(_)) => Ok(None),
@@ -818,8 +744,8 @@ async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
 /// `position_ms as f64` mirrors the established sibling tests
 /// (`local_track_plays`, `hls_seek_near_end_stress`): playback
 /// positions stay far below `2^53` ms, so the cast is exact.
-fn progress_secs(ev: &Event) -> Option<f64> {
-    if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
+fn progress_secs(ev: &TestEvent) -> Option<f64> {
+    if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = ev {
         Some(*position_ms as f64 / 1000.0)
     } else {
         None
@@ -837,7 +763,7 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
 async fn await_progress<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
@@ -905,7 +831,7 @@ where
             let Some(ev) = recv_event(&mut rx).await? else {
                 continue;
             };
-            if let Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
+            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status }) = &ev
                 && *tid == id
             {
                 match status {

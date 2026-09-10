@@ -82,6 +82,10 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
     "test-utils",
 ] }
+kithara-audio = { workspace = true }
+kithara-events = { workspace = true }
+kithara-file = { workspace = true, default-features = false }
+kithara-hls = { workspace = true, default-features = false }
 
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -158,7 +162,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["net", "probe"] }
+kithara = { workspace = true, features = ["net", "probe", "signal"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }

@@ -1,6 +1,9 @@
 use std::net::TcpStream;
 
-use kithara::{self, platform::time::Duration};
+use kithara::{
+    self,
+    platform::{time::Duration, tokio::task::spawn_blocking},
+};
 use kithara_integration_tests::waits::wait_until;
 use kithara_test_fixtures::integration_fixtures::origin_tone;
 
@@ -132,7 +135,12 @@ async fn the_fetched_segments_decode_back_to_the_source_tone(origin_tone: Vec<f3
 async fn stopping_leaves_a_fetchable_vod_tail(origin_tone: Vec<f32>) {
     let origin = Origin::start(origin_tone);
     origin.advance_to(3).await;
-    origin.handle.stop();
+    let origin = spawn_blocking(move || {
+        origin.handle.stop();
+        origin
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     let playlist = Playlist::parse(origin.media_playlist().await);
     assert!(
@@ -188,11 +196,26 @@ async fn cancelling_the_parent_stops_the_origin_and_the_worker(origin_tone: Vec<
         .to_owned();
 
     origin.shutdown();
-    origin.handle.stop();
+    let origin = spawn_blocking(move || {
+        origin.handle.stop();
+        origin
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     wait_until(TEARDOWN_DEADLINE, "the origin stops listening", || {
         TcpStream::connect(&addr).is_err()
     })
     .await
     .expect("the origin still accepts connections after its token was cancelled");
+    drop(origin);
+}
+
+#[cfg(feature = "no-block")]
+#[kithara::test(tokio, flash(false))]
+#[should_panic(expected = "no_block")]
+async fn synchronous_stop_does_not_hide_runtime_blocking(origin_tone: Vec<f32>) {
+    let _mode = kithara::platform::no_block::force_panic_mode();
+    let origin = Origin::start(origin_tone);
+    origin.handle.stop();
 }

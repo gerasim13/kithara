@@ -1,18 +1,19 @@
-#[cfg(any(test, feature = "probe"))]
 use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
-#[cfg(any(test, feature = "probe"))]
-use kithara_events::TrackStatus;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId};
+use kithara_events::TrackId;
 
 use super::{
     QueueControl,
-    types::{Placement, Transition, extract_track_name},
+    types::{CachedPosition, CrossfadeArm, Placement, SelectPhase, Transition, extract_track_name},
 };
+#[cfg(any(test, feature = "probe"))]
+use crate::event::TrackStatus;
 use crate::{
     attempts::LoadClass,
     error::QueueError,
+    event::{AdvanceReason, QueueEvent},
+    navigation::NavigationState,
     track::{TrackRecord, TrackSource},
 };
 
@@ -61,12 +62,31 @@ where
 
     fn clear_inner(&self) {
         let ids: Vec<TrackId> = {
+            let _apply = self.lock_select_apply();
             let mut guard = self.lock_tracks_mut();
             let ids = guard.iter().map(|r| r.id).collect();
             guard.clear();
+            drop(guard);
+
+            *self.lock_pending_select_mut() = SelectPhase::Idle;
+            let mut navigation = self.lock_navigation_mut();
+            let repeat = navigation.repeat_mode();
+            let shuffle = navigation.is_shuffle_enabled();
+            *navigation = NavigationState::new(navigation.history_limit());
+            navigation.set_repeat(repeat);
+            navigation.set_shuffle(shuffle);
+            drop(navigation);
+            self.write_armed_for(CrossfadeArm::Disarmed);
+            self.write_cached_position(CachedPosition::Unknown);
+            #[cfg(any(test, feature = "probe"))]
+            self.autoplay_target.store(CrossfadeArm::Disarmed);
+            self.player.remove_all_items();
             ids
         };
-        self.player.remove_all_items();
+        *self
+            .player_rx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = self.bus.subscribe();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
         }
@@ -335,11 +355,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::QueueEvent;
+    use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, SlotId, TrackRef};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
@@ -409,6 +433,35 @@ mod tests {
         assert_eq!(queue.len(), 2);
         queue.clear();
         assert_eq!(queue.len(), 0);
+    }
+
+    #[kithara::test(tokio)]
+    async fn clear_discards_old_eof_before_reinsert() {
+        let queue = make_queue();
+        let old = queue.probe_register();
+        queue.lock_navigation_mut().select(0);
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(
+                old,
+                SlotId::new(0),
+                Arc::from(format!("test://memory/{}", old.as_u64())),
+            )),
+        });
+
+        queue.clear();
+        let replacement = queue.probe_register();
+        queue.lock_navigation_mut().select(0);
+        queue.player.set_rate(1.0);
+
+        queue
+            .tick()
+            .expect("tick must accept a freshly reinserted queue");
+
+        assert_eq!(
+            queue.current().map(|entry| entry.id),
+            Some(replacement),
+            "an EOF queued before clear must not end the replacement queue"
+        );
     }
 
     #[kithara::test(tokio)]

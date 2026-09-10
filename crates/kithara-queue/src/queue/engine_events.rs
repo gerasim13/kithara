@@ -1,17 +1,17 @@
 use std::sync::PoisonError;
 
+use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
-use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
-    TrackId, TrackStatus,
-};
+use kithara_events::{Envelope, EventSet, TrackId};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+use kithara_play::{ItemRole, PlayerEvent};
 use tracing::debug;
 
 use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
+use crate::event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus};
 
 impl<S> QueueControl<S>
 where
@@ -170,24 +170,24 @@ where
         let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
     }
 
-    pub(super) fn process_player_event(&self, ev: &Event) {
+    pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                 self.handle_item_did_play_to_end(item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::ItemDidFail { item }) => {
                 self.handle_item_did_fail(item);
             }
-            Event::Player(PlayerEvent::CurrentItemChanged) => {
+            PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
             }
-            Event::Player(PlayerEvent::HandoverRequested { item }) => {
+            PlayerBusEvent::Player(PlayerEvent::HandoverRequested { item }) => {
                 self.handle_handover_requested(item);
             }
-            Event::Audio(AudioEvent::UnderrunStarted { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunStarted { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackStalled);
             }
-            Event::Audio(AudioEvent::UnderrunEnded { .. }) => {
+            PlayerBusEvent::Audio(AudioEvent::UnderrunEnded { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp);
             }
             _ => {}
@@ -197,10 +197,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, PlayerEvent, QueueEvent};
+    use kithara_events::DEFAULT_EVENT_BUS_CAPACITY;
+    use kithara_play::PlayerEvent;
     use kithara_test_utils::kithara;
 
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
@@ -237,4 +241,11 @@ mod tests {
             "lag recovery should re-announce the current track"
         );
     }
+}
+
+#[derive(Clone, Debug, EventSet)]
+#[non_exhaustive]
+pub(crate) enum PlayerBusEvent {
+    Player(PlayerEvent),
+    Audio(AudioEvent),
 }

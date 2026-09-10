@@ -20,7 +20,6 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ConsumerWakeMode,
-    events::{Event, QueueEvent},
     platform::{
         sync::{Arc, Mutex, mpsc},
         time::Duration,
@@ -31,11 +30,12 @@ use kithara::{
         ResourceSrc, SessionBinding, SessionDispatcher, SessionDuckingMode, SessionSampleRate,
         SharedEq, SlotId, bridge::slot_channels, player::PlayerControlSource,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::QueueTicker,
     temp_dir,
@@ -77,7 +77,10 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 Reply::Ok
             }
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
+                Reply::PlayerRegistered(kithara::play::session::RegisteredPlayer {
+                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
+                    eq: SharedEq::new(10),
+                })
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
@@ -188,7 +191,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         |event| {
             matches!(
                 event,
-                Event::Queue(QueueEvent::NextTrackReady { id, .. }) if *id == ids[0]
+                TestEvent::Queue(QueueEvent::NextTrackReady { id, .. }) if *id == ids[0]
             )
         },
         Duration::from_secs(60),
@@ -214,7 +217,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         |event| {
             matches!(
                 event,
-                Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == ids[1]
+                TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) if *id == ids[1]
             )
         },
         Duration::from_secs(60),

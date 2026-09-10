@@ -1,8 +1,10 @@
+mod registration;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -17,11 +19,11 @@ use tracing::{debug, info};
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
+    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
     rt::StreamShape,
-    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
+    session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -35,7 +37,7 @@ pub struct EngineImpl<S> {
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
     eq_layout: Mutex<Vec<EqBandConfig>>,
-    player_id: Mutex<Option<PlayerId>>,
+    registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
@@ -58,7 +60,7 @@ impl<S> EngineImpl<S> {
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            player_id: Mutex::default(),
+            registration: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
@@ -82,7 +84,7 @@ impl<S> EngineImpl<S> {
             }
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         let allocated = self.session.allocate_slot(player_id)?;
         let slot_id = allocated.slot;
 
@@ -123,7 +125,7 @@ impl<S> EngineImpl<S> {
     /// ownership. Repeated successful calls are no-ops.
     pub fn close(&self) -> Result<(), PlayError> {
         let _start = self.start_lock.lock();
-        let Some(player_id) = *self.player_id.lock() else {
+        let Some(player_id) = self.registered_id() else {
             return Ok(());
         };
 
@@ -135,7 +137,7 @@ impl<S> EngineImpl<S> {
         }
 
         self.session.unregister_player(player_id)?;
-        *self.player_id.lock() = None;
+        *self.registration.lock() = None;
         Ok(())
     }
 
@@ -173,24 +175,6 @@ impl<S> EngineImpl<S> {
 
     fn emit(&self, event: EngineEvent) {
         self.bus.publish(event);
-    }
-
-    pub(super) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
-        let mut player_id = self.player_id.lock();
-        if let Some(id) = *player_id {
-            return Ok(id);
-        }
-
-        self.validate_session_sample_rate(self.session.requested_sample_rate()?.get())?;
-        let id = self.session.register_player(
-            self.config.grid_id,
-            self.bus.clone(),
-            self.eq_layout.lock().clone(),
-            self.pools().clone(),
-        )?;
-        *player_id = Some(id);
-        drop(player_id);
-        Ok(id)
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
@@ -257,7 +241,7 @@ impl<S> EngineImpl<S> {
             }
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.release_slot(player_id, slot)?;
 
         let _ = self.slots.lock().remove(slot);
@@ -319,7 +303,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
     }
 
@@ -327,7 +311,7 @@ impl<S> EngineImpl<S> {
         &self,
         eq_layout: Vec<EqBandConfig>,
     ) -> Result<(), PlayError> {
-        let player_id = *self.player_id.lock();
+        let player_id = self.registered_id();
         if let Some(player_id) = player_id {
             self.session
                 .set_player_eq_layout(player_id, eq_layout.clone())?;
@@ -337,7 +321,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session
             .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
     }
@@ -380,7 +364,7 @@ impl<S> EngineImpl<S> {
             return Err(PlayError::EngineNotRunning);
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.stop_player(player_id)?;
 
         self.slots.lock().clear();
@@ -395,7 +379,7 @@ impl<S> EngineImpl<S> {
         self.session.stream_shape()
     }
 
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 
@@ -414,7 +398,6 @@ impl<S> EngineImpl<S> {
 
     delegate::delegate! {
         to self.slots.lock() {
-            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]

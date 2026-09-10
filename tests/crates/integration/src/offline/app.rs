@@ -13,7 +13,7 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 
-use super::{OfflineQueue, QueueTicker};
+use super::{OfflineQueue, QueueTicker, RENDER_PACE};
 use crate::TestTempDir;
 
 #[non_exhaustive]
@@ -89,18 +89,17 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
         .worker(worker.clone())
         .store(store)
         .build();
-    let session_config = HostConfig::offline(session_pools)
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session_config = HostConfig::offline(session_pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session_config.sample_rate())
             .worker(worker)
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().player(player).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");

@@ -171,8 +171,7 @@ impl ManualRingSession {
         }
     }
 
-    /// `no_block`: sync command-reply bridge to the dedicated ring-session worker.
-    #[kithara::allow_block]
+    /// Synchronous command-reply bridge; call from a blocking control thread.
     pub fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
@@ -382,10 +381,11 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
+        gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
         pools: pools(),
         sample_rate: session_rate.get(),
     }) {
-        Reply::PlayerRegistered(player_id) => player_id,
+        Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };
