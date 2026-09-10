@@ -112,6 +112,9 @@ pub(crate) struct CiHost {
     pub(crate) removable_roots: Vec<String>,
     /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
     pub(crate) sccache_size: String,
+    /// A mode-0600 file with the scoped S3 settings real jobs inherit.
+    #[serde(default)]
+    pub(crate) sccache_s3_env_file: Option<PathBuf>,
     pub(crate) soft_cleanup_bytes: u64,
     pub(crate) sync_uid: u32,
     pub(crate) sync_user: String,
