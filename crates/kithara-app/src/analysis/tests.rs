@@ -14,15 +14,15 @@ use ::kithara::{
         tokio::sync::watch,
     },
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, off_thread::OffThread};
 
 use super::{
     AnalysisService,
     entry::{Stage, settled_for},
     fixtures::{
-        analysis, app_config, axis, fingerprint, grid, memory_store, mp3_track, mp3_track_48k,
-        other_axis, persistence, progress, queue, revision_held, revision_of, snapshot, test_pools,
-        track, wav_track,
+        analysis, app_config, axis, fingerprint, grid, long_wav, memory_store, other_axis,
+        persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
+        rhythm_a_mp3, rhythm_b_mp3, short_wav, snapshot, test_pools, tone_mp3, track,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -89,11 +89,11 @@ fn take_over_run(
 }
 
 #[kithara::test(native, tokio)]
-async fn a_settled_hit_with_a_gap_is_served_without_a_pass() {
+async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let settled = snapshot(
         "test-track".into(),
         3,
@@ -112,10 +112,11 @@ async fn a_settled_hit_with_a_gap_is_served_without_a_pass() {
     assert!(owner.active.is_none(), "nothing is left to analyse");
     assert!(owner.pending.is_empty());
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_hit_missing_an_artifact_is_served_and_refilled() {
+async fn a_hit_missing_an_artifact_is_served_and_refilled(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let fingerprint = owner.runner.fingerprint().clone();
@@ -123,8 +124,8 @@ async fn a_hit_missing_an_artifact_is_served_and_refilled() {
         fingerprint.beat().is_some(),
         "fixture needs an artifact to omit"
     );
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     owner.cache.put(
         target_of(&owner, &source),
         progress(snapshot("test-track".into(), 7, 1_000, fingerprint, None)),
@@ -139,14 +140,15 @@ async fn a_hit_missing_an_artifact_is_served_and_refilled() {
         "the artifact is refilled"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn an_entry_is_held_only_while_a_deck_keeps_its_receiver() {
+async fn an_entry_is_held_only_while_a_deck_keeps_its_receiver(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
 
     let rx = owner.subscribe(queue, track_id, source, axis());
     assert!(owner.entries[0].is_held());
@@ -157,14 +159,15 @@ async fn an_entry_is_held_only_while_a_deck_keeps_its_receiver() {
         "the owner's own handle is no receiver"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_complete_hit_is_served_without_a_pass() {
+async fn a_complete_hit_is_served_without_a_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -182,15 +185,19 @@ async fn a_complete_hit_is_served_without_a_pass() {
     assert!(owner.active.is_none(), "nothing is left to analyse");
     assert!(owner.pending.is_empty());
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn every_revision_reaches_the_deck_that_holds_the_track() {
+async fn every_revision_reaches_the_deck_that_holds_the_track(
+    tone_mp3: String,
+    rhythm_a_mp3: String,
+) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (_playing, _) = track(&queue, 8, "file:///tmp/track-8.mp3");
-    let (held, source) = track(&queue, 7, "file:///tmp/track-7.mp3");
+    let (host, queue) = queue_off().await;
+    let (_playing, _) = track(&host, 8, &rhythm_a_mp3).await;
+    let (held, source) = track(&host, 7, &tone_mp3).await;
     assert_eq!(
         queue.current_index(),
         Some(0),
@@ -213,16 +220,17 @@ async fn every_revision_reaches_the_deck_that_holds_the_track() {
         "the deck holding the track sees the latest revision"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn two_decks_holding_one_track_share_one_pass() {
+async fn two_decks_holding_one_track_share_one_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host_a, queue_a) = queue();
-    let (_host_b, queue_b) = queue();
-    let (track_a, source_a) = track(&queue_a, 1, "file:///tmp/shared.mp3");
-    let (track_b, source_b) = track(&queue_b, 2, "file:///tmp/shared.mp3");
+    let (host_a, queue_a) = queue_off_named("app-host-a").await;
+    let (host_b, queue_b) = queue_off_named("app-host-b").await;
+    let (track_a, source_a) = track(&host_a, 1, &tone_mp3).await;
+    let (track_b, source_b) = track(&host_b, 2, &tone_mp3).await;
 
     let rx_a = owner.subscribe(queue_a, track_a, source_a, axis());
     let tx = take_over_run(&mut owner, None);
@@ -237,15 +245,17 @@ async fn two_decks_holding_one_track_share_one_pass() {
     assert_eq!(revision_held(&rx_a), Some(1));
     assert_eq!(revision_held(&rx_b), Some(1));
     cancel.cancel();
+    host_a.close().await;
+    host_b.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_held_track_preempts_a_background_run() {
+async fn a_held_track_preempts_a_background_run(tone_mp3: String, rhythm_a_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (background, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
-    let (held, source) = track(&queue, 2, "file:///tmp/track-2.mp3");
+    let (host, queue) = queue_off().await;
+    let (background, _) = track(&host, 1, &tone_mp3).await;
+    let (held, source) = track(&host, 2, &rhythm_a_mp3).await;
     owner.warm(&queue, &[background], axis());
     assert_eq!(running_track(&owner), Some(background));
     let tx = take_over_run(&mut owner, None);
@@ -269,16 +279,21 @@ async fn a_held_track_preempts_a_background_run() {
     );
     assert_eq!(pending_tracks(&owner), vec![background]);
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_background_track_waits_for_a_held_one() {
+async fn a_background_track_waits_for_a_held_one(
+    tone_mp3: String,
+    rhythm_a_mp3: String,
+    rhythm_b_mp3: String,
+) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (held, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
-    let (background, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
-    let (later, later_source) = track(&queue, 3, "file:///tmp/track-3.mp3");
+    let (host, queue) = queue_off().await;
+    let (held, source) = track(&host, 1, &tone_mp3).await;
+    let (background, _) = track(&host, 2, &rhythm_a_mp3).await;
+    let (later, later_source) = track(&host, 3, &rhythm_b_mp3).await;
     let _rx = owner.subscribe(queue.clone(), held, source, axis());
     let _tx = take_over_run(&mut owner, None);
 
@@ -306,14 +321,15 @@ async fn a_background_track_waits_for_a_held_one() {
         "the warm track follows"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_pass_restarts_on_the_axis_the_next_request_names() {
+async fn a_pass_restarts_on_the_axis_the_next_request_names(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let _rx = owner.subscribe(queue.clone(), track_id, source.clone(), axis());
     let tx = take_over_run(&mut owner, None);
 
@@ -332,10 +348,14 @@ async fn a_pass_restarts_on_the_axis_the_next_request_names() {
     assert_eq!(owner.entries[run.entry].track_id(), track_id);
     assert_eq!(run.axis, other_axis(), "on the axis the request named");
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
+async fn preemption_commits_a_checkpoint_before_starting_the_next_track(
+    tone_mp3: String,
+    rhythm_a_mp3: String,
+) {
     let directory = tempfile::tempdir().expect("temporary analysis store");
     let pools = test_pools();
     let store = AppStore::builder(pools.clone())
@@ -345,9 +365,9 @@ async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
         .build();
     let cancel = CancelToken::root();
     let mut owner = owner_in(&cancel, store.clone());
-    let (_host, queue) = queue();
-    let (track_a, source_a) = track(&queue, 1, "file:///tmp/track-a.mp3");
-    let (track_b, source_b) = track(&queue, 2, "file:///tmp/track-b.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_a, source_a) = track(&host, 1, &tone_mp3).await;
+    let (track_b, source_b) = track(&host, 2, &rhythm_a_mp3).await;
     let target = target_of(&owner, &source_a);
     let rx_a = owner.subscribe(queue.clone(), track_a, source_a, axis());
     let publication = take_over_run(&mut owner, Some(progress(analysis())));
@@ -375,11 +395,12 @@ async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
         AnalysisFile::parse(&bytes, &fingerprint()).expect("committed checkpoint validates");
     assert_eq!(restored.latest().analysis().revision(), 1);
     cancel.cancel();
+    host.close().await;
 }
 
 struct HeldRun {
     target: AnalysisTarget,
-    _host: AppHost,
+    host: OffThread<(AppHost, AppQueueControl)>,
     queue: AppQueueControl,
     source: AppTrackSource,
     owner: Owner,
@@ -387,10 +408,16 @@ struct HeldRun {
     track_id: TrackId,
 }
 
+impl HeldRun {
+    async fn close(self) {
+        self.host.close().await;
+    }
+}
+
 async fn close_run(cancel: &CancelToken, url: &str, value: Option<AnalysisProgress>) -> HeldRun {
     let mut owner = owner(cancel);
-    let (host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, url);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, url).await;
     let target = target_of(&owner, &source);
     let rx = owner.subscribe(queue.clone(), track_id, source.clone(), axis());
     let tx = take_over_run(&mut owner, value);
@@ -404,19 +431,14 @@ async fn close_run(cancel: &CancelToken, url: &str, value: Option<AnalysisProgre
         source,
         target,
         rx,
-        _host: host,
+        host,
     }
 }
 
 #[kithara::test(native, tokio)]
-async fn a_close_carrying_a_complete_value_publishes_and_caches_it() {
+async fn a_close_carrying_a_complete_value_publishes_and_caches_it(tone_mp3: String) {
     let cancel = CancelToken::root();
-    let mut run = close_run(
-        &cancel,
-        "file:///tmp/track-1.mp3",
-        Some(progress(analysis())),
-    )
-    .await;
+    let mut run = close_run(&cancel, &tone_mp3, Some(progress(analysis()))).await;
 
     assert_eq!(revision_held(&run.rx), Some(1));
     assert!(run.owner.cache.get(&run.target, axis()).is_some());
@@ -426,12 +448,13 @@ async fn a_close_carrying_a_complete_value_publishes_and_caches_it() {
         "the pass ran its course"
     );
     cancel.cancel();
+    run.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_close_without_a_value_is_retried_on_the_next_subscribe() {
+async fn a_close_without_a_value_is_retried_on_the_next_subscribe(tone_mp3: String) {
     let cancel = CancelToken::root();
-    let mut run = close_run(&cancel, "file:///tmp/track-1.mp3", None).await;
+    let mut run = close_run(&cancel, &tone_mp3, None).await;
 
     assert_eq!(revision_held(&run.rx), None);
     assert!(
@@ -449,13 +472,14 @@ async fn a_close_without_a_value_is_retried_on_the_next_subscribe() {
         "the track is retried on the next subscribe"
     );
     cancel.cancel();
+    run.close().await;
 }
 
 async fn resumable_progress(url: &str) -> AnalysisProgress {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, url);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, url).await;
     let rx = owner.subscribe(queue, track_id, source, axis());
     loop {
         time::timeout(Duration::from_secs(2), owner.drive())
@@ -464,6 +488,7 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
         let held = rx.borrow().clone();
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
+            host.close().await;
             return progress;
         }
         assert!(owner.active.is_some(), "the pass published no checkpoint");
@@ -471,9 +496,8 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
 }
 
 #[kithara::test(native, tokio, flash(false))]
-async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    let url = wav_track(directory.path(), 12);
+async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe(long_wav: String) {
+    let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
     let cancel = CancelToken::root();
     let mut run = close_run(&cancel, &url, Some(checkpoint.clone())).await;
@@ -496,12 +520,12 @@ async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe() {
         "the checkpoint is resumed once its commit lands"
     );
     cancel.cancel();
+    run.close().await;
 }
 
 #[kithara::test(native, tokio, flash(false))]
-async fn a_rejected_checkpoint_opens_a_fresh_pass() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    let url = wav_track(directory.path(), 12);
+async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
+    let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
     let cancel = CancelToken::root();
     let mut config = app_config(&cancel, memory_store());
@@ -509,8 +533,8 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass() {
     let (service, _handle) =
         AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
     let mut owner = service.owner;
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, &url);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &url).await;
     let target = target_of(&owner, &source);
     assert!(
         owner
@@ -543,14 +567,15 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass() {
     assert!(held.analysis().is_complete(), "which finishes the track");
     assert!(held.analysis().revision() > checkpoint.analysis().revision());
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn an_entry_is_queued_only_while_it_is_in_line() {
+async fn an_entry_is_queued_only_while_it_is_in_line(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -568,14 +593,15 @@ async fn an_entry_is_queued_only_while_it_is_in_line() {
     assert!(owner.pending.is_empty());
     assert_ne!(owner.entries[0].stage(), Stage::Queued);
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_finished_background_entry_holds_its_value_only_in_the_cache() {
+async fn a_finished_background_entry_holds_its_value_only_in_the_cache(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let target = target_of(&owner, &source);
     owner.warm(&queue, &[track_id], axis());
     let tx = take_over_run(&mut owner, Some(progress(analysis())));
@@ -595,14 +621,15 @@ async fn a_finished_background_entry_holds_its_value_only_in_the_cache() {
         "a deck is served from the cache"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn warm_seeds_nothing_before_the_run_opens() {
+async fn warm_seeds_nothing_before_the_run_opens(tone_mp3: String, rhythm_a_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/track-1.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let complete = snapshot(
         "test-track".into(),
         5,
@@ -614,7 +641,7 @@ async fn warm_seeds_nothing_before_the_run_opens() {
         .cache
         .put(target_of(&owner, &source), progress(complete));
     let _busy_rx = {
-        let (busy, busy_source) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (busy, busy_source) = track(&host, 2, &rhythm_a_mp3).await;
         owner.subscribe(queue.clone(), busy, busy_source, axis())
     };
     take_over_run(&mut owner, None);
@@ -627,16 +654,17 @@ async fn warm_seeds_nothing_before_the_run_opens() {
     );
     assert_eq!(owner.entries[1].stage(), Stage::Queued);
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]
-async fn a_background_warm_keeps_the_holder_of_a_held_entry() {
+async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host_a, queue_a) = queue();
-    let (_host_b, queue_b) = queue();
-    let (track_a, source_a) = track(&queue_a, 1, "file:///tmp/shared.mp3");
-    let (track_b, _) = track(&queue_b, 2, "file:///tmp/shared.mp3");
+    let (host_a, queue_a) = queue_off_named("app-host-a").await;
+    let (host_b, queue_b) = queue_off_named("app-host-b").await;
+    let (track_a, source_a) = track(&host_a, 1, &tone_mp3).await;
+    let (track_b, _) = track(&host_b, 2, &tone_mp3).await;
     let _rx = owner.subscribe(queue_a, track_a, source_a, axis());
 
     owner.warm(&queue_b, &[track_b], axis());
@@ -644,6 +672,8 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry() {
     assert_eq!(owner.entries.len(), 1, "one resource, one entry");
     assert_eq!(owner.entries[0].track_id(), track_a);
     cancel.cancel();
+    host_a.close().await;
+    host_b.close().await;
 }
 
 async fn settle(owner: &mut Owner) {
@@ -655,9 +685,8 @@ async fn settle(owner: &mut Owner) {
 }
 
 #[kithara::test(native, tokio, flash(false))]
-async fn a_fresh_pass_publishes_above_the_seeded_revision() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    let url = wav_track(directory.path(), 2);
+async fn a_fresh_pass_publishes_above_the_seeded_revision(short_wav: String) {
+    let url = short_wav;
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let fingerprint = owner.runner.fingerprint().clone();
@@ -665,8 +694,8 @@ async fn a_fresh_pass_publishes_above_the_seeded_revision() {
         fingerprint.beat().is_some(),
         "fixture needs an artifact to omit"
     );
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, &url);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &url).await;
     let target = target_of(&owner, &source);
     let wanting = snapshot(token_for(target.key()), 3, 1_000, fingerprint, None);
     owner.cache.put(target, progress(wanting));
@@ -683,6 +712,7 @@ async fn a_fresh_pass_publishes_above_the_seeded_revision() {
         held.analysis().revision()
     );
     cancel.cancel();
+    host.close().await;
 }
 
 #[derive(Debug)]
@@ -699,7 +729,7 @@ impl AssetLayout for InvalidLayout {
 }
 
 #[kithara::test(native, tokio)]
-async fn an_invalid_layout_yields_no_analysis() {
+async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
     let layouts = AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
     let store = AppStore::builder(test_pools())
         .backend(StorageBackend::Memory)
@@ -707,8 +737,8 @@ async fn an_invalid_layout_yields_no_analysis() {
         .build();
     let cancel = CancelToken::root();
     let mut owner = owner_in(&cancel, store);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, "file:///tmp/invalid.mp3");
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
 
     let mut rx = owner.subscribe(queue, track_id, source, axis());
 
@@ -716,25 +746,24 @@ async fn an_invalid_layout_yields_no_analysis() {
     assert!(rx.changed().await.is_err(), "and nothing will come");
     assert!(owner.entries.is_empty());
     cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio, flash(false))]
-async fn a_track_shorter_than_its_header_claims_is_done() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    the_source_gave_everything_it_can(&mp3_track(directory.path())).await;
+async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
+    the_source_gave_everything_it_can(&tone_mp3).await;
 }
 
 #[kithara::test(native, tokio, flash(false))]
-async fn a_resampled_track_is_covered_from_its_first_frame() {
-    let directory = tempfile::tempdir().expect("temporary track dir");
-    the_source_gave_everything_it_can(&mp3_track_48k(directory.path())).await;
+async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
+    the_source_gave_everything_it_can(&rhythm_a_mp3).await;
 }
 
 async fn the_source_gave_everything_it_can(url: &str) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
-    let (_host, queue) = queue();
-    let (track_id, source) = track(&queue, 1, url);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, url).await;
 
     let rx = owner.subscribe(queue.clone(), track_id, source.clone(), axis());
     settle(&mut owner).await;
@@ -770,6 +799,7 @@ async fn the_source_gave_everything_it_can(url: &str) {
         "a track the source gave in full is not analysed again"
     );
     cancel.cancel();
+    host.close().await;
 }
 
 const MPEG_FRAME_SAMPLES: u64 = 1152;

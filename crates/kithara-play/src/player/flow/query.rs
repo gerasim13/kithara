@@ -41,11 +41,7 @@ impl<S> PlayerRuntime<S> {
 
     /// Get EQ gain for a band in dB.
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = self.slot()?;
-        self.core
-            .engine
-            .slot_eq(slot_id)
-            .and_then(|eq| eq.gain(band))
+        self.core.engine.eq().and_then(|eq| eq.gain(band))
     }
 
     /// Single coherent read of the active slot's live playback scalars.
@@ -56,6 +52,25 @@ impl<S> PlayerRuntime<S> {
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
         Some(self.core.engine.slot_playback(slot_id)?.snapshot())
+    }
+
+    /// Current playback position in seconds.
+    ///
+    /// The media clock owns the answer once a slot carries the track. Before
+    /// that there is no clock to ask, and the only truth about the current
+    /// item's playhead is the position handed over for it to start at: a host
+    /// restoring a stored position reads it back here to draw its progress,
+    /// and answering `None` is what puts the scrubber at the head of a track
+    /// the player has already accepted a seek for.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        if let Some(snapshot) = self.playback_snapshot() {
+            return Some(snapshot.position);
+        }
+        self.core
+            .start_position
+            .lock()
+            .map(|held| held.as_secs_f64())
     }
 
     /// Read the active audio slot's real-time counters for tests and probes.
@@ -122,10 +137,6 @@ impl<S> PlayerRuntime<S> {
             #[expr($.is_some_and(|s| s.playing))]
             #[call(playback_snapshot)]
             pub fn is_playing(&self) -> bool;
-            /// Current playback position in seconds.
-            #[expr(Some($?.position))]
-            #[call(playback_snapshot)]
-            pub fn position_seconds(&self) -> Option<f64>;
             /// Current effective playback rate (`0.0` while paused or without a slot).
             #[expr($.map_or(0.0, |snapshot| snapshot.rate))]
             #[call(playback_snapshot)]

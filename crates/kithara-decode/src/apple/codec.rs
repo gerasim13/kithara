@@ -281,6 +281,33 @@ impl AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
+    fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
+        let input_frames = if let Some(packets) =
+            super::audio_file_demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
+                .checked_div(self.input_bytes_per_packet)
+        {
+            packets
+                .max(1)
+                .checked_mul(self.frames_per_packet.max(1))
+                .ok_or(DecodeError::InvalidData {
+                    detail: "Apple PCM packet frame count overflows",
+                })?
+        } else {
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
+        };
+        let frames = output_frame_capacity(
+            input_frames,
+            self.source_sample_rate,
+            self.spec.sample_rate.get(),
+        )?
+        .max(self.eof_flush_frame_capacity()?);
+        out.ensure_len(output_sample_capacity(
+            frames,
+            usize::from(self.spec.channels),
+        )?)?;
+        Ok(())
+    }
+
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -585,10 +612,8 @@ fn derive_aac_asbd_from_esds(
     Ok(chosen.asbd)
 }
 
-/// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1
-/// ESDS descriptor chain Apple's `AudioFormat` / `AudioConverter`
-/// APIs accept as a magic cookie. Layout documented in
-/// `kithara-decode/CONTEXT.md` "Apple AAC input format (ESDS rationale)".
+/// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1 ESDS descriptor
+/// chain Apple's `AudioFormat` / `AudioConverter` APIs accept as a magic cookie.
 fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     const TOO_LONG: DecodeError = DecodeError::InvalidData {
         detail: "aac: descriptor too long for short-form ESDS size field",
@@ -599,7 +624,7 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
     let esd_body: u8 = esd_body_len.try_into().map_err(|_| TOO_LONG)?;
 
-    // WHY: ES_Descriptor chain; field layout is documented in CONTEXT.md.
+    // WHY: ES_Descriptor chain.
     let header: [u8; 22] = [
         0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,
@@ -831,6 +856,7 @@ mod priming_table_tests {
 #[cfg(test)]
 mod output_rate_tests {
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::unit_fixtures::aac_init;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -850,17 +876,8 @@ mod output_rate_tests {
         const UPSAMPLE_CAPACITY: u32 = 1116;
     }
 
-    fn read_fixture(name: &str) -> Vec<u8> {
-        let route = format!("/hls/{name}");
-        let resource = kithara_test_fixtures::hls::long_plain()
-            .get(&route)
-            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
-        std::fs::read(resource.path())
-            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
-    }
-
-    fn aac_lc_track() -> TrackInfo {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn aac_lc_track(aac_init: &[u8]) -> TrackInfo {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
         let extra_data = init.config.as_ref().to_vec();
         TrackInfo {
@@ -933,8 +950,8 @@ mod output_rate_tests {
     }
 
     #[kithara::test]
-    fn apple_codec_spec_uses_resolved_output_rate() {
-        let track = aac_lc_track();
+    fn apple_codec_spec_uses_resolved_output_rate(aac_init: Vec<u8>) {
+        let track = aac_lc_track(&aac_init);
         let target_rate = if track.sample_rate == Consts::ALT_RATE {
             Consts::SOURCE_RATE
         } else {
@@ -955,6 +972,7 @@ mod aac_lc_decode_tests {
     use kithara_bufpool::PoolRegion;
     use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
     use kithara_test_utils::kithara;
 
     use super::{AppleCodec, ceil_resampled_frames, output_frame_capacity};
@@ -964,15 +982,6 @@ mod aac_lc_decode_tests {
         fmp4::parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
         test_pools::{TestPools, pools},
     };
-
-    fn read_fixture(name: &str) -> Vec<u8> {
-        let route = format!("/hls/{name}");
-        let resource = kithara_test_fixtures::hls::long_plain()
-            .get(&route)
-            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
-        std::fs::read(resource.path())
-            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
-    }
 
     struct Consts;
     impl Consts {
@@ -1047,13 +1056,13 @@ mod aac_lc_decode_tests {
     /// The module already lives under the `apple` + macOS/iOS gate, so no
     /// per-item `cfg` is needed.
     #[kithara::test]
-    fn apple_aac_lc_decode_produces_finite_pcm() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn apple_aac_lc_decode_produces_finite_pcm(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 
-        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let seg = aac_segment;
         let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
             .expect("BUG: parse segment frames")
             .iter()
@@ -1081,8 +1090,11 @@ mod aac_lc_decode_tests {
     }
 
     #[kithara::test]
-    fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames(
+        aac_init: Vec<u8>,
+        aac_segment: Vec<u8>,
+    ) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
@@ -1092,7 +1104,7 @@ mod aac_lc_decode_tests {
             "fixture sample rate must differ from target rate"
         );
 
-        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let seg = aac_segment;
         let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
             .expect("BUG: parse segment frames")
             .iter()
@@ -1151,8 +1163,11 @@ mod aac_lc_decode_tests {
     }
 
     #[kithara::test]
-    fn apple_aac_lc_src_eof_flush_total_output_within_one_frame() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn apple_aac_lc_src_eof_flush_total_output_within_one_frame(
+        aac_init: Vec<u8>,
+        aac_segment: Vec<u8>,
+    ) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
@@ -1162,7 +1177,7 @@ mod aac_lc_decode_tests {
             "fixture sample rate must differ from target rate"
         );
 
-        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let seg = aac_segment;
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 
@@ -1200,13 +1215,16 @@ mod aac_lc_decode_tests {
     }
 
     #[kithara::test]
-    fn apple_aac_lc_passthrough_eof_drain_preserves_length() {
-        let init_bytes = read_fixture("init-slq-a1.mp4");
+    fn apple_aac_lc_passthrough_eof_drain_preserves_length(
+        aac_init: Vec<u8>,
+        aac_segment: Vec<u8>,
+    ) {
+        let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 
-        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let seg = aac_segment;
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 

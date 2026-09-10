@@ -132,6 +132,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{click_silence_4s, clicks_120_4s};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -150,8 +151,8 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn clicks_raise_peaks_where_the_clicks_are() {
-        let pcm = clicks::track(4.0, 0.5);
+    fn clicks_raise_peaks_where_the_clicks_are(clicks_120_4s: Vec<f32>) {
+        let pcm = clicks_120_4s;
         let curve = Novelty::new(pools())
             .expect("a fresh region has room for the window")
             .curve(&pcm)
@@ -182,10 +183,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn silence_is_flat() {
+    fn silence_is_flat(click_silence_4s: Vec<f32>) {
         let curve = Novelty::new(pools())
             .expect("a fresh region has room for the window")
-            .curve(&clicks::silence(4.0))
+            .curve(&click_silence_4s)
             .expect("the curve fits the region");
         assert!(!curve.is_empty(), "silence still yields a curve");
         assert!(

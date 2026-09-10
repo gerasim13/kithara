@@ -72,7 +72,16 @@ dev = []
 test = ["kithara/probe", "dep:cpal"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["assets", "queue"] }
+kithara = { workspace = true, default-features = false, features = [
+    "assets",
+    "bufpool",
+    "events",
+    "platform",
+    "play",
+    "queue",
+    "stream",
+    "test-utils",
+] }
 
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -82,6 +91,7 @@ kithara = { workspace = true, default-features = false, features = ["assets", "q
 # the web-audio backend in the wasm32 target block.
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+num-traits = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -107,8 +117,11 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
-    "backend-web-audio",
+    "analysis-waveform",
+    "audio",
+    "beat-dsp",
     "hls",
+    "host",
     "resample-rubato",
     "symphonia",
     "webcodecs",
@@ -123,9 +136,7 @@ kithara = { workspace = true, default-features = false, features = [
 kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
-console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
-num-traits = { workspace = true }
 # Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
 # runtime same-thread assertion) so the JS-backed observer impls satisfy the
 # `core::observer` traits' real `Send + Sync` supertraits on wasm.
@@ -147,7 +158,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["net", "probe"] }
+kithara = { workspace = true, features = ["net", "probe", "signal"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }

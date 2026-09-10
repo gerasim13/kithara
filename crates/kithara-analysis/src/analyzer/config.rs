@@ -5,7 +5,7 @@ use bon::Builder;
 use kithara_beat::{BeatConfig, BeatConfigPatch};
 #[cfg(feature = "beat-dsp")]
 use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
 struct Consts;

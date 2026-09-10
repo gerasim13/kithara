@@ -76,6 +76,15 @@ where
         !self.runtime.is_closed() && self.runtime.is_playing()
     }
 
+    /// Register deck controls without starting the output stream.
+    ///
+    /// # Errors
+    /// Returns a registration or response geometry error.
+    pub fn prepare(&self) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.core.engine.prepare())
+    }
+
     /// Pause playback unless the owning player is closed.
     pub fn pause(&self) {
         self.command(PlayerRuntime::pause);

@@ -11,8 +11,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{GroupState, player::PlayerMember};
-use kithara_test_utils::kithara;
+use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
 use tracing::{debug, warn};
 
 use super::{
@@ -26,12 +25,11 @@ use super::{
 use crate::error::PlayError;
 
 pub(crate) struct SessionClient<S> {
+    root_view: RootView,
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
 }
 
 impl<S> SessionClient<S> {
-    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
-    #[kithara::allow_block]
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
@@ -52,6 +50,15 @@ impl<S> SessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
+        }
+    }
+
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
@@ -132,6 +139,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
+    let client_view = root_view.clone();
     spawn_named(thread_name, move || {
         engine_thread::<B, S>(
             cmd_rx,
@@ -143,6 +151,7 @@ where
         );
     });
     Arc::new(SessionClient {
+        root_view: client_view,
         cmd_tx: Mutex::new(cmd_tx),
     })
 }

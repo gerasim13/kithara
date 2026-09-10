@@ -36,6 +36,7 @@ pub(crate) fn tick<T: StreamType>(
         ctx.playhead.set_duration(Some(duration));
     }
     let epoch = ctx.seek.epoch();
+    let mut decoded = false;
     loop {
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
@@ -76,9 +77,16 @@ pub(crate) fn tick<T: StreamType>(
             }
             return DecodeAction::Eof;
         }
+        if decoded {
+            return DecodeAction::Progress;
+        }
+        decoded = true;
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
+            }
+            Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
+                return DecodeAction::Progress;
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 return DecodeAction::Pending(WaitingReason::Waiting);

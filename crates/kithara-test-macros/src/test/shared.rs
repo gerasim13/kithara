@@ -11,7 +11,9 @@ use super::parse::TestArgs;
 
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     if args.is_serial {
-        quote! { #[serial_test::serial] }
+        quote! {
+            #[::kithara_test_utils::serial_test::serial(crate = ::kithara_test_utils::serial_test)]
+        }
     } else {
         quote! {}
     }

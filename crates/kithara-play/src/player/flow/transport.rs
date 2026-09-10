@@ -5,8 +5,6 @@ use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
-#[cfg(test)]
-use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{PlayerStatus, TrackId},
@@ -39,6 +37,19 @@ where
         }
     }
 
+    /// Place the freshly-loaded track at the position handed over before it
+    /// existed. Must follow [`Self::start_playback`]: a fade-in re-bases a
+    /// track that is past its head, which would undo the seek.
+    fn apply_start_position(&self) {
+        let Some(target) = self.core.start_position.lock().take() else {
+            return;
+        };
+        let seconds = target.as_secs_f64();
+        if let Err(e) = self.seek_seconds(seconds) {
+            warn!(?e, seconds, "start position rejected by the loaded track");
+        }
+    }
+
     /// Ensure the audio engine is started.
     pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
         if self.core.engine.is_running() {
@@ -64,6 +75,7 @@ where
         };
         self.publish_current_track_snapshot(duration_seconds);
         self.start_playback(item_id);
+        self.apply_start_position();
         Ok(true)
     }
 
@@ -120,17 +132,31 @@ where
     /// thread can render a block off the rebased source in that window and
     /// republish a shorter `PlaybackShared::duration`, turning an in-range
     /// target into a spurious `PastEof`.
+    ///
+    /// A seek that arrives before the player holds a slot is kept as the
+    /// current item's start position and applied by the load that starts it,
+    /// so a position handed over at queue-seeding time is where playback
+    /// begins.
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+        let target_secs = seconds.max(0.0);
+        let target = Duration::from_secs_f64(target_secs);
+
         let Some(slot_id) = self.slot() else {
-            return Err(PlayError::NotReady);
+            // No slot means no processor to carry the re-base, and refusing
+            // here drops a real target: a host restores its stored position
+            // while seeding the queue. Keep it — the load that starts the
+            // current item places the track there instead of at its head.
+            *self.core.start_position.lock() = Some(target);
+            debug!(target_secs, "seek held until a track is loaded");
+            return Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            });
         };
 
         let Some(playback) = self.core.engine.slot_playback(slot_id) else {
             return Err(PlayError::SlotNotFound(slot_id));
         };
-
-        let target_secs = seconds.max(0.0);
-        let target = Duration::from_secs_f64(target_secs);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,
@@ -245,77 +271,5 @@ where
 
     pub(crate) fn start_playback(&self, item_id: TrackId) {
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::{
-        PlayWorker, PlayWorkerConfig,
-        player::PlayerConfig,
-        session::testing,
-        test_pools::{TestPools, pools},
-    };
-
-    fn player() -> PlayerImpl<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .session(testing::test_session())
-                .build(),
-        )
-    }
-
-    #[kithara::test]
-    fn seek_seconds_without_slot_returns_not_ready() {
-        let player = player();
-        let err = player.seek_seconds(1.0).expect_err("must error");
-        assert!(matches!(err, PlayError::NotReady));
-    }
-
-    #[kithara::test]
-    fn select_item_out_of_range_returns_typed_error() {
-        let player = player();
-        let err = player
-            .select_item_with_crossfade(
-                5,
-                SelectTransition {
-                    autoplay: false,
-                    crossfade_seconds: 0.0,
-                },
-            )
-            .expect_err("must error");
-        assert!(matches!(
-            err,
-            PlayError::IndexOutOfRange { index: 5, len: 0 }
-        ));
-    }
-
-    /// `enqueue_to_processor` takes the resource out of the slot, so a
-    /// select against an emptied (consumed) slot has nothing to load: it
-    /// must fail loudly instead of moving the playlist current index / announcing
-    /// `CurrentItemChanged` while the old audio keeps playing.
-    #[kithara::test]
-    fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-        let player = player();
-        player.reserve_slots(2);
-        let result = player.select_item_with_crossfade(
-            1,
-            SelectTransition {
-                autoplay: false,
-                crossfade_seconds: 0.0,
-            },
-        );
-        assert!(result.is_err(), "selecting an emptied slot must fail");
-        assert_eq!(
-            player.current_index(),
-            0,
-            "bookkeeping must not move on a failed select"
-        );
     }
 }

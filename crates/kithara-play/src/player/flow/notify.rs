@@ -313,12 +313,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig, mock,
         player::{
             PlayerConfig, PlayerImpl,
             state::{PendingNext, PendingNextState},
         },
-        session::testing,
         test_pools::{TestPools, pools},
     };
 
@@ -335,9 +334,9 @@ mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker)
-                .session(testing::test_session())
+                .session(mock::session())
                 .build(),
         );
         player

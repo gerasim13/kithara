@@ -173,12 +173,15 @@ pub(crate) fn drain_filtered_frames(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{encode_partial_i16, encode_scale_i16};
+    use kithara_test_utils::kithara;
+
     use super::pump_pcm_samples;
     use crate::{test_pcm::TestPcm, test_pools};
 
-    #[test]
-    fn i16_input_scales_onto_the_full_scale_f32_range() {
-        let pcm = TestPcm::from_samples(&[i16::MIN, -16_384, 0, 16_384, i16::MAX], 48_000, 1);
+    #[kithara::test(native, flash(false))]
+    fn i16_input_scales_onto_the_full_scale_f32_range(encode_scale_i16: &'static [u8]) {
+        let pcm = TestPcm::from_bytes(encode_scale_i16.to_vec(), 48_000, 1);
 
         let mut samples = Vec::new();
         pump_pcm_samples(&pcm, &test_pools::pools(), 2, |chunk| {
@@ -190,9 +193,9 @@ mod tests {
         assert_eq!(samples, [-1.0, -0.5, 0.0, 0.5, 32_767.0 / 32_768.0]);
     }
 
-    #[test]
-    fn an_incomplete_trailing_frame_is_dropped_at_eof() {
-        let pcm = TestPcm::from_bytes(vec![0x00, 0x40, 0x00, 0x40, 0x11], 48_000, 2);
+    #[kithara::test(native, flash(false))]
+    fn an_incomplete_trailing_frame_is_dropped_at_eof(encode_partial_i16: &'static [u8]) {
+        let pcm = TestPcm::from_bytes(encode_partial_i16.to_vec(), 48_000, 2);
 
         let mut samples = Vec::new();
         pump_pcm_samples(&pcm, &test_pools::pools(), 1, |chunk| {

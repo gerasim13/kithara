@@ -3,7 +3,6 @@ use std::num::NonZeroU32;
 use firewheel::{
     dsp::{
         fade::FadeCurve,
-        filter::smoothing_filter::DEFAULT_SETTLE_EPSILON,
         mix::{Mix, MixDSP},
     },
     node::ProcBuffers,
@@ -57,8 +56,6 @@ pub(crate) struct RenderPass {
 impl RenderPass {
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
 
-    const GATE_SMOOTH_SECONDS: f32 = 0.005;
-
     const MIN_STEREO: usize = 2;
 
     const SCRATCH_BUF_COUNT: usize = 6;
@@ -69,6 +66,7 @@ impl RenderPass {
         stretch: Arc<StretchControls>,
         smoothing: SmootherConfig,
         grid: Output<DeckGrid>,
+        gate_smoothing: SmootherConfig,
     ) -> Self
     where
         S: HasPool<f32>,
@@ -83,10 +81,7 @@ impl RenderPass {
             gate: MixDSP::new(
                 Mix::FULLY_WET,
                 Self::GATE_CURVE,
-                SmootherConfig {
-                    smooth_seconds: Self::GATE_SMOOTH_SECONDS,
-                    settle_epsilon: DEFAULT_SETTLE_EPSILON,
-                },
+                gate_smoothing,
                 shape.sample_rate,
             ),
         };

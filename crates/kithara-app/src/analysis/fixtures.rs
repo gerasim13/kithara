@@ -1,6 +1,6 @@
 use std::{
+    convert::Infallible,
     num::{NonZeroU32, NonZeroUsize},
-    path::Path,
 };
 
 use kithara::{
@@ -27,8 +27,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
-use kithara_test_fixtures::assets;
-use num_traits::cast::AsPrimitive;
+use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::off_thread::OffThread;
+use url::Url;
 
 use super::{Entry, Request};
 use crate::{
@@ -121,7 +122,8 @@ pub(crate) fn revision_held(rx: &watch::Receiver<Option<AnalysisProgress>>) -> O
 
 pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
-    let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    let mut host =
+        AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
@@ -134,13 +136,36 @@ pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     (host, control)
 }
 
-pub(crate) fn track(queue: &AppQueueControl, id: u64, url: &str) -> (TrackId, AppTrackSource) {
+pub(crate) async fn queue_off() -> (OffThread<(AppHost, AppQueueControl)>, AppQueueControl) {
+    queue_off_named("app-host").await
+}
+
+pub(crate) async fn queue_off_named(
+    name: &'static str,
+) -> (OffThread<(AppHost, AppQueueControl)>, AppQueueControl) {
+    let host = OffThread::spawn(name, || Ok::<_, Infallible>(queue()))
+        .await
+        .expect("app host fixture is infallible");
+    let control = host.call(|(_, control)| control.clone()).await;
+    (host, control)
+}
+
+/// Appends a track from the host owner thread, as the app would.
+pub(crate) async fn track(
+    host: &OffThread<(AppHost, AppQueueControl)>,
+    id: u64,
+    url: &str,
+) -> (TrackId, AppTrackSource) {
     let track_id = TrackId::from(id);
-    queue
-        .append_with_id(track_id, url.to_owned())
-        .expect("append test track");
-    let source = queue.track_source(track_id).expect("track has a source");
-    (track_id, source)
+    let url = url.to_owned();
+    host.call(move |(_, queue)| {
+        queue
+            .append_with_id(track_id, url)
+            .expect("append test track");
+        let source = queue.track_source(track_id).expect("track has a source");
+        (track_id, source)
+    })
+    .await
 }
 
 pub(crate) fn memory_store() -> AppStore {
@@ -187,45 +212,37 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
     .expect("persistence fixture starts")
 }
 
-pub(crate) fn mp3_track(directory: &Path) -> String {
-    let path = directory.join("track.mp3");
-    std::fs::write(&path, assets::sine_mp3_a440_2s().bytes()).expect("fixture track is written");
-    format!("file://{}", path.display())
+fn asset_url(asset: Asset) -> String {
+    let path = asset.path().expect("fixture is stored on disk");
+    assert!(path.is_file(), "fixture file exists: {}", path.display());
+    Url::from_file_path(path)
+        .expect("fixture path is absolute")
+        .into()
 }
 
-pub(crate) fn mp3_track_48k(directory: &Path) -> String {
-    let path = directory.join("track-48k.mp3");
-    std::fs::write(&path, assets::rhythm_mp3_deck_a_120bpm_48k().bytes())
-        .expect("fixture track is written");
-    format!("file://{}", path.display())
+#[kithara::fixture]
+pub(crate) fn tone_mp3() -> String {
+    asset_url(assets::sine_mp3_a440_2s())
 }
 
-pub(crate) fn wav_track(directory: &Path, seconds: u32) -> String {
-    let path = directory.join("track.wav");
-    let rate = axis().get();
-    let frames = rate * seconds;
-    let data_len = frames * 4;
-    let mut bytes = Vec::with_capacity(44 + data_len as usize);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&2u16.to_le_bytes());
-    bytes.extend_from_slice(&rate.to_le_bytes());
-    bytes.extend_from_slice(&(rate * 4).to_le_bytes());
-    bytes.extend_from_slice(&4u16.to_le_bytes());
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    let step = std::f64::consts::TAU * 440.0 / f64::from(rate);
-    for frame in 0..frames {
-        let sample: i16 = ((f64::from(frame) * step).sin() * 16_000.0).as_();
-        bytes.extend_from_slice(&sample.to_le_bytes());
-        bytes.extend_from_slice(&sample.to_le_bytes());
-    }
-    std::fs::write(&path, bytes).expect("fixture track is written");
-    format!("file://{}", path.display())
+#[kithara::fixture]
+pub(crate) fn rhythm_a_mp3() -> String {
+    asset_url(assets::rhythm_mp3_deck_a_120bpm_48k())
+}
+
+#[kithara::fixture]
+pub(crate) fn rhythm_b_mp3() -> String {
+    asset_url(assets::rhythm_mp3_deck_b_120bpm_48k())
+}
+
+#[kithara::fixture]
+pub(crate) fn short_wav() -> String {
+    asset_url(assets::sine_wav_a440_2s())
+}
+
+#[kithara::fixture]
+pub(crate) fn long_wav() -> String {
+    asset_url(assets::sine_wav_a440_12s())
 }
 
 pub(crate) async fn next_subscribe(

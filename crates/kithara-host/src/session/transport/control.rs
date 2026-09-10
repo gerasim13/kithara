@@ -230,6 +230,7 @@ pub(crate) fn prepare_route_restart<B: AudioBackend, S>(
             .ok_or(SessionError::NoContext)?
             .stop_stream();
     }
+    state.publish_root();
     finish_route_restart(state, target)
 }
 

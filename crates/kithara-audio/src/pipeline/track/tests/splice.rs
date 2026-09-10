@@ -436,6 +436,16 @@ fn build_variant_layout(label: &str, variant_index: usize) -> VariantLayout {
     }
 }
 
+#[kithara::fixture]
+fn slq_layout() -> VariantLayout {
+    build_variant_layout("slq", Consts::SLQ_VARIANT)
+}
+
+#[kithara::fixture]
+fn smq_layout() -> VariantLayout {
+    build_variant_layout("smq", Consts::SMQ_VARIANT)
+}
+
 fn media_info(variant: usize) -> MediaInfo {
     let mut info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::AacLc))
@@ -598,12 +608,11 @@ fn segment_end(state: &SpliceState, segment: u32) -> Duration {
 /// splice-continuity contract: RED = audible click on variant switch
 /// (see .docs/plans/2026-07-03-resampler-native-src-design.md, S-Click)
 #[kithara::test(tokio)]
-async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
-    let SpliceFixture { mut source, state } = splice_source(vec![
-        build_variant_layout("slq", Consts::SLQ_VARIANT),
-        build_variant_layout("smq", Consts::SMQ_VARIANT),
-    ])
-    .await;
+async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
+    slq_layout: VariantLayout,
+    smq_layout: VariantLayout,
+) {
+    let SpliceFixture { mut source, state } = splice_source(vec![slq_layout, smq_layout]).await;
     let splice_time = segment_end(&state, Consts::SPLICE_SEGMENT - 1);
     let capture_frames = segment_boundary_frame(&state, Consts::CAPTURE_END_SEGMENT);
     let mut left = Vec::with_capacity(capture_frames);
@@ -673,9 +682,8 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
 }
 
 #[kithara::test(tokio)]
-async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
-    let SpliceFixture { mut source, state } =
-        splice_source(vec![build_variant_layout("slq", Consts::SLQ_VARIANT)]).await;
+async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantLayout) {
+    let SpliceFixture { mut source, state } = splice_source(vec![slq_layout]).await;
     let recreate_after = segment_end(&state, Consts::SPLICE_SEGMENT - 1);
     let capture_frames = segment_boundary_frame(&state, Consts::CAPTURE_END_SEGMENT);
     let mut left = Vec::with_capacity(capture_frames);

@@ -67,7 +67,7 @@ pub(crate) enum PlayerPhaseKind {
 /// `Playing` and `Paused` carry the same `slot`. `Loading` is the transient
 /// state between slot allocation and the first track being driven; `Idle` is
 /// the freshly-constructed state with no slot; `Stopped` follows
-/// `remove_all_items` (cleared queue, slot may still exist).
+/// `remove_all_items` (cleared queue, no slot or track-local state).
 pub(crate) enum PlayerPhase {
     Idle,
     Loading {
@@ -210,20 +210,10 @@ impl PlayerPhase {
     }
 
     pub(crate) fn enter_stopped(&mut self) {
-        let (slot, abr_handle) = match std::mem::replace(self, Self::Idle) {
-            Self::Loading {
-                slot, abr_handle, ..
-            }
-            | Self::Playing {
-                slot, abr_handle, ..
-            }
-            | Self::Paused {
-                slot, abr_handle, ..
-            } => (Some(slot), abr_handle),
-            Self::Stopped { slot, abr_handle } => (slot, abr_handle),
-            Self::Idle => (None, None),
+        *self = Self::Stopped {
+            slot: None,
+            abr_handle: None,
         };
-        *self = Self::Stopped { slot, abr_handle };
     }
 
     const fn is_paused(&self) -> bool {
@@ -310,7 +300,7 @@ impl<S> PlayerRuntime<S> {
         self.publish_time_control_status(TimeControlStatus::Playing, None);
     }
 
-    /// Move the player into `Stopped`, preserving the slot/ABR handle.
+    /// Move the player into `Stopped`, dropping slot and track-local state.
     pub(crate) fn enter_stopped(&self) {
         self.phase.lock().enter_stopped();
         self.publish_time_control_status(TimeControlStatus::Paused, None);
@@ -361,9 +351,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing, test_pools::pools,
-    };
+    use crate::{PlayWorker, PlayWorkerConfig, mock, player::PlayerConfig, test_pools::pools};
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -425,9 +413,9 @@ mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker)
-                .session(testing::test_session())
+                .session(mock::session())
                 .build(),
         );
         assert_eq!(

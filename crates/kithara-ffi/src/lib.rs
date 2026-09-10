@@ -26,7 +26,7 @@ pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
-pub use core::{item, layout, observer, types};
+pub use core::{analysis, item, layout, observer, types};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::{FFI_RUNTIME, Inner, event_bridge};

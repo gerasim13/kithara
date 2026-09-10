@@ -55,11 +55,10 @@ pub struct PlayerTrack {
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
     ///
-    /// The control thread publishes the next epoch before it sends the
-    /// matching `PlayerCmd::Seek`, so a render block that sees a newer
-    /// published epoch is rendering a position the user has already left.
-    /// [`read`](Self::read) uses the gap to refuse natural-EOF finalization
-    /// until the re-base arrives; see the crate `CONTEXT.md`.
+    /// The control thread publishes the next epoch before it sends the matching
+    /// `PlayerCmd::Seek`, so a render block that sees a newer published epoch is
+    /// rendering a position the user has already left. [`read`](Self::read) uses the
+    /// gap to refuse natural-EOF finalization until the re-base arrives.
     pub(super) seek_epoch: u64,
 }
 
@@ -105,14 +104,16 @@ impl PlayerTrack {
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
     pub fn fade_in(&mut self) {
         self.set_state(TrackState::FadingIn);
-        self.fade.fade_in();
+        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.fade.fade_in(sample_rate);
         self.triggers.reset();
     }
 
     /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
     pub fn fade_out(&mut self) {
         self.set_state(TrackState::FadingOut);
-        self.fade.fade_out();
+        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.fade.fade_out(sample_rate);
     }
 
     /// Re-base this track onto a slot seek epoch the processor has applied.
@@ -127,7 +128,8 @@ impl PlayerTrack {
     /// Instantly start playing at full volume.
     pub fn play(&mut self) {
         self.set_state(TrackState::Playing);
-        self.fade.play();
+        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.fade.play(sample_rate);
         self.triggers.reset();
         self.ended_at_eof = false;
     }
@@ -177,13 +179,20 @@ impl PlayerTrack {
     /// Instantly stop (silent, finished state).
     pub fn stop(&mut self) {
         self.set_state(TrackState::Finished);
-        self.fade.stop();
+        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
+        self.fade.stop(sample_rate);
     }
 
-    /// Re-create the `MixDSP` with a new fade duration.
+    /// Apply a new duration to the next fade.
     pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        self.fade
-            .update_duration(fade_duration, sample_rate, self.state.is_leading());
+        self.fade.set_next_duration(fade_duration);
+        self.sample_rate = sample_rate.get();
+    }
+
+    /// Propagate a stream sample-rate change to the resource and fade.
+    pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.resource.set_host_sample_rate(sample_rate);
+        self.fade.update_sample_rate(sample_rate);
         self.sample_rate = sample_rate.get();
     }
 
@@ -218,8 +227,6 @@ impl PlayerTrack {
             /// Apply a playback-rate target directly to this track's Warp controls.
             #[call(apply_playback_rate)]
             pub fn set_playback_rate(&mut self, rate: f32);
-            /// Propagate the host sample rate to the owned resource.
-            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
     }
 }

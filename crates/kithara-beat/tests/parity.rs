@@ -10,8 +10,8 @@ use kithara_test_utils::kithara;
 const SMALL_MIN_F: f64 = 0.99;
 
 #[kithara::test(native, flash(false))]
-fn python_parity_small_model() {
-    let pcm = load_pcm_fixture("beat_test_mono_22050.f32le");
+fn python_parity_small_model(beat_pcm: Vec<f32>) {
+    let pcm = beat_pcm;
     let bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)
@@ -49,4 +49,9 @@ fn python_parity_small_model() {
         "downbeat F-measure {:.4} < {SMALL_MIN_F} @ {WINDOW}s vs golden_small.json",
         downbeats.f_measure
     );
+}
+
+#[kithara::fixture]
+fn beat_pcm() -> Vec<f32> {
+    load_pcm_fixture("beat_test_mono_22050.f32le")
 }

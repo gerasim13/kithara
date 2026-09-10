@@ -161,7 +161,10 @@ impl<S> Host<S> {
     {
         let grid_id = player.id();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(dispatcher))?;
+        player.attach_session(SessionBinding::new(
+            dispatcher,
+            self.requested_sample_rate(),
+        ))?;
         Ok((grid_id, player.control()))
     }
 
@@ -304,7 +307,7 @@ impl<S> Host<S> {
             SyncMemberKind::Group,
             SyncMode::LocalSync,
         );
-        let view = RootView::new(&group);
+        let view = RootView::new(&group, sample_rate);
         Ok(SessionRoot {
             sample_rate,
             group,

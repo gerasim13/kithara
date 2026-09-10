@@ -1,23 +1,30 @@
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::sync::{Mutex, mpsc};
-use kithara_play::{PlayError, SessionDispatcher};
+use kithara_play::{PlayError, SessionDispatcher, SessionSampleRate, StreamShape};
 use kithara_worker::TaskControl;
 
 use super::{OfflineMsg, OfflineSessionError};
 use crate::session::{
     Cmd, HostCmd, HostDispatcher, HostReply, Reply,
     protocol::{HostCmdMsg, HostDispatchError},
+    state::RootView,
 };
 
 pub(crate) struct OfflineSessionClient<S> {
+    root_view: RootView,
     cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
     control: TaskControl,
 }
 
 impl<S> OfflineSessionClient<S> {
-    pub(super) fn new(cmd_tx: mpsc::Sender<OfflineMsg<S>>, control: TaskControl) -> Self {
+    pub(super) fn new(
+        cmd_tx: mpsc::Sender<OfflineMsg<S>>,
+        control: TaskControl,
+        root_view: RootView,
+    ) -> Self {
         Self {
+            root_view,
             control,
             cmd_tx: Mutex::new(cmd_tx),
         }
@@ -83,8 +90,19 @@ impl<S> OfflineSessionClient<S> {
 }
 
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
+    delegate::delegate! {
+        to self.root_view {
+            #[expr(Ok($))]
+            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            #[expr(Ok($))]
+            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
+        }
+    }
+
+    /// Offline render pulls the graph from the session task, an ordinary thread
+    /// that may block and read the clock, so a reader wakes its producer inline.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
+        ConsumerWakeMode::ImmediateOffRt
     }
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {

@@ -9,7 +9,7 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
-    Dispatcher, DispatcherConfig, RayonConfig, TaskConfig, TaskError, TaskHandle, Worker,
+    Dispatcher, DispatcherConfig, OwnedPoolConfig, TaskConfig, TaskError, TaskHandle, Worker,
     WorkerConfig,
 };
 use tracing::warn;
@@ -104,7 +104,7 @@ impl AnalysisWorker {
                     WorkerConfig::new().with_cancel(cancel)
                 })
                 .with_max_compute_tasks(max_compute_tasks)
-                .with_owned_pool(RayonConfig::new(
+                .with_owned_pool(OwnedPoolConfig::new(
                     max_compute_tasks,
                     "kithara-analysis-compute",
                 ));

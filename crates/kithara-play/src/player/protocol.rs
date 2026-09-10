@@ -94,6 +94,9 @@ pub trait PlayerControlSource: Player {
     /// Attaches the resident Player to its canonical session exactly once.
     fn attach_session(&mut self, binding: SessionBinding<Self::Schema>) -> Result<(), PlayError>;
 
+    /// Prepare the attached graph and slot before exposing musical controls.
+    fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
+
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
 
@@ -221,6 +224,10 @@ where
 
     fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.runtime.attach_session(binding)
+    }
+
+    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
+        control.prepare()
     }
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {

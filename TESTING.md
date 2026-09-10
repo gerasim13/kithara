@@ -3,13 +3,13 @@
 How the workspace is tested, what the `flash` virtual clock is for, and an
 honest read on whether it earns its keep. This is a guide, not a contract — the
 authoritative commands live in the `justfile` and `.config/nextest.toml`; the
-per-crate behavior contracts live in each crate's `CONTEXT.md`.
+per-crate behavior contracts live in each crate's wiki page.
 
 ## Running tests
 
 The canonical gate is plain `just test` (the product workspace, all backends,
 `flash` ON, `test-release` profile). Backend features (symphonia / apple /
-android) are activated automatically by `tests/Cargo.toml`, so a single run
+android) are activated automatically by `tests/crates/integration/Cargo.toml`, so a single run
 exercises every compiled-in decoder.
 
 ```sh
@@ -83,24 +83,16 @@ the full suite but passes alone is load-correlated, not deterministic.
 - `ci` — CI tuning.
 - `fast` — quick local iteration.
 - `stress` — for the stress lanes (`--stress-count N` / `--stress-duration`).
-- `cold` — `default` plus a setup script that recreates a separate cold root
-  and exports it as `KITHARA_FIXTURE_CACHE` without touching the default cache.
 
-### Fixture cache (L2)
+### Build-time audio fixtures
 
-Encode/mux fixtures are expensive to regenerate, so an on-disk cache is **on by
-default** (unset `KITHARA_FIXTURE_CACHE` ⇒ a persistent default dir; see
-`tests/src/fixture_cache.rs`). The opt-in `cold` profile gives an isolated,
-freshly recreated per-run cache without touching that persistent default.
+`kithara-test-fixtures` generates audio inputs during the build. Tests receive
+prepared values through `#[kithara::fixture]` parameters; they do not generate
+or encode their input audio at runtime.
 
-Whichever root is in effect, the build fingerprint is appended to it, so an
-encoder change lands in a fresh sub-directory instead of reusing bytes the
-previous encoder produced. `just test fixture-cache path` prints the roots and
-`just test fixture-cache clear` drops them; the next run then re-encodes every
-fixture it touches, which costs a full suite roughly +64% wall time.
-
-Generated fixtures and test logs must stay a reasonable size — `src/` is
-production code, large fixtures belong under `tests/`.
+Set `KITHARA_FIXTURE_CACHE` before building to select the asset store. For a
+cold build, point it at an empty, separate directory. Changing the variable
+only when launching an already-built test binary cannot change its manifest.
 
 ## Test attributes (`kithara-test-macros`)
 
@@ -112,7 +104,7 @@ production code, large fixtures belong under `tests/`.
   spawns (sync: an RAII guard; async: a per-poll combinator). A no-op when the
   `flash` feature is off. Used to mark the few production async helpers whose
   virtual `sleep` must participate in the sim (see the cancel/flash contracts in
-  `kithara-platform/CONTEXT.md`).
+  [kithara-platform contracts](https://github.com/zvuk/kithara/wiki/kithara-platform)).
 - `#[kithara::hang_watchdog]` — wraps a function with a `HangDetector`.
 - `#[kithara::fixture]`, `#[kithara::mock]`, `#[kithara::probe]` — rstest /
   unimock / USDT replacements gated to `cfg(any(test, feature = …))` so they are

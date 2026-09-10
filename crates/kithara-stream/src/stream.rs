@@ -16,6 +16,7 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
@@ -483,6 +484,9 @@ impl<T: StreamType> Stream<T> {
                 ReadOutcome::Eof => {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
+                ReadOutcome::Pending(PendingReason::Retry) if matches!(wait, WaitMode::Probe) => {
+                    return Ok(StreamReadOutcome::Pending(PendingReason::Retry));
+                }
                 ReadOutcome::Pending(PendingReason::Retry) => {
                     // WHY: Resource evicted between `wait_range` (Ready) and `read_at`: re-acquire on the next loop. This is active progress, not a
                     // wait, so re-loop tightly - the reader stays counted and keeps the virtual clock pinned until it re-acquires.
@@ -717,6 +721,13 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
+            debug!(
+                current,
+                len,
+                new_pos,
+                ?pos,
+                "refusing a seek past the published end of the stream"
+            );
             self.source.set_position(current);
             return Err(IoError::new(
                 ErrorKind::InvalidInput,
@@ -754,6 +765,7 @@ mod tests {
     /// the wait-outcome script, not the read script.
     #[derive(Clone, Copy)]
     enum ScriptRead {
+        Retry,
         Data(usize),
         Eof,
     }
@@ -896,6 +908,7 @@ mod tests {
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
+                ScriptRead::Retry => Ok(ReadOutcome::Pending(PendingReason::Retry)),
                 ScriptRead::Eof => Ok(ReadOutcome::Eof),
                 ScriptRead::Data(n) => {
                     let Ok(start) = usize::try_from(offset) else {
@@ -1087,6 +1100,29 @@ mod tests {
             let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
+    }
+
+    #[kithara::test]
+    fn probe_read_yields_retry_before_consuming_more_source_steps() {
+        let source = ScriptSource::new(
+            Arc::new(SeekState::new()),
+            [WaitOutcome::Ready, WaitOutcome::Ready],
+            [ScriptRead::Retry, ScriptRead::Data(4)],
+            vec![1, 2, 3, 4],
+        );
+        let mut stream = Stream::<DummyType> { source };
+        let mut out = [0; 4];
+        assert!(matches!(
+            stream.try_read(&mut out),
+            Ok(StreamReadOutcome::Pending(PendingReason::Retry))
+        ));
+        assert_eq!(stream.source.position(), 0);
+        assert_eq!(stream.source.reads.len(), 1);
+        assert!(matches!(
+            stream.try_read(&mut out),
+            Ok(StreamReadOutcome::Bytes { .. })
+        ));
+        assert_eq!(out, [1, 2, 3, 4]);
     }
 
     #[kithara::test]

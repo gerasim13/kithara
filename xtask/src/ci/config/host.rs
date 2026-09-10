@@ -112,6 +112,9 @@ pub(crate) struct CiHost {
     pub(crate) removable_roots: Vec<String>,
     /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
     pub(crate) sccache_size: String,
+    /// A mode-0600 file with the scoped S3 settings real jobs inherit.
+    #[serde(default)]
+    pub(crate) sccache_s3_env_file: Option<PathBuf>,
     pub(crate) soft_cleanup_bytes: u64,
     pub(crate) sync_uid: u32,
     pub(crate) sync_user: String,
@@ -448,8 +451,9 @@ fn default_removable_roots() -> Vec<String> {
 
 /// Cleanup takes whole any cache directory this list does not name, so a
 /// namespace that has an owner belongs here even when nothing writes to it for
-/// a week. `target-slots` holds every Linux job's `CARGO_TARGET_DIR` and is
-/// owned by the build-cache budget, which evicts per slot.
+/// a week. `target-slots` holds every GitLab job's persistent
+/// `CARGO_TARGET_DIR` and is owned by the build-cache budget, which evicts per
+/// slot.
 ///
 /// The two code-owned names are spelled once, in
 /// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] and [`TARGET_SLOT_CACHE_NAMESPACE`], so a

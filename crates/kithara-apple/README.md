@@ -21,3 +21,7 @@ Higher-level crates use its typed wrappers or re-exported Apple framework types
 instead of declaring local Apple FFI structs, externs, or binding dependencies.
 Codec policy remains in `kithara-decode`; resampler algorithms remain in
 `kithara-resampler`; HTTP semantics remain in `kithara-net`.
+
+## Integration
+
+[Crate contracts](https://github.com/zvuk/kithara/wiki/kithara-apple).

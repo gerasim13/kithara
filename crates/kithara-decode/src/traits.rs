@@ -40,7 +40,7 @@ pub enum InputReadOutcome {
 /// the requested target itself unless it coincides). `PastEof` carries
 /// the decoder's known total duration so the caller can park at EOF
 /// without rounding.
-// WHY: not #[non_exhaustive] — cross-crate mock (`tests/src/decode_mock.rs`) builds variants by named fields (AGENTS.md "small, obviously stable exception").
+// WHY: not #[non_exhaustive] — cross-crate mock (`tests/crates/integration/src/decode_mock.rs`) builds variants by named fields (AGENTS.md "small, obviously stable exception").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
     /// Decoder is now parked at `landed_at` / `landed_frame` /
@@ -249,6 +249,21 @@ pub trait Decoder: Send + 'static {
     ///
     /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome>;
+
+    /// Prepare input and storage before entering a checked decode quantum.
+    ///
+    /// Codec initialization may decode and retain the first outcome after
+    /// construction or seek. Repeated preparation must preserve that outcome
+    /// until the following decode call delivers it, including any failure.
+    fn prepare_next_chunk(&mut self) {}
+
+    /// Decode with storage prepared by [`Self::prepare_next_chunk`].
+    ///
+    /// # Errors
+    /// Returns a preparation or decoding error.
+    fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        self.next_chunk()
+    }
 
     /// Seek to a time position.
     ///

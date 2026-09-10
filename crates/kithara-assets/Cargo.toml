@@ -24,8 +24,8 @@ tls-native = ["kithara-storage/tls-native"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-derive = { workspace = true }
 kithara-events = { workspace = true, features = ["asset"] }
-kithara-macros = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-macros = { workspace = true }

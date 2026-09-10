@@ -1,0 +1,705 @@
+#![cfg(not(target_arch = "wasm32"))]
+#![forbid(unsafe_code)]
+
+use kithara::{
+    assets::AssetStore,
+    decode::DecoderBackend,
+    events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    host::HostConfig,
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, timeout},
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
+    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    fixture_protocol::EncryptionRequest,
+    kithara,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
+    temp_dir,
+    waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
+};
+use kithara_test_fixtures::SignalAsset;
+use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
+
+#[derive(Clone, Copy, Debug)]
+enum LocalSource {
+    Mp3,
+    HlsAac,
+    HlsAacAes128,
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        write!(&mut s, "{b:02x}").expect("hex write");
+    }
+    s
+}
+
+async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url {
+    match kind {
+        LocalSource::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        LocalSource::HlsAac => {
+            let builder = HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2);
+            helper
+                .create_hls(builder)
+                .await
+                .expect("create local plain HLS fixture")
+                .master_url()
+        }
+        LocalSource::HlsAacAes128 => {
+            let key: &[u8] = b"0123456789abcdef";
+            let iv: [u8; 16] = [0u8; 16];
+            let builder = HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2)
+                .encryption(EncryptionRequest {
+                    key_hex: hex_encode(key),
+                    iv_hex: Some(hex_encode(&iv)),
+                });
+            helper
+                .create_hls(builder)
+                .await
+                .expect("create local encrypted HLS fixture")
+                .master_url()
+        }
+    }
+}
+
+/// Drain `rx` non-blockingly and return the most recent sink-truth
+/// `PlaybackProgress` position seen (seconds), or `None` if none is
+/// buffered. Reads an event-sourced position WITHOUT consuming virtual
+/// time — the caller brackets it around a body-level (virtualized)
+/// `time::sleep`. Deliberately does NOT fall back to the tick cache: the
+/// REAL-clock background tick loop refreshes that cache, so it goes stale
+/// once an event-driven wait collapses real time. Callers decide what an
+/// empty buffer means (a live-playback window waits for the next event; a
+/// PAUSE window — where progress is silent by design — reads the frozen
+/// `Queue::position_seconds()` explicitly).
+fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
+    let mut latest: Option<f64> = None;
+    loop {
+        match rx.try_recv().map(|env| env.event) {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                latest = Some(position_ms as f64 / 1000.0);
+            }
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+        }
+    }
+    latest
+}
+
+async fn receive_progress(
+    rx: &mut EventReceiver,
+    mut lagged: impl FnMut() -> Option<f64>,
+) -> Result<f64, String> {
+    loop {
+        match rx.recv().await.map(|env| env.event) {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                return Ok(position_ms as f64 / 1000.0);
+            }
+            Ok(_) => {}
+            Err(RecvError::Lagged(_)) => {
+                if let Some(position) = lagged() {
+                    return Ok(position);
+                }
+            }
+            Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+        }
+    }
+}
+
+/// Block for the next sink-truth `PlaybackProgress` and return its
+/// position (seconds). `recv()` parks on the virtual clock, so the offline
+/// render worker advances and a fresh progress event is emitted; this
+/// anchors a window endpoint to the SAME event clock as `drain_latest_position`
+/// instead of the REAL-clock-gated tick cache. A buffered event already
+/// past is fine — it is still event-sourced and on the render cadence.
+async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> Result<f64, String> {
+    timeout(deadline, receive_progress(rx, || None))
+        .await
+        .map_err(|_| format!("no PlaybackProgress within {deadline:?}"))?
+}
+
+/// Collect `count` playback positions sampled on consecutive sink-truth
+/// `PlaybackProgress` events (real PCM-commit cadence under the virtual
+/// clock), then assert non-decreasing. Replaces a wall-clock sample loop
+/// whose REAL `sleep` would not park the engine. The fast-path seed keeps
+/// the first sample aligned with the current head.
+async fn sample_positions_via_progress(
+    rx: &mut EventReceiver,
+    queue: &QueueControl<TestPools>,
+    count: usize,
+    deadline: Duration,
+) -> Result<Vec<f64>, String> {
+    let mut out = Vec::with_capacity(count);
+    out.push(queue.position_seconds().unwrap_or(0.0));
+    timeout(deadline, async {
+        while out.len() < count {
+            out.push(receive_progress(rx, || Some(queue.position_seconds().unwrap_or(0.0))).await?);
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "only sampled {} of {count} positions in {deadline:?}",
+            out.len()
+        )
+    })??;
+    Ok(out)
+}
+
+fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
+    for w in samples.windows(2) {
+        assert!(
+            w[1] >= w[0] - 0.05,
+            "position regressed [{label}]: {samples:?}"
+        );
+    }
+}
+
+async fn build_queue_with_tick(
+    temp_dir: &TestTempDir,
+) -> (
+    OfflineQueue<TestPools>,
+    Downloader,
+    AssetStore<TestPools>,
+    QueueTicker,
+) {
+    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone()).build();
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
+            .build(),
+    );
+    let queue = OfflineQueue::paced(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+        RENDER_PACE,
+    )
+    .await
+    .expect("create product offline queue");
+    let queue_for_tick = queue.control();
+    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools,
+            CancelToken::never(),
+        ))
+        .build(),
+    );
+    (queue, downloader, store, tick_handle)
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple(local_mp3().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::mp3_android(local_mp3().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
+)]
+#[case::hls_aac_symphonia(
+    local_hls().await,
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_aac_apple(local_hls().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::hls_aac_android(local_hls().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
+)]
+#[case::hls_aes_symphonia(
+    local_encrypted_hls().await,
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_aes_apple(
+        local_encrypted_hls().await,
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::hls_aes_android(
+        local_encrypted_hls().await,
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+async fn local_track_plays_end_to_end(
+    #[case] source: (LocalSource, TestServerHelper, Url),
+    #[case] rng_seed: u64,
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let (kind, _server, url) = source;
+    let label = format!("{kind:?}/{backend:?}");
+
+    let temp = temp_dir();
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .initial_abr_mode(abr)
+        .build();
+    let source = TrackSource::Config(Box::new(cfg));
+
+    // Subscribe before the actions that drive loading / playback so no
+    // status or progress event can slip in before the first `recv`. The
+    // queue bus is the player bus (`Queue::new` clones `player.bus()`),
+    // so audio sink-truth events arrive here too.
+    let mut rx = queue.subscribe();
+
+    let track_id = queue
+        .run(move |q| q.append(source))
+        .await
+        .expect("append local track");
+
+    wait_for_loader_done_event(&mut rx, &queue, track_id, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
+
+    queue
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
+        .expect("select");
+    wait_for_position_event(&mut rx, &queue, 0.5, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|e| panic!("play fail [{label}]: {e}"));
+    let progress = sample_positions_via_progress(&mut rx, &queue, 5, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|e| panic!("sample fail [{label}]: {e}"));
+    assert_monotonic_nondecreasing(&progress, &label);
+
+    let duration = queue
+        .duration_seconds()
+        .expect("duration known after Loaded");
+    let mut rng = Xorshift64::new(rng_seed);
+    for i in 0..3 {
+        let target = duration * rng.range_f64(0.05, 0.95);
+        queue.seek(target).expect("seek");
+        // `before` / `after` come from the sink-truth events (the wait
+        // helpers' return values), NOT the REAL-clock tick cache, which
+        // goes stale once these waits collapse real time.
+        let before =
+            wait_for_position_near_event(&mut rx, &queue, target, 1.0, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{label}]: {e}"));
+        let after = wait_for_position_event(&mut rx, &queue, before + 0.5, Duration::from_secs(5))
+            .await
+            .unwrap_or_else(|e| panic!("seek #{i} hang [{label}]: {e}"));
+        assert!(
+            after - before >= 0.5,
+            "seek #{i} hang [{label}]: {before:.2}→{after:.2}"
+        );
+    }
+
+    // Offline-realtime gain window. Seek to a deterministic early position
+    // first: the random seek loop above can leave the head close to EOF
+    // (`target` reaches `0.95 * duration`), and after natural EOF the
+    // offline player correctly STOPS emitting `PlaybackProgress` — position
+    // can no longer advance, so a window started there would read ~0 gain
+    // through no fault of the render cadence. Anchoring at 25% of duration
+    // guarantees a full 2s of remaining audio for every fixture.
+    let window_anchor = duration * 0.25;
+    queue.seek(window_anchor).expect("seek to window anchor");
+    wait_for_position_near_event(&mut rx, &queue, window_anchor, 1.0, Duration::from_secs(5))
+        .await
+        .unwrap_or_else(|e| panic!("window anchor seek [{label}]: {e}"));
+
+    // Flush any progress buffered while the anchor seek settled so the
+    // start anchor is a genuinely FRESH post-seek event, not a stale frame
+    // from before the seek landed.
+    let _ = drain_latest_position(&mut rx);
+
+    // Both endpoints are built the same way — discard the backlog, block for
+    // a FRESH `PlaybackProgress`, read the cursor beside it — because
+    // `assert_playhead_tracks_renderer` spends its whole slack on the
+    // difference of the two reporting lags, and only identical sourcing makes
+    // that difference cancel.
+    let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
+    let cursor_start = queue.host().position();
+    time::sleep(Duration::from_secs(2)).await;
+    let _ = drain_latest_position(&mut rx);
+    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
+    let cursor_end = queue.host().position();
+    assert_playhead_tracks_renderer(
+        end_pos - start_pos,
+        cursor_end - cursor_start,
+        queue.host().spec(),
+        &label,
+    );
+
+    queue.remove(track_id).expect("remove");
+    tick_handle.stop().await;
+    queue.close().await;
+}
+
+async fn wait_for_queue_event<F>(
+    rx: &mut EventReceiver,
+    mut pred: F,
+    deadline: Duration,
+) -> Option<QueueEvent>
+where
+    F: FnMut(&QueueEvent) -> bool,
+{
+    timeout(deadline, async {
+        loop {
+            match rx.recv().await.map(|env| env.event) {
+                Ok(Event::Queue(ev)) => {
+                    if pred(&ev) {
+                        return Some(ev);
+                    }
+                }
+                Ok(_) => continue,
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
+}
+
+fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {
+    let current = queue.current().map(|entry| (entry.id, entry.status));
+    let statuses: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            let status = queue.track(*id).map_or_else(
+                || "missing".to_string(),
+                |entry| format!("{:?}", entry.status),
+            );
+            format!("{}:{status}", id.as_u64())
+        })
+        .collect();
+    format!(
+        "current={current:?}, player_index={:?}, pos={:?}, dur={:?}, statuses=[{}]",
+        queue.current_index(),
+        queue.position_seconds(),
+        queue.duration_seconds(),
+        statuses.join(", ")
+    )
+}
+
+/// Mirror of `real_playlist::queue_playlist_behavior` against local fixtures.
+///
+/// Five-track playlist (mp3 → hls aac → hls aes → hls aac → mp3) drives
+/// the production pipeline through pause/resume, seek, manual crossfade,
+/// auto-advance and `QueueEnded`. Per-track failures are collected so DRM
+/// or loader regressions surface as a structured panic instead of the
+/// first bad entry killing the whole test.
+///
+/// All waits are event-driven so the test is flash-correct: the wait
+/// helpers `.await` sink-truth bus events (`TrackStatusChanged`,
+/// `PlaybackProgress`, `SeekComplete`, `CurrentTrackChanged`,
+/// `QueueEnded`), which park on the virtual clock AND resolve on real
+/// state — a REAL-clock poll loop in a helper (the macro rewrites only
+/// the test body) would never park the quiescence engine, so the engine
+/// could not advance and playback would never progress. Load-bearing
+/// positions are read from the events themselves, not the tick-cached
+/// `Queue::position_seconds()`, which is refreshed by the REAL-clock
+/// background tick loop and goes stale once an event-driven wait
+/// collapses real time. `wait_for_loader_done` accepts `Loaded |
+/// Consumed` (the loader flips straight to `Consumed` when a
+/// `pending_select` was queued for the same track).
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
+async fn local_queue_playlist_behavior(
+    #[future(awt)] local_playlist: (TestServerHelper, Vec<Url>),
+    #[case] backend: DecoderBackend,
+) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let (_server, urls) = local_playlist;
+
+    let temp = temp_dir();
+    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+
+    queue.set_crossfade_duration(2.0);
+
+    let mut rx = queue.subscribe();
+    let mut ids: Vec<TrackId> = Vec::with_capacity(urls.len());
+    for u in &urls {
+        let cfg =
+            ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .decoder(
+                    kithara::audio::AudioDecoderConfig::builder()
+                        .backend(backend)
+                        .build(),
+                )
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
+        ids.push(
+            queue
+                .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+                .await
+                .expect("append crossfade fixture track"),
+        );
+    }
+
+    queue
+        .run({
+            let arg0 = ids[0];
+            move |q| q.select(arg0, Transition::None)
+        })
+        .await
+        .expect("select first");
+    wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
+    wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(5))
+        .await
+        .expect("first track position");
+
+    queue.pause();
+    // Let the pause take effect on the same (virtual) clock as playback.
+    // Raw `PlaybackProgress` carries no track id, so in a crossfade/preload
+    // playlist the queue-visible pause position must come from the queue
+    // snapshot, not from whichever track emitted the last audio event.
+    time::sleep(Duration::from_secs(1)).await;
+    let before_pause = queue.position_seconds().unwrap_or(0.0);
+    time::sleep(Duration::from_secs(2)).await;
+    let during_pause = queue.position_seconds().unwrap_or(0.0);
+    assert!(
+        (during_pause - before_pause).abs() < 0.5,
+        "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
+    );
+    queue.run(move |q| q.play()).await;
+    let after_resume = wait_for_position_event(
+        &mut rx,
+        &queue,
+        during_pause + 0.01,
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("resume didn't advance position from {during_pause:.2}: {e}"));
+    assert!(
+        after_resume >= during_pause - 0.1,
+        "resume reset position: {during_pause:.2} → {after_resume:.2}"
+    );
+    assert!(
+        after_resume > during_pause,
+        "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
+    );
+
+    let duration_0 = queue.duration_seconds().expect("duration for first track");
+    let seek_target = duration_0 * 0.4;
+    queue.seek(seek_target).expect("seek");
+    wait_for_position_near_event(&mut rx, &queue, seek_target, 1.0, Duration::from_secs(5))
+        .await
+        .expect("seek landed near target");
+
+    wait_for_loader_done_event(&mut rx, &queue, ids[1], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
+    let xf_duration = queue.crossfade_duration();
+    queue
+        .run(move |q| q.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext))
+        .await
+        .expect("advance local-track crossfade");
+    let started = wait_for_queue_event(
+        &mut rx,
+        |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("CrossfadeStarted event");
+    if let QueueEvent::CrossfadeStarted { duration_seconds } = started {
+        assert!(
+            (duration_seconds - xf_duration).abs() < 0.01,
+            "crossfade duration mismatch: event={duration_seconds:.2} vs config={xf_duration:.2}"
+        );
+    }
+    wait_for_queue_event(
+        &mut rx,
+        |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[1]),
+        Duration::from_millis(
+            num_traits::cast::<f64, u64>(f64::from(xf_duration) * 1000.0).unwrap_or(u64::MAX)
+                + 5_000,
+        ),
+    )
+    .await
+    .expect("CurrentTrackChanged to track 1 after crossfade");
+
+    let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
+    for i in 1..urls.len() {
+        let url = urls[i].clone();
+        let result: Result<(), String> =
+            async {
+                wait_for_loader_done_event(&mut rx, &queue, ids[i], Duration::from_secs(30))
+                    .await
+                    .map_err(|e| format!("load: {e}"))?;
+                wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(5))
+                    .await
+                    .map_err(|e| format!("play: {e}"))?;
+
+                if i + 1 < urls.len() {
+                    let dur = queue
+                        .duration_seconds()
+                        .ok_or_else(|| "duration unknown".to_string())?;
+                    let near_end = (dur - f64::from(xf_duration) - 2.0).max(0.0);
+                    queue.seek(near_end).map_err(|e| format!("seek: {e}"))?;
+                    wait_for_queue_event(
+                    &mut rx,
+                    |ev| matches!(
+                        ev,
+                        QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[i + 1]
+                    ),
+                    Duration::from_secs(5),
+                )
+                .await
+                .ok_or_else(|| {
+                    format!(
+                        "timeout on auto-advance; {}",
+                        playlist_snapshot(&queue, &ids)
+                    )
+                })?;
+                }
+                Ok(())
+            }
+            .await;
+        per_track.push((url.to_string(), result));
+    }
+
+    let last_result: Result<(), String> = async {
+        let dur = queue
+            .duration_seconds()
+            .ok_or_else(|| "duration unknown".to_string())?;
+        queue
+            .seek((dur - 3.0).max(0.0))
+            .map_err(|e| format!("seek: {e}"))?;
+        wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(ev, QueueEvent::QueueEnded),
+            Duration::from_secs(5),
+        )
+        .await
+        .ok_or_else(|| format!("timeout on QueueEnded; {}", playlist_snapshot(&queue, &ids)))?;
+        Ok(())
+    }
+    .await;
+
+    let mut fails: Vec<String> = per_track
+        .iter()
+        .filter_map(|(u, r)| r.as_ref().err().map(|e| format!("  - {u}: {e}")))
+        .collect();
+    if let Err(e) = &last_result {
+        fails.push(format!(
+            "  - [last:{}] QueueEnded: {e}",
+            urls[urls.len() - 1]
+        ));
+    }
+    if !fails.is_empty() {
+        panic!(
+            "local_queue_playlist_behavior: {} track(s) failed:\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
+    }
+
+    tick_handle.stop().await;
+    queue.close().await;
+}
+
+#[kithara::fixture]
+async fn local_mp3() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::Mp3, &helper).await;
+    (LocalSource::Mp3, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_encrypted_hls() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::HlsAacAes128, &helper).await;
+    (LocalSource::HlsAacAes128, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_hls() -> (LocalSource, TestServerHelper, Url) {
+    let helper = TestServerHelper::new().await;
+    let url = build_fixture_url(LocalSource::HlsAac, &helper).await;
+    (LocalSource::HlsAac, helper, url)
+}
+
+#[kithara::fixture]
+async fn local_playlist() -> (TestServerHelper, Vec<Url>) {
+    let helper = TestServerHelper::new().await;
+    let kinds = [
+        LocalSource::Mp3,
+        LocalSource::HlsAac,
+        LocalSource::HlsAacAes128,
+        LocalSource::HlsAac,
+        LocalSource::Mp3,
+    ];
+    let mut urls: Vec<Url> = Vec::with_capacity(kinds.len());
+    for &k in &kinds {
+        urls.push(build_fixture_url(k, &helper).await);
+    }
+
+    (helper, urls)
+}

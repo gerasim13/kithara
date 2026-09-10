@@ -2,12 +2,7 @@ mod error;
 mod file;
 mod update;
 
-#[cfg(all(
-    test,
-    not(target_arch = "wasm32"),
-    feature = "analysis-beat",
-    feature = "analysis-waveform"
-))]
+#[cfg(all(test, feature = "analysis-beat", feature = "analysis-waveform"))]
 mod resume_tests;
 #[cfg(test)]
 mod tests;

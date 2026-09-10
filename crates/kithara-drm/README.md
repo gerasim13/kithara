@@ -71,4 +71,4 @@ built. Concrete URL and domain policies live in the composition layer
 (`kithara-play`) and register a `KeyRequestResolver`; this crate does not
 interpret domains or query parameters.
 
-See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-drm) for detailed contracts, invariants, and internals.

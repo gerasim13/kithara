@@ -113,7 +113,7 @@ async fn a_readiness_poll_answers_while_a_construction_read_holds_the_mutex() {
         let mut buf = [0u8; 64];
         reader.read(&mut buf)
     });
-    park.wait_entered();
+    park.wait_entered().await;
 
     assert!(
         !ReadinessGate::new(None).source_is_ready(&shared),

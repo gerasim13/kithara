@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::{
     Ctx,
     common::project::{HealthConfig, ProjectConfig},
+    quality_assessment::lcom,
 };
 
 /// Names the producing tools own. They are contracts with those tools rather
@@ -60,9 +61,26 @@ fn render(artifacts: &Path, config: &ProjectConfig) -> Result<String> {
     out.push_str(&assessment(artifacts)?);
     out.push_str(&health(artifacts, health_report_name(&config.health)?)?);
     out.push_str(&coverage_risk(artifacts, budgets.crap_rows)?);
+    out.push_str(&type_cohesion(
+        artifacts,
+        config.quality.render.summary_rows,
+    )?);
     out.push_str(&architecture(artifacts, budgets.top_contours)?);
     out.push_str(&duplication(artifacts, budgets.similarity_rows)?);
     Ok(out)
+}
+
+fn type_cohesion(artifacts: &Path, rows: usize) -> Result<String> {
+    let Some(assessment) = find(artifacts, &|path| {
+        named(path, "assessment.json") && under(path, Consts::ASSESSMENT_DIRECTORY)
+    })?
+    else {
+        return Ok(missing(
+            "Type cohesion (LCOM4)",
+            "quality-assessment/assessment.json",
+        ));
+    };
+    lcom::render_file(&assessment, rows)
 }
 
 /// The health report is this workspace's own artifact rather than a foreign
@@ -484,6 +502,31 @@ mod tests {
     #[test]
     fn the_default_configuration_carries_similarity_rows() {
         assert!(ProjectConfig::default().ci_report.similarity_rows > 0);
+    }
+
+    #[test]
+    fn consolidated_report_includes_lcom4_and_crap_from_the_same_run() {
+        let temp = tempdir().expect("directory");
+        write(
+            &temp
+                .path()
+                .join("quality-assessment/rev/product-standard/assessment.json"),
+            r#"{
+            "lcom4": {"notes": ["diagnostic only"], "types": [
+                {"name": "demo::Pair", "target": "lib", "location": "src/lib.rs:1", "lcom4": 2,
+                 "groups": [{"methods": ["read"], "fields": ["a"]}, {"methods": ["write"], "fields": ["b"]}]}
+            ]}
+        }"#,
+        );
+        write(
+            &temp.path().join("quality-lab/rev/cargo-crap/report.md"),
+            "| function | CRAP |\n| parse | 12 |\n",
+        );
+        let report = render(temp.path(), &ProjectConfig::default()).expect("report");
+        assert!(report.contains("## Type cohesion (LCOM4)"));
+        assert!(report.contains("demo::Pair"));
+        assert!(report.contains("`read` (a); `write` (b)"));
+        assert!(report.contains("| parse | 12 |"));
     }
 
     #[test]

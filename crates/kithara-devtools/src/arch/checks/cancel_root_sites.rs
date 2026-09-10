@@ -14,6 +14,11 @@ pub(crate) const ID: &str = "cancel_root_sites";
 
 pub(crate) struct CancelRootSites;
 
+pub(super) struct PatternSite {
+    pub(super) location: String,
+    pub(super) pattern: String,
+}
+
 impl Check for CancelRootSites {
     fn id(&self) -> &'static str {
         ID
@@ -21,37 +26,59 @@ impl Check for CancelRootSites {
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.cancel_root_sites;
-        let exempt: BTreeSet<&str> = cfg.exempt_crates.iter().map(String::as_str).collect();
-        let allowed: BTreeSet<&str> = cfg.allowed_files.iter().map(String::as_str).collect();
-        let mut violations = Vec::new();
-
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path);
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if is_test_or_bench_path(&rel_str) {
-                continue;
-            }
-            if rel.file_name().and_then(|f| f.to_str()) == Some("tests.rs") {
-                continue;
-            }
-            if crate_is_exempt(rel, &exempt) || allowed.contains(rel_str.as_str()) {
-                continue;
-            }
-
-            let content = fs::read_to_string(&path)?;
-            for (line_num, pattern) in scan_source(&content, &cfg.patterns) {
-                violations.push(
-                    Violation::deny(
-                        ID,
-                        format!("{rel_str}:{line_num}"),
-                        format!("orphan `{pattern}()` cancel-root minting in production code"),
-                    )
-                    .with_explanation(EXPLANATION),
-                );
-            }
-        }
-        Ok(violations)
+        configured_pattern_sites(ctx, &cfg.patterns, &cfg.allowed_files, &cfg.exempt_crates).map(
+            |sites| {
+                sites
+                    .into_iter()
+                    .map(|site| {
+                        Violation::deny(
+                            ID,
+                            site.location,
+                            format!(
+                                "orphan `{}()` cancel-root minting in production code",
+                                site.pattern
+                            ),
+                        )
+                        .with_explanation(EXPLANATION)
+                    })
+                    .collect()
+            },
+        )
     }
+}
+
+pub(super) fn configured_pattern_sites(
+    ctx: &Context<'_>,
+    patterns: &[String],
+    allowed_files: &[String],
+    exempt_crates: &[String],
+) -> Result<Vec<PatternSite>> {
+    let exempt: BTreeSet<&str> = exempt_crates.iter().map(String::as_str).collect();
+    let allowed: BTreeSet<&str> = allowed_files.iter().map(String::as_str).collect();
+    let mut sites = Vec::new();
+
+    for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+        let rel = relative_to(ctx.workspace_root, &path);
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if is_test_or_bench_path(&rel_str)
+            || rel.file_name().and_then(|file| file.to_str()) == Some("tests.rs")
+            || crate_is_exempt(rel, &exempt)
+            || allowed.contains(rel_str.as_str())
+        {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)?;
+        sites.extend(
+            scan_source(&content, patterns)
+                .into_iter()
+                .map(|(line, pattern)| PatternSite {
+                    location: format!("{rel_str}:{line}"),
+                    pattern,
+                }),
+        );
+    }
+    Ok(sites)
 }
 
 /// Pure core: the (1-based line, matched pattern) of every root-minting call in

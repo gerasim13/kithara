@@ -34,13 +34,11 @@ pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
 /// through the injected typed pool region, which keeps the hot path zero-alloc
 /// once the pool is warm.
 pub(crate) trait FrameCodec: Send + 'static {
-    /// Decode one demuxed frame into `out` (interleaved f32, from the
-    /// shared typed pool region); returns frames written, `0` for a consumed
-    /// packet that produced no PCM (warm-up / backpressure). `pts` is the
-    /// demuxer presentation time (diagnostics only). `packet_desc` carries
-    /// opaque per-packet VBR metadata (Apple MP3/ALAC serialize an
-    /// `AudioStreamPacketDescription`); empty for CBR. See CONTEXT.md
-    /// "Module layout" / `FrameCodec` contract.
+    /// Decode one demuxed frame into `out` (interleaved f32, from the shared typed pool
+    /// region); returns frames written, `0` for a consumed packet that produced no PCM
+    /// (warm-up / backpressure). `pts` is the demuxer presentation time (diagnostics
+    /// only). `packet_desc` carries opaque per-packet VBR metadata (Apple MP3/ALAC
+    /// serialize an `AudioStreamPacketDescription`); empty for CBR.
     ///
     /// # Errors
     ///
@@ -54,6 +52,11 @@ pub(crate) trait FrameCodec: Send + 'static {
         packet_desc: &[u8],
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32>;
+
+    /// Reserve output storage before the decode quantum.
+    fn prepare_output(&self, _out: &mut SampleBuffer) -> DecodeResult<()> {
+        Ok(())
+    }
 
     /// Presentation time of the PCM produced by the most recent non-empty
     /// [`Self::decode_frame`] call. Queue codecs override this when output lags

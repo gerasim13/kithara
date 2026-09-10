@@ -1,0 +1,288 @@
+use std::{
+    env, io,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+pub use kithara::assets::{AssetReader, ReadSide};
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
+        WriteSide,
+    },
+    encode::EncodeConfig,
+    record::{RecordingConfig, RecordingCore},
+};
+use kithara_app::recording::AssetPartSink;
+use serde::Serialize;
+
+use crate::bufpool_ext::{TestPools, pools};
+
+const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
+static ATTEMPT: AtomicU64 = AtomicU64::new(0);
+
+pub type AudioArtifactRecording = RecordingCore<AssetPartSink<TestPools>>;
+
+/// One opt-in disk `AssetStore` scope for related listening artifacts.
+pub struct AudioArtifactSet {
+    channels: u16,
+    sample_rate: u32,
+    scope: AssetScope<TestPools>,
+}
+
+/// One listening artifact per harness: PCM pushed by the render funnel,
+/// markers stamped by control calls, published on drop.
+pub struct AudioArtifactTap {
+    set: AudioArtifactSet,
+    recording: Option<AudioArtifactRecording>,
+    markers: Vec<Marker>,
+    frames: u64,
+    channels: u16,
+}
+
+#[derive(Serialize)]
+struct Marker {
+    frame: u64,
+    label: String,
+}
+
+impl AudioArtifactTap {
+    /// Build a tap only when `KITHARA_AUDIO_ARTIFACT_DIR` is set.
+    pub fn from_env(case: &str, sample_rate: u32, channels: u16) -> io::Result<Option<Self>> {
+        let Some(set) = AudioArtifactSet::from_env(case, sample_rate, channels)? else {
+            return Ok(None);
+        };
+        let recording = set.recording("output", None)?;
+        Ok(Some(Self {
+            set,
+            recording: Some(recording),
+            markers: Vec::new(),
+            frames: 0,
+            channels,
+        }))
+    }
+
+    pub fn push(&mut self, pcm: &[f32]) {
+        if let Some(recording) = self.recording.as_mut() {
+            recording
+                .push(pcm)
+                .unwrap_or_else(|error| panic!("listening tap push: {error}"));
+            self.frames += (pcm.len() / usize::from(self.channels)) as u64;
+        }
+    }
+
+    pub fn mark(&mut self, label: &str) {
+        self.markers.push(Marker {
+            frame: self.frames,
+            label: label.to_owned(),
+        });
+    }
+}
+
+impl Drop for AudioArtifactTap {
+    fn drop(&mut self) {
+        let Some(recording) = self.recording.take() else {
+            return;
+        };
+        let output = match AudioArtifactSet::finish(recording) {
+            Ok(reader) => audio_artifact_path(&reader).ok(),
+            Err(error) => {
+                eprintln!("KITHARA_AUDIO_ARTIFACT output not published: {error}");
+                None
+            }
+        };
+        let manifest = serde_json::json!({
+            "frames": self.frames,
+            "channels": self.channels,
+            "sample_rate": self.set.sample_rate,
+            "markers": self.markers,
+            "output": output,
+        });
+        match self
+            .set
+            .write_manifest(&manifest)
+            .and_then(|reader| audio_artifact_path(&reader))
+        {
+            Ok(path) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest: {}", path.display()),
+            Err(error) => eprintln!("KITHARA_AUDIO_ARTIFACT manifest not published: {error}"),
+        }
+    }
+}
+
+/// Return the running test's path as an artifact label.
+#[must_use]
+pub fn artifact_label() -> String {
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_owned();
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+impl AudioArtifactSet {
+    /// Build an artifact set only when the absolute opt-in directory is set.
+    pub fn from_env(case: &str, sample_rate: u32, channels: u16) -> io::Result<Option<Self>> {
+        let Some(root) = env::var_os(ARTIFACT_DIR_ENV).map(PathBuf::from) else {
+            return Ok(None);
+        };
+        Self::new(&root, case, sample_rate, channels).map(Some)
+    }
+
+    /// Build an artifact set in an explicit absolute directory.
+    pub fn new(root: &Path, case: &str, sample_rate: u32, channels: u16) -> io::Result<Self> {
+        if !root.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{ARTIFACT_DIR_ENV} must be an absolute path"),
+            ));
+        }
+        if sample_rate == 0 || channels == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audio artifact sample rate and channel count must be non-zero",
+            ));
+        }
+        validate_label(case)?;
+        let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+        let source = AssetSource::Local {
+            path: root.join(format!("{case}-{}-{attempt}", std::process::id())),
+        };
+        let store = AssetStore::builder(pools())
+            .backend(StorageBackend::Disk {
+                root: root.to_path_buf(),
+            })
+            .build();
+        let scope = store.scope::<Self>(&source).map_err(io::Error::other)?;
+        Ok(Self {
+            channels,
+            sample_rate,
+            scope,
+        })
+    }
+
+    /// Open one WAV float32 transaction.
+    pub fn recording(
+        &self,
+        label: &str,
+        expected_frames: Option<u64>,
+    ) -> io::Result<AudioArtifactRecording> {
+        validate_label(label)?;
+        let key = self.key(&format!("{label}.wav"))?;
+        let sink = AssetPartSink::acquire(self.scope.store(), &key).map_err(io::Error::other)?;
+        let config = RecordingConfig::builder()
+            .encode(
+                EncodeConfig::builder()
+                    .sample_rate(self.sample_rate)
+                    .channels(self.channels)
+                    .build(),
+            )
+            .build();
+        RecordingCore::new(&config, sink, expected_frames).map_err(io::Error::other)
+    }
+
+    /// Finish and atomically publish one audio artifact.
+    pub fn finish(recording: AudioArtifactRecording) -> io::Result<AssetReader<TestPools>> {
+        recording.finish().map_err(io::Error::other)
+    }
+
+    /// Serialize and atomically publish the set manifest.
+    pub fn write_manifest<T: Serialize>(&self, manifest: &T) -> io::Result<AssetReader<TestPools>> {
+        let bytes = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
+        let key = self.key("manifest.json")?;
+        let writer = match self
+            .scope
+            .store()
+            .acquire_resource(&key, None)
+            .map_err(io::Error::other)?
+        {
+            AcquisitionResult::Pending(writer) => writer,
+            AcquisitionResult::Ready(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "audio artifact manifest is already committed",
+                ));
+            }
+            _ => return Err(io::Error::other("unexpected manifest acquisition phase")),
+        };
+        writer.write_at(0, &bytes).map_err(io::Error::other)?;
+        writer
+            .commit(Some(
+                u64::try_from(bytes.len()).map_err(|_| io::Error::other("manifest too large"))?,
+            ))
+            .map_err(io::Error::other)
+    }
+
+    fn key(&self, name: &str) -> io::Result<kithara::assets::ResourceKey> {
+        self.scope
+            .key(&AssetResource::Named {
+                namespace: "artifacts".to_owned(),
+                name: name.to_owned(),
+            })
+            .map_err(io::Error::other)
+    }
+}
+
+/// Return the absolute disk path of a committed artifact.
+pub fn audio_artifact_path(reader: &AssetReader<TestPools>) -> io::Result<PathBuf> {
+    let path = reader
+        .path()
+        .ok_or_else(|| io::Error::other("disk audio artifact has no path"))?;
+    if !path.is_absolute() {
+        return Err(io::Error::other("audio artifact path is not absolute"));
+    }
+    Ok(path.to_path_buf())
+}
+
+/// Write listening WAV files and a manifest when the artifact directory is set.
+pub fn write_audio_artifact<T: Serialize>(
+    case: &str,
+    sample_rate: u32,
+    channels: u16,
+    audio: &[(&str, &[f32])],
+    manifest: &T,
+) -> io::Result<Option<PathBuf>> {
+    let Some(set) = AudioArtifactSet::from_env(case, sample_rate, channels)? else {
+        return Ok(None);
+    };
+    for (label, samples) in audio {
+        if !samples.len().is_multiple_of(usize::from(channels)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "audio artifact samples must contain complete interleaved frames",
+            ));
+        }
+        let frames = u64::try_from(samples.len() / usize::from(channels))
+            .map_err(|_| io::Error::other("audio artifact frame count overflow"))?;
+        let mut recording = set.recording(label, Some(frames))?;
+        recording.push(samples).map_err(io::Error::other)?;
+        let _ = AudioArtifactSet::finish(recording)?;
+    }
+    let manifest = set.write_manifest(manifest)?;
+    let directory = audio_artifact_path(&manifest)?
+        .parent()
+        .ok_or_else(|| io::Error::other("audio artifact manifest has no parent"))?
+        .to_path_buf();
+    Ok(Some(directory))
+}
+
+fn validate_label(label: &str) -> io::Result<()> {
+    if label.is_empty()
+        || !label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("artifact label must contain only ASCII letters, digits, '-' or '_': {label}"),
+        ));
+    }
+    Ok(())
+}

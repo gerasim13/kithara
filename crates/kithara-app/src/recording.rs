@@ -105,6 +105,7 @@ mod tests {
     use kithara_assets::{AssetResource, AssetSource, AssetStore, ReadSide, StorageBackend};
     use kithara_encode::EncodeConfig;
     use kithara_record::{RecordingConfig, RecordingCore};
+    use kithara_test_fixtures::play_fixtures::recording as recording_pcm;
     use kithara_test_utils::kithara;
 
     use super::AssetPartSink;
@@ -113,7 +114,7 @@ mod tests {
     struct RecordingArtifact;
 
     #[kithara::test]
-    fn recording_core_commits_a_readable_wav_to_memory_assets() {
+    fn recording_core_commits_a_readable_wav_to_memory_assets(recording_pcm: Vec<f32>) {
         let pool = pools::build(&pools::PoolsSection::default())
             .unwrap_or_else(|error| panic!("app pools: {error}"));
         let store = AssetStore::builder(pool)
@@ -145,7 +146,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("recording session: {error}"));
 
         recording
-            .push(&[0.25, -0.25, 0.5, -0.5])
+            .push(&recording_pcm)
             .unwrap_or_else(|error| panic!("record PCM: {error}"));
         let _reader = recording
             .finish()

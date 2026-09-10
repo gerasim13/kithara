@@ -52,17 +52,15 @@ where
         )
     }
 
-    /// Builds the variant's init slot. The slot exists (`Some(Segment::Init)`)
-    /// iff the playlist carries an `#EXT-X-MAP` URL — NOT iff the init's
-    /// byte length is already known (R5). A not-yet-resolved init leaves
-    /// `init_size() == 0` while the URL is present; the init is still a real
-    /// segment that must be fetched (its committed `final_len` sets the real
-    /// size). Keying existence on known size drops such an init, and
-    /// `read_at(0)` then serves segment 0's container where the demuxer
-    /// expects `ftyp` ("`re_mp4`: ftyp not found") or wedges with no progress.
-    /// `None` is the old `VariantInit::NotApplicable`: no `#EXT-X-MAP`, or a
-    /// byte-range-embedded init living in segment 0's byte range. See the crate
-    /// `CONTEXT.md` "Variant init".
+    /// Builds the variant's init slot. The slot exists (`Some(Segment::Init)`) iff the
+    /// playlist carries an `#EXT-X-MAP` URL — NOT iff the init's byte length is already
+    /// known (R5). A not-yet-resolved init leaves `init_size() == 0` while the URL is
+    /// present; the init is still a real segment that must be fetched (its committed
+    /// `final_len` sets the real size). Keying existence on known size drops such an
+    /// init, and `read_at(0)` then serves segment 0's container where the demuxer
+    /// expects `ftyp` ("`re_mp4`: ftyp not found") or wedges with no progress. `None`
+    /// is the old `VariantInit::NotApplicable`: no `#EXT-X-MAP`, or a
+    /// byte-range-embedded init living in segment 0's byte range.
     pub(super) fn build_init_entry(
         playlist_state: &PlaylistState,
         variant_idx: usize,

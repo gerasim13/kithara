@@ -24,6 +24,16 @@ pub(crate) struct KitharaExt {
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
     pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
+    pub(crate) verdict: CiVerdictConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiVerdictConfig {
+    /// Old test ID prefixes mapped to their current names. Test source moves
+    /// change nextest's package and binary prefix without changing the test,
+    /// while the executor's journal necessarily still contains the old ID.
+    pub(crate) id_aliases: BTreeMap<String, String>,
 }
 
 /// A CI lane that is nothing but the work it asks the executor for. Lanes that
@@ -62,6 +72,9 @@ pub(crate) struct CiLaneConfig {
     /// runners on one host buy a check per push that a single Mac mini can
     /// only afford weekly. Empty means both fleets agree.
     pub(crate) kinds_github: Vec<String>,
+    /// A stable GitHub runner label for lanes whose persistent build cache
+    /// must stay on one runner slot. Empty keeps the lane on the shared pool.
+    pub(crate) github_runner: Option<String>,
     pub(crate) timeout_minutes: u32,
     /// Checkout depth. Zero is full history, which a lane comparing against a
     /// base revision needs and a shallow clone does not carry.
@@ -202,6 +215,9 @@ impl CiProjectConfig {
                     "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
                 );
             }
+            if lane.github_runner.as_deref().is_some_and(str::is_empty) {
+                bail!("ext.ci.lanes.{name}.github_runner must not be empty");
+            }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
@@ -255,6 +271,13 @@ impl CiProjectConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         self.validate_lanes()?;
+        for (old, new) in &self.verdict.id_aliases {
+            if old.is_empty() || new.is_empty() || old == new {
+                bail!(
+                    "ext.ci.verdict.id_aliases must map a non-empty old prefix to a different prefix"
+                );
+            }
+        }
         if self.pins.as_os_str().is_empty()
             || self.pins.is_absolute()
             || self
@@ -578,13 +601,13 @@ pub(crate) enum AssetKey {
     Wasm,
 }
 
-/// What a packaging run collects, and whether the built framework has to match
-/// the version the Swift manifest records. Publishing a version asks that
-/// question; taking a snapshot of a commit does not.
+/// What a packaging run collects. Whether the built framework has to match a
+/// version belongs to the pipeline rather than to the profile: one job builds
+/// the same assets for a release someone named a version for and for the
+/// rolling nightly, which names none.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PackageProfile {
-    pub(crate) version_gate: bool,
     pub(crate) assets: Vec<AssetKey>,
 }
 
@@ -714,7 +737,7 @@ merged_asset = "Kithara.xcframework.zip"
     }
 
     #[test]
-    fn a_packaging_profile_names_its_assets_and_gate() {
+    fn a_packaging_profile_names_its_assets() {
         let ctx = ctx_from_config(
             r#"
 [ext.release]
@@ -722,7 +745,6 @@ core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
 
 [ext.release.packages.snapshot]
-version_gate = false
 assets = ["merged"]
 "#,
         );
@@ -730,7 +752,7 @@ assets = ["merged"]
         let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
 
         let profile = ext.release.package("snapshot").expect("snapshot profile");
-        assert!(!profile.version_gate);
+
         assert_eq!(profile.assets, vec![AssetKey::Merged]);
     }
 
@@ -840,7 +862,6 @@ assets = ["mergd"]
         let ctx = ctx_from_config(
             r#"
 [ext.release.packages.release]
-version_gate = true
 assets = ["core", "merged"]
 "#,
         );

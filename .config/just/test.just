@@ -70,7 +70,7 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std=std,panic_abort,core,alloc \
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
-      --features backend-web-audio,wasm-bindgen,symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
+      --features symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
@@ -78,11 +78,33 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-ffi --test web-observer --no-default-features \
       --features wasm
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-worker --lib
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-platform --lib
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-analysis --lib --no-default-features \
+      --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
     if [[ "$suite" == "all" ]]; then
-      # The integration browser tests live in `suite_heavy`. Building the whole
-      # crate for wasm compiles every native suite too, and those reach for
-      # threads, the filesystem, and a local test server the browser cannot
-      # offer. `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
+      # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
       # so both lanes rebuild one identical std. The release-grade test profile
       # is what lets the seek-pressure contract reach its final oracle inside
       # its own ten-second deadline, which stays untouched.
@@ -91,7 +113,15 @@ wasm BROWSER="chrome" SUITE="all":
         --target wasm32-unknown-unknown \
         -Z build-std=std,panic_abort,core,alloc \
         -Z build-std-features=optimize_for_size \
-        -p kithara-integration-tests --test suite_heavy
+        -p kithara-ffi-web-tests -p kithara-integration-tests --test ffi_web --test suite_heavy
+      # `wasm-bindgen-test` picks its thread per binary, and the live-graph
+      # oracle needs the page's main thread.
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-integration-tests --test suite_live_web_audio
     fi
     # `webcodecs_browser` belongs to kithara-decode, not to any integration
     # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
@@ -112,25 +142,11 @@ wasm BROWSER="chrome" SUITE="all":
         --test webcodecs_browser
     fi
 
-# Locate or drop the on-disk fixture cache. Each build fingerprint gets its own
-# sub-directory, so an obsolete one wastes disk rather than serving stale bytes;
-# dropping the roots costs the next run one re-encode of everything it touches.
-fixture-cache ACTION="path":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tmp="${TMPDIR:-/tmp}"
-    warm="${tmp%/}/kithara-fixture-cache"
-    cold="${tmp%/}/kithara-fixture-cold"
-    case "{{ ACTION }}" in
-      path) printf '%s\n%s\n' "$warm" "$cold" ;;
-      clear) rm -rf "$warm" "$cold" && echo "==> dropped $warm and $cold" ;;
-      *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
-    esac
-
-# Run any test filter with the listening tap enabled: every offline harness
-# publishes its output WAV and manifest under OUTPUT (absolute path).
+# Render the same active no-SYNC scenarios into listening artifacts. The
+# recorders are ignored in ordinary CI so filesystem work cannot consume their
+# behavioral-test deadlines.
 [positional-arguments]
-audio-artifacts OUTPUT FILTER SUITE="suite_light":
+audio-artifacts OUTPUT:
     #!/usr/bin/env bash
     set -euo pipefail
     output="{{ OUTPUT }}"
@@ -139,8 +155,13 @@ audio-artifacts OUTPUT FILTER SUITE="suite_light":
       exit 2
     fi
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-integration-tests --test "{{ SUITE }}" \
-        --run-ignored=all -E "{{ FILTER }}"
+      just test run -p kithara-audio-tests --test audio \
+        --run-ignored=only \
+        -E 'test(/no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-play-tests --test play_heavy \
+        --run-ignored=only \
+        -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
 
 # All three lanes require a real output device.
 [positional-arguments]
@@ -271,9 +292,9 @@ uncovered:
       --features kithara-audio/rodio \
       --cargo-profile test-release --no-fail-fast || true
     cargo llvm-cov nextest --no-report \
-      -p kithara-integration-tests --features e2e \
+      -p kithara-play-tests --features kithara-play-tests/e2e \
       --cargo-profile test-release \
-      --test suite_e2e --run-ignored all --no-fail-fast || true
+      --test e2e --run-ignored all --no-fail-fast || true
     cargo llvm-cov report \
       --ignore-filename-regex '(tests/|examples/|benches/)' \
       --show-missing-lines
@@ -357,7 +378,7 @@ miri *ARGS:
 # Both run under nextest: a violation aborts the process, and one process per
 # test is what turns that abort into a named failure plus JUnit instead of a
 # bare exit code for the whole suite.
-_rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
+_rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
@@ -427,18 +448,18 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
         cargo "$toolchain" nextest run --profile rtsan \
-        -p kithara-integration-tests --test {{ SUITE }} \
+        {{ TARGETS }} \
         --features {{ FEATURES }} \
         --target "$target" $repeats {{ FILTER }}
 
-rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
+rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it.
-rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap kithara_audio::analysis_offer_is_realtime_safe": (_rtsan "suite_light" "apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play-tests -p kithara-analysis-tests --test play --test analysis" "kithara-play-tests/apple-fused-src" FILTER)
 
-rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" "apple-fused-src" FILTER)
+rtsan-file FILTER="phase_continuity::file": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
 
-rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" "apple-fused-src" FILTER)
+rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)

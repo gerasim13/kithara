@@ -11,7 +11,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_stream::{
-    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, StreamError,
+    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, SourcePhase, StreamError,
     StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId, dl::FetchCmd,
 };
@@ -73,7 +73,10 @@ where
     pub(super) fn new(active: Arc<HlsSession<S>>) -> Self {
         Self {
             publication: ArcSwap::from_pointee(ResidentSessions::one(active)),
-            transition: Mutex::new(TransitionState { incoming: None }),
+            transition: Mutex::new(TransitionState {
+                incoming: None,
+                retired: Vec::new(),
+            }),
         }
     }
 
@@ -101,14 +104,37 @@ where
             .map(|slot| Arc::clone(&slot.session))
     }
 
-    fn publish_exact_one(&self, session: Arc<HlsSession<S>>) {
+    pub(super) fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
         self.publication
-            .store(Arc::new(ResidentSessions::one(session)));
+            .load()
+            .second
+            .as_ref()
+            .is_some_and(|session| {
+                session.transition() == Some(transition)
+                    && session.wait_phase() == SourcePhase::WaitingDemand
+            })
     }
 
-    fn publish_exact_two(&self, first: Arc<HlsSession<S>>, second: Arc<HlsSession<S>>) {
-        self.publication
-            .store(Arc::new(ResidentSessions::two(first, second)));
+    /// Retain replaced snapshots until readers release them; only writers reclaim.
+    fn publish(&self, state: &mut TransitionState<S>, residents: ResidentSessions<S>) {
+        state
+            .retired
+            .retain(|snapshot| Arc::strong_count(snapshot) > 1);
+        state.retired.push(self.publication.load_full());
+        self.publication.store(Arc::new(residents));
+    }
+
+    fn publish_exact_one(&self, state: &mut TransitionState<S>, session: Arc<HlsSession<S>>) {
+        self.publish(state, ResidentSessions::one(session));
+    }
+
+    fn publish_exact_two(
+        &self,
+        state: &mut TransitionState<S>,
+        first: Arc<HlsSession<S>>,
+        second: Arc<HlsSession<S>>,
+    ) {
+        self.publish(state, ResidentSessions::two(first, second));
     }
 
     #[cfg(test)]
@@ -126,6 +152,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     incoming: Option<IncomingSlot<S>>,
+    retired: Vec<Arc<ResidentSessions<S>>>,
 }
 
 struct IncomingSlot<S>
@@ -185,7 +212,7 @@ where
             "discarding incoming variant session"
         );
         let active = self.active_session();
-        self.sessions.publish_exact_one(active);
+        self.sessions.publish_exact_one(state, active);
         slot.session.abort();
         if abort_intent {
             let _ = self.abr_publisher.abort_pending(slot.claim.ticket());
@@ -398,13 +425,14 @@ where
                 return false;
             }
             slot.session.activate();
-            self.sessions.publish_exact_one(Arc::clone(&slot.session));
+            self.sessions
+                .publish_exact_one(&mut state, Arc::clone(&slot.session));
             outgoing.abort();
             true
         });
         match committed {
             None => {
-                self.sessions.publish_exact_one(outgoing);
+                self.sessions.publish_exact_one(&mut state, outgoing);
                 slot.session.abort();
                 return VariantPromotion::Stale;
             }
@@ -421,7 +449,7 @@ where
                     state.incoming = Some(slot);
                     return VariantPromotion::Deferred;
                 }
-                self.sessions.publish_exact_one(outgoing);
+                self.sessions.publish_exact_one(&mut state, outgoing);
                 slot.session.abort();
                 return VariantPromotion::Stale;
             }
@@ -528,4 +556,45 @@ fn unsupported_pending_claim() -> StreamError {
         ErrorKind::InvalidData,
         "unsupported pending ABR claim state",
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream::coord::tests::{incremental_profile, prepare_incoming, switch_coord};
+
+    #[kithara::test]
+    fn demand_probe_does_not_take_transition_lock() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let _writer = coord.sessions.transition.lock();
+        assert!(coord.sessions.transition_demand_in_flight(transition));
+    }
+
+    #[kithara::test]
+    fn published_sessions_are_reclaimed_by_writer_after_readers_release() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let snapshot = coord.sessions.publication.load();
+        let old = Arc::downgrade(&snapshot);
+        assert!(coord.abort_variant(transition));
+        assert!(!coord.sessions.transition_demand_in_flight(transition));
+        drop(snapshot);
+        assert!(
+            old.upgrade().is_some(),
+            "reader must not reclaim its snapshot"
+        );
+        let active = coord.active_session();
+        coord
+            .sessions
+            .publish_exact_one(&mut coord.sessions.transition.lock(), active);
+        assert!(
+            old.upgrade().is_none(),
+            "writer reclaims quiescent snapshots"
+        );
+    }
 }

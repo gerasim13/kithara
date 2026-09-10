@@ -2,6 +2,7 @@ use std::num::NonZero;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_fixtures::unit_fixtures::warp_pair;
 use kithara_test_utils::kithara;
 use realfft::RealFftPlanner;
 
@@ -28,26 +29,8 @@ impl Consts {
     const SR: u32 = 44_100;
 }
 
-fn f32_of(x: f64) -> f32 {
-    num_traits::cast(x).unwrap_or_default()
-}
-
 fn f64_of(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()
-}
-
-/// Interleaved stereo sine at `F0`, phase-accumulated to avoid drift.
-fn sine(frames: usize) -> Vec<f32> {
-    let inc = std::f64::consts::TAU * Consts::F0 / f64::from(Consts::SR);
-    let mut phase = 0.0_f64;
-    let mut out = Vec::with_capacity(frames * usize::from(Consts::CH));
-    for _ in 0..frames {
-        let s = f32_of(0.5 * phase.sin());
-        out.push(s);
-        out.push(s);
-        phase += inc;
-    }
-    out
 }
 
 fn chunk(pools: &Pools, samples: &[f32]) -> AudioChunk {
@@ -142,7 +125,7 @@ fn flush_serviced(fx: &mut WarpRenderer) -> Option<AudioChunk> {
 }
 
 #[kithara::test]
-fn prepared_render_commits_its_context_despite_a_new_publication() {
+fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     let pools = pools();
     let controls = StretchControls::new(1.0);
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
@@ -164,7 +147,7 @@ fn prepared_render_commits_its_context_despite_a_new_publication() {
             .output(SessionFrame::new(1_000))
             .build(),
     );
-    let mut input = chunk(&pools, &[0.25, -0.5]);
+    let mut input = chunk(&pools, &warp_pair);
     input.meta.frame_offset = 41;
 
     renderer.prepare(spec());

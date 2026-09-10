@@ -252,9 +252,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig, mock,
         player::PlayerConfig,
-        session::testing,
         test_pools::{TestPools, pools},
     };
 
@@ -266,9 +265,9 @@ mod tests {
     fn commit_next_without_arm_returns_not_ready() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session())
+                .session(mock::session())
                 .build(),
         );
         let err = player.commit_next(1).expect_err("must error");
@@ -279,9 +278,9 @@ mod tests {
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session())
+                .session(mock::session())
                 .build(),
         );
         player

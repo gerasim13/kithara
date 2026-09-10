@@ -4,14 +4,21 @@ use std::{
 };
 
 use bon::Builder;
-use firewheel::param::smoother::SmootherConfig;
+use firewheel::{
+    dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
+};
 use kithara_bufpool::PoolRegion;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, DEFAULT_RATE_SMOOTHING, StretchControls};
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
-    session::SessionDispatcher,
+    session::SessionBinding,
+};
+
+pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
+    smooth_seconds: 0.005,
+    settle_epsilon: DEFAULT_SETTLE_EPSILON,
 };
 
 /// Configuration for the audio engine.
@@ -37,9 +44,9 @@ pub struct EngineConfig<S> {
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
-    /// Optional pre-bound dispatcher for isolated harnesses. Production
-    /// engines receive their session when the owning Player enters a Host.
-    pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    /// Optional pre-bound session for isolated harnesses. Production engines
+    /// receive theirs when the owning Player enters a Host.
+    pub(crate) session: Option<SessionBinding<S>>,
     /// Typed pool facade for audio-thread scratch buffers.
     pub(crate) pools: PoolRegion<S>,
     /// EQ band layout per player. Default: 10-band log-spaced. Not a
@@ -49,6 +56,9 @@ pub struct EngineConfig<S> {
     /// than through config.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
+    /// Render-pass slot gate smoothing. Default: 5 ms.
+    #[builder(default = DEFAULT_GATE_SMOOTHING)]
+    pub(crate) gate_smoothing: SmootherConfig,
     /// Number of output channels. Default: 2 (stereo). Not a document key:
     /// the only reader is a startup log line, so a document value would
     /// change nothing the engine actually does.
@@ -71,6 +81,7 @@ impl<S> Clone for EngineConfig<S> {
             session: self.session.clone(),
             pools: self.pools.clone(),
             eq_layout: self.eq_layout.clone(),
+            gate_smoothing: self.gate_smoothing,
             channels: self.channels,
             sample_rate: self.sample_rate,
             max_slots: self.max_slots,
@@ -86,6 +97,7 @@ impl<S> fmt::Debug for EngineConfig<S> {
             .field("channels", &self.channels)
             .field("response_budget_frames", &self.response_budget_frames)
             .field("render_quantum_frames", &self.render_quantum_frames)
+            .field("gate_smoothing", &self.gate_smoothing)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
     }
@@ -95,7 +107,7 @@ impl<S> fmt::Debug for EngineConfig<S> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{BeatGridId, EngineConfig, NonZeroU32, NonZeroUsize};
+    use super::{BeatGridId, DEFAULT_GATE_SMOOTHING, EngineConfig, NonZeroU32, NonZeroUsize};
     use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
@@ -110,5 +122,6 @@ mod tests {
         assert_eq!(config.channels, 2);
         assert_eq!(config.max_slots, 4);
         assert_eq!(config.eq_layout.len(), 10);
+        assert_eq!(config.gate_smoothing, DEFAULT_GATE_SMOOTHING);
     }
 }

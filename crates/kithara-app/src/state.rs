@@ -527,39 +527,20 @@ fn same_revision(shown: Option<&TrackAnalysis>, next: Option<&TrackAnalysis>) ->
     }
 }
 
-fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
-    for (band, &gain) in eq_bands.iter().enumerate() {
-        let _ = queue.set_eq_gain(band, f32::from(gain));
-    }
-}
-
 pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            let eq_bands = {
-                let mut st = state.lock();
-                st.current_track_index = current_index;
-                st.track_name = current_index
-                    .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
-                    .unwrap_or_default();
-                st.selected_variant = None;
-                st.is_seeking = false;
-                st.eq_bands.clone()
-            };
-            reapply_eq(queue, &eq_bands);
+            let mut st = state.lock();
+            st.current_track_index = current_index;
+            st.track_name = current_index
+                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                .unwrap_or_default();
+            st.selected_variant = None;
+            st.is_seeking = false;
         }
         Event::Player(PlayerEvent::RateChanged { rate }) => {
-            let started = rate > 0.0;
-            let mut st = state.lock();
-            st.playing = started;
-            let eq_bands = started.then(|| st.eq_bands.clone());
-            drop(st);
-            // Playback just started on an active slot -- push the desired EQ
-            // down so gains set before play take effect.
-            if let Some(eq_bands) = eq_bands {
-                reapply_eq(queue, &eq_bands);
-            }
+            state.lock().playing = rate > 0.0;
         }
         // Session-mix gain deliberately has no event mapping here: `st.volume`
         // is content volume, owned by the player's volume path alone.
@@ -672,7 +653,7 @@ mod tests {
     use crate::{
         analysis::{
             AnalysisHandle, Request,
-            fixtures::{answer_subscribe, next_subscribe, queue, track, wait_for_revision},
+            fixtures::{answer_subscribe, next_subscribe, queue_off, track, wait_for_revision},
         },
         pools::AppQueueControl,
         waveform::TrackAnalysis,
@@ -709,11 +690,11 @@ mod tests {
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_observes_a_track_added_to_its_empty_queue() {
-        let (_host, queue) = queue();
+        let (host, queue) = queue_off().await;
         let (state, mut requests, cancel) = deck(&queue);
         assert_eq!(state.lock().current_track_index, None);
 
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let tx = time::timeout(
             Duration::from_secs(2),
             answer_subscribe(&mut requests, track_id),
@@ -726,12 +707,13 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_a_removed_track() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let tx = answer_subscribe(&mut requests, track_id).await;
         tx.send_replace(Some(progress(1)));
@@ -753,13 +735,15 @@ mod tests {
         let st = state.lock();
         assert_eq!(st.current_track_index, None);
         assert!(st.analysis.is_none(), "nothing is shown for no track");
+        drop(st);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio)]
     async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
-        let (_host, queue) = queue();
-        let (track_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
 
         let first = answer_subscribe(&mut requests, track_id).await;
@@ -770,22 +754,32 @@ mod tests {
         first.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
+        host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
+            .await;
+        queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         queue
             .bus()
             .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
         let second = answer_subscribe(&mut requests, track_id).await;
         second.send_replace(Some(progress(2)));
         wait_for_revision(&state, 2).await;
+        assert_eq!(
+            queue.eq_gain(0),
+            Some(-6.0),
+            "event mirrors preserve the deck EQ"
+        );
+        assert!(state.lock().playing, "the rate event reaches the UI");
 
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_deck_lets_go_of_its_track_before_asking_for_the_next() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
-        let (second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+        let (second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         let (_state, mut requests, cancel) = deck(&queue);
         let first = answer_subscribe(&mut requests, first_id).await;
 
@@ -801,15 +795,16 @@ mod tests {
         );
         drop(reply);
         cancel.cancel();
+        host.close().await;
     }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_lagged_deck_resyncs_from_its_queue() {
-        let (_host, queue) = queue();
-        let (first_id, _) = track(&queue, 1, "file:///tmp/track-1.mp3");
+        let (host, queue) = queue_off().await;
+        let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
         let (_, reply) = next_subscribe(&mut requests).await;
-        let (_second_id, _) = track(&queue, 2, "file:///tmp/track-2.mp3");
+        let (_second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
                 .bus()
@@ -831,6 +826,7 @@ mod tests {
         drop(again);
         drop(first);
         cancel.cancel();
+        host.close().await;
     }
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {

@@ -88,11 +88,11 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
+kithara-derive = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
-kithara-macros = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
@@ -141,7 +141,8 @@ hotpath = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-play = { path = ".", default-features = false, features = ["probe"] }
+kithara-play = { path = ".", default-features = false, features = ["mock", "probe"] }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 bytes = { workspace = true }

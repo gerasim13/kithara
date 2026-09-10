@@ -115,25 +115,32 @@ fn is_silence(sample: f32) -> bool {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows};
+    use super::{FrameClass, Replay, ascending_phase_replays, classify_windows};
+    use crate::fixtures::{
+        ascending_pcm, ascending_wrap_pcm, descending_pcm, descending_wrap_pcm, provenance_silence,
+    };
 
     const WINDOW: usize = 64;
 
     #[kithara::test(native, flash(false))]
-    fn classify_windows_labels_pure_signals_including_wrap() {
-        let ascending = ascending_signal(SAW_PERIOD - 32, WINDOW);
+    fn classify_windows_labels_pure_signals_including_wrap(
+        ascending_wrap_pcm: Vec<f32>,
+        descending_wrap_pcm: Vec<f32>,
+        provenance_silence: Vec<f32>,
+    ) {
+        let ascending = &ascending_wrap_pcm[..WINDOW];
         assert_eq!(
-            classify_windows(&ascending, WINDOW, 0.5),
+            classify_windows(ascending, WINDOW, 0.5),
             vec![FrameClass::Ascending]
         );
 
-        let descending = descending_signal(SAW_PERIOD - 32, WINDOW);
+        let descending = descending_wrap_pcm;
         assert_eq!(
             classify_windows(&descending, WINDOW, 0.5),
             vec![FrameClass::Descending]
         );
 
-        let silence = vec![0.0; WINDOW];
+        let silence = provenance_silence;
         assert_eq!(
             classify_windows(&silence, WINDOW, 0.5),
             vec![FrameClass::Silence]
@@ -141,20 +148,22 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn ascending_phase_replays_accepts_pure_ascending_run_including_wrap() {
-        let left = ascending_signal(SAW_PERIOD - 32, WINDOW * 2);
+    fn ascending_phase_replays_accepts_pure_ascending_run_including_wrap(
+        ascending_wrap_pcm: Vec<f32>,
+    ) {
+        let left = ascending_wrap_pcm;
 
         assert!(ascending_phase_replays(&left, 0, left.len(), 3).is_empty());
     }
 
     #[kithara::test(native, flash(false))]
-    fn ascending_phase_replays_reports_spliced_replay_from_start() {
+    fn ascending_phase_replays_reports_spliced_replay_from_start(ascending_pcm: Vec<f32>) {
         let splice_start = 200_000;
         let replay_len = 1_000;
         let total_len = splice_start + replay_len + 2_000;
-        let mut left = ascending_signal(0, total_len);
-        let replay = ascending_signal(0, replay_len);
-        left[splice_start..splice_start + replay_len].copy_from_slice(&replay);
+        let mut left = ascending_pcm[..total_len].to_vec();
+        let replay = &ascending_pcm[..replay_len];
+        left[splice_start..splice_start + replay_len].copy_from_slice(replay);
 
         let replays = ascending_phase_replays(&left, 0, left.len(), 3);
 
@@ -170,11 +179,14 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn ascending_phase_replays_reports_descending_region() {
+    fn ascending_phase_replays_reports_descending_region(
+        ascending_pcm: Vec<f32>,
+        descending_pcm: Vec<f32>,
+    ) {
         let descending_start = 128;
         let descending_len = 64;
-        let mut left = ascending_signal(0, 512);
-        let descending = descending_signal(0, descending_len);
+        let mut left = ascending_pcm[..512].to_vec();
+        let descending = descending_pcm;
         left[descending_start..descending_start + descending_len].copy_from_slice(&descending);
 
         let replays = ascending_phase_replays(&left, 0, left.len(), 3);
@@ -194,31 +206,5 @@ mod tests {
         assert_eq!(actual.start_frame, expected.start_frame);
         assert_eq!(actual.len, expected.len);
         assert_eq!(actual.start_phase, expected.start_phase);
-    }
-
-    fn ascending_signal(start_frame: usize, len: usize) -> Vec<f32> {
-        (start_frame..start_frame + len)
-            .map(ascending_sample)
-            .collect()
-    }
-
-    fn descending_signal(start_frame: usize, len: usize) -> Vec<f32> {
-        (start_frame..start_frame + len)
-            .map(descending_sample)
-            .collect()
-    }
-
-    fn ascending_sample(frame: usize) -> f32 {
-        let unit = i32::try_from(frame % SAW_PERIOD).expect("phase fits i32");
-        i16_to_f32(i16::try_from(unit - 32_768).expect("ascending sample fits i16"))
-    }
-
-    fn descending_sample(frame: usize) -> f32 {
-        let unit = i32::try_from(frame % SAW_PERIOD).expect("phase fits i32");
-        i16_to_f32(i16::try_from(32_767 - unit).expect("descending sample fits i16"))
-    }
-
-    fn i16_to_f32(sample: i16) -> f32 {
-        f32::from(sample) / 32_768.0
     }
 }

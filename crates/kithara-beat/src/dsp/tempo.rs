@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use bon::bon;
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 

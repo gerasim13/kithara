@@ -15,6 +15,8 @@ pub(crate) mod codec;
 pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
+#[cfg(test)]
+mod mp4_tests;
 pub(crate) mod probe;
 pub(crate) mod registry;
 #[cfg(test)]
@@ -23,3 +25,5 @@ mod tests;
 pub(crate) use codec::SymphoniaCodec;
 pub(crate) use config::SymphoniaConfig;
 pub(crate) use demuxer::{FileOpen, SymphoniaDemuxer};
+
+mod packets;

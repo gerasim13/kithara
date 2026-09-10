@@ -187,6 +187,7 @@ mod tests {
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+    use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -211,8 +212,8 @@ mod tests {
         }
     }
 
-    fn chunk(pools: &Pools, frames: usize, at: u64) -> AudioChunk {
-        let samples = vec![0.0_f32; frames * 2];
+    fn chunk(pools: &Pools, pcm: &[f32], frames: usize, at: u64) -> AudioChunk {
+        let samples = &pcm[..frames * 2];
         AudioChunk::new(
             AudioChunkInfo {
                 spec: spec(),
@@ -220,7 +221,7 @@ mod tests {
                 frame_offset: at,
                 ..Default::default()
             },
-            sample_buffer(pools, &samples),
+            sample_buffer(pools, samples),
         )
     }
 
@@ -248,10 +249,14 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_waveform_pass_publishes_a_waveform_and_no_beat() {
+    fn a_waveform_pass_publishes_a_waveform_and_no_beat(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
 
         let snapshot = analyzers.snapshot(None, true, Some(8192));
         assert!(snapshot.waveform().is_some(), "the waveform slot is filled");
@@ -259,7 +264,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_beat_pass_publishes_both_artifacts_at_once() {
+    fn a_beat_pass_publishes_both_artifacts_at_once(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
             .with_waveform(8)
@@ -269,7 +274,7 @@ mod tests {
             .build(spec().sample_rate, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
         analyzers.push(
-            &chunk(&pools, 8192, 0),
+            &chunk(&pools, &analysis_silence, 8192, 0),
             &mut Extent::default(),
             detector.as_mut(),
         );
@@ -283,11 +288,15 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_rejected_range_leaves_the_coverage_alone() {
+    fn a_rejected_range_leaves_the_coverage_alone(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut extent = Extent::default();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(&chunk(&pools, 8192, 0), &mut extent, None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut extent,
+            None,
+        );
         let covered = analyzers.snapshot(None, false, None).coverage().clone();
 
         // A rate the pass was not opened with.
@@ -301,7 +310,7 @@ mod tests {
                 frame_offset: 0,
                 ..Default::default()
             },
-            sample_buffer(&pools, &vec![0.0_f32; 2048]),
+            sample_buffer(&pools, &analysis_silence[..2048]),
         );
         assert_eq!(
             analyzers.push(&foreign, &mut Extent::default(), None),
@@ -314,14 +323,18 @@ mod tests {
         );
 
         assert_eq!(
-            analyzers.push(&chunk(&pools, 8192, 0), &mut extent, None),
+            analyzers.push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut extent,
+                None
+            ),
             Ingest::Covered
         );
         assert_eq!(analyzers.snapshot(None, false, None).coverage(), &covered);
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_pass_keeps_the_axis_it_was_opened_on() {
+    fn a_pass_keeps_the_axis_it_was_opened_on(analysis_silence: Vec<f32>) {
         let pools = pools();
         // Opened at 48 kHz; the reader turns out to decode at 44.1 kHz.
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
@@ -331,7 +344,11 @@ mod tests {
             .expect("analysis buffers fit the test region");
 
         assert_eq!(
-            analyzers.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None),
+            analyzers.push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None
+            ),
             Ingest::ForeignRate,
             "the first chunk does not get to redefine the axis"
         );
@@ -350,12 +367,20 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_range_no_one_covered_is_missing_until_it_arrives() {
+    fn a_range_no_one_covered_is_missing_until_it_arrives(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
         // A producer was starved over [8192, 16384) and carried on past it.
-        analyzers.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
-        analyzers.push(&chunk(&pools, 8192, 16_384), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 16_384),
+            &mut Extent::default(),
+            None,
+        );
 
         assert_eq!(
             analyzers.snapshot(None, false, None).missing(),
@@ -363,7 +388,11 @@ mod tests {
             "the hole is known to exist because something landed past it"
         );
 
-        analyzers.push(&chunk(&pools, 8192, 8192), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 8192),
+            &mut Extent::default(),
+            None,
+        );
         assert!(
             analyzers.snapshot(None, false, None).missing().is_empty(),
             "a range taken on a second offer leaves the missing set"
@@ -371,12 +400,16 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_scattered_coverage_is_measured_against_where_it_reaches() {
+    fn a_scattered_coverage_is_measured_against_where_it_reaches(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
         // A range decoded away from the start, which is what a schedule
         // covers first.
-        analyzers.push(&chunk(&pools, 8192, 65_536), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 65_536),
+            &mut Extent::default(),
+            None,
+        );
 
         let snapshot = analyzers.snapshot(None, false, None);
         assert_eq!(
@@ -395,10 +428,14 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn nothing_past_the_frontier_is_claimed_missing() {
+    fn nothing_past_the_frontier_is_claimed_missing(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
 
         assert!(
             analyzers.snapshot(None, false, None).missing().is_empty(),
@@ -415,13 +452,13 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn revisions_strictly_increase_across_publications() {
+    fn revisions_strictly_increase_across_publications(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
         let mut revisions = Vec::new();
         for block in 0..3u64 {
             analyzers.push(
-                &chunk(&pools, 8192, block * 8192),
+                &chunk(&pools, &analysis_silence, 8192, block * 8192),
                 &mut Extent::default(),
                 None,
             );
@@ -436,19 +473,23 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_pass_opened_above_a_held_revision_publishes_above_it() {
+    fn a_pass_opened_above_a_held_revision_publishes_above_it(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
             .build(spec().sample_rate, "track-a".into(), 3)
             .expect("waveform buffers fit the test region");
-        analyzers.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
+        analyzers.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
 
         assert_eq!(analyzers.snapshot(None, false, None).revision(), 4);
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_snapshot_carries_the_token_its_pass_was_opened_with() {
+    fn a_snapshot_carries_the_token_its_pass_was_opened_with(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
             .with_waveform(8)
@@ -458,8 +499,16 @@ mod tests {
             .with_waveform(8)
             .build(spec().sample_rate, "track-b".into(), 0)
             .expect("analysis buffers fit the test region");
-        first.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
-        second.push(&chunk(&pools, 8192, 0), &mut Extent::default(), None);
+        first.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
+        second.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        );
 
         assert_eq!(
             first.snapshot(None, true, Some(8192)).token().as_str(),
@@ -499,7 +548,9 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_grid_is_provisional_until_the_pass_settles_over_a_covered_extent() {
+    fn a_grid_is_provisional_until_the_pass_settles_over_a_covered_extent(
+        analysis_silence: Vec<f32>,
+    ) {
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
             .with_waveform(8)
@@ -509,7 +560,7 @@ mod tests {
             .build(spec().sample_rate, "track-a".into(), 0)
             .expect("analysis buffers fit the test region");
         analyzers.push(
-            &chunk(&pools, 8192, 0),
+            &chunk(&pools, &analysis_silence, 8192, 0),
             &mut Extent::default(),
             detector.as_mut(),
         );

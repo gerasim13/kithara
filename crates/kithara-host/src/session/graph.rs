@@ -215,30 +215,13 @@ pub(super) mod lifecycle {
         let Some(render_quantum_frames) = render_quantum_frames else {
             return Ok(());
         };
-        let max_block_frames = state
+        let info = state
             .ctx
             .as_ref()
             .and_then(FirewheelCtx::stream_info)
-            .ok_or(SessionError::NoContext)?
-            .max_block_frames
-            .get();
-        let block_frames = usize::try_from(max_block_frames)
-            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let quantum_frames = render_quantum_frames.get();
-        let preload_chunks = block_frames.div_ceil(quantum_frames);
-        let required_frames = preload_chunks
-            .checked_add(2)
-            .and_then(|chunks| chunks.checked_mul(quantum_frames))
-            .and_then(|frames| frames.checked_sub(1))
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
-        if required_frames > response_budget_frames.get() {
-            return Err(SessionError::ResponseBudgetExceeded {
-                max_block_frames,
-                required_frames,
-                render_quantum_frames: quantum_frames,
-                budget_frames: response_budget_frames.get(),
-            });
-        }
+            .ok_or(SessionError::NoContext)?;
+        kithara_play::StreamShape::new(info.max_block_frames, info.sample_rate)
+            .playback_buffers(render_quantum_frames, response_budget_frames)?;
         Ok(())
     }
     pub(in crate::session) fn stop_player<B: AudioBackend, S>(
@@ -279,7 +262,7 @@ pub(super) mod lifecycle {
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
-    fn shutdown_if_idle<B: AudioBackend, S>(
+    pub(in crate::session) fn shutdown_if_idle<B: AudioBackend, S>(
         state: &mut SessionState<B, S>,
     ) -> Result<(), SessionError> {
         let idle = state.graph.decks().all(|deck| !deck.started);
@@ -332,6 +315,7 @@ pub(super) mod lifecycle {
                 .ok_or(SessionError::NoContext)?
                 .stop_stream();
             state.ctx = None;
+            state.publish_root();
             state.transport_control = None;
             state.mix_tap = None;
             state.transport = SessionTransportState::default();
@@ -404,6 +388,7 @@ pub(super) mod slots {
         let player_node = PlayerNode::new(
             inputs.with_rate(stretch, rate_smoothing),
             player.pools.clone(),
+            player.gate_smoothing,
         )
         .with_session_context();
         let player_node_id = fw_ctx.add_node(player_node, None);
@@ -576,8 +561,22 @@ pub(super) mod controls {
         gain_db: f32,
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
-        if !deck_at(state, idx)?.started {
-            return Err(SessionError::NotRunning(player_id));
+        let player = deck_at(state, idx)?;
+        if band >= player.eq_layout.len() {
+            return Err(SessionError::EqBandOutOfRange {
+                band,
+                bands: player.eq_layout.len(),
+            });
+        }
+        player
+            .shared_eq
+            .set_gain(band, GainDb::from(gain_db))
+            .map_err(|_| SessionError::EqBandOutOfRange {
+                band,
+                bands: player.eq_layout.len(),
+            })?;
+        if !player.started {
+            return Ok(());
         }
         let (ctx, graph) = (&mut state.ctx, &mut state.graph);
         let player = deck_at_mut(graph, idx)?;
@@ -617,77 +616,28 @@ pub(super) mod controls {
             return Ok(());
         }
 
-        let (old_eq_id, master_volume_id, slot_volume_ids, pools) = {
+        let (master_eq_id, pools) = {
             let player = deck_at(state, idx)?;
-            let old_eq_id = player
+            let master_eq_id = player
                 .master_eq_node_id
                 .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
-            let master_volume_id = player
-                .master_volume_node_id
-                .ok_or_else(|| graph_state("player master vol node is not initialised"))?;
-            let slot_volume_ids = player
-                .slots
-                .iter()
-                .map(|slot| slot.volume_node_id)
-                .collect::<Vec<NodeID>>();
-            (
-                old_eq_id,
-                master_volume_id,
-                slot_volume_ids,
-                player.pools.clone(),
-            )
+            (master_eq_id, player.pools.clone())
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let eq_config = EqConfig::builder(pools).build();
-        let master_eq = MasterEqNode::new(eq_config, &eq_layout);
-        let master_eq_memo = Memo::new(master_eq.clone());
-        let master_eq_id = fw_ctx.add_node(master_eq, None);
-
-        let swap = slot_volume_ids
-            .into_iter()
-            .try_for_each(|slot_id| {
-                connect_stereo(
-                    fw_ctx,
-                    slot_id,
-                    master_eq_id,
-                    "connect slot_volume->replacement master_eq",
-                )
-            })
-            .and_then(|()| {
-                connect_stereo(
-                    fw_ctx,
-                    master_eq_id,
-                    master_volume_id,
-                    "connect replacement master_eq->master_vol",
-                )
-            })
-            .and_then(|()| {
-                fw_ctx.remove_node(old_eq_id).map_err(|err| {
-                    SessionError::Graph(format!("remove previous master_eq failed: {err}"))
-                })
-            });
-        if let Err(err) = swap {
-            if let Err(remove_err) = fw_ctx.remove_node(master_eq_id) {
-                warn!(
-                    player_id,
-                    ?remove_err,
-                    "failed to remove rejected replacement EQ node"
-                );
-            }
-            return Err(err);
-        }
-        if let Err(err) = fw_ctx.update() {
-            warn!(
-                player_id,
-                "graph update after EQ layout swap failed: {err:?}"
-            );
-        }
+        let sample_rate = fw_ctx
+            .stream_info()
+            .map(|info| info.sample_rate)
+            .ok_or_else(|| graph_state("session stream is not running"))?;
+        let master_eq = MasterEqNode::new(EqConfig::builder(pools).build(), &eq_layout);
+        let event = master_eq.layout_event(sample_rate).map_err(|error| {
+            SessionError::Graph(format!("prepare master EQ layout failed: {error}"))
+        })?;
+        fw_ctx.queue_event_for(master_eq_id, event);
 
         let player = deck_at_mut(&mut state.graph, idx)?;
         player.eq_layout = eq_layout;
         player.shared_eq.replace(&gains);
-        player.master_eq_node_id = Some(master_eq_id);
-        player.master_eq_memo = Some(master_eq_memo);
+        player.master_eq_memo = Some(Memo::new(master_eq));
         Ok(())
     }
     pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
@@ -890,11 +840,12 @@ mod tests {
                 grid_id,
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
+                gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
                 pools: pools(),
                 sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
         ) {
-            Reply::PlayerRegistered(id) => id,
+            Reply::PlayerRegistered(registered) => registered.id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
@@ -930,6 +881,14 @@ mod tests {
         }
     }
 
+    fn stop(state: &mut TestState, player_id: PlayerId) {
+        match run_cmd(state, Cmd::StopPlayer { player_id }) {
+            Reply::Ok => {}
+            Reply::Err(err) => panic!("player {player_id} failed to stop: {err}"),
+            _ => panic!("player stop returned unexpected reply"),
+        }
+    }
+
     fn set_tempo_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
         assert!(matches!(
             run_cmd(
@@ -948,8 +907,27 @@ mod tests {
         }
     }
 
+    /// Stopping is the verb a host reaches for when playback ends, and it must
+    /// release the output on its own - the existing coverage reaches this only
+    /// through unregister, which a host that stops without dropping its player
+    /// never performs. Naming the two separately is what tells a caller that
+    /// kept its player whether the device is free, which is the difference
+    /// between an audio session that can be deactivated and one that reports
+    /// itself busy.
     #[kithara::test]
-    fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
+    fn stopping_the_last_player_releases_the_output() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+
+        stop(&mut state, player_id);
+
+        assert!(state.ctx.is_none());
+    }
+
+    #[kithara::test]
+    fn a_running_player_changes_its_eq_layout_in_place() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
         let player_id = register(&mut state);
@@ -993,7 +971,7 @@ mod tests {
         assert_eq!(player.shared_eq.snapshot(), vec![-6.0, -3.0, 1.5, 4.0]);
         assert_eq!(player.slots.len(), 1);
         assert_eq!(player.slots[0].slot_id, slot);
-        assert_ne!(player.master_eq_node_id, previous_eq);
+        assert_eq!(player.master_eq_node_id, previous_eq);
         assert_eq!(player.master_volume_node_id, previous_volume);
         assert_eq!(
             player.master_eq_memo.as_ref().map(|memo| memo.band_count()),

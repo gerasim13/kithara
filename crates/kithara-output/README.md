@@ -23,4 +23,4 @@ The current public slice defines exact finite offline rendering:
 - `RenderSink` receives interleaved `f32` PCM without storage assumptions.
 
 Encoding, filesystems, networking, and Firewheel remain in their owning crates.
-See [CONTEXT.md](CONTEXT.md) for lifecycle invariants.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-output) for lifecycle invariants.

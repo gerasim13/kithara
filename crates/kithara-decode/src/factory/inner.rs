@@ -948,6 +948,7 @@ mod apple_factory_tests {
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioChunk, AudioSpec};
     use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
+    use kithara_test_fixtures::{mock_fixtures::one_packet, unit_fixtures::trim_silence};
     use kithara_test_utils::kithara;
 
     use super::{
@@ -960,7 +961,7 @@ mod apple_factory_tests {
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
         error::DecodeResult,
-        fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+        fmp4::test_layout::{FakeSegmented, aac_one},
         test_pools::{TestPools, pools},
         traits::Decoder,
     };
@@ -1001,7 +1002,6 @@ mod apple_factory_tests {
             }
             let packet_idx = self.next_index;
             self.next_index = self.next_index.saturating_add(1);
-            self.held = vec![1u8; 4];
             let spec = self.source_spec();
             Ok(DemuxOutcome::Frame(Frame {
                 data: &self.held,
@@ -1034,6 +1034,7 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
+        pcm: Vec<f32>,
         spec: AudioSpec,
         track_info: DecoderTrackInfo,
         frames_per_call: u32,
@@ -1051,7 +1052,7 @@ mod apple_factory_tests {
                 out.clear();
                 return Ok(0);
             }
-            write_silent_frame(self.spec, self.frames_per_call, out)
+            write_silent_frame(&self.pcm, self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -1068,6 +1069,7 @@ mod apple_factory_tests {
     }
 
     fn write_silent_frame(
+        pcm: &[f32],
         spec: AudioSpec,
         frames: u32,
         out: &mut SampleBuffer,
@@ -1078,9 +1080,7 @@ mod apple_factory_tests {
                 detail: "factory test sample count overflow",
             })?;
         out.ensure_len(samples)?;
-        for sample in out.iter_mut() {
-            *sample = 0.0;
-        }
+        out[..samples].copy_from_slice(&pcm[..samples]);
         out.truncate(samples);
         Ok(frames)
     }
@@ -1104,8 +1104,10 @@ mod apple_factory_tests {
     }
 
     #[kithara::test]
-    fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec() {
-        let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
+    fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec(
+        aac_one: (Vec<u8>, FakeSegmented),
+    ) {
+        let (blob, segmented) = aac_one;
         let source = Cursor::new(blob);
         let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
         let media_info = MediaInfo::builder()
@@ -1170,7 +1172,10 @@ mod apple_factory_tests {
     }
 
     #[kithara::test]
-    fn apple_scaled_gapless_trims_composed_resampled_output_domain() {
+    fn apple_scaled_gapless_trims_composed_resampled_output_domain(
+        trim_silence: Vec<f32>,
+        one_packet: &'static [u8],
+    ) {
         const SOURCE_RATE: u32 = 44_100;
         const OUTPUT_RATE: u32 = 48_000;
         const PACKET_COUNT: u64 = 10;
@@ -1192,13 +1197,14 @@ mod apple_factory_tests {
         let decoded_frames = u64::from(frames_per_call).saturating_mul(PACKET_COUNT);
         let demuxer = PacketDemuxer {
             track: source_track,
-            held: Vec::new(),
+            held: one_packet.to_vec(),
             next_index: 0,
             packet_count: PACKET_COUNT,
             packet_frames: PACKET_FRAMES,
             source_rate: SOURCE_RATE,
         };
         let codec = OutputDomainCodec {
+            pcm: trim_silence,
             frames_per_call,
             spec: AudioSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             track_info: DecoderTrackInfo {

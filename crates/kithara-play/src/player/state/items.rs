@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
@@ -95,6 +96,7 @@ impl ItemQueue {
         &self,
         index: usize,
         host_sample_rate: u32,
+        consumer_wake_mode: ConsumerWakeMode,
         pools: &PoolRegion<S>,
     ) -> Result<Option<TakenItem>, PoolError>
     where
@@ -108,7 +110,7 @@ impl ItemQueue {
         let Some(queued) = playlist.take(index) else {
             return Ok(None);
         };
-        let (item_id, resource) = (queued.item_id, queued.resource);
+        let (item_id, mut resource) = (queued.item_id, queued.resource);
         playlist.track_loaded(item_id, resource.region_plan().cloned());
         let duration_seconds = resource
             .duration()
@@ -117,6 +119,7 @@ impl ItemQueue {
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
+        resource.set_consumer_wake_mode(consumer_wake_mode);
         let src = Arc::clone(resource.src());
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), pools)?;
         drop(playlist);

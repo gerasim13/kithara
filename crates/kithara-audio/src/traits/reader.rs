@@ -2,11 +2,11 @@ use std::num::NonZeroU32;
 
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::producer::PreloadGate;
+use crate::{ConsumerWakeMode, producer::PreloadGate};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -186,6 +186,12 @@ pub trait AudioControl {
         None
     }
 
+    /// Adopt the wake capability of the consumer that will read this reader.
+    ///
+    /// The owning session declares it; readers with no ring to arm keep the
+    /// default no-op.
+    fn set_consumer_wake_mode(&mut self, _mode: ConsumerWakeMode) {}
+
     /// Set the target sample rate of the audio host.
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
@@ -204,6 +210,6 @@ pub trait AudioControl {
 /// - `Ok(ReadOutcome::Frames { .. })` — reader is alive and produced frames.
 /// - `Ok(ReadOutcome::Eof { .. })` — natural end of stream.
 /// - `Err(DecodeError)` — decoder or channel failure.
-pub trait AudioReader: AudioRead + AudioSession + AudioControl + MaybeSend {}
+pub trait AudioReader: AudioRead + AudioSession + AudioControl + Send {}
 
-impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + MaybeSend {}
+impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + Send {}

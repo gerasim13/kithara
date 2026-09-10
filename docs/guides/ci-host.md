@@ -59,6 +59,21 @@ shell jobs inherit that scheduling policy, so marking the parent `Background`
 throttles Cargo and the single-threaded source linters. Colima stays background;
 Linux work has its own container CPU limit.
 
+## Pipeline scheduling
+
+Dispatch waits for its child's verdict without holding a host resource group.
+Independent pipelines can therefore fill the runner's available slots. Measured
+child jobs retain `kithara-suite`; the runner limits total parallelism, each job
+owns its checkout and compiler-cache slot, and the verdict journal locks its
+read-modify-write transaction. Raising the runner limit is a separate host-capacity
+change, not a prerequisite for removing idle time between pipelines.
+
+Superseded branch and merge-request child pipelines cancel interruptible checks,
+including iOS and end-to-end review suites. Main, scheduled, release, and explicit
+platform runs retain their cancellation policy. Quarantine refs are unique per
+head/base pair; the bridge retires obsolete attempts rather than relying on
+same-ref push cancellation.
+
 ## Windows
 
 `xtask ci host` provisions the UTM guest under `<host_root>/vm/windows` from the

@@ -22,7 +22,11 @@ graph, session transport, and platform audio backend. A player/deck remains in
 Callers fully construct a player or decorator and transfer that instance with
 `Host::insert`. The Host attaches its opaque session capability exactly once
 and retains the instance; callers receive a typed `HostOwned` control endpoint,
-not the player value or its session dispatcher.
+not the player value or its session dispatcher. Insertion registers deck controls
+and validates known output geometry without opening an audio device. Playback
+starts the output graph and allocates its slot, validating the actual output
+geometry before rendering. Remove the deck or close the Host to release its
+resources.
 
 `Host<S>` shares the player's closed buffer-pool schema. Insertion accepts only
 players with that same schema, while each registered deck retains its existing
@@ -32,7 +36,7 @@ players with that same schema, while each registered deck retains its existing
 With the `offline` feature, the same `Host<S>` drives its owned graph without an
 audio device and implements `kithara_output::OfflineRenderer` for exact finite
 output-frame ranges. Its offline variant carries the pool, render quantum,
-latency, worker, task, dispatcher, and optional probe pacing budgets.
+latency, worker, task, and dispatcher budgets.
 
 The current crate is a mechanical ownership extraction. Runtime invariants and
-dependency boundaries are documented in [`CONTEXT.md`](CONTEXT.md).
+dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).

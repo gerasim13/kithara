@@ -4,11 +4,8 @@
 //! - [`AudioConfig`] - pipeline configuration
 //! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`AudioReader`] for pull-based audio consumers
-//!
-//! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 mod audio;
 #[cfg(any(test, feature = "mock"))]

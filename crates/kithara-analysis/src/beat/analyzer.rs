@@ -473,6 +473,11 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
 mod tests {
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_fixtures::analysis_beat_fixtures::{
+        cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
+        quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
+        tenth_816000,
+    };
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
@@ -623,16 +628,6 @@ mod tests {
         )
     }
 
-    fn stereo(frames: usize, f: impl Fn(usize) -> f32) -> Vec<f32> {
-        let mut out = Vec::with_capacity(frames * 2);
-        for n in 0..frames {
-            let s = f(n);
-            out.push(s);
-            out.push(s);
-        }
-        out
-    }
-
     fn push_chunked(
         analyzer: &mut Pass,
         pcm: &[f32],
@@ -655,14 +650,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resume_between_blocks_leaves_no_step_in_the_audio() {
+    fn resume_between_blocks_leaves_no_step_in_the_audio(sine_440: Vec<f32>) {
         // A 440 Hz sine at 22 050 Hz moves at most 0.063 between neighbouring
         // samples; anything larger is a seam an onset detector reads as a beat.
-        let step = std::f32::consts::TAU * 440.0 / 44_100.0;
-        let pcm = stereo(2 * 44_100, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_440;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let detector = detector(|mono| {
             let worst = mono
@@ -688,15 +679,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resamples_all_input_without_tail_loss() {
+    fn resamples_all_input_without_tail_loss(sine_440: Vec<f32>) {
         // 2.0 s of 440 Hz at 44.1 kHz must reach the detector as exactly
         // 2.0 s at 22 050 Hz, with real signal all the way to the end —
         // the resampler tail must be flushed, not dropped.
-        let step = std::f32::consts::TAU * 440.0 / 44_100.0;
-        let pcm = stereo(2 * 44_100, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_440;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(
@@ -723,10 +710,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn resampler_delay_is_trimmed_so_positions_stay_aligned() {
+    fn resampler_delay_is_trimmed_so_positions_stay_aligned(step: Vec<f32>) {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
-        let pcm = stereo(2 * 44_100, |n| if n < 44_100 { 0.0 } else { 0.5 });
+        let pcm = step;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), 2 * Consts::TARGET);
@@ -748,13 +735,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn downmix_is_channel_mean() {
+    fn downmix_is_channel_mean(cancelling: Vec<f32>) {
         // L = +0.8, R = -0.8 cancels to mono silence.
-        let mut pcm = Vec::with_capacity(44_100 * 2);
-        for _ in 0..44_100 {
-            pcm.push(0.8);
-            pcm.push(-0.8);
-        }
+        let pcm = cancelling;
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono.len(), Consts::TARGET);
@@ -769,9 +752,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn passthrough_at_detector_rate() {
+    fn passthrough_at_detector_rate(quarter_10000: Vec<f32>) {
         // A 22 050 Hz source needs no resampling: the detector sees the input.
-        let pcm = stereo(10_000, |_| 0.25);
+        let pcm = quarter_10000;
         let mut analyzer = analyzer(22_050, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 10_000].as_slice());
@@ -784,12 +767,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn custom_detector_rate_controls_passthrough_domain() {
+    fn custom_detector_rate_controls_passthrough_domain(quarter_4096: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .build();
-        let pcm = stereo(4096, |_| 0.25);
+        let pcm = quarter_4096;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
@@ -802,14 +785,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn detector_input_is_bounded_by_configured_window() {
+    fn detector_input_is_bounded_by_configured_window(quarter_132300: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(1)
             .detector_overlap_seconds(0)
             .build();
-        let pcm = stereo(3 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let pcm = quarter_132300;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -829,14 +812,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_at_the_minimum_is_detected_before_the_flush() {
+    fn a_run_at_the_minimum_is_detected_before_the_flush(quarter_88200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
             .build();
-        let pcm = stereo(2 * usize::try_from(Consts::SRC).unwrap_or(0), |_| 0.25);
+        let pcm = quarter_88200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -864,7 +847,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_short_run_yields_a_grid_and_is_refined_when_it_fills() {
+    fn a_short_run_yields_a_grid_and_is_refined_when_it_fills(quarter_529200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
             .target_rate(Consts::SRC)
@@ -873,7 +856,7 @@ mod tests {
             .detector_min_window_seconds(2)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let pcm = stereo(12 * second, |_| 0.25);
+        let pcm = quarter_529200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
@@ -919,7 +902,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn finalize_builds_grid_in_source_frames() {
+    fn finalize_builds_grid_in_source_frames(tenth_816000: Vec<f32>) {
         // 9 downbeats every 2.0 s -> 120 bpm, positions converted at the
         // SOURCE rate (48 kHz here), not the detector's 22 050 Hz.
         let raw = RawBeats {
@@ -938,13 +921,7 @@ mod tests {
         };
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(move |_| raw.clone());
-        analyzer.push_interleaved(
-            &stereo(17 * 48_000, |_| 0.1),
-            2,
-            0,
-            Opens::Run,
-            &mut detector,
-        );
+        analyzer.push_interleaved(&tenth_816000, 2, 0, Opens::Run, &mut detector);
         let grid = analyzer
             .snapshot(&mut detector, true)
             .expect("mock detects");
@@ -964,7 +941,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_holds_what_waits_rather_than_the_track() {
+    fn a_run_holds_what_waits_rather_than_the_track(quarter_2646000: Vec<f32>) {
         // Window 2 s, overlap 1 s: a 3 s window, a 12 s budget. Detection
         // keeps pace, so what waits is one window however long the track is.
         let config = BeatAnalysisConfig::builder()
@@ -974,7 +951,7 @@ mod tests {
             .detector_overlap_seconds(1)
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let pcm = stereo(60 * second, |_| 0.25);
+        let pcm = quarter_2646000;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
@@ -996,7 +973,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_run_that_fed_no_window_keeps_what_it_holds() {
+    fn a_run_that_fed_no_window_keeps_what_it_holds(
+        quarter_44100: Vec<f32>,
+        quarter_88200: Vec<f32>,
+    ) {
         // Window 2 s, no overlap. The first run opens half a second in and is
         // too short for any window; the second is a whole one.
         let config = BeatAnalysisConfig::builder()
@@ -1010,14 +990,14 @@ mod tests {
         let mut detector = detector(|_| empty_raw());
 
         let at = u64::try_from(second / 2).unwrap_or(0);
-        analyzer.push_interleaved_deferred(&stereo(second, |_| 0.25), 2, at, Opens::Run);
+        analyzer.push_interleaved_deferred(&quarter_44100, 2, at, Opens::Run);
         let held = analyzer.held_frames();
         assert!(held > 0, "the short run holds what it was given");
 
         // One whole window on the grid, so releasing on it leaves nothing of
         // its own behind and the hold that remains is the short run's.
         let far = u64::try_from(10 * second).unwrap_or(0);
-        analyzer.push_interleaved_deferred(&stereo(2 * second, |_| 0.25), 2, far, Opens::Run);
+        analyzer.push_interleaved_deferred(&quarter_88200, 2, far, Opens::Run);
         while let Some(request) = analyzer.prepare_detection(false) {
             analyzer.apply_detection(request.detect(&mut detector));
         }
@@ -1030,7 +1010,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_track_past_the_budget_is_taken_whole_by_waiting() {
+    fn a_track_past_the_budget_is_taken_whole_by_waiting(quarter_2646000: Vec<f32>) {
         // A detector too slow to keep pace fills the hold. Offered the same
         // second again once room appears, the pass takes the whole track.
         let config = BeatAnalysisConfig::builder()
@@ -1041,7 +1021,7 @@ mod tests {
             .build();
         let second = usize::try_from(Consts::SRC).unwrap_or(1);
         let seconds = 60;
-        let pcm = stereo(seconds * second, |_| 0.25);
+        let pcm = quarter_2646000;
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
@@ -1082,7 +1062,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn detector_failure_propagates() {
+    fn detector_failure_propagates(tenth_4096: Vec<f32>) {
         let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
@@ -1090,12 +1070,12 @@ mod tests {
                     reason: "scripted".to_string(),
                 })
             }));
-        analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2, 0, Opens::Run, &mut detector);
+        analyzer.push_interleaved(&tenth_4096, 2, 0, Opens::Run, &mut detector);
         assert!(analyzer.snapshot(&mut detector, true).is_err());
     }
 
     #[kithara::test]
-    fn shuffled_blocks_place_markers_where_ascending_does() {
+    fn shuffled_blocks_place_markers_where_ascending_does(sine_220: Vec<f32>) {
         // One detector window per second, so a 6 s source yields several
         // windows and the shuffle actually reorders detected spans.
         let config = BeatAnalysisConfig::builder()
@@ -1107,13 +1087,7 @@ mod tests {
         // Short enough that the mono budget never reclaims a span before its
         // window completes: marker equality across arrival orders holds below
         // the budget, and the budget's own behaviour is asserted separately.
-        let seconds = 3;
-        let frames = seconds * usize::try_from(Consts::SRC).unwrap_or(1);
-        let step = std::f32::consts::TAU * 220.0 / 44_100.0;
-        let pcm = stereo(frames, |n| {
-            let t: f32 = n.as_();
-            0.5 * (step * t).sin()
-        });
+        let pcm = sine_220;
 
         // Each window reports one beat a quarter of the way in, so the marker
         // positions are a pure function of where the window sits.
@@ -1165,7 +1139,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_hold_the_detector_cannot_read_still_takes_the_audio_that_completes_a_window() {
+    fn a_hold_the_detector_cannot_read_still_takes_the_audio_that_completes_a_window(
+        quarter_44100: Vec<f32>,
+        quarter_176400: Vec<f32>,
+    ) {
         // 3 s windows at 2 s hops are ready 4 s past a window's start, so four
         // runs opening 1 s past a hop boundary hold four windows' worth with
         // nothing to read.
@@ -1176,18 +1153,11 @@ mod tests {
             .detector_overlap_seconds(1)
             .detector_min_window_seconds(1)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
         let mut analyzer = analyzer(Consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
         for run in 0..4u64 {
             let at = (1 + 10 * run) * u64::from(Consts::SRC);
-            let took = analyzer.push_interleaved(
-                &stereo(4 * second, |_| 0.25),
-                2,
-                at,
-                Opens::Run,
-                &mut detector,
-            );
+            let took = analyzer.push_interleaved(&quarter_176400, 2, at, Opens::Run, &mut detector);
             assert!(took, "a run of its own is taken while there is room");
         }
         assert!(
@@ -1197,7 +1167,7 @@ mod tests {
 
         // This second fills the window of the run at 11 s.
         let took = analyzer.push_interleaved(
-            &stereo(second, |_| 0.25),
+            &quarter_44100,
             2,
             15 * u64::from(Consts::SRC),
             Opens::Extends,

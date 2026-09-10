@@ -1,7 +1,7 @@
 use kithara_test_macros as kithara;
 use num_traits::cast;
 
-use crate::signal::{Pcm, Wave, header, wav, wav_from_fn};
+use crate::signal::{Pcm, Wave, header, wav, wav_from_fn, wav_of_size};
 
 struct Consts;
 
@@ -20,6 +20,8 @@ impl Consts {
     const SAMPLE_RATE: u32 = 44_100;
     const SECONDS_PER_MINUTE: f64 = 60.0;
     const SOURCE_FRAMES: usize = 264_600;
+    const SHORT_FRAMES: usize = 88_200;
+    const LONG_FRAMES: usize = 529_200;
     const TONE_HZ: f64 = 440.0;
     const TONE_PEAK: i16 = 16_000;
 }
@@ -33,7 +35,13 @@ pub(super) enum RhythmControl {
 
 /// Plain 440 Hz tone.
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::a440_10_frames(10, i16::MAX)]
+#[case::a440_100_frames(100, i16::MAX)]
+#[case::a440_10000_frames(10_000, i16::MAX)]
+#[case::a440_full_scale_2s(Consts::SHORT_FRAMES, i16::MAX)]
+#[case::a440_2s(Consts::SHORT_FRAMES, Consts::TONE_PEAK)]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK)]
+#[case::a440_12s(Consts::LONG_FRAMES, Consts::TONE_PEAK)]
 fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
     wav(
         Consts::SAMPLE_RATE,
@@ -180,4 +188,16 @@ pub(super) fn rhythm_pcm(
         }
         .sample(within_beat, sample_rate)
     })
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::timeline_saw_2mb(2_000_000, Wave::Sawtooth)]
+fn sized_wav(total_bytes: usize, wave: Wave) -> Vec<u8> {
+    wav_of_size(Consts::SAMPLE_RATE, Consts::CHANNELS, total_bytes, wave)
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
+#[case::default()]
+fn timeline_wav() -> Vec<u8> {
+    sine_wav(441_000, i16::MAX)
 }

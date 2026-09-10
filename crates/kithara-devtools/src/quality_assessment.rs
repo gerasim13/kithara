@@ -9,6 +9,7 @@ use crate::Ctx;
 mod adapters;
 mod artifact;
 mod collect;
+pub(crate) mod lcom;
 mod model;
 mod orchestrator;
 mod summary;
@@ -136,7 +137,7 @@ mod tests {
         .expect("package manifest");
         fs::write(
             temp.path().join("demo/src/lib.rs"),
-            "pub struct Demo;\nimpl Demo {\n    pub fn new() -> Self { Self }\n}\n",
+            "pub struct Demo { a: u8, b: u8 }\nimpl Demo {\n    pub fn a(&self) -> u8 { self.a }\n    pub fn b(&self) -> u8 { self.b }\n}\n",
         )
         .expect("source");
         for namespace in ["arch", "style", "idioms"] {
@@ -183,6 +184,54 @@ mod tests {
         assert_eq!(assessment["summary"]["debt_threshold"], 100);
         assert_eq!(assessment["verdict"], "refactor");
         assert_eq!(assessment["scope"]["kind"], "workspace");
+        assert_eq!(
+            assessment["lcom4"]["types"][0]["groups"]
+                .as_array()
+                .expect("groups")
+                .len(),
+            2
+        );
+        let markdown = fs::read_to_string(output.join("assessment.md")).expect("Markdown");
+        assert!(markdown.contains("Type cohesion (LCOM4)"));
+        assert!(markdown.contains("demo::Demo"));
+    }
+
+    #[test]
+    fn lcom4_changes_do_not_change_debt_or_verdict() {
+        let temp = tempdir().expect("directory");
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"demo\"]\nresolver = \"3\"\n",
+        )
+        .expect("workspace");
+        fs::create_dir_all(temp.path().join("demo/src")).expect("source directory");
+        fs::write(
+            temp.path().join("demo/Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("package");
+        let source = temp.path().join("demo/src/lib.rs");
+        fs::write(&source, "pub struct Pair { a: u8, b: u8 } impl Pair { fn a(&self) { self.a; } fn b(&self) { self.b; } }").expect("disconnected source");
+        let ctx = Ctx::load_from_manifest(&temp.path().join("Cargo.toml")).expect("context");
+        let args = AssessArgs {
+            depth: AssessmentDepth::Standard,
+            profile: AssessmentProfile::Product,
+            baseline: None,
+            krate: None,
+            module: None,
+            reuse_existing: true,
+        };
+        let disconnected = collect::collect(&args, &ctx, &[]).expect("disconnected assessment");
+        fs::write(&source, "pub struct Pair { a: u8, b: u8 } impl Pair { fn a(&self) { self.a; } fn b(&self) { self.a; } }").expect("connected source");
+        let connected = collect::collect(&args, &ctx, &[]).expect("connected assessment");
+        assert_eq!(disconnected.lcom4.types[0].lcom4, 2);
+        assert_eq!(connected.lcom4.types[0].lcom4, 1);
+        assert_eq!(disconnected.verdict, connected.verdict);
+        assert_eq!(
+            disconnected.summary.debt_units,
+            connected.summary.debt_units
+        );
+        assert_eq!(disconnected.summary.findings, connected.summary.findings);
     }
 
     #[test]

@@ -61,11 +61,8 @@ pub(super) struct RingParts {
 
 impl RingConsumer {
     pub(super) fn new(parts: RingParts) -> Self {
-        let consumer_wake_mode = if parts.block_on_underrun {
-            ConsumerWakeMode::ImmediateOffRt
-        } else {
-            parts.consumer_wake_mode
-        };
+        let consumer_wake_mode =
+            resolve_wake_mode(parts.consumer_wake_mode, parts.block_on_underrun);
         Self {
             consumer_wake_mode,
             audio_rx: parts.audio_rx,
@@ -94,7 +91,7 @@ impl RingConsumer {
         let mut popped = false;
         while let Some(fetch) = self.audio_rx.try_pop() {
             popped = true;
-            if fetch.epoch() < epoch {
+            if fetch.epoch() < epoch && !is_producer_terminal(&fetch) {
                 if let Fetch::Data { data, .. } = fetch {
                     self.discard(data);
                 }
@@ -144,7 +141,7 @@ impl RingConsumer {
     }
 
     fn process_fetch(&mut self, fetch: Fetch<AudioChunk>) -> FetchOutcome {
-        if !self.validator.is_valid(&fetch) {
+        if !self.validator.is_valid(&fetch) && !is_producer_terminal(&fetch) {
             if let Fetch::Data { data, .. } = fetch {
                 self.discard(data);
             }
@@ -267,6 +264,10 @@ impl RingConsumer {
         }
     }
 
+    pub(super) fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
+        self.consumer_wake_mode = resolve_wake_mode(mode, self.block_on_underrun);
+    }
+
     fn source_span(
         &mut self,
         data: &AudioChunk,
@@ -295,10 +296,9 @@ impl RingConsumer {
         epoch: u64,
         cursor: &mut ChunkCursor,
     ) {
-        debug_assert_eq!(
-            fetch.epoch(),
-            epoch,
-            "PCM ring preserved a fetch from a future seek epoch"
+        debug_assert!(
+            fetch.epoch() == epoch || is_producer_terminal(&fetch),
+            "PCM ring preserved an epoch-scoped fetch from another seek epoch"
         );
         match fetch {
             Fetch::Data {
@@ -324,6 +324,16 @@ impl RingConsumer {
 
     pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
         wake_worker(worker, self.consumer_wake_mode);
+    }
+}
+
+/// A consumer that blocks on underrun waits on the producer thread, so it wakes
+/// it inline whatever the session declares.
+const fn resolve_wake_mode(mode: ConsumerWakeMode, block_on_underrun: bool) -> ConsumerWakeMode {
+    if block_on_underrun {
+        ConsumerWakeMode::ImmediateOffRt
+    } else {
+        mode
     }
 }
 
@@ -354,6 +364,17 @@ struct ConsumerHangCtx {
     epoch: u64,
 }
 
+/// Whether `fetch` reports a producer that will never produce again.
+///
+/// A failure marker is pushed once, immediately before the produce task
+/// retires, and the track FSM never leaves `Failed` — so no later epoch
+/// can restate it and the marker must terminalise the consumer whatever
+/// epoch it carries. Epoch scoping stays on data and natural EOF, both of
+/// which a live producer re-derives after a seek.
+const fn is_producer_terminal(fetch: &Fetch<AudioChunk>) -> bool {
+    matches!(fetch, Fetch::Failure { .. })
+}
+
 fn try_pop_and_wake(
     audio_rx: &mut Inlet<Fetch<AudioChunk>>,
     worker: Option<&dyn WorkerWake>,
@@ -381,6 +402,7 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::PlayheadState;
+    use kithara_test_fixtures::mock_fixtures::ring_pcm;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -467,6 +489,21 @@ mod tests {
     }
 
     #[kithara::test]
+    fn an_adopted_mode_still_yields_to_blocking_reads() {
+        let mut fixture =
+            RingFixture::with_wake_mode(false, true, ConsumerWakeMode::ImmediateOffRt);
+
+        fixture
+            .ring
+            .set_consumer_wake_mode(ConsumerWakeMode::RealtimeDeferred);
+
+        assert_eq!(
+            fixture.ring.consumer_wake_mode,
+            ConsumerWakeMode::ImmediateOffRt
+        );
+    }
+
+    #[kithara::test]
     fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
         let fixture = RingFixture::with_wake_mode(true, false, ConsumerWakeMode::ImmediateOffRt);
 
@@ -477,14 +514,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_reports_whether_it_popped_any_item() {
+    fn seek_drain_reports_whether_it_popped_any_item(ring_pcm: Vec<f32>) {
         let mut drained = RingFixture::new(true);
-        let first = drained.chunk(&[0.1]);
+        let first = drained.chunk(&ring_pcm[..1]);
         drained
             .data_tx
             .try_push(Fetch::data(first, 0))
             .expect("first stale chunk reaches ring");
-        let second = drained.chunk(&[0.2]);
+        let second = drained.chunk(&ring_pcm[1..2]);
         drained
             .data_tx
             .try_push(Fetch::data(second, 0))
@@ -543,9 +580,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn consumer_phase_transitions_to_playing_on_first_chunk() {
+    fn consumer_phase_transitions_to_playing_on_first_chunk(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let chunk = fixture.chunk(&[0.1, 0.2]);
+        let chunk = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(chunk, 0))
@@ -565,10 +602,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn consumer_phase_seek_pending_to_playing_on_chunk() {
+    fn consumer_phase_seek_pending_to_playing_on_chunk(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
-        let chunk = fixture.chunk(&[0.1, 0.2]);
+        let chunk = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(chunk, 1))
@@ -578,14 +615,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
+    fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let stale = fixture.chunk(&[0.1, 0.2]);
+        let stale = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(stale, 0))
             .expect("stale chunk reaches ring");
-        let fresh = fixture.chunk(&[0.7, 0.8]);
+        let fresh = fixture.chunk(&ring_pcm[2..]);
         fixture
             .data_tx
             .try_push(Fetch::data(fresh, 1))
@@ -610,9 +647,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seek_drain_preserves_new_epoch_eof_after_stale_chunks() {
+    fn seek_drain_preserves_new_epoch_eof_after_stale_chunks(ring_pcm: Vec<f32>) {
         let mut fixture = RingFixture::new(true);
-        let stale = fixture.chunk(&[0.1, 0.2]);
+        let stale = fixture.chunk(&ring_pcm[..2]);
         fixture
             .data_tx
             .try_push(Fetch::data(stale, 0))
@@ -696,6 +733,56 @@ mod tests {
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
         assert_eq!(
             failed.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_stale_producer_failure_survives_a_new_seek_epoch() {
+        let mut fixture = RingFixture::new(true);
+        fixture
+            .data_tx
+            .try_push(Fetch::failure(0))
+            .expect("failure reaches ring");
+
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+
+        assert_eq!(
+            fixture.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::ProducerAfterSeek
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_stale_natural_eof_does_not_terminate_a_new_seek_epoch() {
+        let mut fixture = RingFixture::new(true);
+        fixture
+            .data_tx
+            .try_push(Fetch::eof(0))
+            .expect("natural eof reaches ring");
+
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+
+        assert_eq!(fixture.ring.phase, ConsumerPhase::SeekPending { epoch: 1 });
+    }
+
+    #[kithara::test]
+    fn a_stale_producer_failure_terminates_the_consumer() {
+        let mut fixture = RingFixture::new(true);
+        fixture.ring.validator.epoch = 3;
+        fixture
+            .data_tx
+            .try_push(Fetch::failure(0))
+            .expect("failure reaches ring");
+
+        let _chunk = fixture.recv();
+
+        assert_eq!(
+            fixture.ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::Producer
             }

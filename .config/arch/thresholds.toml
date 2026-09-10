@@ -117,7 +117,7 @@ warn_where = 4
 warn = 4
 # Per-crate overrides: app/test/macro crates may relax the threshold.
 [module_fan_out.overrides]
-"kithara-play" = 9       # Player/session orchestration spans sibling modules by crate contract; see crates/kithara-play/CONTEXT.md.
+"kithara-play" = 9       # Player/session orchestration spans sibling modules by crate contract; see https://github.com/zvuk/kithara/wiki/kithara-play#planes--ownership.
 "kithara-app" = 8
 "kithara-ffi" = 8
 "kithara-test-utils" = 8
@@ -181,6 +181,14 @@ allowed_files = [
   "crates/kithara-hls/src/peer.rs",
 ]
 
+[smoothing_primitive_sites]
+# Parameter smoothing has one primitive (firewheel `SmoothedParam`, composed
+# as `MixDSP` for A-to-B transitions). A hand-rolled one-pole or a direct
+# `SmoothingFilter` is sanctioned only in the biquad gain bank.
+patterns = ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+allowed_files = ["crates/kithara-play/src/effects/eq/gain.rs"]
+exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]
+
 [tokio_dep_quarantine]
 # Crates whose direct tokio dependency is never flagged. `kithara-platform` is
 # the quarantine OWNER (it wraps tokio behind `kithara_platform::{tokio,time,
@@ -209,7 +217,7 @@ allowed_crates = []
 # callers reach as `kithara_storage::{MmapOptions, MemOptions}`), and once as
 # `<Driver>::Options` so `Resource::<D>::open(cancel, opts)` can pick the
 # driver from the option type alone via call-site inference. Rationale is
-# recorded in `crates/kithara-storage/CONTEXT.md` ("Notes on the
+# recorded in [kithara-storage contracts](https://github.com/zvuk/kithara/wiki/kithara-storage) ("Notes on the
 # `redundant_reexport` audit warning") and `backend/traits.rs` doc comment on
 # `Driver`.
 exempt = ["MmapOptions", "MemOptions"]

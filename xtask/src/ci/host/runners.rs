@@ -11,6 +11,7 @@ use tracing::info;
 
 use super::services::launchd;
 use crate::ci::{
+    cache::client_environment,
     config::{CiConfig, MAC_CONFIG_PATH},
     environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
@@ -102,7 +103,7 @@ impl<'a> RunnerManager<'a> {
 
         write_secure(
             &runner_root.join("config.toml"),
-            &self.runner_config(&home, &tokens),
+            &self.runner_config(&home, &tokens)?,
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
@@ -267,7 +268,7 @@ impl<'a> RunnerManager<'a> {
     /// machine's twenty-four gigabytes, its build tree started empty after every
     /// recycle, and sccache died inside it often enough that jobs compiled
     /// locally — a suite that runs in three minutes took an hour to reach.
-    fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
+    fn runner_config(&self, home: &Path, tokens: &Tokens) -> Result<String> {
         let concurrency = self.config.host.job_concurrency;
         let cargo_build_jobs = self.cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
@@ -277,19 +278,30 @@ impl<'a> RunnerManager<'a> {
         let lane_config = MAC_CONFIG_PATH;
         let image = &self.config.pins.linux_image;
         let provisioned_image = format!("{PROVISIONED_LINUX_IMAGE_ENV}={image}");
-        format!(
+        let sccache_s3 = self
+            .config
+            .host
+            .sccache_s3_env_file
+            .as_deref()
+            .map(client_environment)
+            .transpose()?
+            .into_iter()
+            .flatten()
+            .map(|(name, value)| format!(", \"{name}={value}\""))
+            .collect::<String>();
+        Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"]\n\
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"]\n",
+             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
             tokens.macos,
             tokens.android,
             tokens.release,
-        )
+        ))
     }
 
     /// A bind mount is resolved by the Docker daemon, which lives inside
@@ -478,7 +490,7 @@ fn read_token(root: &Path, name: &str) -> Result<String> {
     Ok(token)
 }
 
-pub(super) fn read_secret(path: &Path) -> Result<String> {
+pub(crate) fn read_secret(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -504,7 +516,7 @@ pub(super) fn read_trimmed(path: &Path) -> Result<String> {
     Ok(trimmed.to_owned())
 }
 
-pub(super) fn write_secure(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_secure(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
     #[cfg(unix)]
     {
@@ -731,7 +743,10 @@ mod tests {
             .retire_legacy_macos_runner("gui/501", &launchctl)
             .expect_err("a loaded service must make the failed bootout fatal");
 
-        assert!(error.to_string().contains("retiring legacy macOS runner"));
+        assert!(
+            error.to_string().contains("retiring legacy macOS runner"),
+            "unexpected retirement error: {error:#}"
+        );
         assert!(legacy.is_file());
     }
 
@@ -843,7 +858,8 @@ mod tests {
             release: "glrt-release".into(),
         };
 
-        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
+        let rendered: toml::Value =
+            toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
         let runners = rendered["runners"].as_array().unwrap();
         for token in ["glrt-macos", "glrt-linux", "glrt-android", "glrt-release"] {
             assert!(
@@ -882,7 +898,8 @@ mod tests {
             release: "glrt-release".into(),
         };
 
-        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
+        let rendered: toml::Value =
+            toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
         assert_eq!(
             rendered["concurrent"].as_integer(),
             Some(config.host.job_concurrency as i64)
@@ -963,6 +980,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_runner_inherits_the_configured_s3_cache_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let env_file = directory.path().join("cache.env");
+        fs::write(
+            &env_file,
+            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+        )
+        .expect("write cache environment");
+        fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600))
+            .expect("restrict cache environment");
+
+        let mut config = fixture();
+        config.host.sccache_s3_env_file = Some(env_file);
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens)
+                .expect("render runner config"),
+        )
+        .expect("runner config is TOML");
+
+        for runner in rendered["runners"].as_array().expect("runners") {
+            assert!(
+                runner["environment"]
+                    .as_array()
+                    .expect("runner environment")
+                    .iter()
+                    .any(|value| value.as_str() == Some("SCCACHE_BUCKET=cache")),
+                "{} does not inherit the S3 cache: {runner}",
+                runner["name"]
+            );
+        }
+    }
+
     /// The runner config and the colima agent are written by two different
     /// functions and read by two different programs; nothing but this test
     /// says they have to agree. When they stopped agreeing, Docker filled the
@@ -984,8 +1045,8 @@ mod tests {
             android: "glrt-android".into(),
             release: "glrt-release".into(),
         };
-        let rendered: toml::Value =
-            toml::from_str(&manager.runner_config(&home, &tokens)).expect("runner config is TOML");
+        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens).unwrap())
+            .expect("runner config is TOML");
         // The pipeline builds `SCCACHE_DIR` out of this, so a runner that
         // leaves it unset would resolve the compiler cache against the
         // filesystem root and fail every build on that executor.
@@ -1076,7 +1137,7 @@ mod tests {
             socket.display()
         );
 
-        let rendered = manager.runner_config(&home, &tokens);
+        let rendered = manager.runner_config(&home, &tokens).unwrap();
         assert!(
             rendered.contains(&docker_host(&home, &config.host.colima_profile)),
             "the runner config does not point at the configured profile's socket: {rendered}"
@@ -1108,7 +1169,7 @@ mod tests {
             release: "glrt-release".into(),
         };
 
-        let runner = manager.runner_config(&home, &tokens);
+        let runner = manager.runner_config(&home, &tokens).unwrap();
         for rendered in [&runner] {
             for forbidden in [
                 "tls-ca-file",

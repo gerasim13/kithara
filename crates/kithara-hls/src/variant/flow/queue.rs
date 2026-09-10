@@ -113,10 +113,8 @@ where
         );
     }
 
-    /// Same as [`Self::rebuild`] but also enqueues `seg 0` when
-    /// `from_seg > 0`, so the decoder factory's probe has the container
-    /// header to construct the codec. See the crate `CONTEXT.md`
-    /// "Decoder-probe rebuild".
+    /// Same as [`Self::rebuild`] but also enqueues `seg 0` when `from_seg > 0`, so the
+    /// decoder factory's probe has the container header to construct the codec.
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,

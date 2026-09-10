@@ -34,3 +34,7 @@ compiler producing a normalized UI tree for renderers.
   the existing app, while the optional `masonry` feature mounts the same compiled document and
   neutral solver into retained Masonry widgets with a public custom-content seam, typed actions,
   portable pointer capture, and native popover/window layers.
+
+## Integration
+
+[Crate contracts](https://github.com/zvuk/kithara/wiki/kithara-ui).

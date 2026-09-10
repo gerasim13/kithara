@@ -70,3 +70,7 @@ exempt_files = [
   "crates/kithara-net/src/retry.rs",
   "crates/kithara-net/src/types.rs",
 ]
+
+[derivable_ranged]
+enabled = true
+severity = "deny"

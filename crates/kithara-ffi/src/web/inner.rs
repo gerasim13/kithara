@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use js_sys::Function;
 use kithara::{
     platform::sync::{Arc, Mutex},
     queue::{RepeatMode, TrackId, Transition},
@@ -9,7 +10,7 @@ use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
-    web::{bridge::WorkerBridge, commands::WorkerCmd},
+    web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
 };
 
 /// Number of EQ bands surfaced through the wasm facade. Module-level
@@ -44,7 +45,7 @@ pub(crate) struct WasmInner {
     playing_rate: AtomicU32,
     volume: AtomicU32,
     muted: Mutex<bool>,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    routes: Routes,
     repeat_mode: Mutex<FfiRepeatMode>,
     bridge: WorkerBridge,
     eq_gains: [AtomicU32; EQ_BANDS],
@@ -52,10 +53,11 @@ pub(crate) struct WasmInner {
 
 impl Default for WasmInner {
     fn default() -> Self {
+        let queue_view: Arc<Mutex<QueueView>> = Arc::new(Mutex::default());
         Self {
             bridge: WorkerBridge::default(),
-            queue_view: Arc::new(Mutex::default()),
-            observer: Mutex::default(),
+            routes: Routes::new(Arc::clone(&queue_view)),
+            queue_view,
             volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
             crossfade_secs: AtomicU32::new(Self::DEFAULT_CROSSFADE_SECONDS.to_bits()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
@@ -106,6 +108,12 @@ impl WasmInner {
                 transition: Transition::None,
             });
         }
+    }
+
+    /// Start (or restart) the analysis pass for a queued track.
+    pub(crate) fn analyze(&self, id: TrackId) -> Result<(), FfiError> {
+        let request_id = Self::next_request_id();
+        self.try_send(WorkerCmd::Analyze { id, request_id })
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
@@ -374,11 +382,6 @@ impl WasmInner {
         self.send(WorkerCmd::SetVolume(volume));
     }
 
-    pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
-        crate::web::observer::router::install(Arc::clone(&observer), Arc::clone(&self.queue_view));
-        *self.observer.lock() = Some(observer);
-    }
-
     pub(crate) fn set_playing_rate(&self, rate: f32) {
         store_f32(&self.playing_rate, rate);
     }
@@ -456,6 +459,12 @@ impl WasmInner {
     }
 
     delegate::delegate! {
+        to self.routes {
+            #[call(set_analysis)]
+            pub(crate) fn set_analysis_observer(&self, func: Function);
+            #[call(set_player)]
+            pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>);
+        }
         to self.bridge {
             #[call(position_secs)]
             pub(crate) fn current_time(&self) -> f64;

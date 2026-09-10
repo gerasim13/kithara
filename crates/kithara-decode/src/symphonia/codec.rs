@@ -37,10 +37,9 @@ use crate::{
 struct Consts;
 
 impl Consts {
-    /// LAME-convention decoder algorithmic delay for the `mpa` MP3
-    /// decoder (528 polyphase synthesis filter convergence + 1 sync
-    /// sample). See [`crate::codec::FrameCodec::decoder_algo_delay`]
-    /// + `kithara-decode/CONTEXT.md` "Gapless probe contract".
+    /// LAME-convention decoder algorithmic delay for the `mpa` MP3 decoder (528
+    /// polyphase synthesis filter convergence + 1 sync sample). See
+    /// [`crate::codec::FrameCodec::decoder_algo_delay`].
     const MP3_DECODER_DELAY: u64 = 528 + 1;
 
     /// Symphonia packets are unidimensional (single audio track) so
@@ -177,6 +176,25 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
+        let frames = self
+            .decoder
+            .codec_params()
+            .max_frames_per_packet
+            .unwrap_or_else(|| {
+                self.codec
+                    .map_or(0, |codec| u64::from(access_unit_frames(codec)))
+            });
+        let samples = usize::try_from(frames)?
+            .checked_mul(usize::from(self.spec.channels))
+            .ok_or(DecodeError::InvalidData {
+                detail: "codec output sample count overflow",
+            })?;
+        out.ensure_len(samples)?;
+        out.clear();
+        Ok(())
+    }
+
     #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
@@ -299,7 +317,8 @@ impl FrameCodec for SymphoniaCodec {
     }
 
     fn priming(&self, codec: AudioCodec) -> CodecPriming {
-        // WHY: AAC (incl. HE-AAC seen as AacLc) requests 2 AU of SBR/PS QMF pre-roll after flush (CONTEXT.md "Seek pre-roll and trim").
+        // WHY: AAC (incl. HE-AAC seen as AacLc) requests 2 AU of SBR/PS QMF pre-roll
+        // after flush.
         match codec {
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
                 packets: 2,
@@ -415,7 +434,7 @@ mod tests {
     fn symphonia_priming_warms_aac_and_defaults_elsewhere() {
         let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
             .expect("BUG: MP3 codec open");
-        // WHY: AAC (incl. HE-AAC seen as AacLc) requests 2-AU SBR pre-roll (CONTEXT.md "Seek pre-roll and trim").
+        // WHY: AAC (incl. HE-AAC seen as AacLc) requests 2-AU SBR pre-roll.
         for c in [AudioCodec::AacLc, AudioCodec::AacHe, AudioCodec::AacHeV2] {
             assert_eq!(
                 codec.priming(c),

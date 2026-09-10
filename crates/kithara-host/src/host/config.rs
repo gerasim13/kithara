@@ -44,9 +44,6 @@ pub enum HostConfig<S> {
         dispatcher: Box<DispatcherConfig>,
         /// Admission, priority, and cancellation configuration for the session task.
         task: TaskConfig,
-        /// Optional automatic test/probe render cadence.
-        #[cfg(any(test, feature = "probe"))]
-        pacing: Option<Duration>,
     },
 }
 

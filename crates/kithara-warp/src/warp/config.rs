@@ -4,7 +4,7 @@ use bon::Builder;
 use firewheel_core::{
     dsp::filter::smoothing_filter::DEFAULT_SETTLE_EPSILON, param::smoother::SmootherConfig,
 };
-use kithara_macros::Patch;
+use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
     not(target_arch = "wasm32"),

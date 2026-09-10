@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -7,37 +7,7 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig, rt::StreamShape, session::SessionError};
-
-fn playback_buffers(
-    shape: StreamShape,
-    quantum: NonZeroUsize,
-    budget: NonZeroUsize,
-) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
-    let output_frames = usize::try_from(shape.max_block_frames.get())
-        .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-    let preload = output_frames.div_ceil(quantum.get());
-    let ring = preload
-        .checked_add(1)
-        .ok_or(SessionError::ResponseGeometryOverflow)?;
-    let required_frames = ring
-        .checked_add(1)
-        .and_then(|chunks| chunks.checked_mul(quantum.get()))
-        .and_then(|frames| frames.checked_sub(1))
-        .ok_or(SessionError::ResponseGeometryOverflow)?;
-    if required_frames > budget.get() {
-        return Err(SessionError::ResponseBudgetExceeded {
-            required_frames,
-            max_block_frames: shape.max_block_frames.get(),
-            render_quantum_frames: quantum.get(),
-            budget_frames: budget.get(),
-        });
-    }
-    Ok((
-        NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
-        NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
-    ))
-}
+use crate::{PlayError, resource::ResourceConfig, session::SessionError};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -67,22 +37,9 @@ where
         // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
         if let Some(quantum) = warp.render_quantum_frames() {
-            let budget = self.player.core.response_budget_frames;
-            let (preload, ring) = if let Some(shape) = stream_shape {
-                playback_buffers(shape, quantum, budget)?
-            } else {
-                let preload = budget
-                    .get()
-                    .checked_add(1)
-                    .map(|frames| frames / quantum.get())
-                    .and_then(|chunks| chunks.checked_sub(2))
-                    .and_then(NonZeroUsize::new)
-                    .ok_or(SessionError::ResponseGeometryOverflow)?;
-                let ring = preload
-                    .checked_add(1)
-                    .ok_or(SessionError::ResponseGeometryOverflow)?;
-                (preload, ring)
-            };
+            let shape = stream_shape.ok_or(SessionError::NoContext)?;
+            let (preload, ring) =
+                shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -112,7 +69,6 @@ where
             bus,
             cancel,
             worker: Some(self.player.core.worker.clone()),
-            consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             block_on_underrun: self.player.core.block_on_underrun,
             audio,
             host_sample_rate,
@@ -152,32 +108,20 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_assets::AssetStore;
-    use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
 
     use super::*;
     use crate::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
+        PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
-        session::{Cmd, Reply, SessionDispatcher, testing},
+        rt::StreamShape,
         test_pools::{TestPools, pools},
     };
-
-    struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
-
-    impl SessionDispatcher<TestPools> for ImmediateSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::ImmediateOffRt
-        }
-
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            self.0.exec(cmd)
-        }
-    }
 
     fn resource_config(source: &str) -> ResourceConfig<TestPools> {
         let pools = pools();
@@ -198,16 +142,16 @@ mod tests {
     ) -> PlayerImpl<TestPools> {
         let shape = StreamShape::new(
             NonZeroU32::new(output_buffer).expect("fixture output block is non-zero"),
-            testing::TEST_SAMPLE_RATE,
+            mock::SAMPLE_RATE,
         );
         let warp = WarpConfig::builder()
             .render_quantum_frames(NonZeroUsize::new(quantum).expect("fixture quantum is non-zero"))
             .build();
         PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session_with_shape(Some(shape)))
+                .session(mock::session_with_shape(Some(shape)))
                 .warp(warp)
                 .response_budget_frames(
                     NonZeroUsize::new(response_budget).expect("fixture budget is non-zero"),
@@ -217,56 +161,17 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_config_propagates_session_consumer_wake_mode_to_audio() {
-        let session: Arc<dyn SessionDispatcher<TestPools>> =
-            Arc::new(ImmediateSession(testing::test_session()));
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
-                .worker(worker())
-                .session(session)
-                .build(),
-        );
 
-        let prepared = player
-            .prepare_config(resource_config("https://example.com/song.mp3"))
-            .expect("test session answers stream-shape queries");
-        assert_eq!(
-            prepared.consumer_wake_mode,
-            Some(ConsumerWakeMode::ImmediateOffRt)
-        );
-        assert_eq!(
-            prepared
-                .decoder
-                .resampler()
-                .expect("known output shape installs resampling")
-                .options()
-                .chunk_size,
-            128
-        );
-        let audio = prepared.build_file_config(player.worker(), None);
-        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
-
-        let prepared = player
-            .prepare_config(resource_config("https://example.com/live.m3u8"))
-            .expect("test session answers stream-shape queries");
-        let audio = prepared
-            .build_hls_config(player.worker(), None)
-            .expect("valid HLS config");
-        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
-    }
-
-    #[kithara::test]
     fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
         let shape = StreamShape::new(
             NonZeroU32::new(128).expect("test block is non-zero"),
-            testing::TEST_SAMPLE_RATE,
+            mock::SAMPLE_RATE,
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session_with_shape(Some(shape)))
+                .session(mock::session_with_shape(Some(shape)))
                 .build(),
         );
 
@@ -296,7 +201,7 @@ mod tests {
     ) {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
                 .warp(
                     WarpConfig::builder()
@@ -335,13 +240,13 @@ mod tests {
         config.decoder = AudioDecoderConfig::builder().resampler(explicit).build();
         let shape = StreamShape::new(
             NonZeroU32::new(128).expect("test block is non-zero"),
-            testing::TEST_SAMPLE_RATE,
+            mock::SAMPLE_RATE,
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(testing::TEST_SAMPLE_RATE)
+                .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(testing::test_session_with_shape(Some(shape)))
+                .session(mock::session_with_shape(Some(shape)))
                 .build(),
         );
 

@@ -727,9 +727,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// slot. Mirrors `AVPlayer.stop` semantics — after `stop()`, the
     /// player is ready to accept a fresh queue via ``insert(_:after:)``.
     public func stop() {
-        _inner.stop()
-        _knownItems.removeAll()
-        publishCurrentItem(nil)
+        removeAllItems()
     }
 
     // MARK: - Network / DRM hooks
