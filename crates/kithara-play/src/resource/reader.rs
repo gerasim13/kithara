@@ -413,7 +413,9 @@ mod tests {
             StreamStatus,
         },
     };
-    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_audio::{
+        AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome, SourceSpan,
+    };
     use kithara_bufpool::PoolRegion;
     use kithara_decode::TrackMetadata;
     use kithara_events::TrackId;
@@ -547,7 +549,12 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
-                source_span: None,
+                source_span: SourceSpan::new(
+                    u64::try_from(self.position_frames - frames.get())
+                        .expect("fixture frame fits u64"),
+                    u64::try_from(self.position_frames).expect("fixture frame fits u64"),
+                    self.spec.sample_rate,
+                ),
             })
         }
         fn read_planar<'a>(
@@ -564,7 +571,12 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: frames,
                 position: self.position_duration(),
-                source_span: None,
+                source_span: SourceSpan::new(
+                    u64::try_from(self.position_frames - frames.get())
+                        .expect("fixture frame fits u64"),
+                    u64::try_from(self.position_frames).expect("fixture frame fits u64"),
+                    self.spec.sample_rate,
+                ),
             })
         }
 
@@ -712,8 +724,7 @@ mod tests {
             .position()
             - first_position;
         let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
-        let expected_advance =
-            f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
+        let expected_advance = f64::from(block_frames) / f64::from(Consts::SAMPLE_RATE);
         assert!((first_advance - expected_advance).abs() < f64::EPSILON);
         assert_eq!(
             processor.playback().rate.load(Ordering::Relaxed),

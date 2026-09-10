@@ -443,15 +443,8 @@ impl ProductHarness {
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
-        let render_block_frames = NonZeroU32::new(
-            u32::try_from(block_frames).expect("offline render block count fits u32"),
-        )
-        .expect("offline render block count is non-zero");
         let spec = AudioSpec::new(CHANNELS, sample_rate);
-        let session = HostConfig::offline(pools)
-            .sample_rate(sample_rate)
-            .max_block_frames(render_block_frames)
-            .build();
+        let session = HostConfig::offline(pools).sample_rate(sample_rate).build();
         let mut host = Host::new(session)
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
         let mut decks = Vec::with_capacity(case.decks);
@@ -461,6 +454,7 @@ impl ProductHarness {
                 PlayerConfig::builder()
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
+                    .block_on_underrun(!paced)
                     .crossfade_duration(case.crossfade_secs)
                     .build(),
             );

@@ -67,9 +67,22 @@ where
         // pair overwrites whatever the document said under `audio:`.
         let mut audio = config.audio;
         if let Some(quantum) = warp.render_quantum_frames() {
-            let shape = stream_shape.ok_or(SessionError::NoContext)?;
-            let (preload, ring) =
-                playback_buffers(shape, quantum, self.player.core.response_budget_frames)?;
+            let budget = self.player.core.response_budget_frames;
+            let (preload, ring) = if let Some(shape) = stream_shape {
+                playback_buffers(shape, quantum, budget)?
+            } else {
+                let preload = budget
+                    .get()
+                    .checked_add(1)
+                    .map(|frames| frames / quantum.get())
+                    .and_then(|chunks| chunks.checked_sub(2))
+                    .and_then(NonZeroUsize::new)
+                    .ok_or(SessionError::ResponseGeometryOverflow)?;
+                let ring = preload
+                    .checked_add(1)
+                    .ok_or(SessionError::ResponseGeometryOverflow)?;
+                (preload, ring)
+            };
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -222,7 +235,15 @@ mod tests {
             prepared.consumer_wake_mode,
             Some(ConsumerWakeMode::ImmediateOffRt)
         );
-        assert!(prepared.decoder.resampler().is_none());
+        assert_eq!(
+            prepared
+                .decoder
+                .resampler()
+                .expect("known output shape installs resampling")
+                .options()
+                .chunk_size,
+            128
+        );
         let audio = prepared.build_file_config(player.worker(), None);
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
 
@@ -235,7 +256,6 @@ mod tests {
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
     }
 
-    #[kithara::test]
     #[kithara::test]
     fn prepare_config_sizes_default_resampling_work_to_the_output_block() {
         let shape = StreamShape::new(
@@ -266,18 +286,42 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_config_without_a_session_keeps_default_resampling_work() {
+    #[case::default(None, 32, 12, 13)]
+    #[case::explicit(Some(64), 64, 5, 6)]
+    fn prepare_config_bounds_unbound_buffering_by_the_response_budget(
+        #[case] configured: Option<usize>,
+        #[case] expected_quantum: usize,
+        #[case] expected_preload: usize,
+        #[case] expected_ring: usize,
+    ) {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(testing::TEST_SAMPLE_RATE)
                 .worker(worker())
+                .warp(
+                    WarpConfig::builder()
+                        .maybe_render_quantum_frames(configured.and_then(NonZeroUsize::new))
+                        .build(),
+                )
                 .build(),
         );
 
         let prepared = player
             .prepare_config(resource_config("https://example.com/song.mp3"))
-            .expect("resources may be prepared before host insertion");
-
+            .expect("resources can be prepared before Host attachment");
+        let quantum = prepared
+            .warp
+            .render_quantum_frames()
+            .expect("default quantum");
+        let preload = prepared
+            .audio
+            .preload_chunks
+            .expect("bounded preload")
+            .get();
+        let ring = prepared.audio.audio_buffer_chunks.expect("bounded ring");
+        assert_eq!(quantum.get(), expected_quantum);
+        assert_eq!((preload, ring), (expected_preload, expected_ring));
+        assert!((ring + 1) * quantum.get() - 1 <= player.core.response_budget_frames.get());
         assert!(prepared.decoder.resampler().is_none());
     }
 

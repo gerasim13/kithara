@@ -23,7 +23,9 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{asset::Asset, assets};
 use kithara_test_utils::probe::{IntoProbeArg, capture as probe_capture, capture::Recorder};
 
-use super::sync_product_matrix::{ProductHarness, Provider, SyncCase};
+use super::sync_product_matrix::{
+    DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, ProductHarness, Provider, SyncCase,
+};
 
 struct Fixture;
 
@@ -75,42 +77,43 @@ pub(super) struct TrackSpan {
     pub(super) first: i64,
     pub(super) last: i64,
     pub(super) served: u64,
+    pub(super) output_frames: u64,
+    source_free_frames: u64,
 }
 
-pub(super) fn spans(recorder: &Recorder, block_frames: i64) -> BTreeMap<u64, TrackSpan> {
-    let mut firings: Vec<(u64, i64, u64)> = recorder
-        .events_with_probe("render")
-        .iter()
-        .filter_map(|event| {
-            let base = event.u64("output_base")?;
-            if base == u64::MAX {
-                return None;
-            }
-            let start: i64 = i64::from_probe_arg(event.u64("range_start")?);
-            Some((
-                event.u64("track_id")?,
-                i64::from_probe_arg(base) + start,
-                event.u64("served_media_frames")?,
-            ))
-        })
-        .collect();
-    firings.sort_by_key(|(track, block, _)| (*track, *block));
+pub(super) fn spans(recorder: &Recorder) -> BTreeMap<u64, TrackSpan> {
     let mut spans = BTreeMap::new();
-    for pair in firings.windows(2) {
-        let ((track, block, served), (next_track, next_block, next_served)) = (pair[0], pair[1]);
-        if track != next_track || next_served <= served {
+    for event in recorder.events_with_probe("render") {
+        let Some(base) = event.u64("output_base").filter(|base| *base != u64::MAX) else {
             continue;
-        }
+        };
+        let Some(frames) = event.u64("rendered_frames").filter(|frames| *frames > 0) else {
+            continue;
+        };
+        let track = event.u64("track_id").expect("render names its track");
+        let offset = event.u64("range_start").expect("render names its offset");
+        let first = i64::from_probe_arg(base) + i64::from_probe_arg(offset);
+        let last = first + i64::try_from(frames).expect("render frame count fits i64");
+        let served = event
+            .u64("served_media_frames")
+            .expect("render names its source frontier");
         spans
             .entry(track)
             .and_modify(|span: &mut TrackSpan| {
-                span.last = next_block + block_frames;
-                span.served = next_served;
+                span.first = span.first.min(first);
+                span.last = span.last.max(last);
+                if span.served == served {
+                    span.source_free_frames += frames;
+                }
+                span.served = served;
+                span.output_frames += frames;
             })
             .or_insert(TrackSpan {
-                first: block,
-                last: next_block + block_frames,
-                served: next_served,
+                first,
+                last,
+                served,
+                output_frames: frames,
+                source_free_frames: 0,
             });
     }
     spans
@@ -234,7 +237,7 @@ async fn seam_rate_persists_into_next_track() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder, block);
+    let spans = spans(&recorder);
     for (index, name) in Fixture::HOUSE_THEN_TECHNO.iter().enumerate() {
         let id: TrackId = harness.ids[0][index];
         let span = spans
@@ -249,8 +252,10 @@ async fn seam_rate_persists_into_next_track() {
         let rendered = span.last - span.first;
         assert!(
             (rendered - expected).abs() <= block,
-            "track {index} `{name}` rendered {rendered} output frames, expected {expected} ± {block} at rate {}",
+            "track {index} `{name}` spans {rendered} frames, produced {} audio frames, expected {expected} ± {block} at rate {}; source-free output frames={}",
+            span.output_frames,
             Fixture::RATE,
+            span.source_free_frames,
         );
     }
 }
@@ -273,7 +278,7 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder, block);
+    let spans = spans(&recorder);
     let b = spans[&harness.ids[0][1].as_u64()];
     let b_first = b.first - origin;
     let played = usize::try_from((b.last - origin) * i64::from(Fixture::CHANNELS))
@@ -299,7 +304,6 @@ async fn seam_off_keeps_the_stream_continuous_at_original_tempo() {
     }
 }
 
-#[ignore = "ignored-red: the seam is armed by the queue tick, not by the RT trigger (plan 1 Task 5), 2026-09-07"]
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn seam_honours_the_configured_crossfade_length() {
     let recorder = probe_capture::install();
@@ -317,7 +321,7 @@ async fn seam_honours_the_configured_crossfade_length() {
             block as usize,
         )
         .await;
-    let spans = spans(&recorder, block);
+    let spans = spans(&recorder);
     let (a, b) = (
         spans[&harness.ids[0][0].as_u64()],
         spans[&harness.ids[0][1].as_u64()],
@@ -364,6 +368,66 @@ async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
         matches!(admission, SyncAdmission::Prepared { .. }),
         "the deck prepares a warp map for a complete track grid, got {admission:?}"
     );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(300)))]
+async fn published_track_grids_align_the_rendered_beats() {
+    let case = DOWNTEMPO_HOUSE_SYNC;
+    let grids = [
+        asset_grid(
+            "rhythm_wav_downtempo_96_aligned",
+            "rhythm_expected_analysis_downtempo_96_aligned",
+        ),
+        asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS),
+    ];
+    let mut tracks = Vec::new();
+    for audible in 0..case.decks() {
+        let mut harness = ProductHarness::new(case, DOWNTEMPO_HOUSE_PROVIDER, audible).await;
+        let _ = harness
+            .capture_frames(
+                case,
+                2 * Fixture::SAMPLE_RATE as usize,
+                harness.block_frames,
+            )
+            .await;
+        harness.request_sync(case).await;
+        for (deck, grid) in grids.iter().enumerate() {
+            let admission = harness
+                .publish_track_grid(
+                    deck,
+                    harness.ids[deck][0],
+                    grid.clone(),
+                    BeatGridState::Complete,
+                )
+                .expect("publish score grid");
+            assert!(
+                matches!(admission, SyncAdmission::Prepared { .. }),
+                "covered score grid must prepare alignment: {admission:?}"
+            );
+        }
+        let _ = harness
+            .capture_frames(case, Fixture::SAMPLE_RATE as usize, harness.block_frames)
+            .await;
+        tracks.push(
+            harness
+                .capture_frames(
+                    case,
+                    3 * Fixture::SAMPLE_RATE as usize,
+                    harness.block_frames,
+                )
+                .await,
+        );
+        assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+    }
+    let tracks = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let failures = marked_synchronization_failures(
+        "published score grids",
+        &tracks,
+        Fixture::CHANNELS,
+        Fixture::SAMPLE_RATE,
+        case.final_bpm(),
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]

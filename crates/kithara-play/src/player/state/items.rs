@@ -129,15 +129,6 @@ impl ItemQueue {
         }))
     }
 
-    /// Tracks with a published grid, paired with that grid.
-    pub(crate) fn track_grids(&self) -> Vec<(TrackId, TrackGrid)> {
-        self.playlist
-            .lock()
-            .track_grids()
-            .map(|(item, grid)| (item, grid.clone()))
-            .collect()
-    }
-
     delegate::delegate! {
         to self.playlist.lock() {
             #[call(clear)]

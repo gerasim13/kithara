@@ -22,6 +22,7 @@ use crate::{
     error::PlayError,
     rt::StreamShape,
     session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
+    sync::DeckGrid,
 };
 
 type SlotHandle = SlotControl;
@@ -83,7 +84,11 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(player_id)?;
+        let allocated = self.session.allocate_slot(
+            player_id,
+            Arc::clone(&self.config.stretch),
+            self.config.rate_smoothing,
+        )?;
         let slot_id = allocated.slot;
 
         self.slots.lock().insert(slot_id, allocated.control);
@@ -414,6 +419,7 @@ impl<S> EngineImpl<S> {
 
     delegate::delegate! {
         to self.slots.lock() {
+            pub(crate) fn publish_deck_grid(&self, grid: DeckGrid);
             pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;

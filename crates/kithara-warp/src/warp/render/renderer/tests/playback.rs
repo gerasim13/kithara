@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
-    render_serviced, renderer, sine, spec,
+    publish_rate, render_serviced, renderer, sine, spec,
 };
 use crate::{Warp, WarpConfig, test_pools::pools};
 
@@ -73,7 +73,9 @@ fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind)
         .stretch(Arc::clone(&controls))
         .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
         .build();
-    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let mut renderer = warp.renderer(spec(), pools());
     renderer.prepare(spec());
     let latency = renderer
         .engine
@@ -91,6 +93,11 @@ fn live_activation_primes_from_passthrough_history(#[case] backend: StretchKind)
     assert_eq!(&unity.samples[..], &source);
 
     let revision = controls.set_speed(2.0);
+    publish_rate(
+        &publisher,
+        controls.rate_target(),
+        u64::try_from(cue).expect("cue fits"),
+    );
     let mut meta = AudioChunkInfo {
         frame_offset: u64::try_from(cue).expect("cue fits u64"),
         spec: spec(),
@@ -139,7 +146,7 @@ fn rendered_quantum_keeps_the_rate_revision_selected_during_planning() {
     let mut renderer = renderer(Arc::clone(&controls));
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
-    let input = chunk(&pools, &sine(128));
+    let input = chunk(&pools, &sine(32));
 
     let frames = renderer
         .prepare_quantum(input.meta, input.frames())
@@ -473,13 +480,17 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let mut fx = warp.renderer(spec(), pools());
     let pools = fx.pools.clone();
     let block = sine(4096);
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
     controls.set_speed(0.5);
+    publish_rate(&publisher, controls.rate_target(), 0);
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
         if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {

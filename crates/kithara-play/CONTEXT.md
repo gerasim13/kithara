@@ -35,17 +35,17 @@ asks it via `resource_headers` - never a second policy source of truth.
 the cache, wildcard and ordering precedence, and header merge order.
 
 ## Per-track producer chain
-`PlayWorker::open` is the sole supported production composition path, and no
-workspace production code can build a second playback scheduling path:
-`PlayWorker` derives its dispatcher from `kithara-worker`, while `kithara-audio`
-exposes only the prepared source and wake contracts. One chain, one final
-output path:
-`decoded source -> WarpRenderer -> custom effects -> final output ring`. The Warp
-wrapper stays resident with sync off. The deck owns its session grid and track
-grids; `Playlist` retains each plan until its Warp slot loads. Building grids
-defer reconciliation; complete grids can prepare it. Plans swap on the next
-chunk; activation and phase application are not yet wired end to end.
-Final-ring readiness does not prove device presentation.
+`PlayWorker::open` solely composes production playback:
+`decoded source -> WarpRenderer -> custom effects -> final output ring`.
+It derives dispatch from `kithara-worker`; `kithara-audio` supplies prepared
+sources and wake contracts. Warp remains resident with sync off. The deck owns
+grids; `Playlist` retains plans until Warp loads them. Building grids defer
+reconciliation; complete grids prepare it. Plans swap per chunk; exact activation
+and phase actuation remain unfinished. Ring readiness is not presentation.
+
+Deck state/grid commits are atomic. Local tempo preserves the current beat;
+the first grid starts at beat zero, while unresolved live geometry rejects.
+HostSync without a parent has unavailable geometry.
 
 At true source EOF `WarpSource` drains the Warp tail through the effect chain
 before `EffectDrain` flushes the effects, preserving multi-pull tails.
@@ -73,14 +73,12 @@ The leading track publishes the deck's effective rate through `PlaybackShared`;
 backendless resource reports `1.0`, and a paused deck or one with no leading
 track reports `0.0`.
 
-`WarpRenderer` runs at `ratio = 1/speed`; key-lock off (the constructed default)
-gives `pitch = speed`, vinyl-style. Speed, key-lock, and backend apply live
-mid-track with no reload, and each `PlayerTrack` re-reads the rate its resource
-applies every render block, so a runtime change moves its media clock as well as
-its DSP. **Without a backend - every wasm build - the same Warp slot stays in the
-chain as an exact identity renderer**: output stays at 1.0. A `kithara-warp`
-region boundary preserves backend history and is not a source discontinuity, and
-stretch changes output frame count, never `AudioSpec.sample_rate`.
+`WarpRenderer` uses `ratio = 1/speed`; key-lock off gives `pitch = speed`.
+`PlayerTrack` counts consumed source-span lengths, excluding trimmed prefixes
+and output-only tails. Absolute source endpoints serve Warp alignment. The
+render probe records actual frames and media position after each read, including
+partial EOF. WASM renders identity at 1.0. Region changes preserve backend
+history; stretch changes frame counts, never `AudioSpec.sample_rate`.
 
 ## Engine Load
 `PlayerCore` creates one address-stable `EngineLoad` meter and passes the same
@@ -89,6 +87,9 @@ stretch changes output frame count, never `AudioSpec.sample_rate`.
 node.
 
 ## Configuration document
+
+Player supplies a 32-frame Warp quantum when unspecified. Before Host binding,
+buffers fit its response budget; Host still admits the measured callback.
 
 `PlayerConfig<S>` is this crate's one player configuration, tunables and
 per-call wiring together. `#[derive(Patch)]` generates `PlayerConfigPatch`,

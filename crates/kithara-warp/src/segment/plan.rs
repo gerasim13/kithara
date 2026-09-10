@@ -1,18 +1,16 @@
 use num_traits::cast::AsPrimitive;
 
-use super::{BeatsPerMinute, SegmentSet};
+use super::SegmentSet;
 use crate::{GridSegment, MapPosition, RegionPlan, RegionPlanError};
 
 impl SegmentSet {
-    /// Plans the stretch that plays every asset segment at the `deck` tempo:
-    /// each segment's correction is its own tempo divided by `deck`.
+    /// Freezes asset tempos independently of the deck that will play them.
     ///
     /// # Errors
     ///
     /// Returns [`RegionPlanError::SessionAxis`] for a session-positioned set
-    /// and the [`RegionPlan`] validation errors for a degenerate correction.
-    pub fn region_plan(&self, deck: BeatsPerMinute) -> Result<RegionPlan, RegionPlanError> {
-        let deck = f64::from(deck);
+    /// and the [`RegionPlan`] validation errors for a degenerate tempo.
+    pub fn region_plan(&self) -> Result<RegionPlan, RegionPlanError> {
         let planned = self
             .segments()
             .iter()
@@ -23,13 +21,13 @@ impl SegmentSet {
                 else {
                     return Err(RegionPlanError::SessionAxis { index });
                 };
-                let correction = segment
+                let beats_per_second = segment
                     .tempo(self.axis())
-                    .map_or(0.0, |tempo| f64::from(tempo) / deck);
+                    .map_or(0.0, |tempo| f64::from(tempo) / 60.0);
                 Ok(GridSegment::new(
                     f64::from(start).as_(),
                     f64::from(end).as_(),
-                    correction,
+                    beats_per_second,
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -44,15 +42,14 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        AssetAxis, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, BeatsPerMinute,
-        FrameUncertainty, MapAxis, MapPosition, MapSegment, RegionPlanError, SegmentFacts,
-        SegmentSet, SessionAxis, SessionEpoch, SessionFrame,
+        AssetAxis, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
+        MapPosition, MapSegment, RegionPlanError, SegmentFacts, SegmentSet, SessionAxis,
+        SessionEpoch, SessionFrame,
     };
 
     struct Consts;
 
     impl Consts {
-        const DECK_BPM: f64 = 60.0;
         const FRAME_COUNT: u64 = 96_000;
         const SAMPLE_RATE: u32 = 48_000;
         const SEGMENT_END: u32 = 48_000;
@@ -86,12 +83,8 @@ mod tests {
         .expect("invariant: fixture markers form an increasing affine relation")
     }
 
-    fn deck() -> BeatsPerMinute {
-        BeatsPerMinute::try_from(Consts::DECK_BPM).expect("invariant: fixture tempo is positive")
-    }
-
     #[kithara::test]
-    fn an_asset_set_plans_one_region_per_segment_corrected_to_the_deck_tempo() {
+    fn an_asset_set_preserves_each_segments_tempo() {
         let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT));
         let set = SegmentSet::new(
             axis,
@@ -103,7 +96,7 @@ mod tests {
         )
         .expect("invariant: one bounded segment is a valid set");
 
-        let plan = set.region_plan(deck()).expect("an asset set yields a plan");
+        let plan = set.region_plan().expect("an asset set yields a plan");
 
         let [region] = plan.segments()[..] else {
             panic!("one segment plans one region, got {plan:?}");
@@ -111,9 +104,9 @@ mod tests {
         assert_eq!(region.start_frame(), 0);
         assert_eq!(region.end_frame(), u64::from(Consts::SEGMENT_END));
         assert!(
-            (region.ratio_correction() - 2.0).abs() < f64::EPSILON,
-            "120 bpm over a 60 bpm deck corrects by 2.0, got {}",
-            region.ratio_correction()
+            (region.beats_per_second() - 2.0).abs() < f64::EPSILON,
+            "120 bpm is 2 beats per second, got {}",
+            region.beats_per_second()
         );
     }
 
@@ -131,7 +124,7 @@ mod tests {
         .expect("invariant: one session segment is a valid set");
 
         assert_eq!(
-            set.region_plan(deck()).unwrap_err(),
+            set.region_plan().unwrap_err(),
             RegionPlanError::SessionAxis { index: 0 }
         );
     }

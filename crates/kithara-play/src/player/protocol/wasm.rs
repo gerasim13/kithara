@@ -7,7 +7,10 @@ use kithara_warp::{
 };
 use portable_atomic::{AtomicF32, Ordering};
 
-use crate::{api::TrackId, sync::GroupState};
+use crate::{
+    api::TrackId,
+    sync::{DeckGrid, GroupState},
+};
 
 pub(crate) struct PlayerSync {
     grid: BeatGridSnapshot,
@@ -21,23 +24,21 @@ impl PlayerSync {
         self.owned.as_ref().ok_or(SyncError::OwnerUnavailable)
     }
 
-    pub(crate) fn publish_session_anchor(
-        &mut self,
-        anchor: SessionAnchor,
-    ) -> Result<(), SyncError> {
-        self.owned
-            .as_mut()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.publish_session_anchor(anchor)
-            })
+    delegate::delegate! {
+        to self.owned.as_mut().ok_or(SyncError::OwnerUnavailable)? {
+            pub(crate) fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError>;
+        }
     }
 
-    pub(crate) fn refresh_session_grid(&mut self, now: SessionFrame) -> Result<(), SyncError> {
-        self.owned
-            .as_mut()
-            .map_or(Err(SyncError::OwnerUnavailable), |owned| {
-                owned.refresh_session_grid(now)
-            })
+    pub(crate) fn transact_at(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+        now: SessionFrame,
+    ) -> Result<(SyncAdmission, Option<DeckGrid>), SyncRejected<PlayerMember>> {
+        match self.owned.as_mut() {
+            Some(owned) => owned.transact_at(operation, now),
+            None => Err(SyncRejected::new(SyncError::OwnerUnavailable, operation)),
+        }
     }
 
     pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {

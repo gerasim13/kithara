@@ -15,6 +15,16 @@ and playback flow. `kithara-warp` owns synchronization and warp contracts. The
 dependency direction is `kithara-host -> kithara-play` and
 `kithara-host -> kithara-warp`; neither lower crate may depend on the Host.
 
+## Output response geometry
+
+Realtime Host requests 128 output frames by default; offline Host also defaults
+to 128 frames per backend block. Offline graph declick duration is unchanged.
+The request is not a measurement: response admission uses the backend's actual
+stream geometry. A device returning an incompatible block size is rejected by
+the existing response-budget check; neither the measured block nor the player's
+448-frame default budget is enlarged or replaced with a requested value.
+An output request can span several offline backend blocks.
+
 ## Offline rendering
 
 `Host` is the sole composition root for both realtime and offline sessions.

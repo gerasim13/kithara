@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::{NonZeroU32, NonZeroUsize};
+
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
@@ -16,6 +18,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
+    worker::DispatcherConfig,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
@@ -187,8 +190,21 @@ fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
+    let sample_rate = NonZeroU32::new(44_100).expect("fixture sample rate is non-zero");
+    let block_frames = NonZeroU32::new(128).expect("fixture block size is non-zero");
+    let cadence =
+        Duration::from_secs_f64(f64::from(block_frames.get()) / f64::from(sample_rate.get()));
     let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
+        .sample_rate(sample_rate)
+        .max_block_frames(block_frames)
+        .pacing(cadence)
+        .dispatcher(
+            DispatcherConfig::builder()
+                .name("local-track-offline")
+                .capacity(NonZeroUsize::MIN)
+                .wait_timeout(cadence)
+                .build(),
+        )
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -366,14 +382,7 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
-    // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
-    // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
-    // blocks for the next progress event (parking the virtual clock so the
-    // render worker is live), `end_pos` drains the latest progress buffered
-    // across the window — so the comparison never touches the REAL-clock-gated
-    // tick cache, which goes stale once these waits collapse real time.
+    // Both endpoints come from progress events while the paced worker renders.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));

@@ -177,9 +177,12 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::AllocateSlot { player_id } => {
-            slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
-        }
+        Cmd::AllocateSlot {
+            player_id,
+            stretch,
+            rate_smoothing,
+        } => slots::allocate_slot(state, player_id, stretch, rate_smoothing)
+            .unwrap_or_else(Reply::Err),
         Cmd::ReleaseSlot { player_id, slot } => match slots::release_slot(state, player_id, slot) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -489,7 +492,9 @@ mod tests {
         sync::atomic::AtomicBool,
     };
 
-    use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
+    use firewheel::{
+        FirewheelCtx, StreamInfo, param::smoother::SmootherConfig, processor::FirewheelProcessor,
+    };
     use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
@@ -498,7 +503,9 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
+    use kithara_warp::{
+        BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis, StretchControls,
+    };
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -1030,7 +1037,14 @@ mod tests {
             })
         ));
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
@@ -1085,7 +1099,14 @@ mod tests {
             "route invalidation must not drop active slots"
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
@@ -1114,7 +1135,14 @@ mod tests {
             1
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(deck(&state, 0).slots.len(), 1);
@@ -1147,7 +1175,14 @@ mod tests {
             "active slot graph must survive stream restart"
         );
         assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            run_cmd(
+                &mut state,
+                Cmd::AllocateSlot {
+                    player_id,
+                    stretch: StretchControls::new(1.0),
+                    rate_smoothing: SmootherConfig::default()
+                }
+            ),
             Reply::SlotAllocated(..)
         ));
         assert_eq!(

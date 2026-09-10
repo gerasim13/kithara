@@ -17,6 +17,7 @@ use std::{
 use kithara::{
     audio::{
         AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+        SourceSpan,
     },
     decode::{DecodeError, TrackMetadata},
     events::EventBus,
@@ -173,7 +174,7 @@ impl AudioRead for TestPcmReader {
         Ok(ReadOutcome::Frames {
             count,
             position: new_position,
-            source_span: None,
+            source_span: SourceSpan::new(start, self.position_frames, self.spec.sample_rate),
         })
     }
 
@@ -218,7 +219,7 @@ impl AudioRead for TestPcmReader {
         Ok(ReadOutcome::Frames {
             count,
             position: new_position,
-            source_span: None,
+            source_span: SourceSpan::new(start, self.position_frames, self.spec.sample_rate),
         })
     }
 

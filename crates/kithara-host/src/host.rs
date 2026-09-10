@@ -502,7 +502,7 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn realtime_config_preserves_output_block_default_and_allows_override() {
+    fn realtime_config_defaults_to_small_blocks_and_allows_override() {
         let default = HostConfig::<TestPools>::builder().build();
         let HostConfig::Realtime {
             output_block_frames,
@@ -511,9 +511,9 @@ mod tests {
         else {
             panic!("default Host config must be realtime");
         };
-        assert_eq!(output_block_frames, None);
+        assert_eq!(output_block_frames, NonZeroU32::new(128));
 
-        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let frames = NonZeroU32::new(256).expect("test block size is non-zero");
         let configured = HostConfig::<TestPools>::builder()
             .output_block_frames(frames)
             .build();

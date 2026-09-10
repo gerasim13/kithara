@@ -50,7 +50,10 @@ impl<S> SessionDispatcher<S> for TestSession {
 }
 
 pub(crate) fn test_session<S>() -> Arc<dyn SessionDispatcher<S>> {
-    test_session_with_shape(None)
+    test_session_with_shape(Some(StreamShape::new(
+        NonZeroU32::new(128).expect("test block size is non-zero"),
+        TEST_SAMPLE_RATE,
+    )))
 }
 
 pub(crate) fn test_session_with_shape<S>(

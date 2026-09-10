@@ -132,16 +132,10 @@ where
         &mut self,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        let mode_or_tempo = matches!(
-            operation,
-            SyncOperation::Sync { .. } | SyncOperation::Tempo { .. }
-        );
-        let admission = self.sync.transact(operation)?;
-        if mode_or_tempo && matches!(admission, SyncAdmission::StateChanged { .. }) {
-            let now = self.runtime.presentation_frontier().output();
-            if let Err(error) = self.refresh_deck_grid(now) {
-                tracing::warn!(%error, "deck session grid did not follow its sync state");
-            }
+        let now = self.runtime.presentation_frontier().output();
+        let (admission, projection) = self.sync.transact_at(operation, now)?;
+        if let Some(projection) = projection {
+            self.runtime.core.engine.publish_deck_grid(projection);
         }
         Ok(admission)
     }
@@ -168,10 +162,6 @@ where
 
     fn commit_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
         self.sync.publish_session_anchor(anchor)?;
-        let sync = &self.sync;
-        #[cfg(target_arch = "wasm32")]
-        let sync = sync.owned()?;
-        self.replan_tracks(sync.deck_tempo());
         Ok(())
     }
 

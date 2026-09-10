@@ -6,9 +6,9 @@ use num_traits::ToPrimitive;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, planned_renderer,
-    render_serviced, renderer, sine, spec,
+    publish_rate, render_serviced, sine, spec,
 };
-use crate::{GridSegment, RegionPlan, Warp, WarpConfig};
+use crate::{GridSegment, RegionPlan, Warp, WarpConfig, test_pools::pools};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -311,7 +311,14 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     let reference_controls = StretchControls::new(0.5);
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
-    let mut reference = renderer(Arc::clone(&reference_controls));
+    let reference_config = WarpConfig::builder()
+        .stretch(Arc::clone(&reference_controls))
+        .build();
+    let mut reference_warp = Warp::new((), &reference_config);
+    let reference_publisher = reference_warp
+        .take_publisher()
+        .expect("fixture owns publisher");
+    let mut reference = reference_warp.renderer(spec(), pools());
     let pools = reference.pools.clone();
     let reference_active = render_serviced(&mut reference, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
@@ -348,6 +355,11 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     );
 
     reference_controls.set_speed(1.0);
+    publish_rate(
+        &reference_publisher,
+        reference_controls.rate_target(),
+        u64::try_from(ACTIVE_FRAMES).expect("fixture fits"),
+    );
     let mut reference_unity = chunk(&pools, &source[split..]);
     reference_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let reference_unity = render_serviced(&mut reference, reference_unity)
@@ -360,13 +372,20 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     let live_config = WarpConfig::builder()
         .stretch(Arc::clone(&live_controls))
         .build();
-    let mut live = Warp::new((), &live_config).renderer(spec(), pools.clone());
+    let mut live_warp = Warp::new((), &live_config);
+    let live_publisher = live_warp.take_publisher().expect("fixture owns publisher");
+    let mut live = live_warp.renderer(spec(), pools.clone());
     let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
     assert_eq!(live_active.frames(), reference_active.frames());
     assert_eq!(live.rendered_source_end(), Some(held_frontier));
 
     live_controls.set_speed(1.0);
+    publish_rate(
+        &live_publisher,
+        live_controls.rate_target(),
+        u64::try_from(ACTIVE_FRAMES).expect("fixture fits"),
+    );
     let mut live_unity = chunk(&pools, &source[split..]);
     live_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let unity_ptr = live_unity.samples.as_ptr();

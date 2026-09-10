@@ -1,10 +1,13 @@
 mod wire {
     use std::num::NonZeroUsize;
 
+    use firewheel::param::smoother::SmootherConfig;
     use kithara_bufpool::PoolRegion;
     use kithara_events::{EventBus, TrackId};
+    use kithara_platform::sync::Arc;
     use kithara_warp::{
-        BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, SyncAdmission, SyncError,
+        BeatGridId, BeatGridIdAllocationError, BeatGridState, SegmentSet, StretchControls,
+        SyncAdmission, SyncError,
     };
 
     use crate::{
@@ -97,6 +100,8 @@ mod wire {
         },
         AllocateSlot {
             player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
         },
         ReleaseSlot {
             player_id: PlayerId,
@@ -227,6 +232,7 @@ mod wire {
 mod handle {
     use std::num::{NonZeroU32, NonZeroUsize};
 
+    use firewheel::param::smoother::SmootherConfig;
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
@@ -234,7 +240,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_warp::BeatGridId;
+    use kithara_warp::{BeatGridId, StretchControls};
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
@@ -328,8 +334,17 @@ mod handle {
             }))
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+        pub fn allocate_slot(
+            &self,
+            player_id: PlayerId,
+            stretch: Arc<StretchControls>,
+            rate_smoothing: SmootherConfig,
+        ) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::AllocateSlot {
+                player_id,
+                stretch,
+                rate_smoothing,
+            })? {
                 Reply::SlotAllocated(allocated) => Ok(allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),

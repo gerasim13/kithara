@@ -39,12 +39,12 @@ use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+const BLOCK_FRAMES: usize = 128;
 const CAPTURE_SECS: u32 = 2;
 const CAPTURE_START_SECS: f64 = 10.0;
 const CAPTURE_START_STEP_SECS: f64 = 4.0;
 const MAX_SEEK_SECS: u32 = 8;
-const CONTROL_SETTLE_BLOCKS: usize = 4;
+const CONTROL_SETTLE_BLOCKS: usize = 4 * 512 / BLOCK_FRAMES;
 const MIX_HEADROOM: f32 = 0.5;
 const MIN_FIXED_STEM_RMS_DBFS: f64 = -50.0;
 const MIN_DECK_CONTRIBUTION_RATIO: f64 = 0.02;

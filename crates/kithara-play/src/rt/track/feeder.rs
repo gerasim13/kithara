@@ -139,15 +139,23 @@ impl PlayerResource {
         self.resource.get().cached_span().as_secs_f64()
     }
 
-    fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
+    fn consume_source(
+        &mut self,
+        mut frames: usize,
+        context: Option<&RenderContext>,
+    ) -> Option<u64> {
+        let mut source_frames = 0u64;
         let mut output_start = 0usize;
         while frames > 0 {
-            let Some(mut span) = self.source_spans.pop_front() else {
-                break;
-            };
+            let mut span = self.source_spans.pop_front()?;
             let consumed = frames.min(span.frames);
             let output_end = output_start.saturating_add(consumed);
-            match (context, span.take(consumed)) {
+            let source = span.take(consumed);
+            if let Some(source) = source {
+                source_frames =
+                    source_frames.checked_add(source.end().checked_sub(source.start())?)?;
+            }
+            match (context, source) {
                 (Some(context), Some(source)) => {
                     kithara::probe_event!(
                         pcm_consumed,
@@ -162,10 +170,10 @@ impl PlayerResource {
                     );
                     self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
                 }
-                (_, source) => {
-                    self.last_source_end =
-                        source.map(|source| SourceEnd::new(source.end(), source.sample_rate()));
+                (None, Some(source)) => {
+                    self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
                 }
+                (_, None) => {}
             }
             frames -= consumed;
             output_start = output_end;
@@ -173,9 +181,7 @@ impl PlayerResource {
                 self.source_spans.push_front(span);
             }
         }
-        if frames > 0 {
-            self.last_source_end = None;
-        }
+        Some(source_frames)
     }
 
     /// Decoded-ahead frontier in seconds: how much content has been decoded
@@ -218,6 +224,13 @@ impl PlayerResource {
                 }
             };
             if n == 0 {
+                break;
+            }
+            if source
+                .is_some_and(|span| span.sample_rate() != self.resource.get().spec().sample_rate)
+            {
+                metrics.record_decode_error();
+                self.failed = true;
                 break;
             }
             self.source_spans
@@ -272,7 +285,7 @@ impl PlayerResource {
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
-        self.read_with_context(None, output, range, metrics)
+        self.read_with_context(None, output, range, metrics).0
     }
 
     pub(crate) fn read_with_context(
@@ -281,7 +294,7 @@ impl PlayerResource {
         output: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
-    ) -> ReadOutcome {
+    ) -> (ReadOutcome, u64) {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
@@ -290,7 +303,7 @@ impl PlayerResource {
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            return ReadOutcome::Failed;
+            return (ReadOutcome::Failed, 0);
         }
 
         if self.write_len > 0 {
@@ -304,7 +317,15 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
-            self.consume_source(frames_to_write, context);
+            let Some(source_frames) = self.consume_source(frames_to_write, context) else {
+                metrics.record_decode_error();
+                self.failed = true;
+                self.last_source_end = None;
+                self.source_spans.clear();
+                self.write_len = 0;
+                self.write_pos = 0;
+                return (ReadOutcome::Failed, 0);
+            };
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -321,7 +342,7 @@ impl PlayerResource {
                 eof_reached |= self.fill_scratch(target, metrics);
             }
 
-            if frames_to_write == frames_to_read {
+            let outcome = if frames_to_write == frames_to_read {
                 ReadOutcome::Full {
                     frames: frames_to_write,
                 }
@@ -337,16 +358,17 @@ impl PlayerResource {
                 ReadOutcome::Full {
                     frames: frames_to_write,
                 }
-            }
+            };
+            (outcome, source_frames)
         } else if eof_reached {
-            ReadOutcome::Eof
+            (ReadOutcome::Eof, 0)
         } else {
             metrics.record_underrun();
             let range_len = range.len();
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            ReadOutcome::Full { frames: 0 }
+            (ReadOutcome::Full { frames: 0 }, 0)
         }
     }
 

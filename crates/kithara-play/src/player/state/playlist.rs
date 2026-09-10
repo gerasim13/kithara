@@ -93,13 +93,6 @@ impl Playlist {
         track.plan = plan;
     }
 
-    /// Tracks with a published grid, paired with that grid.
-    pub(crate) fn track_grids(&self) -> impl Iterator<Item = (TrackId, &TrackGrid)> {
-        self.tracks
-            .iter()
-            .filter_map(|(item, track)| Some((*item, track.grid.as_ref()?)))
-    }
-
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
         let pos = at.map_or(self.items.len(), |i| i.min(self.items.len()));
         self.items.insert(pos, Some(q));

@@ -80,7 +80,8 @@ impl StretchControls {
         self.engine.keylock.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn rate_target(&self) -> RateTarget {
+    #[must_use]
+    pub fn rate_target(&self) -> RateTarget {
         RateTarget::unpack(self.target.load(Ordering::Acquire))
     }
 

@@ -46,8 +46,12 @@ contracts for the later actuator integration.
 
 `WarpConfig` is built with `bon`, uses `fieldwork` for read access, and carries
 the shared `StretchControls` owned by the resident identity `Warp<S>`. On
-native targets it also carries backend preparation, source-block, smoothing,
-and optional render-quantum settings expressed in frames. The identity
+native targets it also carries backend preparation, source-block and optional
+render-quantum settings expressed in frames. Standalone Warp leaves the quantum
+unspecified; Player supplies 32 frames when omitted, so playback uses bounded
+prefill/ring admission before observing the next control publication.
+Rate smoothing uses Firewheel
+`SmootherConfig` and runs once per output block in the playback owner. The identity
 renderer deliberately ignores temporal intent while preserving the same stage
 contract. Every renderer receives the caller's configured `PoolRegion<S>`; it
 never creates a pool region. Source ownership, cancellation, worker resources,
@@ -65,3 +69,26 @@ Fixed-ratio sample-rate conversion remains owned by `kithara-decode`; it is not
 a substitute Warp backend because resampling changes pitch. Targets without an
 elastic backend report playback-rate capability as unavailable and preserve
 decoded samples through the identity renderer.
+
+
+## Published render rate
+
+Asset region plans contain beats per source second, independent of deck tempo.
+In Off mode, Warp uses the published smoothed manual multiplier. In HostSync
+and LocalSync it derives source seconds per output second from the published
+deck beat span divided by asset tempo, ignoring the manual multiplier. Missing
+asset geometry or a stationary beat span preserves original tempo; it does not
+establish phase lock. The playback owner projects local deck anchors onto the
+Host output frame span before publication. HostSync uses the current Host span.
+
+The output owner publishes the applied multiplier and request revision together
+in `RenderContext`. Warp does not smooth that value or resample a live speed
+control during rendering. Preparing a source quantum pins its context until
+that quantum renders, even if a newer publication arrives in between.
+
+Before the first presentation frontier exists, a worker must prefill the track.
+The renderer captures the initial control target at construction for this
+bootstrap phase. Subsequent rate changes arrive through the publisher; clearing
+a context does not reactivate control polling. A standalone renderer caller
+that changes rate must likewise publish its output context. Backend and keylock
+selection remain separate live controls. WASM identity behavior is unchanged.

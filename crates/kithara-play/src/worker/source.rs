@@ -651,7 +651,10 @@ mod tests {
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
-    use kithara_warp::{StretchControls, StretchKind};
+    use kithara_warp::{
+        PresentationFrontier, RenderContext, SessionEpoch, SessionFrame, StretchControls,
+        StretchKind, SyncMode, Warp,
+    };
 
     use super::*;
     use crate::test_pools::{TestPools, pools, pools_with_budget};
@@ -691,7 +694,7 @@ mod tests {
                 NonZeroUsize::new(quantum_frames).expect("test quantum is non-zero"),
             )
             .build();
-        let warp = kithara_warp::Warp::new((), &config);
+        let warp = Warp::new((), &config);
         let renderer = warp.renderer(spec, pools.clone());
         let drain = EffectDrain::new(effects.len(), pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
@@ -1074,6 +1077,55 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case::unity(1.0, 1_387)]
+    #[case::stretched(1.5, 925)]
+    fn decoder_timestamp_gap_does_not_discard_pcm(
+        #[case] rate: f32,
+        #[case] minimum_frames: usize,
+    ) {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pools = pools();
+        let source = RawSource {
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 1_024, 363, 0.25),
+                chunk_with_frames(&pools, spec, 2_048, 1_024, 0.25),
+            ]),
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(StretchControls::new(rate))
+            .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum"))
+            .build();
+        let warp = Warp::new((), &config);
+        let renderer = warp.renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+        let mut source = WarpSource::new(source, renderer, Vec::new(), drain, spec, pools);
+        let mut output_frames = 0;
+        let mut eof = false;
+
+        for _ in 0..512 {
+            flush_deferred(&mut source);
+            match source.step_track() {
+                TrackStep::Produced(Fetch::Data { data, .. }) => output_frames += data.frames(),
+                TrackStep::StateChanged => {}
+                TrackStep::Eof => {
+                    eof = true;
+                    break;
+                }
+                _ => panic!("timestamp gaps must not fail decoded PCM delivery"),
+            }
+        }
+
+        assert!(eof, "both decoded ranges must reach EOF");
+        assert!(
+            output_frames >= minimum_frames,
+            "both decoded ranges must be rendered: {output_frames} < {minimum_frames}"
+        );
+        assert_eq!(source.source.chunks.len(), 0, "both source chunks consumed");
+    }
+
+    #[kithara::test]
     fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
@@ -1288,7 +1340,9 @@ mod tests {
                 NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
             )
             .build();
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let mut warp = Warp::new((), &config);
+        let publisher = warp.take_publisher().expect("fixture owns publisher");
+        let renderer = warp.renderer(spec, pools.clone());
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
@@ -1309,6 +1363,23 @@ mod tests {
         }
 
         controls.set_speed(1.0);
+        let frame = SessionFrame::new(i64::from(ACTIVE_FRAMES));
+        let context = RenderContext::new(
+            frame..frame,
+            spec.sample_rate,
+            None,
+            SessionEpoch::new(0),
+            None,
+        )
+        .expect("fixture context")
+        .with_rate(SyncMode::Off, controls.rate_target());
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(first_active_end)
+                .output(frame)
+                .build(),
+        );
         let transition = source.step_track();
         assert!(matches!(
             &transition,
@@ -1375,7 +1446,7 @@ mod tests {
             .stretch(controls)
             .build();
         let target_pools = pools_with_budget(0);
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
+        let renderer = Warp::new((), &config).renderer(spec, target_pools.clone());
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &target_pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));

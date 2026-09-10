@@ -1,8 +1,8 @@
 use kithara_platform::sync::Arc;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatsPerMinute,
-    ReconcileCause, SegmentSet, SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncMember, SyncOperation, SyncStatusSnapshot, TopologyOperation,
+    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, ReconcileCause,
+    SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember, SyncOperation,
+    SyncStatusSnapshot, TopologyOperation,
 };
 use tracing::warn;
 
@@ -88,7 +88,7 @@ where
         let sync = &self.sync;
         #[cfg(target_arch = "wasm32")]
         let sync = sync.owned()?;
-        self.replan_track(item, sync.deck_tempo());
+        self.replan_track(item);
         let (load, transport) = sync.generations();
         let frontier = self.runtime.presentation_frontier();
         self.transact_sync(SyncOperation::Reconcile {
@@ -131,33 +131,15 @@ where
         self.sync.acknowledge(applied).map(Some)
     }
 
-    /// Recomputes the region plan of every track with a grid for the current
-    /// deck tempo.
-    pub(crate) fn replan_tracks(&self, tempo: Option<BeatsPerMinute>) {
-        for (item, _) in self.runtime.core.items.track_grids() {
-            self.replan_track(item, tempo);
-        }
-    }
-
-    pub(crate) fn refresh_deck_grid(&mut self, now: SessionFrame) -> Result<(), SyncError> {
-        self.sync.refresh_session_grid(now)?;
-        let sync = &self.sync;
-        #[cfg(target_arch = "wasm32")]
-        let sync = sync.owned()?;
-        self.replan_tracks(sync.deck_tempo());
-        Ok(())
-    }
-
-    fn replan_track(&self, item: TrackId, tempo: Option<BeatsPerMinute>) {
+    fn replan_track(&self, item: TrackId) {
         let Some(grid) = self.runtime.core.items.track_grid(item) else {
             return;
         };
-        let plan = tempo.and_then(|tempo| {
-            grid.segments
-                .region_plan(tempo)
-                .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
-                .ok()
-        });
+        let plan = grid
+            .segments
+            .region_plan()
+            .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
+            .ok();
         self.runtime
             .core
             .items

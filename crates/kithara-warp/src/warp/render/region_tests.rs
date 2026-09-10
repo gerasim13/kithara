@@ -6,7 +6,8 @@ use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
 use crate::{
-    GridSegment, RegionPlan, RegionPlanError, StretchControls, Warp, WarpConfig,
+    GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
+    SessionEpoch, SessionFrame, StretchControls, SyncMode, TransportRevision, Warp, WarpConfig,
     test_pools::{Pools, pools, sample_buffer},
 };
 
@@ -96,12 +97,40 @@ fn add_click(buf: &mut [f32], frame: usize) {
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+    render_on_grid(backend, speed, plan, source, (SyncMode::HostSync, 1.0))
+}
+
+#[kithara::hang_watchdog]
+fn render_on_grid(
+    backend: StretchKind,
+    speed: f32,
+    plan: Option<RegionPlan>,
+    source: &[f32],
+    grid: (SyncMode, f64),
+) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let config = WarpConfig::builder().stretch(controls).build();
-    let warp = Warp::new((), &config);
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut warp = Warp::new((), &config);
+    let publisher = warp.take_publisher().expect("fixture owns publisher");
+    let context = RenderContext::new(
+        SessionFrame::new(0)..SessionFrame::new(i64::from(SR)),
+        spec().sample_rate,
+        Some(SessionBeat::default()..SessionBeat::new(grid.1).expect("beat")),
+        SessionEpoch::new(0),
+        Some(TransportRevision::first()),
+    )
+    .expect("fixture context")
+    .with_rate(grid.0, controls.rate_target());
+    publisher.publish(
+        &context,
+        PresentationFrontier::builder()
+            .source(0)
+            .output(SessionFrame::new(0))
+            .build(),
+    );
     warp.region_plan().install(plan.map(Arc::new));
     let mut fx = warp.renderer(spec(), pools.clone());
     let mut out = Vec::new();
@@ -192,7 +221,7 @@ fn rms_profile(mono: &[f32]) -> (f32, f32) {
 }
 
 #[kithara::test]
-fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
+fn plan_rejects_inverted_overlapping_and_bad_tempo_segments() {
     assert!(matches!(
         RegionPlan::new(vec![seg(10, 10, 1.0)]),
         Err(RegionPlanError::Inverted { index: 0 })
@@ -221,11 +250,11 @@ fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
 fn region_lookup_covers_segments_and_gaps() {
     let plan = RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
     let cases = [
-        (0_u64, 0_u64, 100_u64, 1.0),
-        (150, 100, 200, 1.1),
-        (250, 200, 300, 1.0),
-        (350, 300, 400, 0.9),
-        (450, 400, u64::MAX, 1.0),
+        (0_u64, 0_u64, 100_u64, None),
+        (150, 100, 200, Some(1.1)),
+        (250, 200, 300, None),
+        (350, 300, 400, Some(0.9)),
+        (450, 400, u64::MAX, None),
     ];
     for (frame, start, end, correction) in cases {
         let r = plan.region_at(frame);
@@ -234,11 +263,7 @@ fn region_lookup_covers_segments_and_gaps() {
             (start, end),
             "bounds at frame {frame}"
         );
-        assert!(
-            (r.correction() - correction).abs() < 1e-12,
-            "correction at frame {frame}: got {}, want {correction}",
-            r.correction()
-        );
+        assert_eq!(r.beats_per_second(), correction);
         assert!(r.contains(frame));
     }
 }
@@ -371,6 +396,10 @@ fn empty_plan_matches_no_plan(#[case] backend: StretchKind) {
     let with = render(backend, 0.5, Some(empty), &src);
     let without = render(backend, 0.5, None, &src);
     assert_eq!(
+        without, src,
+        "HostSync without asset geometry must preserve original audio and ignore manual speed"
+    );
+    assert_eq!(
         with.len(),
         without.len(),
         "empty plan must not change output sizing"
@@ -380,4 +409,34 @@ fn empty_plan_matches_no_plan(#[case] backend: StretchKind) {
         min_rms >= median_rms * 0.5,
         "empty plan dented the envelope: min {min_rms}, median {median_rms}"
     );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(#[case] backend: StretchKind) {
+    let frames = NOMINAL * BARS;
+    let mut source = silence(frames);
+    for beat in 0..BARS {
+        add_click(&mut source, beat * NOMINAL + 8192);
+    }
+    for (mode, bps, interval) in [
+        (SyncMode::HostSync, 2.0, NOMINAL),
+        (SyncMode::LocalSync, 1.5, NOMINAL * 4 / 3),
+    ] {
+        let plan = RegionPlan::new(vec![seg(0, frames, 2.0)]).expect("120 BPM asset");
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, (mode, bps));
+        let clicks = click_positions(&mono(&output));
+        assert_eq!(clicks.len(), BARS, "every source beat survives {mode:?}");
+        for pair in clicks.windows(2) {
+            let actual = pair[1] - pair[0];
+            assert!(
+                actual.abs_diff(interval) <= interval / 20,
+                "{mode:?}: beat interval {actual}, expected {interval}"
+            );
+        }
+    }
 }

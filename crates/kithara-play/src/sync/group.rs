@@ -8,12 +8,14 @@ use kithara_warp::{
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, LoadGeneration, MapAxis,
     MapPoint, MapPosition, MapRegion, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
     SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
-    SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp, TransportRevision,
-    WarpMapRevision,
+    SyncGroupSnapshot, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyRevision, TopologyStamp,
+    TransportRevision, WarpMapRevision,
 };
 
-use super::{TempoSource, prepare::PreparedSync, topology::materialize_topology, transaction};
+use super::{
+    DeckGrid, TempoSource, prepare::PreparedSync, topology::materialize_topology, transaction,
+};
 
 /// Canonical mutable state for one recursive synchronization group.
 ///
@@ -81,25 +83,87 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// [`SyncMode::HostSync`] republishes this group's session grid on it.
     pub fn publish_session_anchor(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
         if self.mode == SyncMode::HostSync {
-            self.publish_session_grid(anchor)?;
+            let candidate = self.session_candidate(anchor)?;
+            self.publish_grid(candidate)?;
         }
         self.parent_anchor = Some(anchor);
         Ok(())
     }
 
-    /// Republishes this group's session grid so it follows the current mode:
-    /// the parent's anchor under `HostSync`, the local tempo continuing from
-    /// the beat under `now` under `LocalSync`, and no grid at all when `Off`.
-    pub fn refresh_session_grid(&mut self, now: SessionFrame) -> Result<(), SyncError> {
-        match (self.mode, self.tempo) {
+    /// Commits a deck state change and its session grid as one transaction.
+    pub(crate) fn transact_at(
+        &mut self,
+        operation: SyncOperation<G>,
+        now: SessionFrame,
+    ) -> Result<(SyncAdmission, Option<DeckGrid>), SyncRejected<G>> {
+        let state = if operation.target() == self.grid.id() {
+            match &operation {
+                SyncOperation::Sync {
+                    intent: SyncIntent::Enable,
+                    ..
+                } => Some((SyncMode::HostSync, TempoSource::Inherited)),
+                SyncOperation::Sync {
+                    intent: SyncIntent::Disable,
+                    ..
+                } => self
+                    .seed_local_tempo()
+                    .map(|tempo| (SyncMode::LocalSync, TempoSource::Local(tempo))),
+                SyncOperation::Sync {
+                    intent: SyncIntent::Free,
+                    ..
+                } => Some((SyncMode::Off, TempoSource::Inherited)),
+                SyncOperation::Tempo { tempo, .. } if self.mode == SyncMode::LocalSync => {
+                    Some((SyncMode::LocalSync, TempoSource::Local(*tempo)))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let candidate = state
+            .map(|(mode, tempo)| self.state_grid(mode, tempo, now))
+            .transpose();
+        let candidate = match candidate {
+            Ok(candidate) => candidate,
+            Err(error) => return Err(SyncRejected::new(error, operation)),
+        };
+        if let Some(candidate) = &candidate
+            && let Err(error) = self.validate_grid(&candidate.0)
+        {
+            return Err(SyncRejected::new(error, operation));
+        }
+        let admission = self.transact(operation)?;
+        let projection = if matches!(admission, SyncAdmission::StateChanged { .. }) {
+            candidate.map(|(grid, projection)| {
+                self.grid = grid;
+                projection
+            })
+        } else {
+            None
+        };
+        Ok((admission, projection))
+    }
+
+    fn state_grid(
+        &self,
+        mode: SyncMode,
+        tempo: TempoSource,
+        now: SessionFrame,
+    ) -> Result<(BeatGridSnapshot, DeckGrid), SyncError> {
+        match (mode, tempo) {
             (SyncMode::HostSync, _) => self
                 .parent_anchor
-                .map_or(Ok(()), |anchor| self.publish_session_grid(anchor)),
+                .map_or_else(
+                    || self.unavailable_session_candidate(),
+                    |anchor| self.session_candidate(anchor),
+                )
+                .map(|grid| (grid, DeckGrid::Host)),
             (SyncMode::LocalSync, TempoSource::Local(tempo)) => {
                 let origin = MapPoint::new(self.grid.stamp(), MapPosition::Session(now));
-                let beat = match self.grid.beat_at(origin) {
-                    BeatGridQuery::Resolved(estimate) => f64::from(*estimate.value().value()),
-                    _ => 0.0,
+                let beat = match (self.grid.state(), self.grid.beat_at(origin)) {
+                    (_, BeatGridQuery::Resolved(estimate)) => f64::from(*estimate.value().value()),
+                    (BeatGridState::Unavailable(_), _) => 0.0,
+                    (state, _) => return Err(SyncError::InvalidGroupGridState { state }),
                 };
                 let beat =
                     SessionBeat::new(beat).map_err(|_| SyncError::InvalidGroupGridState {
@@ -114,14 +178,17 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 .map_err(|_| SyncError::InvalidGroupGridState {
                     state: self.grid.state(),
                 })?;
-                self.publish_session_grid(anchor)
+                self.session_candidate(anchor)
+                    .map(|grid| (grid, DeckGrid::Local(anchor)))
             }
             (SyncMode::LocalSync, TempoSource::Inherited) => {
                 Err(SyncError::InvalidGroupGridState {
                     state: self.grid.state(),
                 })
             }
-            (SyncMode::Off, _) => self.publish_unavailable_session_grid(),
+            (SyncMode::Off, _) => self
+                .unavailable_session_candidate()
+                .map(|grid| (grid, DeckGrid::Off)),
         }
     }
 
@@ -147,10 +214,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             })
     }
 
-    fn publish_session_grid(&mut self, anchor: SessionAnchor) -> Result<(), SyncError> {
+    fn session_candidate(&self, anchor: SessionAnchor) -> Result<BeatGridSnapshot, SyncError> {
         let axis = self.session_axis()?;
         let revision = self.next_grid_revision()?;
-        self.publish_grid(BeatGridSnapshot::session(
+        Ok(BeatGridSnapshot::session(
             self.grid.id(),
             revision,
             axis.epoch(),
@@ -159,7 +226,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ))
     }
 
-    fn publish_unavailable_session_grid(&mut self) -> Result<(), SyncError> {
+    fn unavailable_session_candidate(&self) -> Result<BeatGridSnapshot, SyncError> {
         let axis = self.session_axis()?;
         let revision = self.next_grid_revision()?;
         let epoch = if self.grid.state() == BeatGridState::Live {
@@ -172,11 +239,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         } else {
             axis.epoch()
         };
-        self.publish_unavailable_grid(
-            BeatGridStamp::new(self.grid.id(), revision),
-            axis.sample_rate(),
-            epoch,
-        )
+        Ok(BeatGridSnapshot::unavailable(
+            self.grid.id(),
+            revision,
+            MapAxis::Session(SessionAxis::new(axis.sample_rate(), epoch)),
+        ))
     }
 
     /// Publishes a later immutable grid snapshot for this stable owner.
@@ -186,6 +253,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Returns [`SyncError`] when the candidate changes identity or axis, moves
     /// the revision backwards, or violates the group-grid lifecycle.
     pub fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError> {
+        self.validate_grid(&candidate)?;
+        if candidate.stamp() != self.grid.stamp() {
+            self.grid = candidate;
+        }
+        Ok(())
+    }
+
+    fn validate_grid(&self, candidate: &BeatGridSnapshot) -> Result<(), SyncError> {
         let given = candidate.stamp();
         if given.grid_id() != self.grid.id() {
             return Err(SyncError::GridIdentityMismatch {
@@ -247,7 +322,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 given: candidate_axis,
             });
         }
-        self.grid = candidate;
         Ok(())
     }
 
