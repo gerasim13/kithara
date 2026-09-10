@@ -10,7 +10,7 @@ use super::{
     container::{Container, container},
     profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor},
 };
-use crate::ci::{config::CiPins, process::Process};
+use crate::ci::{cache::client_environment, config::CiPins, process::Process};
 
 /// Where the services live and what they call.
 ///
@@ -293,6 +293,10 @@ fn unit(
     for entry in Container::environment() {
         write!(unit, " --env {entry}")?;
     }
+    if let Some(path) = &host.sccache_s3_env_file {
+        client_environment(path)?;
+        write!(unit, " --env-file {}", path.display())?;
+    }
     for (volume, target) in &job.mounts {
         let mount_type = Container::mount_type(volume);
         write!(
@@ -350,6 +354,8 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use clap::Parser;
 
     use super::*;
@@ -471,6 +477,36 @@ mod tests {
         for entry in Container::environment() {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
+    }
+
+    #[test]
+    fn a_unit_inherits_the_configured_s3_cache_environment() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let env_file = directory.path().join("cache.env");
+        std::fs::write(
+            &env_file,
+            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+        )
+        .expect("write cache environment");
+        std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict cache environment");
+
+        let mut host = host_fixture();
+        host.sccache_s3_env_file = Some(env_file.clone());
+        let pins = &fixture().pins;
+        let text = unit(
+            &host,
+            host.runner("kithara-ci-octocat").expect("runner"),
+            "0,1,2",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+
+        assert!(
+            text.contains(&format!("--env-file {}", env_file.display())),
+            "{text}"
+        );
     }
 
     /// The whole fleet declares one runtime directory, so systemd must be told
