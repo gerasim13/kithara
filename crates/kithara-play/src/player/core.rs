@@ -11,7 +11,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_warp::WarpConfig;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use self::lifecycle::{CloseAdmission, PlayerLifecycle};
 pub use self::player::PlayerImpl;
@@ -141,7 +141,7 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.cancel();
     }
 
-    /// Remove all items from the queue.
+    /// Remove all items, release the active slot, and stop the engine.
     pub fn remove_all_items(&self)
     where
         S: HasPool<f32>,
@@ -151,8 +151,25 @@ impl<S> PlayerRuntime<S> {
         self.set_status(PlayerStatus::Unknown);
         // The item the held start position belongs to is gone with the queue.
         *self.core.start_position.lock() = None;
+        let slot = self.slot();
         let _ = self.send_to_slot(PlayerCmd::Clear);
+
+        if self.core.engine.is_running() {
+            if let Some(slot) = slot
+                && let Err(error) = self.core.engine.release_slot(slot)
+            {
+                warn!(?slot, ?error, "failed to release player slot during stop");
+            }
+            if let Err(error) = self.core.engine.stop() {
+                warn!(?error, "failed to stop player engine");
+            }
+        }
+
         self.enter_stopped();
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!("all items removed");
     }
 
@@ -542,6 +559,36 @@ mod tests {
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"
         );
+    }
+
+    #[kithara::test]
+    fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
+        let player = player();
+        player.play();
+        assert!(player.engine().is_running(), "setup must start the engine");
+        assert!(player.slot().is_some(), "setup must allocate a slot");
+
+        player.remove_all_items();
+
+        assert!(
+            !player.engine().is_running(),
+            "remove_all_items must stop the engine"
+        );
+        assert!(
+            player.slot().is_none(),
+            "remove_all_items must release slot ownership"
+        );
+        assert!(player.current_abr_handle().is_none());
+        assert!((player.rate() - 0.0).abs() < f32::EPSILON);
+
+        player.play();
+
+        assert!(
+            player.engine().is_running(),
+            "play must restart the stopped engine"
+        );
+        assert!(player.slot().is_some(), "play must allocate a fresh slot");
+        player.remove_all_items();
     }
 
     #[kithara::test]
