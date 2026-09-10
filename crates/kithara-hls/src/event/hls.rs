@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
-use crate::{Event, SeekEpoch};
+use kithara_events::Event;
+use kithara_stream::SeekEpoch;
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum HlsError {
+pub enum HlsFailure {
     /// Playlist parse / structure error.
     #[display("playlist: {_0}")]
     Playlist(String),
@@ -80,7 +81,7 @@ pub enum HlsEvent {
         to_segment_index: usize,
     },
     /// HLS-specific error (non-network).
-    Error { error: HlsError },
+    Error { error: HlsFailure },
     /// Active variant is fully cached for offline-ready playback.
     CacheComplete { total_bytes: Option<u64> },
     /// Stream ended (reader hit EOF).

@@ -9,7 +9,7 @@ use std::{
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
 use kithara_bufpool::HasPool;
-use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
+use kithara_events::EventBus;
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
@@ -17,6 +17,7 @@ use kithara_stream::dl::{OnCompleteFn, WriterFn};
 use tracing::{debug, error};
 
 use crate::{
+    DrmEvent, HlsEvent, HlsFailure,
     segment::state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
     signal::SizeSignal,
     variant::{HlsVariant, PlanRevision},
@@ -420,7 +421,7 @@ where
                     "terminal fetch failure — slot parked Failed, will not re-dispatch"
                 );
                 bus.publish(HlsEvent::Error {
-                    error: EventHlsError::Other("segment fetch failed".to_string()),
+                    error: HlsFailure::Other("segment fetch failed".to_string()),
                 });
                 handle.into_failed();
             } else {

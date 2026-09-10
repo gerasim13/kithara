@@ -192,12 +192,11 @@ pub mod prelude {
     };
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "hls")]
-    pub use kithara_events::HlsEvent;
     pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig, FileEvent};
     #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig};
+    pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
     pub use kithara_play::{
         EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
         PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,

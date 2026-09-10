@@ -10,9 +10,7 @@ keywords = ["events", "audio", "observer", "pubsub", "player"]
 categories = ["asynchronous"]
 
 [features]
-default = ["hls", "player", "queue", "drm"]
-hls = []
-drm = []
+default = ["player", "queue"]
 player = []
 queue = []
 

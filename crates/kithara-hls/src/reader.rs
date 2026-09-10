@@ -5,11 +5,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use kithara_abr::{AbrMode, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, HlsEvent};
+use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
-use crate::stream::{HlsCoord, HlsSession};
+use crate::{
+    HlsEvent,
+    stream::{HlsCoord, HlsSession},
+};
 
 enum HlsReaderRoute<S>
 where
@@ -256,7 +259,7 @@ mod tests {
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{EventBus, HlsEvent};
+    use kithara_events::EventBus;
     use kithara_platform::{
         CancelToken,
         sync::{Arc, ThreadGate},

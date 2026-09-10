@@ -6,8 +6,8 @@ use std::{
 use kithara::{
     abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
-    events::{EventBus, HlsEvent},
-    hls::{AbrMode, Hls, HlsConfig},
+    events::EventBus,
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         CancelToken,
         sync::Arc,

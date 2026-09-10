@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::Event;
+use kithara_events::Event;
 
 /// Stage where a DRM key fetch failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

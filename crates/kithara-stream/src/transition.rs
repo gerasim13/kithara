@@ -1,5 +1,6 @@
 use kithara_abr::{AbrTicket, VariantIndex};
-use kithara_events::SeekEpoch;
+
+use crate::seek::SeekEpoch;
 
 /// Result of publishing an audio-approved incoming variant.
 #[must_use]

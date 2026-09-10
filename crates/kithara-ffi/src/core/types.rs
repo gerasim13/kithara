@@ -5,8 +5,8 @@ use kithara::{
         PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
     },
     events::{
-        AdvanceReason, KeyFailureStage, KeySource, QueueRepeatMode, RouteChangeReason,
-        StretchBackendKind, TrackId, TrackStatus as TS,
+        AdvanceReason, QueueRepeatMode, RouteChangeReason, StretchBackendKind, TrackId,
+        TrackStatus as TS,
     },
     platform::{sync::Arc, time::Duration},
     play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
@@ -14,6 +14,7 @@ use kithara::{
     stream::{AudioCodec, CancelReason, ContainerFormat},
 };
 use kithara_file::TotalBytesSource;
+use kithara_hls::{KeyFailureStage, KeySource};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]

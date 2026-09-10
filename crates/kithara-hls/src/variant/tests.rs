@@ -10,7 +10,7 @@ use kithara_assets::{
     WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -27,6 +27,7 @@ use url::Url;
 
 use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
+    HlsEvent,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,

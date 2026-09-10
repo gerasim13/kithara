@@ -8,16 +8,14 @@ use futures::future::try_join_all;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
-use kithara_events::{
-    DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent, KeyFailureStage, KeySource,
-};
+use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{sync::Arc, time::Instant};
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
 use crate::{
-    HlsError, HlsResult,
+    DrmEvent, HlsError, HlsEvent, HlsFailure, HlsResult, KeyFailureStage, KeySource,
     handle::KeyPeer,
     logging::{RedactedNetError, RedactedUrl},
 };
@@ -582,7 +580,7 @@ where
 
 fn publish_decryption_error(bus: &EventBus, detail: &str) {
     bus.publish(HlsEvent::Error {
-        error: EventHlsError::Decryption(detail.to_string()),
+        error: HlsFailure::Decryption(detail.to_string()),
     });
 }
 
@@ -643,7 +641,7 @@ mod tests {
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
         KeyRequestResolver, PreparedKeyRequest,
     };
-    use kithara_events::{DrmEvent, EventBus, KeyFailureStage, KeySource};
+    use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{
         CancelToken,
@@ -1161,7 +1159,7 @@ mod tests {
         assert!(matches!(
             hls_error,
             Some(TestEvent::Hls(HlsEvent::Error {
-                error: EventHlsError::Decryption(detail),
+                error: HlsFailure::Decryption(detail),
             })) if detail == "key processor failed"
         ));
     }

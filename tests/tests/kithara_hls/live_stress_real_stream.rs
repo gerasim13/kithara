@@ -13,8 +13,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
-    events::HlsEvent,
-    hls::{Hls, HlsConfig},
+    hls::{Hls, HlsConfig, HlsEvent},
     platform::{
         sync::Arc,
         time::Duration,

@@ -9,11 +9,11 @@ use kithara::{
         DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
     },
     decode::{GaplessMode, SilenceTrimParams},
-    events::{EventBus, EventReceiver, SeekEpoch},
+    events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
-    stream::{ContainerFormat, MediaInfo},
+    stream::{ContainerFormat, MediaInfo, SeekEpoch},
 };
 use kithara_integration_tests::{
     TestTempDir,

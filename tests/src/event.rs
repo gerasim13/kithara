@@ -3,11 +3,10 @@ use kithara::{
     assets::AssetEvent,
     audio::{AudioEvent, DecoderEvent},
     file::FileEvent,
+    hls::HlsEvent,
     stream::DownloaderEvent,
 };
-use kithara_events::{
-    BusEvent, EventSet, HlsEvent, ItemEvent, PlayerEvent, QueueEvent, TransportEvent,
-};
+use kithara_events::{BusEvent, EventSet, ItemEvent, PlayerEvent, QueueEvent, TransportEvent};
 
 /// Domains inspected by shared integration-test waits and event predicates.
 #[derive(Clone, Debug, EventSet)]

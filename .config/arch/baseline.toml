@@ -13,7 +13,6 @@ schema_version = 1
 "crates/kithara-assets/src/store/handle.rs" = 1
 "crates/kithara-decode/src/factory/inner.rs" = 1
 "crates/kithara-encode/src/factory.rs" = 1
-"crates/kithara-events/src/lib.rs" = 1
 "crates/kithara-ffi/src/core/item.rs" = 1
 "crates/kithara-ffi/src/core/observer.rs" = 1
 "crates/kithara-ffi/src/core/types.rs" = 1

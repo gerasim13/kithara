@@ -5,7 +5,7 @@ use std::ops::Range;
 use delegate::delegate;
 use kithara_assets::EvictionSubscription;
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, HlsEvent};
+use kithara_events::DeferredBus;
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -15,7 +15,7 @@ use kithara_stream::{
 };
 
 use super::coord::{HlsCoord, HlsProbe};
-use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
+use crate::{HlsEvent, peer::HlsPeer, reader::HlsReaderEventSink};
 
 /// HLS source: thin façade over [`HlsCoord`].
 ///

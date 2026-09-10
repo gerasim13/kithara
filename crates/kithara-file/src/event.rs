@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use kithara_events::{Event, SeekEpoch};
-use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_events::Event;
+use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///

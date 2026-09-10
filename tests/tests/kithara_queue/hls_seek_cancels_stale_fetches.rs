@@ -8,7 +8,7 @@ use kithara::{
     assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
-    events::HlsEvent,
+    hls::HlsEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

@@ -12,13 +12,8 @@ mod ids;
 mod meta;
 mod receiver;
 mod scope;
-mod seek;
 mod topic;
 
-#[cfg(feature = "drm")]
-mod drm;
-#[cfg(feature = "hls")]
-mod hls;
 #[cfg(feature = "player")]
 mod play;
 #[cfg(feature = "queue")]
@@ -27,11 +22,7 @@ mod queue;
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;
 pub use deferred::DeferredBus;
-#[cfg(feature = "drm")]
-pub use drm::{DrmEvent, KeyFailureStage, KeySource};
 pub use event::{Event, EventSet};
-#[cfg(feature = "hls")]
-pub use hls::{HlsError, HlsEvent};
 pub use ids::{SlotId, TrackId};
 pub use kithara_derive::{Event, EventSet};
 pub use kithara_platform::tokio::{
@@ -50,4 +41,3 @@ pub use play::{
 pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use receiver::{EventReceiver, TopicReceiver};
 pub use scope::BusScope;
-pub use seek::SeekEpoch;

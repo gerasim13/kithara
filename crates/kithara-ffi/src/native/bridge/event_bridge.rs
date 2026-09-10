@@ -381,8 +381,8 @@ mod tests {
 
     use kithara::{
         events::{
-            AdvanceReason, EventBus, HlsError, HlsEvent, ItemRole, QueueEvent, QueueRepeatMode,
-            SlotId, TrackId, TrackRef, TrackStatus,
+            AdvanceReason, EventBus, ItemRole, QueueEvent, QueueRepeatMode, SlotId, TrackId,
+            TrackRef, TrackStatus,
         },
         platform::{
             sync::{Arc, Mutex},
@@ -392,6 +392,7 @@ mod tests {
         queue::{QueueConfig, test_utils::QueueProbe},
     };
     use kithara_file::{FileError, FileEvent};
+    use kithara_hls::{HlsEvent, HlsFailure};
 
     use super::*;
     use crate::{
@@ -550,7 +551,7 @@ mod tests {
     fn hls_protocol_failure_is_not_duplicated_by_queue_status() {
         assert_protocol_failure_is_not_duplicated(
             ItemBusEvent::Hls(HlsEvent::Error {
-                error: HlsError::Playlist("boom".into()),
+                error: HlsFailure::Playlist("boom".into()),
             }),
             "item failed: playlist: boom",
         );

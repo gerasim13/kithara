@@ -5,13 +5,12 @@ use std::io::{Error as IoError, ErrorKind};
 use arc_swap::ArcSwap;
 use kithara_abr::{AbrDecision, AbrReason, PendingAbrClaim, PendingAbrDecision, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::SeekEpoch;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use kithara_stream::{
-    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, StreamError,
+    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SeekEpoch, SourceError, StreamError,
     StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId, dl::FetchCmd,
 };

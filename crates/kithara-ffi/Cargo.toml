@@ -75,6 +75,7 @@ test = ["kithara/probe", "dep:cpal"]
 kithara = { workspace = true, default-features = false, features = ["assets", "queue"] }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
+kithara-hls = { workspace = true, default-features = false }
 
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types

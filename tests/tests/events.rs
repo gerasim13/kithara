@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::events::{EventBus, HlsEvent};
+use kithara::{events::EventBus, hls::HlsEvent};
 use kithara_integration_tests::event::TestEvent;
 
 #[kithara::test]

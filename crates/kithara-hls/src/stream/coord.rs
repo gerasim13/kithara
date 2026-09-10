@@ -6,7 +6,7 @@ use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, HlsEvent};
+use kithara_events::DeferredBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, WaitGate},
@@ -24,6 +24,7 @@ use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
+    HlsEvent,
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx},
 };

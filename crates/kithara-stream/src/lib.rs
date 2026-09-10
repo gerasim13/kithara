@@ -17,6 +17,7 @@ mod playhead;
 mod preroll;
 mod profile;
 mod reader;
+mod seek;
 mod seek_state;
 mod source;
 mod stream;
@@ -38,6 +39,7 @@ pub use reader::{
     ConstructionGate, OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan,
     VariantReaderTake,
 };
+pub use seek::SeekEpoch;
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,

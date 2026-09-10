@@ -4,10 +4,9 @@ use kithara::{
     audio::{AudioEvent, DecoderEvent},
     stream::DownloaderEvent,
 };
-use kithara_events::{
-    DjEvent, DrmEvent, EngineEvent, EventSet, HlsEvent, PlayerEvent, QueueEvent, SessionEvent,
-};
+use kithara_events::{DjEvent, EngineEvent, EventSet, PlayerEvent, QueueEvent, SessionEvent};
 use kithara_file::FileEvent;
+use kithara_hls::{DrmEvent, HlsEvent};
 
 #[derive(Clone, Debug, EventSet)]
 #[non_exhaustive]

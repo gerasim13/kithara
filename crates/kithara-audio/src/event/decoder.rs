@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use kithara_events::{Event, SeekEpoch};
+use kithara_events::Event;
 use kithara_platform::time::Duration;
-use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

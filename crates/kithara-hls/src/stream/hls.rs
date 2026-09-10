@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::OnceLock};
 use kithara_abr::VariantInfo;
 use kithara_assets::{AssetSource, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
@@ -23,6 +23,7 @@ use super::{
     source::HlsSource,
 };
 use crate::{
+    HlsEvent, HlsFailure,
     config::{DEFAULT_LOOK_AHEAD_BYTES, HlsConfig},
     handle::StreamPeer,
     peer::HlsPeer,
@@ -250,7 +251,7 @@ where
 fn publish_playlist_error(bus: &EventBus, err: &crate::HlsError) {
     if let crate::HlsError::PlaylistParse(detail) = err {
         bus.publish(HlsEvent::Error {
-            error: EventHlsError::Playlist(detail.clone()),
+            error: HlsFailure::Playlist(detail.clone()),
         });
     }
 }

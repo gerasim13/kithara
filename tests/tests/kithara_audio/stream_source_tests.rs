@@ -8,11 +8,10 @@ use kithara::{
         ConsumerWakeMode, DecoderChangeCause, DecoderEvent, ReadOutcome, RubatoBackend,
         SeekLifecycleStage,
     },
-    events::SeekEpoch,
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, SeekEpoch, Stream},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{

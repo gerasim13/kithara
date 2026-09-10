@@ -10,8 +10,8 @@ use kithara::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
     },
     decode::DecoderBackend,
-    events::{EventBus, EventReceiver, HlsEvent},
-    hls::{AbrMode, Hls, HlsConfig},
+    events::{EventBus, EventReceiver},
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},

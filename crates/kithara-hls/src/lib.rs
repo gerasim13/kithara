@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 
 mod decrypt_processor;
+mod event;
 mod handle;
 mod ids;
 mod logging;
@@ -19,6 +20,7 @@ mod variant;
 
 pub use config::{HlsConfig, HlsConfigPatch, KeyOptions, SizeProbeMethod};
 pub use error::{HlsError, HlsResult};
+pub use event::{DrmEvent, HlsEvent, HlsFailure, KeyFailureStage, KeySource};
 pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyRequestResolver, PreparedKeyRequest};
