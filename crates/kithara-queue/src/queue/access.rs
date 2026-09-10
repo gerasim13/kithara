@@ -102,7 +102,7 @@ where
             #[must_use]
             #[expr($?.current_variant())]
             #[call(current_abr_handle)]
-            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
+            pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo>;
             /// Whether the queue is empty.
             #[must_use]
             #[expr($.is_empty())]

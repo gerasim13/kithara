@@ -1,6 +1,6 @@
 use kithara::{
-    abr::AbrMode,
-    events::{AbrEvent, AudioEvent, Envelope, EventReceiver},
+    abr::{AbrEvent, AbrMode},
+    events::{AudioEvent, Envelope, EventReceiver},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -229,8 +229,8 @@ impl Drop for ItemEventBridge {
 #[cfg(test)]
 mod tests {
     use kithara::{
-        abr::{AbrMode, VariantIndex},
-        events::{AbrEvent, AbrReason, FileError, FileEvent, VariantDuration, VariantInfo},
+        abr::{AbrEvent, AbrMode, AbrReason, VariantDuration, VariantIndex, VariantInfo},
+        events::{FileError, FileEvent},
         platform::sync::{Arc, Mutex},
     };
 

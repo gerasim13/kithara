@@ -3,8 +3,8 @@
 use std::io::Read;
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    events::AbrMode,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,

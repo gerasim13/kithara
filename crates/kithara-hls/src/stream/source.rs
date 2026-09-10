@@ -182,9 +182,9 @@ where
 mod tests {
     use std::sync::OnceLock;
 
-    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrMode, AbrSettings, AbrState, VariantIndex};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{AbrMode, EventBus, VariantIndex};
+    use kithara_events::EventBus;
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
     use kithara_test_utils::kithara;

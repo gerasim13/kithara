@@ -6,8 +6,8 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kithara::{
     abr::{
         Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
+        VariantDuration, VariantIndex, VariantInfo,
     },
-    events::{VariantDuration, VariantIndex, VariantInfo},
     platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::auto;

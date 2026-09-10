@@ -1,6 +1,4 @@
-use kithara_events::AbrMode;
 use kithara_platform::time::Duration;
-use num_traits::AsPrimitive;
 use url::Url;
 
 pub trait Probe {
@@ -55,12 +53,6 @@ impl IntoProbeArg for Duration {
 impl IntoProbeArg for &Url {
     fn into_probe_arg(self) -> u64 {
         0
-    }
-}
-
-impl IntoProbeArg for AbrMode {
-    fn into_probe_arg(self) -> u64 {
-        AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

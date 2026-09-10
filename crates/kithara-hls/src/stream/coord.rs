@@ -655,9 +655,12 @@ mod tests {
         sync::OnceLock,
     };
 
-    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState, PendingAbrClaim};
+    use kithara_abr::{
+        Abr, AbrController, AbrMock, AbrMode, AbrReason, AbrSettings, AbrState, PendingAbrClaim,
+        VariantIndex,
+    };
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
-    use kithara_events::{AbrMode, AbrReason, EventBus, VariantIndex};
+    use kithara_events::EventBus;
     use kithara_platform::{
         sync::{Arc, ThreadGate},
         time::Instant,

@@ -4625,6 +4625,7 @@ dependencies = [
  "bon",
  "dashmap",
  "delegate",
+ "derive_more",
  "fieldwork",
  "humantime-serde",
  "kithara-derive",

@@ -19,9 +19,10 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
-    events::{AbrMode, PlayerEvent},
+    events::PlayerEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},

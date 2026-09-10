@@ -2,9 +2,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::HasPool;
 #[cfg(test)]
-use kithara_events::{AbrMode, VariantIndex};
+use kithara_abr::{AbrMode, VariantIndex};
+use kithara_bufpool::HasPool;
 use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::sync::Arc;
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};

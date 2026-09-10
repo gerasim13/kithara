@@ -4,9 +4,10 @@
 use std::collections::{HashMap, HashSet};
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, HlsEvent},
+    events::{AudioEvent, HlsEvent},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

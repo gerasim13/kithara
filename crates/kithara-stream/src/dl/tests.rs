@@ -13,11 +13,12 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream::iter as stream_iter};
-use kithara_abr::{Abr, AbrSettings, AbrState};
-use kithara_bufpool::testing::pools as test_pools;
-use kithara_events::{
-    AbrEvent, AbrMode, AbrReason, Envelope, EventBus, VariantDuration, VariantIndex, VariantInfo,
+use kithara_abr::{
+    Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
+    VariantInfo,
 };
+use kithara_bufpool::testing::pools as test_pools;
+use kithara_events::{Envelope, EventBus};
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
     CancelToken,

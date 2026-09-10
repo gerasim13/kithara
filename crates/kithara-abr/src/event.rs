@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
+use kithara_events::Event;
 use kithara_platform::time::Duration;
-
-use crate::Event;
+use kithara_test_utils::probe::IntoProbeArg;
 
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
 /// `usize` representation of [`AbrMode`].
@@ -109,6 +109,12 @@ impl From<usize> for AbrMode {
         } else {
             Self::Manual(VariantIndex::new(val))
         }
+    }
+}
+
+impl IntoProbeArg for AbrMode {
+    fn into_probe_arg(self) -> u64 {
+        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 
@@ -223,6 +229,7 @@ pub enum AbrEvent {
 
 #[cfg(test)]
 mod tests {
+    use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
@@ -302,7 +309,7 @@ mod tests {
 
     #[kithara::test]
     fn typed_channel_carries_locked() {
-        let bus = crate::EventBus::default();
+        let bus = EventBus::default();
         let mut rx = bus.subscribe::<AbrEvent>();
         bus.publish(AbrEvent::Locked);
         let event = rx.try_recv().expect("the event arrives").event;
@@ -311,7 +318,7 @@ mod tests {
 
     #[kithara::test]
     fn typed_channel_preserves_variant_applied() {
-        let bus = crate::EventBus::default();
+        let bus = EventBus::default();
         let mut rx = bus.subscribe::<AbrEvent>();
         bus.publish(AbrEvent::VariantApplied {
             from: VariantIndex::new(0),

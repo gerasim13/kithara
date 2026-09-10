@@ -21,8 +21,9 @@
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

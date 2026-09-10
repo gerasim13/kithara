@@ -3,11 +3,11 @@ use std::num::NonZeroU32;
 #[cfg(test)]
 use kithara::analysis::Coverage;
 use kithara::{
-    abr::AbrHandle,
+    abr::{AbrHandle, AbrMode, VariantInfo},
     analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
     events::{
-        AbrMode, BpmInfo, DjEvent, EngineEvent, Envelope, EventReceiver, MediaTime, PlayerEvent,
-        SessionEvent, SlotId, TrackId, VariantInfo,
+        BpmInfo, DjEvent, EngineEvent, Envelope, EventReceiver, MediaTime, PlayerEvent,
+        SessionEvent, SlotId, TrackId,
     },
     platform::{
         CancelToken,

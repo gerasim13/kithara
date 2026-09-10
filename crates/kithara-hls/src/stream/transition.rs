@@ -3,9 +3,9 @@ mod prepare;
 use std::io::{Error as IoError, ErrorKind};
 
 use arc_swap::ArcSwap;
-use kithara_abr::{AbrDecision, PendingAbrClaim, PendingAbrDecision};
+use kithara_abr::{AbrDecision, AbrReason, PendingAbrClaim, PendingAbrDecision, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::{AbrReason, SeekEpoch, VariantIndex};
+use kithara_events::SeekEpoch;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},

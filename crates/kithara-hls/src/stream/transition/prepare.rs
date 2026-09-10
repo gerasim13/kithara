@@ -1,8 +1,7 @@
 use std::io::{Error as IoError, ErrorKind};
 
-use kithara_abr::PendingAbrClaim;
+use kithara_abr::{PendingAbrClaim, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::VariantIndex;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,

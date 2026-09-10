@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use kithara_abr::{AbrController, AbrPeerId};
-use kithara_events::{BandwidthSource, EventBus};
+use kithara_abr::{AbrController, AbrPeerId, BandwidthSource};
+use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetError, NetObserver, Observer, Retryability};
 use kithara_platform::{
     CancelGroup, CancelToken,

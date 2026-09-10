@@ -3,7 +3,6 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use kithara_events::AbrMode;
 use kithara_platform::time::Duration;
 use url::Url;
 
@@ -90,12 +89,6 @@ impl IntoProbeArg for &Url {
         let mut hasher = DefaultHasher::new();
         self.as_str().hash(&mut hasher);
         hasher.finish()
-    }
-}
-
-impl IntoProbeArg for AbrMode {
-    fn into_probe_arg(self) -> u64 {
-        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

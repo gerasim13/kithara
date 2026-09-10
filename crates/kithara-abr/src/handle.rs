@@ -1,8 +1,9 @@
-use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
+use kithara_events::EventBus;
 use kithara_platform::sync::{Arc, RwLock};
 use kithara_test_utils::kithara;
 
 use crate::{
+    AbrEvent, AbrMode, VariantIndex, VariantInfo,
     controller::{AbrController, AbrPeerId},
     state::{AbrDecision, AbrError, AbrState, PendingAbrClaim, PendingAbrDecision},
 };
@@ -269,10 +270,7 @@ impl Drop for HandleInner {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{
-        AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, EventBus, VariantDuration,
-        VariantIndex, VariantInfo,
-    };
+    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, Envelope, EventBus};
     use kithara_platform::{
         CancelToken,
         time::{Duration, Instant},
@@ -282,7 +280,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Abr, AbrController, AbrMock, AbrSettings, ThroughputEstimator,
+        Abr, AbrController, AbrEvent, AbrMock, AbrReason, AbrSettings, ThroughputEstimator,
+        VariantDuration, VariantIndex, VariantInfo,
         state::{AbrDecision, AbrState},
     };
 

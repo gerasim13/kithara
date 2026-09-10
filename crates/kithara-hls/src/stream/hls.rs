@@ -2,9 +2,10 @@
 
 use std::{marker::PhantomData, sync::OnceLock};
 
+use kithara_abr::VariantInfo;
 use kithara_assets::{AssetSource, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
+use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,

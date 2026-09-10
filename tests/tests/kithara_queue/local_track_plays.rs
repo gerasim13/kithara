@@ -2,9 +2,10 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
     decode::DecoderBackend,
-    events::{AbrMode, AdvanceReason, AudioEvent, EventReceiver, QueueEvent, TrackId},
+    events::{AdvanceReason, AudioEvent, EventReceiver, QueueEvent, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

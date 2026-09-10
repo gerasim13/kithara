@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use kithara::{
-    events::{AbrEvent, AdvanceReason, AudioEvent, EventReceiver},
+    abr::AbrEvent,
+    events::{AdvanceReason, AudioEvent, EventReceiver},
     hls::AbrMode,
     platform::{
         sync::Arc,

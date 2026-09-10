@@ -11,8 +11,9 @@
 use std::num::NonZeroUsize;
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, TrackId, TrackStatus},
+    events::{TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

@@ -126,7 +126,7 @@ impl<S> Audio<S> {
 
     #[must_use]
     /// Returns metadata for the currently selected adaptive variant.
-    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+    pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo> {
         self.session.abr_handle.as_ref()?.current_variant()
     }
 

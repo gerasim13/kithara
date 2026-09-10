@@ -1,13 +1,11 @@
 use std::path::Path;
 
 use kithara::{
-    abr::AbrHandle,
+    abr::{AbrHandle, AbrMode},
     assets::{AssetStore, StorageBackend},
     bufpool::HasPool,
     decode::DecoderBackend,
-    events::{
-        AbrMode, AudioEvent, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId, TrackStatus,
-    },
+    events::{AudioEvent, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

@@ -9,10 +9,11 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, HlsEvent},
+    events::HlsEvent,
     hls::{Hls, HlsConfig},
     platform::{
         sync::Arc,

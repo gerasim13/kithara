@@ -4,8 +4,9 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, QueueEvent, TrackId, TrackStatus},
+    events::{QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

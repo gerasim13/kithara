@@ -287,7 +287,7 @@ impl PeerHandle {
 
     /// Attach an event bus so the Downloader can publish per-peer
     /// [`DownloaderEvent`](crate::DownloaderEvent)s and the ABR
-    /// controller can publish [`AbrEvent`](kithara_events::AbrEvent)s to
+    /// controller can publish [`AbrEvent`](kithara_abr::AbrEvent)s to
     /// it. Returns `self` so the call chains naturally after
     /// [`Downloader::register`](super::Downloader::register).
     #[must_use]

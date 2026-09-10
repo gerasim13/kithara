@@ -15,8 +15,6 @@ mod scope;
 mod seek;
 mod topic;
 
-#[cfg(feature = "abr")]
-mod abr;
 #[cfg(feature = "asset")]
 mod asset;
 #[cfg(feature = "audio")]
@@ -34,11 +32,6 @@ mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
-#[cfg(feature = "abr")]
-pub use abr::{
-    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError,
-    VariantDuration, VariantIndex, VariantInfo,
-};
 #[cfg(feature = "asset")]
 pub use asset::{AssetEvent, EvictReason};
 #[cfg(feature = "audio")]
