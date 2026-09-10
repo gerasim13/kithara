@@ -90,7 +90,7 @@ kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true }
 kithara-drm = { workspace = true }
-kithara-events = { workspace = true }
+kithara-events = { workspace = true, features = ["player"] }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
