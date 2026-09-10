@@ -15,11 +15,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
+    audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
-    events::{
-        AudioCodecKind, DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent,
-        EventBus, EventReceiver,
-    },
+    events::{EventBus, EventReceiver},
     host::HostConfig,
     platform::{
         time::{Duration, Instant, sleep},
@@ -143,7 +141,7 @@ struct DecoderObservation {
     frame_end: usize,
     backend: DecoderBackendKind,
     cause: DecoderChangeCause,
-    codec: Option<AudioCodecKind>,
+    codec: Option<AudioCodec>,
     sample_rate: u32,
     channels: u16,
     variant: Option<u32>,
@@ -186,11 +184,11 @@ fn fixture_with_signal(signal: PackagedSignal) -> HlsFixtureBuilder {
         })
 }
 
-fn variant_codec(variant: usize) -> AudioCodecKind {
+fn variant_codec(variant: usize) -> AudioCodec {
     if variant == FLAC {
-        AudioCodecKind::Flac
+        AudioCodec::Flac
     } else {
-        AudioCodecKind::AacLc
+        AudioCodec::AacLc
     }
 }
 

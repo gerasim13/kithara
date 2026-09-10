@@ -5,8 +5,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::AbrMode,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, EventReceiver},
+    events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

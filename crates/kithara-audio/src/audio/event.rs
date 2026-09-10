@@ -3,21 +3,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kithara_decode::{
     DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass,
 };
-use kithara_events::{
-    AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, DeferredBus, EventBus,
-    FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
-    SegmentLocation,
-};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioChunkInfo, AudioSpec};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, SeekObserve};
+use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve};
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
 use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
-use crate::ConsumerWakeMode;
+use crate::{
+    AudioEvent, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind,
+    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FrameDomain,
+    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation,
+};
 
 struct Consts;
 
@@ -239,36 +238,6 @@ fn clamp_millis(duration: Duration) -> u64 {
     ToPrimitive::to_u64(&duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) const fn map_audio_codec_kind(codec: AudioCodec) -> AudioCodecKind {
-    match codec {
-        AudioCodec::AacLc => AudioCodecKind::AacLc,
-        AudioCodec::AacHe => AudioCodecKind::AacHe,
-        AudioCodec::AacHeV2 => AudioCodecKind::AacHeV2,
-        AudioCodec::Mp3 => AudioCodecKind::Mp3,
-        AudioCodec::Flac => AudioCodecKind::Flac,
-        AudioCodec::Vorbis => AudioCodecKind::Vorbis,
-        AudioCodec::Opus => AudioCodecKind::Opus,
-        AudioCodec::Alac => AudioCodecKind::Alac,
-        AudioCodec::Pcm => AudioCodecKind::Pcm,
-        AudioCodec::Adpcm => AudioCodecKind::Adpcm,
-    }
-}
-
-pub(crate) const fn map_container_kind(container: ContainerFormat) -> ContainerKind {
-    match container {
-        ContainerFormat::Mp4 => ContainerKind::Mp4,
-        ContainerFormat::Fmp4 => ContainerKind::Fmp4,
-        ContainerFormat::MpegTs => ContainerKind::MpegTs,
-        ContainerFormat::MpegAudio => ContainerKind::MpegAudio,
-        ContainerFormat::Adts => ContainerKind::Adts,
-        ContainerFormat::Flac => ContainerKind::Flac,
-        ContainerFormat::Wav => ContainerKind::Wav,
-        ContainerFormat::Ogg => ContainerKind::Ogg,
-        ContainerFormat::Caf => ContainerKind::Caf,
-        ContainerFormat::Mkv => ContainerKind::Mkv,
-    }
-}
-
 pub(crate) const fn map_decoder_backend(backend: DecodeBackend) -> EventDecoderBackend {
     match backend {
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -363,14 +332,8 @@ pub(crate) struct DecoderChangedEventData<'a> {
 pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> DecoderEvent {
     DecoderEvent::DecoderChanged {
         backend: map_decoder_backend(data.backend),
-        codec: data
-            .media_info
-            .and_then(|info| info.codec)
-            .map(map_audio_codec_kind),
-        container: data
-            .media_info
-            .and_then(|info| info.container)
-            .map(map_container_kind),
+        codec: data.media_info.and_then(|info| info.codec),
+        container: data.media_info.and_then(|info| info.container),
         sample_rate: data.spec.sample_rate.get(),
         channels: data.spec.channels,
         bit_depth: None,
@@ -395,9 +358,7 @@ pub(crate) fn decoder_gapless_event(
         domain,
         leading_frames: gapless.leading_frames,
         trailing_frames: gapless.trailing_frames,
-        codec: media_info
-            .and_then(|info| info.codec)
-            .map(map_audio_codec_kind),
+        codec: media_info.and_then(|info| info.codec),
         sample_rate: spec.sample_rate.get(),
     })
 }
@@ -440,7 +401,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{AudioEvent, EventBus};
+    use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{SeekControl, SeekState};
@@ -448,6 +409,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        AudioEvent,
         audio::{Fetch, ring::create_channels},
         test_pools::{Pools, pools, sample_buffer},
     };

@@ -1,4 +1,3 @@
-use kithara_events::{AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation};
 use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
@@ -8,19 +7,22 @@ use super::{
     TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
-use crate::pipeline::{
-    decode::{
-        event::{GenerationInstalled, enqueue_generation_installed},
-        format::{FormatDecision, detect},
-        gate::recreate_phase,
+use crate::{
+    AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation,
+    pipeline::{
+        decode::{
+            event::{GenerationInstalled, enqueue_generation_installed},
+            format::{FormatDecision, detect},
+            gate::recreate_phase,
+        },
+        rebuild::{
+            DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState,
+            policy::{classify, observed_seek, superseded},
+        },
+        seek::{ResumeState, SeekRequest, engine::SeekTransition},
+        source::StreamAudioSource,
     },
-    rebuild::{
-        DecoderBuildComplete, RebuildState, RecreateCause, RecreateNext, RecreateOutcome,
-        RecreateState,
-        policy::{classify, observed_seek, superseded},
-    },
-    seek::{ResumeState, SeekRequest, engine::SeekTransition},
-    source::StreamAudioSource,
 };
 
 const fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {

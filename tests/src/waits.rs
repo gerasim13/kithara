@@ -10,8 +10,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    audio::AudioEvent,
     bufpool::HasPool,
-    events::{AudioEvent, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
     platform::{
         thread::active_named_thread_count,
         time::{Duration, Instant, sleep, timeout},

@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara_decode::ChunkRetire;
-use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, TrackFailureKind};
+use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -18,7 +18,7 @@ pub(crate) use crate::pipeline::{
     stream::shared::SharedStream,
 };
 use crate::{
-    AudioLaneEvent,
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, TrackFailureKind,
     pipeline::{
         decode::{
             gate::ReadinessGate,

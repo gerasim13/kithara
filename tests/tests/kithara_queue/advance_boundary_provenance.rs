@@ -4,7 +4,8 @@ use std::path::Path;
 
 use kithara::{
     abr::AbrEvent,
-    events::{AdvanceReason, AudioEvent, EventReceiver},
+    audio::AudioEvent,
+    events::{AdvanceReason, EventReceiver},
     hls::AbrMode,
     platform::{
         sync::Arc,

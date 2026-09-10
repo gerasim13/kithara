@@ -1,10 +1,10 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
+    AudioEvent, AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
     mock::AudioSourceMock,
 };
-use kithara_events::{AudioEvent, DeferredBus, EventBus};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,

@@ -3,8 +3,8 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     StretchKind,
-    audio::DecoderResamplerSettings,
-    events::{ResamplerKind, TrackId},
+    audio::{DecoderResamplerSettings, ResamplerKind},
+    events::TrackId,
     platform::sync::Arc,
     play::{PlaybackResamplerBackend, ResourceSrc},
     warp::{StretchControls, WarpConfig},
@@ -144,7 +144,7 @@ fn assert_initial_apple_decoder(observations: &[DecoderObservation], label: &str
     let event = observations[0];
     assert_eq!(event.backend, DecoderBackendKind::Apple, "{label} backend");
     assert_eq!(event.cause, DecoderChangeCause::Initial, "{label} cause");
-    assert_eq!(event.codec, Some(AudioCodecKind::AacLc), "{label} codec",);
+    assert_eq!(event.codec, Some(AudioCodec::AacLc), "{label} codec",);
     assert_eq!(
         event.sample_rate, HOST_SAMPLE_RATE,
         "{label} host-rate decoder output",
@@ -344,7 +344,7 @@ async fn render_desktop(master_url: &url::Url, switch: bool) -> DesktopRender {
         let target = lifecycle.decoders[0];
         assert_eq!(target.backend, DecoderBackendKind::Apple);
         assert_eq!(target.cause, DecoderChangeCause::VariantSwitch);
-        assert_eq!(target.codec, Some(AudioCodecKind::Flac));
+        assert_eq!(target.codec, Some(AudioCodec::Flac));
         assert_eq!(target.sample_rate, HOST_SAMPLE_RATE);
         assert_eq!(target.channels, CHANNELS);
         assert_eq!(

@@ -15,10 +15,6 @@ mod scope;
 mod seek;
 mod topic;
 
-#[cfg(feature = "audio")]
-mod audio;
-#[cfg(feature = "decoder")]
-mod decoder;
 #[cfg(feature = "drm")]
 mod drm;
 #[cfg(feature = "hls")]
@@ -28,17 +24,8 @@ mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
-#[cfg(feature = "audio")]
-pub use audio::{
-    AudioEvent, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation, TrackFailureKind,
-};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;
-#[cfg(feature = "decoder")]
-pub use decoder::{
-    AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend,
-    DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, ResamplerKind,
-};
 pub use deferred::DeferredBus;
 #[cfg(feature = "drm")]
 pub use drm::{DrmEvent, KeyFailureStage, KeySource};

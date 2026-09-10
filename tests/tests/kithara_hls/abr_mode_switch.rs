@@ -6,9 +6,11 @@ use std::{
 use kithara::{
     abr::{AbrEvent, AbrReason},
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
+    },
     decode::DecoderBackend,
-    events::{AudioEvent, DecoderEvent, EventBus, EventReceiver, HlsEvent},
+    events::{EventBus, EventReceiver, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,

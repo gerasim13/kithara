@@ -164,7 +164,6 @@ schema_version = 1
 "crates/kithara-encode/src/types.rs::EncodedTrack" = 1
 "crates/kithara-encode/src/types.rs::PackagedEncodeRequest" = 1
 "crates/kithara-abr/src/event.rs::VariantInfo" = 1
-"crates/kithara-events/src/audio.rs::SegmentLocation" = 1
 "crates/kithara-events/src/play.rs::BpmInfo" = 1
 "crates/kithara-events/src/play.rs::PortDescription" = 1
 "crates/kithara-ffi/src/core/types.rs::FfiItemConfig" = 1

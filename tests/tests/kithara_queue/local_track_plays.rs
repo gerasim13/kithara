@@ -4,8 +4,9 @@
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AdvanceReason, AudioEvent, EventReceiver, QueueEvent, TrackId},
+    events::{AdvanceReason, EventReceiver, QueueEvent, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

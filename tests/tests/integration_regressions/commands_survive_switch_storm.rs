@@ -4,7 +4,8 @@ use std::collections::HashSet;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, QueueEvent},
+    audio::AudioEvent,
+    events::QueueEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time, time::Duration, tokio},

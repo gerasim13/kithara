@@ -1,6 +1,6 @@
 use kithara::{
-    audio::ReadOutcome,
-    events::{AudioEvent, DecoderEvent, EventReceiver, SeekLifecycleStage},
+    audio::{AudioEvent, DecoderEvent, ReadOutcome, SeekLifecycleStage},
+    events::EventReceiver,
     platform::{
         time::{self, Duration},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},

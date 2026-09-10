@@ -2,8 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::AudioEvent,
-    hls::{AbrMode, HlsConfigPatch},
+    audio::AudioEvent,
+    events::hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time, time::Duration, tokio},

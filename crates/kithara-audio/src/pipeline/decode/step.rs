@@ -1,13 +1,11 @@
 use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
-use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
 use kithara_signal::AudioChunk;
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
 use crate::{
-    audio::event::{
-        decode_error_detail, map_audio_codec_kind, map_decode_error_class, map_decode_error_kind,
-    },
+    AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation,
+    audio::event::{decode_error_detail, map_decode_error_class, map_decode_error_kind},
     pipeline::{
         decode::{
             core::{ActiveDecode, DecodeAction, DecodeCtx},
@@ -128,11 +126,7 @@ fn decode_failed<T: StreamType>(
         emit.enqueue(DecoderEvent::DecodeError {
             class: map_decode_error_class(error.classify()),
             kind: map_decode_error_kind(&error),
-            codec: core
-                .active()
-                .media_info()
-                .and_then(|info| info.codec)
-                .map(map_audio_codec_kind),
+            codec: core.active().media_info().and_then(|info| info.codec),
             detail: decode_error_detail(&error),
         });
     }

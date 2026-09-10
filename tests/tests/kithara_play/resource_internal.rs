@@ -9,8 +9,8 @@
 
 use kithara::{
     self,
-    audio::ReadOutcome,
-    events::{AudioEvent, EventBus},
+    audio::{AudioEvent, ReadOutcome},
+    events::EventBus,
     platform::time::Duration,
     play::Resource,
 };

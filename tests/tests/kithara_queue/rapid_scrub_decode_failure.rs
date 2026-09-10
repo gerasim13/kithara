@@ -4,7 +4,8 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
+    audio::AudioEvent,
+    events::{EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

@@ -9,6 +9,7 @@
 //! - `Audio` implements [`AudioReader`] for pull-based audio consumers
 
 mod audio;
+mod event;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
@@ -19,6 +20,11 @@ pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 
 pub use audio::{Audio, PreparedAudio, SeekHandle};
+pub use event::{
+    AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
+    DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
+    SeekLifecycleStage, SegmentLocation, TrackFailureKind,
+};
 #[cfg(feature = "resample-glide")]
 pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
 #[cfg(feature = "resample-rubato")]

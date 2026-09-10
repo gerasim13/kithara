@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, TrackId},
+    audio::AudioEvent,
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

@@ -7,7 +7,7 @@ use std::{
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
-use kithara_events::{DecoderChangeCause, EventBus, EventReceiver, EventSet, FrameDomain};
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelScope,
     sync::Arc,
@@ -32,6 +32,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
+use crate::{DecoderChangeCause, FrameDomain};
 
 struct DecoderDeps<B, S> {
     host_sample_rate: Arc<AtomicU32>,

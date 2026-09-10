@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, HlsEvent},
+    events::HlsEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

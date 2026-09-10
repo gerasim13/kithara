@@ -432,7 +432,7 @@ mod tests {
         sync::atomic::{AtomicU32, AtomicU64},
     };
 
-    use kithara_events::{AudioEvent, EventReceiver};
+    use kithara_events::EventReceiver;
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{PlayheadState, SeekState, WorkerWake};
@@ -441,7 +441,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        AudioEvent, ConsumerWakeMode,
         audio::{Fetch, Outlet, ThreadWake, connect, ring::RingParts},
         test_pools::pools,
     };

@@ -1,6 +1,7 @@
 use kithara::{
     abr::{AbrEvent, AbrMode},
-    events::{AudioEvent, Envelope, EventReceiver},
+    audio::AudioEvent,
+    events::{Envelope, EventReceiver},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::AudioEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},

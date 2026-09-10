@@ -1,8 +1,8 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioEvent, AudioRead, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AudioEvent, EventBus},
+    events::EventBus,
     file::{File, FileConfig},
     platform::time::{self, Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},

@@ -1,7 +1,7 @@
-use kithara_events::{AudioEvent, DeferredBus};
+use kithara_events::DeferredBus;
 use kithara_signal::{AudioChunk, AudioSpec};
 
-use crate::AudioLaneEvent;
+use crate::{AudioEvent, AudioLaneEvent};
 
 #[derive(Default)]
 pub(crate) struct DecodedOutput {

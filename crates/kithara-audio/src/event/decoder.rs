@@ -1,38 +1,8 @@
 #![forbid(unsafe_code)]
 
+use kithara_events::{Event, SeekEpoch};
 use kithara_platform::time::Duration;
-
-use crate::{Event, SeekEpoch};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AudioCodecKind {
-    AacLc,
-    AacHe,
-    AacHeV2,
-    Mp3,
-    Flac,
-    Vorbis,
-    Opus,
-    Alac,
-    Pcm,
-    Adpcm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ContainerKind {
-    Mp4,
-    Fmp4,
-    MpegTs,
-    MpegAudio,
-    Adts,
-    Flac,
-    Wav,
-    Ogg,
-    Caf,
-    Mkv,
-}
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -117,8 +87,8 @@ pub enum ResamplerKind {
 pub enum DecoderEvent {
     DecoderChanged {
         backend: DecoderBackend,
-        codec: Option<AudioCodecKind>,
-        container: Option<ContainerKind>,
+        codec: Option<AudioCodec>,
+        container: Option<ContainerFormat>,
         sample_rate: u32,
         channels: u16,
         bit_depth: Option<u16>,
@@ -133,14 +103,14 @@ pub enum DecoderEvent {
     DecodeError {
         class: DecodeErrorClass,
         kind: DecodeErrorKind,
-        codec: Option<AudioCodecKind>,
+        codec: Option<AudioCodec>,
         detail: &'static str,
     },
     GaplessResolved {
         leading_frames: u64,
         trailing_frames: u64,
         domain: FrameDomain,
-        codec: Option<AudioCodecKind>,
+        codec: Option<AudioCodec>,
         sample_rate: u32,
     },
     ResamplerConfigured {

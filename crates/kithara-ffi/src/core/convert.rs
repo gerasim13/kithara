@@ -1,9 +1,7 @@
 use kithara::{
     assets::AssetEvent,
-    events::{
-        AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, HlsEvent, QueueEvent,
-        SessionEvent,
-    },
+    audio::{AudioEvent, DecoderEvent},
+    events::{DjEvent, DrmEvent, EngineEvent, HlsEvent, QueueEvent, SessionEvent},
     play::PlayerEvent,
     stream::DownloaderEvent,
 };
@@ -585,18 +583,21 @@ mod tests {
 
     use kithara::{
         assets::{AssetEvent, EvictReason},
+        audio::{
+            AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
+            DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
+            TrackFailureKind,
+        },
         events::{
-            AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-            DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent, DrmEvent, EngineEvent,
-            FrameDomain, GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource, MediaTime,
-            PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode, ResamplerKind,
-            RouteChangeReason, RouteDescription, SessionEvent, SlotId, StretchBackendKind,
-            TimeControlStatus, TrackFailureKind, TrackId, TrackRef, TrackStatus,
+            DjEvent, DrmEvent, EngineEvent, HlsEvent, ItemRole, KeyFailureStage, KeySource,
+            MediaTime, PlayerStatus, QueueEvent, QueueRepeatMode, RouteChangeReason,
+            RouteDescription, SessionEvent, SlotId, StretchBackendKind, TimeControlStatus, TrackId,
+            TrackRef, TrackStatus,
         },
         platform::{sync::Arc, time::Duration},
         play::PlayerEvent,
         signal::AudioSpec,
-        stream::{CancelReason, DownloaderEvent, RequestId},
+        stream::{AudioCodec, CancelReason, ContainerFormat, DownloaderEvent, RequestId},
     };
     use kithara_file::{FileEvent, TotalBytesSource};
 
@@ -705,8 +706,8 @@ mod tests {
             (
                 DecoderEvent::DecoderChanged {
                     backend: DecoderBackend::Apple,
-                    codec: Some(AudioCodecKind::AacLc),
-                    container: Some(ContainerKind::Fmp4),
+                    codec: Some(AudioCodec::AacLc),
+                    container: Some(ContainerFormat::Fmp4),
                     sample_rate: 48_000,
                     channels: 2,
                     bit_depth: Some(24),
@@ -745,7 +746,7 @@ mod tests {
                 DecoderEvent::DecodeError {
                     class: DecodeErrorClass::Interrupted,
                     kind: DecodeErrorKind::InvalidData,
-                    codec: Some(AudioCodecKind::Flac),
+                    codec: Some(AudioCodec::Flac),
                     detail: "truncated frame",
                 },
                 |event| {
@@ -765,7 +766,7 @@ mod tests {
                     leading_frames: 1024,
                     trailing_frames: 256,
                     domain: FrameDomain::Output,
-                    codec: Some(AudioCodecKind::Alac),
+                    codec: Some(AudioCodec::Alac),
                     sample_rate: 44_100,
                 },
                 |event| {

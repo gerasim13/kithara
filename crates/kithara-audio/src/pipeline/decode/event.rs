@@ -1,11 +1,11 @@
 use kithara_decode::DecoderBackend;
-use kithara_events::{AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, FrameDomain};
+use kithara_events::DeferredBus;
 use kithara_signal::AudioSpec;
 use kithara_stream::MediaInfo;
 
 use super::DecoderGeneration;
 use crate::{
-    AudioLaneEvent,
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, FrameDomain,
     audio::event::{
         DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
         map_playback_resampler_kind, map_resampler_kind,

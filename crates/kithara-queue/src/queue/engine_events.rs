@@ -1,9 +1,10 @@
 use std::sync::PoisonError;
 
+use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
 use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, EventSet, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
-    TrackId, TrackStatus,
+    AdvanceReason, Envelope, EventSet, ItemEvent, ItemRole, PlayerEvent, QueueEvent, TrackId,
+    TrackStatus,
 };
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;

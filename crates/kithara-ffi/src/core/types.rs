@@ -1,10 +1,12 @@
 use kithara::{
     assets::EvictReason,
+    audio::{
+        DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,
+        PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
+    },
     events::{
-        AdvanceReason, AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-        DecoderBackend, DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource,
-        PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason,
-        StretchBackendKind, TrackFailureKind, TrackId, TrackStatus as TS,
+        AdvanceReason, KeyFailureStage, KeySource, QueueRepeatMode, RouteChangeReason,
+        StretchBackendKind, TrackId, TrackStatus as TS,
     },
     platform::{sync::Arc, time::Duration},
     play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
@@ -514,24 +516,6 @@ pub enum FfiAudioCodecKind {
     Unknown,
 }
 
-impl From<AudioCodecKind> for FfiAudioCodecKind {
-    fn from(value: AudioCodecKind) -> Self {
-        match value {
-            AudioCodecKind::AacLc => Self::AacLc,
-            AudioCodecKind::AacHe => Self::AacHe,
-            AudioCodecKind::AacHeV2 => Self::AacHeV2,
-            AudioCodecKind::Mp3 => Self::Mp3,
-            AudioCodecKind::Flac => Self::Flac,
-            AudioCodecKind::Vorbis => Self::Vorbis,
-            AudioCodecKind::Opus => Self::Opus,
-            AudioCodecKind::Alac => Self::Alac,
-            AudioCodecKind::Pcm => Self::Pcm,
-            AudioCodecKind::Adpcm => Self::Adpcm,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
-        }
-    }
-}
-
 impl From<AudioCodec> for FfiAudioCodecKind {
     fn from(value: AudioCodec) -> Self {
         match value {
@@ -563,24 +547,6 @@ pub enum FfiContainerKind {
     Caf,
     Mkv,
     Unknown,
-}
-
-impl From<ContainerKind> for FfiContainerKind {
-    fn from(value: ContainerKind) -> Self {
-        match value {
-            ContainerKind::Mp4 => Self::Mp4,
-            ContainerKind::Fmp4 => Self::Fmp4,
-            ContainerKind::MpegTs => Self::MpegTs,
-            ContainerKind::MpegAudio => Self::MpegAudio,
-            ContainerKind::Adts => Self::Adts,
-            ContainerKind::Flac => Self::Flac,
-            ContainerKind::Wav => Self::Wav,
-            ContainerKind::Ogg => Self::Ogg,
-            ContainerKind::Caf => Self::Caf,
-            ContainerKind::Mkv => Self::Mkv,
-            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
-        }
-    }
 }
 
 impl From<ContainerFormat> for FfiContainerKind {
@@ -1219,16 +1185,16 @@ mod tests {
     #[kithara::test]
     fn audio_codec_conversion_preserves_known_variants() {
         for (source, expected) in [
-            (AudioCodecKind::AacLc, FfiAudioCodecKind::AacLc),
-            (AudioCodecKind::AacHe, FfiAudioCodecKind::AacHe),
-            (AudioCodecKind::AacHeV2, FfiAudioCodecKind::AacHeV2),
-            (AudioCodecKind::Mp3, FfiAudioCodecKind::Mp3),
-            (AudioCodecKind::Flac, FfiAudioCodecKind::Flac),
-            (AudioCodecKind::Vorbis, FfiAudioCodecKind::Vorbis),
-            (AudioCodecKind::Opus, FfiAudioCodecKind::Opus),
-            (AudioCodecKind::Alac, FfiAudioCodecKind::Alac),
-            (AudioCodecKind::Pcm, FfiAudioCodecKind::Pcm),
-            (AudioCodecKind::Adpcm, FfiAudioCodecKind::Adpcm),
+            (AudioCodec::AacLc, FfiAudioCodecKind::AacLc),
+            (AudioCodec::AacHe, FfiAudioCodecKind::AacHe),
+            (AudioCodec::AacHeV2, FfiAudioCodecKind::AacHeV2),
+            (AudioCodec::Mp3, FfiAudioCodecKind::Mp3),
+            (AudioCodec::Flac, FfiAudioCodecKind::Flac),
+            (AudioCodec::Vorbis, FfiAudioCodecKind::Vorbis),
+            (AudioCodec::Opus, FfiAudioCodecKind::Opus),
+            (AudioCodec::Alac, FfiAudioCodecKind::Alac),
+            (AudioCodec::Pcm, FfiAudioCodecKind::Pcm),
+            (AudioCodec::Adpcm, FfiAudioCodecKind::Adpcm),
         ] {
             assert_eq!(FfiAudioCodecKind::from(source), expected);
         }
@@ -1237,16 +1203,16 @@ mod tests {
     #[kithara::test]
     fn container_conversion_preserves_known_variants() {
         for (source, expected) in [
-            (ContainerKind::Mp4, FfiContainerKind::Mp4),
-            (ContainerKind::Fmp4, FfiContainerKind::Fmp4),
-            (ContainerKind::MpegTs, FfiContainerKind::MpegTs),
-            (ContainerKind::MpegAudio, FfiContainerKind::MpegAudio),
-            (ContainerKind::Adts, FfiContainerKind::Adts),
-            (ContainerKind::Flac, FfiContainerKind::Flac),
-            (ContainerKind::Wav, FfiContainerKind::Wav),
-            (ContainerKind::Ogg, FfiContainerKind::Ogg),
-            (ContainerKind::Caf, FfiContainerKind::Caf),
-            (ContainerKind::Mkv, FfiContainerKind::Mkv),
+            (ContainerFormat::Mp4, FfiContainerKind::Mp4),
+            (ContainerFormat::Fmp4, FfiContainerKind::Fmp4),
+            (ContainerFormat::MpegTs, FfiContainerKind::MpegTs),
+            (ContainerFormat::MpegAudio, FfiContainerKind::MpegAudio),
+            (ContainerFormat::Adts, FfiContainerKind::Adts),
+            (ContainerFormat::Flac, FfiContainerKind::Flac),
+            (ContainerFormat::Wav, FfiContainerKind::Wav),
+            (ContainerFormat::Ogg, FfiContainerKind::Ogg),
+            (ContainerFormat::Caf, FfiContainerKind::Caf),
+            (ContainerFormat::Mkv, FfiContainerKind::Mkv),
         ] {
             assert_eq!(FfiContainerKind::from(source), expected);
         }

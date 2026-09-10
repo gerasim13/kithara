@@ -4,10 +4,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
-        ReadOutcome, RubatoBackend,
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
+        ConsumerWakeMode, DecoderChangeCause, DecoderEvent, ReadOutcome, RubatoBackend,
+        SeekLifecycleStage,
     },
-    events::{AudioEvent, DecoderChangeCause, DecoderEvent, SeekEpoch, SeekLifecycleStage},
+    events::SeekEpoch,
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,

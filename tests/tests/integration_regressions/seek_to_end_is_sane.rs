@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, PlayerEvent},
+    audio::AudioEvent,
+    events::PlayerEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},

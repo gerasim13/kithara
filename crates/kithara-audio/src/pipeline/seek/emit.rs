@@ -1,11 +1,11 @@
 use kithara_decode::DecoderSeekOutcome;
-use kithara_events::{AudioEvent, DeferredBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::DeferredBus;
 use kithara_platform::time::Duration;
 use kithara_stream::{PlayheadWrite, SeekObserve, StreamType};
 use num_traits::cast::ToPrimitive;
 
 use crate::{
-    AudioLaneEvent,
+    AudioEvent, AudioLaneEvent, SeekLifecycleStage, SegmentLocation,
     pipeline::{
         decode::{DecoderGeneration, core::ActiveDecode},
         rebuild::{RecreateNext, RecreateState},

@@ -1,11 +1,11 @@
-use kithara_events::{AudioEvent, DecoderEvent, DeferredBus, EventSet};
+use kithara_events::{DeferredBus, EventSet};
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
 use kithara_stream::PlayheadWrite;
 
 use super::PreloadGate;
 use crate::{
-    Fetch,
+    AudioEvent, DecoderEvent, Fetch,
     runtime::{Inlet, Outlet},
 };
 

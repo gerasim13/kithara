@@ -187,12 +187,13 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
-        Audio, AudioConfig, AudioControl, AudioRead, AudioReader, AudioSession, ResamplerQuality,
+        Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
+        ResamplerQuality,
     };
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;
-    pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver};
+    pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig, FileEvent};
     #[cfg(feature = "hls")]

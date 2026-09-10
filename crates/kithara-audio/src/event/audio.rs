@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
+use kithara_events::{Event, SeekEpoch};
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
-
-use crate::{Event, SeekEpoch};
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -10,9 +10,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
     GaplessMode, GaplessProfile,
 };
-use kithara_events::{
-    AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, EventBus, TrackFailureKind,
-};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Condvar, Mutex, Notify},
     time::Duration,
@@ -32,7 +30,7 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use crate::{
-    AudioLaneEvent,
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind,
     pipeline::{
         decode::{
             DecoderGeneration,
