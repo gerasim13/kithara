@@ -9,7 +9,9 @@ use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{GroupState, SessionSampleRate, StreamShape, player::PlayerMember};
+use kithara_play::{
+    GroupState, SessionSampleRate, StreamShape, player::PlayerMember, session::RegisteredPlayer,
+};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncStatusSnapshot,
@@ -287,7 +289,7 @@ pub(super) fn register_player<B: AudioBackend, S>(
     pools: PoolRegion<S>,
     sample_rate: u32,
     gate_smoothing: SmootherConfig,
-) -> Result<PlayerId, SessionError> {
+) -> Result<RegisteredPlayer, SessionError> {
     NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
     let next_player_id = player_id
@@ -316,6 +318,10 @@ pub(super) fn register_player<B: AudioBackend, S>(
         master_volume,
         gate_smoothing,
     );
+    let registration = RegisteredPlayer {
+        id: player_id,
+        eq: deck.shared_eq.clone(),
+    };
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(
@@ -323,7 +329,7 @@ pub(super) fn register_player<B: AudioBackend, S>(
         players = state.graph.len(),
         "[KITHARA-ROUTE] session player registered"
     );
-    Ok(player_id)
+    Ok(registration)
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend, S>(

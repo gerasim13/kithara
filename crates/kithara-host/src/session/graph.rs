@@ -213,30 +213,13 @@ pub(super) mod lifecycle {
         let Some(render_quantum_frames) = render_quantum_frames else {
             return Ok(());
         };
-        let max_block_frames = state
+        let info = state
             .ctx
             .as_ref()
             .and_then(FirewheelCtx::stream_info)
-            .ok_or(SessionError::NoContext)?
-            .max_block_frames
-            .get();
-        let block_frames = usize::try_from(max_block_frames)
-            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-        let quantum_frames = render_quantum_frames.get();
-        let preload_chunks = block_frames.div_ceil(quantum_frames);
-        let required_frames = preload_chunks
-            .checked_add(2)
-            .and_then(|chunks| chunks.checked_mul(quantum_frames))
-            .and_then(|frames| frames.checked_sub(1))
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
-        if required_frames > response_budget_frames.get() {
-            return Err(SessionError::ResponseBudgetExceeded {
-                max_block_frames,
-                required_frames,
-                render_quantum_frames: quantum_frames,
-                budget_frames: response_budget_frames.get(),
-            });
-        }
+            .ok_or(SessionError::NoContext)?;
+        kithara_play::StreamShape::new(info.max_block_frames, info.sample_rate)
+            .playback_buffers(render_quantum_frames, response_budget_frames)?;
         Ok(())
     }
     pub(in crate::session) fn stop_player<B: AudioBackend, S>(
@@ -570,8 +553,22 @@ pub(super) mod controls {
         gain_db: f32,
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
-        if !deck_at(state, idx)?.started {
-            return Err(SessionError::NotRunning(player_id));
+        let player = deck_at(state, idx)?;
+        if band >= player.eq_layout.len() {
+            return Err(SessionError::EqBandOutOfRange {
+                band,
+                bands: player.eq_layout.len(),
+            });
+        }
+        player
+            .shared_eq
+            .set_gain(band, GainDb::from(gain_db))
+            .map_err(|_| SessionError::EqBandOutOfRange {
+                band,
+                bands: player.eq_layout.len(),
+            })?;
+        if !player.started {
+            return Ok(());
         }
         let (ctx, graph) = (&mut state.ctx, &mut state.graph);
         let player = deck_at_mut(graph, idx)?;
@@ -840,7 +837,7 @@ mod tests {
                 sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
         ) {
-            Reply::PlayerRegistered(id) => id,
+            Reply::PlayerRegistered(registered) => registered.id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }

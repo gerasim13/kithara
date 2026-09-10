@@ -22,10 +22,11 @@ graph, session transport, and platform audio backend. A player/deck remains in
 Callers fully construct a player or decorator and transfer that instance with
 `Host::insert`. The Host attaches its opaque session capability exactly once
 and retains the instance; callers receive a typed `HostOwned` control endpoint,
-not the player value or its session dispatcher. Insertion prepares the output
-graph and an initial slot before returning the control. It can open the audio
-device and fail during preparation; it does not start track playback. Remove
-the deck or close the Host to release prepared resources.
+not the player value or its session dispatcher. Insertion registers deck controls
+and validates known output geometry without opening an audio device. Playback
+starts the output graph and allocates its slot, validating the actual output
+geometry before rendering. Remove the deck or close the Host to release its
+resources.
 
 `Host<S>` shares the player's closed buffer-pool schema. Insertion accepts only
 players with that same schema, while each registered deck retains its existing

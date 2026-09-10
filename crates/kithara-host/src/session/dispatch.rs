@@ -639,7 +639,7 @@ mod tests {
             state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) {
-            Reply::PlayerRegistered(id) => id,
+            Reply::PlayerRegistered(registered) => registered.id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
@@ -789,12 +789,13 @@ mod tests {
     fn detach_is_rejected_while_the_graph_projection_is_live() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let Reply::PlayerRegistered(player_id) = run_cmd(
+        let Reply::PlayerRegistered(registered) = run_cmd(
             &mut state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("fixture player is registered")
         };
+        let player_id = registered.id;
         let detach = |state: &TestState| SyncOperation::Topology {
             base: state.root.topology().expect("fixture topology").stamp(),
             operations: Box::new([TopologyOperation::Detach { member: grid_id }]),
@@ -1305,12 +1306,13 @@ mod tests {
             ),
             HostReply::Ok
         ));
-        let Reply::PlayerRegistered(player_id) = run_cmd(
+        let Reply::PlayerRegistered(registered) = run_cmd(
             &mut state,
             register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("player registration must succeed")
         };
+        let player_id = registered.id;
 
         start_player_cmd(&mut state, player_id);
 

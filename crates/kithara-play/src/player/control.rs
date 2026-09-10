@@ -76,16 +76,13 @@ where
         !self.runtime.is_closed() && self.runtime.is_playing()
     }
 
-    /// Prepare the Host graph and slot without starting track playback.
+    /// Register deck controls without starting the output stream.
     ///
     /// # Errors
-    /// Returns a session startup or slot allocation error.
+    /// Returns a registration or response geometry error.
     pub fn prepare(&self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(|runtime| {
-            runtime.ensure_engine_started()?;
-            runtime.ensure_slot()?;
-            Ok(())
-        })
+        self.runtime
+            .with_open_result(|runtime| runtime.core.engine.prepare())
     }
 
     /// Pause playback unless the owning player is closed.

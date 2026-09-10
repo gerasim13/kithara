@@ -385,7 +385,7 @@ fn bootstrap(
         pools: pools(),
         sample_rate: session_rate.get(),
     }) {
-        Reply::PlayerRegistered(player_id) => player_id,
+        Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };

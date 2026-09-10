@@ -68,7 +68,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
         })
         .expect("register player command")
     {
-        Reply::PlayerRegistered(player_id) => player_id,
+        Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => panic!("register player failed: {error}"),
         _ => panic!("unexpected register player reply"),
     };

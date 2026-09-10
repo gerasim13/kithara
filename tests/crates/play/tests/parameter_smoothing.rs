@@ -118,9 +118,13 @@ pub(super) async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>,
                 .build(),
         )))
         .expect("append sine fixture");
-    deck.select(id, Transition::None)
-        .expect("select sine fixture");
-    deck.play();
+    harness
+        .run(move |deck| {
+            deck.select(id, Transition::None)
+                .expect("select sine fixture");
+            deck.play();
+        })
+        .await;
     let warm = observe(&harness, Consts::SETTLE_BLOCKS).await;
     assert!(
         last_block_peak(&warm) > 0.1,
@@ -397,7 +401,18 @@ async fn failed_deck_preparation_releases_host_membership() {
         .insert(valid)
         .await
         .expect("host can prepare the next deck");
-    deck.play();
-    deck.pause();
+    host.with(move |host| {
+        assert!(
+            host.sample_rate().expect("sample rate").measured.is_none(),
+            "inserting an idle deck must not start the output stream"
+        );
+        deck.set_eq_gain(0, -6.0).expect("configure idle EQ");
+        assert_eq!(deck.eq_gain(0), Some(-6.0));
+        deck.play();
+        assert!(host.sample_rate().expect("sample rate").measured.is_some());
+        assert_eq!(deck.eq_gain(0), Some(-6.0));
+        deck.pause();
+    })
+    .await;
     host.close().await;
 }

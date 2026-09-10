@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
@@ -7,37 +7,7 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig, rt::StreamShape, session::SessionError};
-
-fn playback_buffers(
-    shape: StreamShape,
-    quantum: NonZeroUsize,
-    budget: NonZeroUsize,
-) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
-    let output_frames = usize::try_from(shape.max_block_frames.get())
-        .map_err(|_| SessionError::ResponseGeometryOverflow)?;
-    let preload = output_frames.div_ceil(quantum.get());
-    let ring = preload
-        .checked_add(1)
-        .ok_or(SessionError::ResponseGeometryOverflow)?;
-    let required_frames = ring
-        .checked_add(1)
-        .and_then(|chunks| chunks.checked_mul(quantum.get()))
-        .and_then(|frames| frames.checked_sub(1))
-        .ok_or(SessionError::ResponseGeometryOverflow)?;
-    if required_frames > budget.get() {
-        return Err(SessionError::ResponseBudgetExceeded {
-            required_frames,
-            max_block_frames: shape.max_block_frames.get(),
-            render_quantum_frames: quantum.get(),
-            budget_frames: budget.get(),
-        });
-    }
-    Ok((
-        NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
-        NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
-    ))
-}
+use crate::{PlayError, resource::ResourceConfig, session::SessionError};
 
 struct ConfigPrep<'a, S> {
     player: &'a PlayerRuntime<S>,
@@ -69,7 +39,7 @@ where
         if let Some(quantum) = warp.render_quantum_frames() {
             let shape = stream_shape.ok_or(SessionError::NoContext)?;
             let (preload, ring) =
-                playback_buffers(shape, quantum, self.player.core.response_budget_frames)?;
+                shape.playback_buffers(quantum, self.player.core.response_budget_frames)?;
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
@@ -138,6 +108,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_assets::AssetStore;
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
@@ -147,6 +119,7 @@ mod tests {
         PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
+        rt::StreamShape,
         test_pools::{TestPools, pools},
     };
 

@@ -8,12 +8,19 @@ mod wire {
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
-        bridge::{MixTapWriter, SlotControl},
+        bridge::{MixTapWriter, SharedEq, SlotControl},
         effects::eq::EqBandConfig,
         rt::StreamShape,
     };
 
     pub type PlayerId = u64;
+
+    /// Registered deck identity and its Host-owned EQ controls.
+    #[derive(Clone, Debug)]
+    pub struct RegisteredPlayer {
+        pub id: PlayerId,
+        pub eq: SharedEq,
+    }
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]
@@ -165,7 +172,7 @@ mod wire {
     #[non_exhaustive]
     pub enum Reply {
         Ok,
-        PlayerRegistered(PlayerId),
+        PlayerRegistered(RegisteredPlayer),
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
@@ -232,7 +239,7 @@ mod handle {
 
     #[cfg(any(test, feature = "probe"))]
     use super::wire::PlayerLevel;
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
 
     /// Handle used by resident players to reach their session owner.
@@ -250,7 +257,7 @@ mod handle {
 
         fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
-                Reply::Err(err) => Err(PlayError::Session(err)),
+                Reply::Err(err) => Err(err.into()),
                 reply => Ok(reply),
             }
         }
@@ -382,7 +389,7 @@ mod handle {
 
         pub fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
-                Reply::Err(err) => Err(PlayError::Session(err)),
+                Reply::Err(err) => Err(err.into()),
                 reply => Ok(reply),
             }
         }
@@ -408,7 +415,7 @@ mod handle {
             eq_layout: Vec<EqBandConfig>,
             pools: PoolRegion<S>,
             gate_smoothing: SmootherConfig,
-        ) -> Result<PlayerId, PlayError> {
+        ) -> Result<RegisteredPlayer, PlayError> {
             let sample_rate = self.requested_sample_rate()?.get();
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
@@ -538,7 +545,10 @@ mod handle {
 }
 
 pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
-pub use wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate};
+pub use wire::{
+    AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionError,
+    SessionSampleRate,
+};
 
 #[cfg(test)]
 mod tests {
@@ -597,7 +607,10 @@ mod tests {
                 }
                 Cmd::RegisterPlayer { sample_rate, .. } => {
                     self.applied.store(sample_rate, Ordering::Relaxed);
-                    Ok(Reply::PlayerRegistered(1))
+                    Ok(Reply::PlayerRegistered(crate::session::RegisteredPlayer {
+                        id: 1,
+                        eq: crate::bridge::SharedEq::new(10),
+                    }))
                 }
                 Cmd::StartPlayer { sample_rate, .. } => {
                     self.applied.store(sample_rate, Ordering::Relaxed);
@@ -659,7 +672,8 @@ mod tests {
                 pools(),
                 DEFAULT_GATE_SMOOTHING,
             )
-            .expect("register player");
+            .expect("register player")
+            .id;
         assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
 
         capture.applied.store(0, Ordering::Relaxed);
@@ -693,7 +707,8 @@ mod tests {
                 pools(),
                 DEFAULT_GATE_SMOOTHING,
             )
-            .expect("register player");
+            .expect("register player")
+            .id;
         handle
             .start_player(
                 player_id,

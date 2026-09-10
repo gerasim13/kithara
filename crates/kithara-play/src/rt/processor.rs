@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::atomic::Ordering};
+use std::{
+    collections::VecDeque,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::atomic::Ordering,
+};
 
 use bon::Builder;
 use firewheel::{
@@ -26,6 +30,7 @@ use crate::{
         NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    session::SessionError,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -98,6 +103,40 @@ pub struct StreamShape {
 }
 
 impl StreamShape {
+    /// Compute decoder buffer depths within the output response budget.
+    ///
+    /// # Errors
+    /// Returns an error when the geometry overflows or exceeds the budget.
+    pub fn playback_buffers(
+        self,
+        quantum: NonZeroUsize,
+        budget: NonZeroUsize,
+    ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+        let output_frames = usize::try_from(self.max_block_frames.get())
+            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
+        let preload = output_frames.div_ceil(quantum.get());
+        let ring = preload
+            .checked_add(1)
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        let required_frames = ring
+            .checked_add(1)
+            .and_then(|chunks| chunks.checked_mul(quantum.get()))
+            .and_then(|frames| frames.checked_sub(1))
+            .ok_or(SessionError::ResponseGeometryOverflow)?;
+        if required_frames > budget.get() {
+            return Err(SessionError::ResponseBudgetExceeded {
+                required_frames,
+                max_block_frames: self.max_block_frames.get(),
+                render_quantum_frames: quantum.get(),
+                budget_frames: budget.get(),
+            });
+        }
+        Ok((
+            NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
+            NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
+        ))
+    }
+
     #[must_use]
     pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
         Self {
