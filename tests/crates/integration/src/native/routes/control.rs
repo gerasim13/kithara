@@ -39,6 +39,10 @@ pub(crate) enum ContentSpec {
     Signal {
         name: String,
     },
+    /// Serve one file of the generated HLS bundle, named the way the
+    /// `assets` route names it. A paced-segment fixture needs the same
+    /// playlists and segments that route serves, and no client can upload
+    /// them.
     Asset {
         name: String,
     },
@@ -245,8 +249,24 @@ mod tests {
         else {
             panic!("asset spec must resolve to static bytes");
         };
-        assert!(bytes.starts_with(b"#EXTM3U"));
+        assert!(
+            bytes.starts_with(b"#EXTM3U"),
+            "the resolved body must be the variant playlist"
+        );
         assert_eq!(content_type, Some("application/vnd.apple.mpegurl"));
+    }
+
+    #[kithara::test]
+    fn asset_spec_rejects_a_route_the_bundle_does_not_serve() {
+        let Err(error) = content_from_spec(ContentSpec::Asset {
+            name: "hls/index-not-a-variant.m3u8".to_owned(),
+        }) else {
+            panic!("an unknown route must be rejected");
+        };
+        assert!(
+            error.contains("the generated HLS bundle has no"),
+            "unexpected rejection reason: {error}"
+        );
     }
 
     #[kithara::test]
