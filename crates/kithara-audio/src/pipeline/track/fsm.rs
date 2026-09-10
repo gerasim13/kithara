@@ -115,6 +115,7 @@ pub(super) fn apply_seek_transition<T: StreamType>(
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), epoch);
             src.decode.notify_seek(&src.retired);
+            src.discard_superseded_incoming(epoch);
             src.update_state(Track::<AwaitingResume>::new(resume).erase());
         }
         SeekTransition::AtEof { epoch } => {

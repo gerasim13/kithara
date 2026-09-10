@@ -222,6 +222,33 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Drops the in-flight transition an applied seek superseded.
+    ///
+    /// `VariantTransitionId` binds a transition to the seek epoch that minted
+    /// it, and `SeekPrepare::prepare` already dropped the source's half of one
+    /// minted earlier. The local half outlives that: its generation holds a
+    /// latched pre-seek `OutgoingFrontier` that the repositioned outgoing
+    /// generation never reaches, so `transition_holds_output` would hold every
+    /// decode output against a promotion that can no longer be proven. The
+    /// pending ABR intent survives, exactly as it does on the source side, so
+    /// the new epoch can mint its own transition.
+    pub(super) fn discard_superseded_incoming(&mut self, epoch: u64) {
+        let Some(transition) = self
+            .decode
+            .incoming_transition()
+            .filter(|transition| transition.id().seek_epoch() != epoch)
+        else {
+            return;
+        };
+        debug!(
+            epoch,
+            latched_frontier = ?self.decode.incoming_frontier(),
+            ?transition,
+            "seek superseded a variant transition: discarding the incoming half"
+        );
+        self.discard_local_incoming();
+    }
+
     fn prepare_incoming_transition(
         &mut self,
         control: &dyn VariantControl,
