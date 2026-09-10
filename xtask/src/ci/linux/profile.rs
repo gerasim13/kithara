@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::ci::config::{default_build_cache_size, parse_build_cache_size};
+use crate::ci::{
+    config::{default_build_cache_size, parse_build_cache_size},
+    environment::CacheTrust,
+};
 
 /// Installed profile every Linux CI machine reads through
 /// `KITHARA_CI_LINUX_CONFIG`.
@@ -29,9 +32,6 @@ pub(crate) struct LinuxHost {
     pub(crate) cache_root: PathBuf,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
-    /// A mode-0600 file with the scoped S3 settings every runner inherits.
-    #[serde(default)]
-    pub(crate) sccache_s3_env_file: Option<PathBuf>,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
     /// Serialised last: TOML requires tables after plain values.
@@ -97,6 +97,10 @@ pub(crate) struct LinuxRunner {
     /// registration reaches exactly one, so the choice belongs to the runner
     /// rather than to the machine underneath it.
     pub(crate) repository: String,
+    /// Mode-0600 S3 credentials scoped to this runner's cache namespace.
+    pub(crate) sccache_s3_env_file: PathBuf,
+    /// Whether these credentials may publish immutable target snapshots.
+    pub(crate) cache_trust: CacheTrust,
     /// How many cores one job may use. Handed to the container as a set of
     /// core numbers rather than a share of the machine: a share is a CFS
     /// quota, which throttles a job without telling it anything, so `nproc`
@@ -252,6 +256,12 @@ impl LinuxRunner {
         if self.cpus == 0 || self.memory.trim().is_empty() {
             bail!(
                 "Linux CI runner {} must bound its CPU and memory",
+                self.name
+            );
+        }
+        if !self.sccache_s3_env_file.is_absolute() {
+            bail!(
+                "Linux CI runner {} must name its S3 cache environment by absolute path",
                 self.name
             );
         }

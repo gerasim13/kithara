@@ -22,8 +22,8 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 [dependencies]
 kithara = { workspace = true, features = ["full", "probe", "symphonia", "fdk-aac", "resample-rubato"] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 futures = { workspace = true }

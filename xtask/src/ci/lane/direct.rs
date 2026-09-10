@@ -6,7 +6,7 @@ use kithara_devtools::Ctx;
 
 use super::declared;
 use crate::{
-    ci::{config::CiPins, process::Process, run::PipelineKind},
+    ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
     config::{CiLaneConfig, KitharaExt},
 };
 
@@ -59,7 +59,18 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
-    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
+    let snapshot = lane
+        .target_snapshot
+        .as_deref()
+        .map(|key| snapshot::restore_for_lane(key, &process.target_dir(), &ctx.root))
+        .transpose()?;
+    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)?;
+    if args.kind == PipelineKind::Main
+        && let Some(fingerprint) = snapshot
+    {
+        snapshot::publish_for_lane(&process.target_dir(), &fingerprint)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

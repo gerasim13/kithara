@@ -8,9 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
@@ -75,8 +76,9 @@ impl SccacheSlot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CacheTrust {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CacheTrust {
     Quarantine,
     Review,
     Trusted,
@@ -87,7 +89,7 @@ impl CacheTrust {
     /// root covers everything that can appear in it.
     pub(super) const ALL: [Self; 3] = [Self::Quarantine, Self::Review, Self::Trusted];
 
-    fn from_environment() -> Result<Self> {
+    pub(super) fn from_environment() -> Result<Self> {
         match env::var("KITHARA_CACHE_TRUST")
             .unwrap_or_else(|_| "review".into())
             .as_str()
@@ -99,7 +101,7 @@ impl CacheTrust {
         }
     }
 
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Quarantine => "quarantine",
             Self::Review => "review",
@@ -507,14 +509,18 @@ fn build_target_dir(
     target_scope: &str,
     target_is_windows: bool,
     gitlab: bool,
-    concurrent_id: Option<&str>,
-    slots: usize,
+    job_id: Option<&str>,
 ) -> Result<PathBuf> {
     if gitlab && !target_is_windows {
-        let slot = disposable_slot(concurrent_id, slots)?;
+        let job_id = job_id.context("CI_JOB_ID must identify the GitLab job")?;
+        ensure!(
+            !job_id.is_empty() && job_id.bytes().all(|byte| byte.is_ascii_digit()),
+            "CI_JOB_ID must be decimal digits"
+        );
         return Ok(shared_root
             .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
-            .join(format!("{target_scope}-slot-{slot}")));
+            .join(format!("{target_scope}-job-{job_id}"))
+            .join("cargo"));
     }
     Ok(project_root.join("target"))
 }
@@ -523,17 +529,16 @@ fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    config: &CiConfig,
+    _config: &CiConfig,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
+    let job_id = env::var("CI_JOB_ID").ok();
     let target = build_target_dir(
         project_root,
         shared_root,
         target_scope,
         cfg!(windows),
         is_gitlab(),
-        concurrent_id.as_deref(),
-        config.host.job_concurrency,
+        job_id.as_deref(),
     )?;
     fs::create_dir_all(&target)
         .with_context(|| format!("creating CI build cache {}", target.display()))?;
@@ -1087,40 +1092,43 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_targets_live_in_the_persistent_runner_slot() {
+    fn gitlab_targets_are_private_to_one_job() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
             "review-linux-aarch64",
             false,
             true,
-            Some("1"),
-            3,
+            Some("4711"),
         )
         .unwrap();
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-slot-1")
+            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
         );
-    }
-
-    #[test]
-    fn macos_gitlab_targets_live_in_the_persistent_runner_slot() {
-        let target = build_target_dir(
-            Path::new("/builds/disrupt/kithara"),
-            Path::new("/cache"),
-            "review-macos-aarch64",
-            false,
-            true,
-            Some("1"),
-            3,
-        )
-        .unwrap();
-
-        assert_eq!(
+        assert_ne!(
             target,
-            Path::new("/cache/target-slots/review-macos-aarch64-slot-1")
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                false,
+                true,
+                Some("4712"),
+            )
+            .unwrap()
+        );
+        assert!(
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                false,
+                true,
+                Some("../trusted"),
+            )
+            .is_err()
         );
     }
 
@@ -1133,7 +1141,6 @@ mod tests {
             false,
             false,
             None,
-            3,
         )
         .unwrap();
 

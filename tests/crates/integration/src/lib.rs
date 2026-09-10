@@ -11,58 +11,68 @@
     clippy::unwrap_used
 )]
 
+#[cfg(feature = "all")]
 pub mod abr_fixtures;
+#[cfg(feature = "all")]
 pub use abr_fixtures::auto;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod analysis_pass;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(all(
+    any(feature = "audio", feature = "all"),
+    any(target_os = "macos", target_os = "ios")
+))]
 pub mod apple_warmup;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod architecture_trace;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod asset_fixture;
 pub mod assets_ext;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod audio_artifact;
+#[cfg(feature = "all")]
 pub mod audio_mock;
 pub use kithara::bufpool::testing as bufpool_ext;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod cochlea;
 pub mod consts;
+#[cfg(feature = "all")]
 pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod decode_mock;
+#[cfg(feature = "all")]
 pub mod e2e;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod encode_ext;
 pub mod fixture_protocol;
 pub mod fixtures;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod flash_pace;
 pub mod gapless;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;
 pub mod hls_spec;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod hls_test_helpers;
 pub mod hls_url;
+#[cfg(feature = "all")]
 pub mod log_filter;
 pub mod memory_source;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod net_fixture;
+#[cfg(any(feature = "all", feature = "wasm"))]
 pub mod offline;
 pub mod packed_audio;
 pub mod reads;
 pub mod rfc6381;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod ring;
 pub mod rng;
 pub mod server_url;
 pub mod storage_ext;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod swallow_detector;
 pub mod test_defaults;
 pub mod test_server;
@@ -72,13 +82,14 @@ pub mod token_store;
 /// `Queue`. It lives here rather than beside one suite because two suites drive
 /// it — the fixture-backed one and the production one — and each uses a
 /// different part.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod user_sim;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod waits;
 
+#[cfg(feature = "all")]
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(any(feature = "audio", feature = "all"), not(target_arch = "wasm32")))]
 pub use assets_ext::disk_asset_store;
 pub use assets_ext::memory_asset_store;
 pub use fixtures::*;
@@ -94,6 +105,7 @@ pub use hls_url::{
     hls_segment_path,
 };
 pub use kithara;
+#[cfg(feature = "all")]
 pub use log_filter::rust_log_filter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;

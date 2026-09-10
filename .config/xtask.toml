@@ -516,7 +516,11 @@ default = false
 features = ["no-block"]
 
 [test.net_backends.wreq]
-features = []
+features = [
+  "client-wreq",
+  "kithara-net/client-wreq",
+  "kithara-test-utils/client-wreq",
+]
 
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
@@ -547,6 +551,260 @@ prefix_args = [
   "kithara-ffi-web-tests",
   "--exclude",
   "kithara-ffi-web-analysis-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+# Core data-flow contracts have no reason to compile decoders, encoders, the
+# player, or the app. Keep their selected packages together because they share
+# the same low-level closure and are all exercised by one branch change.
+[test.lanes.core]
+program = "cargo"
+default_features = ["kithara-platform/tokio-rt-multi-thread"]
+owns = [
+  "crates/kithara-bufpool/",
+  "crates/kithara-events/",
+  "crates/kithara-platform/",
+  "crates/kithara-signal/",
+  "crates/kithara-stream/",
+  "tests/crates/bufpool/",
+  "tests/crates/core/",
+  "tests/crates/events/",
+  "tests/crates/platform/",
+  "tests/crates/stream/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-bufpool",
+  "-p",
+  "kithara-events",
+  "-p",
+  "kithara-platform",
+  "-p",
+  "kithara-signal",
+  "-p",
+  "kithara-stream",
+  "-p",
+  "kithara-bufpool-tests",
+  "-p",
+  "kithara-events-tests",
+  "-p",
+  "kithara-platform-tests",
+  "-p",
+  "kithara-stream-tests",
+  "-p",
+  "kithara-core-test-fixtures",
+  "--cargo-profile",
+  "test-release",
+]
+
+# The audio closure owns decode/playback-adjacent implementations and the
+# dedicated tests package. It deliberately uses the lightweight fixture
+# registry declared by `kithara-audio-tests`.
+[test.lanes.audio]
+program = "cargo"
+owns = [
+  "crates/kithara-audio/",
+  "crates/kithara-record/",
+  "crates/kithara-resampler/",
+  "crates/kithara-stretch/",
+  "crates/kithara-warp/",
+  "tests/crates/audio/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-audio",
+  "-p",
+  "kithara-record",
+  "-p",
+  "kithara-resampler",
+  "-p",
+  "kithara-stretch",
+  "-p",
+  "kithara-warp",
+  "-p",
+  "kithara-audio-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+# Each domain facade stays in `tests/`, but a branch selects it with the crate
+# that owns the production contract. The full workspace lane remains the
+# fallback and the default-branch proof.
+[test.lanes.abr]
+program = "cargo"
+owns = ["crates/kithara-abr/", "tests/crates/abr/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-abr",
+  "-p",
+  "kithara-abr-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.analysis]
+program = "cargo"
+owns = [
+  "crates/kithara-analysis/",
+  "crates/kithara-beat/",
+  "tests/crates/analysis/",
+]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-analysis",
+  "-p",
+  "kithara-beat",
+  "-p",
+  "kithara-analysis-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.app]
+program = "cargo"
+owns = ["crates/kithara-app/", "tests/crates/app/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-app",
+  "-p",
+  "kithara-app-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.assets]
+program = "cargo"
+owns = ["crates/kithara-assets/", "tests/crates/assets/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-assets",
+  "-p",
+  "kithara-assets-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.decode]
+program = "cargo"
+owns = ["crates/kithara-decode/", "tests/crates/decode/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-decode",
+  "-p",
+  "kithara-decode-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.encode]
+program = "cargo"
+owns = ["crates/kithara-encode/", "tests/crates/encode/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-encode",
+  "-p",
+  "kithara-encode-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.file]
+program = "cargo"
+owns = ["crates/kithara-file/", "tests/crates/file/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-file",
+  "-p",
+  "kithara-file-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.hls]
+program = "cargo"
+owns = ["crates/kithara-hls/", "tests/crates/hls/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-hls",
+  "-p",
+  "kithara-hls-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.net]
+program = "cargo"
+owns = ["crates/kithara-net/", "tests/crates/net/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-net",
+  "-p",
+  "kithara-net-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.play]
+program = "cargo"
+owns = ["crates/kithara-play/", "tests/crates/play/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-play",
+  "-p",
+  "kithara-play-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.queue]
+program = "cargo"
+owns = ["crates/kithara-queue/", "tests/crates/queue/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-queue",
+  "-p",
+  "kithara-queue-tests",
+  "--cargo-profile",
+  "test-release",
+]
+
+[test.lanes.storage]
+program = "cargo"
+owns = ["crates/kithara-storage/", "tests/crates/storage/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-storage",
+  "-p",
+  "kithara-storage-tests",
   "--cargo-profile",
   "test-release",
 ]
@@ -649,7 +907,7 @@ owns = [
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
-default_features = ["harness"]
+default_features = ["harness", "kithara-test-fixtures/generate"]
 prefix_args = [
   "nextest",
   "run",
@@ -668,6 +926,7 @@ prefix_args = [
 
 [test.lanes.ui]
 program = "cargo"
+owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
 default_features = [
   "kithara-ui/capture",
   "kithara-ui/gpu",
@@ -862,6 +1121,7 @@ default_flash = false
 # tests need no feature and stay in the workspace lane.
 [test.lanes.broadcast]
 program = "cargo"
+owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
 prefix_args = [
   "nextest",
   "run",
@@ -1422,9 +1682,15 @@ timeout_minutes = 60
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
 # twice in one second, and Cargo reported only "could not compile" with no
 # diagnostic, because the compiler never reached one.
+#
+# `--touched` is fail-closed: on `main`, shared configuration, and every path
+# without a reviewed domain owner it runs `workspace`. A branch only becomes
+# narrow after its path is explicitly owned by one of the lanes above.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
+github_runner_main = "kithara-trusted-snapshot"
+target_snapshot = "linux-test-release"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
@@ -1433,11 +1699,12 @@ steps = [
   { args = [
     "test",
     "run",
+    "--touched",
     "--no-block=on",
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -1498,9 +1765,9 @@ steps = [
     "--lane=tooling",
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["main", "nightly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
@@ -1516,9 +1783,9 @@ steps = [
     "--lane=harness",
   ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["main", "nightly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
@@ -1540,9 +1807,9 @@ steps = [
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
   ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
 ]
-role = "deep"
-kinds = []
-kinds_github = ["nightly"]
+role = "gate"
+kinds = ["main", "nightly"]
+kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]

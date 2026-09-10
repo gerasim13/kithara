@@ -1,4 +1,7 @@
-use std::{path::Path, sync::OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use thiserror::Error;
 
@@ -10,10 +13,10 @@ pub struct AssetEntry {
     pub content_type: &'static str,
     /// Content address inside the cache revision namespace.
     pub id: &'static str,
+    /// File extension inside the fixture store.
+    pub ext: &'static str,
     /// Accessor name, `{func}_{case}`.
     pub name: &'static str,
-    /// Absolute path in the store.
-    pub path: &'static str,
     /// Redacted build-time reason an optional asset is unavailable.
     pub unavailable: Option<&'static str>,
 }
@@ -36,7 +39,7 @@ pub enum AssetError {
         /// Generated accessor name.
         name: &'static str,
         /// Expected store path.
-        path: &'static str,
+        path: String,
         /// Filesystem failure.
         #[source]
         source: std::io::Error,
@@ -51,7 +54,10 @@ pub struct Asset {
 
 enum Source {
     Embedded(&'static [u8]),
-    OnDisk(&'static OnceLock<Vec<u8>>),
+    OnDisk {
+        bytes: &'static OnceLock<Vec<u8>>,
+        path: &'static OnceLock<PathBuf>,
+    },
 }
 
 impl Asset {
@@ -84,10 +90,14 @@ impl Asset {
 
     /// Asset read from the store on first use.
     #[must_use]
-    pub const fn on_disk(entry: &'static AssetEntry, cell: &'static OnceLock<Vec<u8>>) -> Self {
+    pub const fn on_disk(
+        entry: &'static AssetEntry,
+        bytes: &'static OnceLock<Vec<u8>>,
+        path: &'static OnceLock<PathBuf>,
+    ) -> Self {
         Self {
             entry,
-            source: Source::OnDisk(cell),
+            source: Source::OnDisk { bytes, path },
         }
     }
 
@@ -96,7 +106,7 @@ impl Asset {
     pub fn path(&self) -> Option<&'static Path> {
         match self.source {
             Source::Embedded(_) => None,
-            Source::OnDisk(_) => Some(Path::new(self.entry.path)),
+            Source::OnDisk { path, .. } => Some(path.get_or_init(|| store_path(self.entry))),
         }
     }
 
@@ -115,23 +125,45 @@ impl Asset {
         }
         match self.source {
             Source::Embedded(bytes) => Ok(bytes),
-            Source::OnDisk(cell) => {
-                if let Some(bytes) = cell.get() {
+            Source::OnDisk { bytes, path } => {
+                if let Some(bytes) = bytes.get() {
                     return Ok(bytes);
                 }
-                let loaded = std::fs::read(self.entry.path).map_err(|source| AssetError::Read {
+                let path = path.get_or_init(|| store_path(self.entry));
+                let loaded = std::fs::read(path).map_err(|source| AssetError::Read {
                     source,
                     name: self.entry.name,
-                    path: self.entry.path,
+                    path: path.display().to_string(),
                 })?;
-                Ok(cell.get_or_init(|| loaded))
+                Ok(bytes.get_or_init(|| loaded))
             }
         }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn store_path(entry: &AssetEntry) -> PathBuf {
+    let root = crate::store::root_from_env()
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
+    crate::store::entry_path(
+        &crate::store::namespace(&root, crate::store::CACHE_VERSION.trim()),
+        entry.id,
+        entry.ext,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn store_path(entry: &AssetEntry) -> PathBuf {
+    panic!(
+        "fixture `{}` needs the `generate` feature on wasm32",
+        entry.name
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use kithara_test_utils::kithara;
 
     use super::{Asset, AssetEntry, AssetError, OnceLock};
@@ -141,12 +173,13 @@ mod tests {
         static ENTRY: AssetEntry = AssetEntry {
             name: "remote_reference",
             id: "remote-id",
-            path: "/missing/remote.m3u8",
+            ext: "m3u8",
             content_type: "application/vnd.apple.mpegurl",
             unavailable: Some("HTTP 403; refresh KITHARA_TOKEN"),
         };
         static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        let asset = Asset::on_disk(&ENTRY, &BYTES);
+        static PATH: OnceLock<PathBuf> = OnceLock::new();
+        let asset = Asset::on_disk(&ENTRY, &BYTES, &PATH);
 
         assert!(matches!(
             asset.try_bytes(),

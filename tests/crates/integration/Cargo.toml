@@ -21,6 +21,78 @@ path = "bin/wasm_test_runner.rs"
 test = false
 
 [features]
+default = ["all"]
+# The complete cross-component suite keeps the feature graph it had before the
+# domain facades became separate packages. Domain test packages opt out of it
+# and enable only their helper closure below.
+all = [
+    "audio",
+    "dep:kithara-app",
+    "dep:kithara-devtools",
+    "kithara/full",
+    "kithara/queue",
+    "kithara/backend-cpal",
+    "kithara/encode",
+    "kithara/fdk-aac",
+    "kithara/stretch-bungee",
+    "kithara-app/analysis-waveform",
+    "kithara-app/beat-nn-small",
+    "kithara-app/lib-only",
+]
+# Helpers used by `kithara-audio-tests`. Cross-component recording and offline
+# player coverage lives in this crate's full integration suite, so this closure
+# excludes the app, analysis, queue and user-simulation support.
+audio = [
+    "dep:kithara",
+    "kithara/abr",
+    "kithara/assets",
+    "kithara/audio",
+    "kithara/bufpool",
+    "kithara/client-reqwest",
+    "kithara/decode",
+    "kithara/drm",
+    "kithara/encode",
+    "kithara/events",
+    "kithara/fdk-aac",
+    "kithara/file",
+    "kithara/hls",
+    "kithara/mock",
+    "kithara/net",
+    "kithara/platform",
+    "kithara/play",
+    "kithara/probe",
+    "kithara/record",
+    "kithara/resample-rubato",
+    "kithara/resampler",
+    "kithara/signal",
+    "kithara/storage",
+    "kithara/stream",
+    "kithara/stretch-signalsmith",
+    "kithara/symphonia",
+    "kithara/test-utils",
+    "kithara/tls-rustls",
+    "kithara/tokio-net",
+    "kithara/tokio-rt-multi-thread",
+    "kithara/warp",
+]
+# Browser targets deliberately name their closure instead of inheriting the
+# native default: native C++ decoder and stretch backends cannot compile there.
+wasm = [
+    "dep:kithara",
+    "kithara-test-fixtures/generate",
+    "kithara/full",
+    "kithara/queue",
+    "kithara/probe",
+    "kithara/mock",
+    "kithara/test-utils",
+    "kithara/symphonia",
+    "kithara/resample-rubato",
+    "kithara/analysis-beat",
+    "kithara/analysis-waveform",
+    "kithara/webcodecs",
+    "kithara/client-reqwest",
+    "kithara/tls-rustls",
+]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
@@ -88,7 +160,7 @@ uuid = { workspace = true }
 # `FDK_archdef.h` has no branch for MSVC on ARM64 and stops at `fatal error
 # C1021: invalid preprocessor command`, so that one target goes without.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
-kithara = { workspace = true, features = ["fdk-aac"] }
+kithara = { workspace = true, default-features = false, optional = true }
 
 # `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
 # already drops the dependency for that target (see its `Cargo.toml`), so
@@ -96,12 +168,12 @@ kithara = { workspace = true, features = ["fdk-aac"] }
 # exist, the same failure wasm32 gets if it asks for the feature that block
 # above never lists.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, features = ["stretch-bungee"] }
+kithara = { workspace = true, default-features = false, optional = true }
 
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
-kithara-devtools = { workspace = true }
+kithara-devtools = { workspace = true, optional = true }
 
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
@@ -130,8 +202,6 @@ rand = { workspace = true }
 # HTTP server (axum stack not available on WASM)
 reqwest = { workspace = true, features = ["rustls", "stream"] }
 
-# WebDriver automation
-thirtyfour = { workspace = true }
 tokio-stream = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
@@ -140,7 +210,7 @@ tower-http = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, optional = true }
 
 # --- Apple hardware backend (macOS/iOS only) ---
 # Forwarded so `DecoderBackend::Apple` is in scope for tests that
@@ -148,25 +218,13 @@ kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, default-features = false, optional = true }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = [
-    "full",
-    "queue",
-    "probe",
-    "mock",
-    "test-utils",
-    "symphonia",
-    "stretch-signalsmith",
-    "backend-cpal",
-    "encode",
-    "tokio-net",
-    "tokio-rt-multi-thread",
-] }
-kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-test-fixtures = { workspace = true }
+kithara = { workspace = true, default-features = false, optional = true }
+kithara-app = { workspace = true, default-features = false, optional = true }
+kithara-test-fixtures = { workspace = true, default-features = false }
 
 # `v4` mints the random tokens the test server hands out; the workspace
 # default carries only `v5`. It stays off wasm: `v4` needs an RNG, and
@@ -179,27 +237,12 @@ uuid = { workspace = true, features = ["v4"] }
 # What the native tests take, minus time stretching: the stretch backends are
 # C++ libraries and `kithara-stretch` declares them for non-wasm targets only,
 # so on wasm the feature compiles a module whose imports do not exist.
-kithara = { workspace = true, default-features = false, features = [
-    "full",
-    "queue",
-    "probe",
-    "mock",
-    "test-utils",
-    "symphonia",
-    "resample-rubato",
-    "analysis-beat",
-    "analysis-waveform",
-    # `probe` re-exports the WebCodecs capability probe on wasm, and the probe
-    # only exists when the decoder that owns it is compiled in.
-    "webcodecs",
-    "client-reqwest",
-    "tls-rustls",
-] }
+kithara = { workspace = true, default-features = false, optional = true }
 
 # Only `signal` reaches wasm: the store and its accessors are a host
 # filesystem, and the wasm lane names assets through `SignalAsset` instead,
 # fetching their bytes from the native test server.
-kithara-test-fixtures = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false }
 
 gloo-timers = { workspace = true }
 

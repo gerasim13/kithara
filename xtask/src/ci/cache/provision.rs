@@ -126,26 +126,15 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
         .status()?;
     ensure!(status.success(), "cache lifecycle import failed: {status}");
     mc(&["admin", "user", "add", "ci", &key, &password])?;
-    let mut policy = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(
-        &mut policy,
-        &json!({
-            "Version": "2012-10-17",
-            "Statement": [
-                {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                 "Resource": [format!("arn:aws:s3:::{bucket}")]},
-                {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],
-                 "Resource": [format!("arn:aws:s3:::{bucket}/*")]}
-            ]
-        }),
-    )?;
+    let mut policy_file = tempfile::NamedTempFile::new()?;
+    serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
     mc(&[
         "admin",
         "policy",
         "create",
         "ci",
         &bucket,
-        policy
+        policy_file
             .path()
             .to_str()
             .context("cache policy path must be UTF-8")?,
@@ -159,6 +148,38 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     ensure!(status.success(), "cache client ownership failed: {status}");
     info!(%scope, "compiler cache scope initialized");
     Ok(())
+}
+
+fn policy(scope: &str, bucket: &str) -> serde_json::Value {
+    let mut statements = vec![
+        json!({
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+            "Resource": [format!("arn:aws:s3:::{bucket}")]
+        }),
+        json!({
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject"],
+            "Resource": [format!("arn:aws:s3:::{bucket}/*")]
+        }),
+    ];
+    if scope != "trusted" {
+        let trusted = "kithara-trusted";
+        statements.extend([
+            json!({
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": [format!("arn:aws:s3:::{trusted}")],
+                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*"]}}
+            }),
+            json!({
+                "Effect": "Allow",
+                "Action": ["s3:GetObject"],
+                "Resource": [format!("arn:aws:s3:::{trusted}/target-snapshots/*")]
+            }),
+        ]);
+    }
+    json!({"Version": "2012-10-17", "Statement": statements})
 }
 
 fn write_environment(
@@ -209,6 +230,26 @@ b",
             assert!(scope_bucket(scope).is_err(), "{scope:?}");
         }
         assert_eq!(scope_bucket("review-1").unwrap(), "kithara-review-1");
+    }
+
+    #[test]
+    fn untrusted_scopes_can_only_read_trusted_target_snapshots() {
+        let review = policy("review", "kithara-review");
+        let statements = review["Statement"].as_array().unwrap();
+        let trusted = statements
+            .iter()
+            .map(serde_json::Value::to_string)
+            .find(|statement| {
+                statement.contains("kithara-trusted/target-snapshots/*")
+                    && statement.contains("s3:GetObject")
+            })
+            .unwrap();
+        assert!(trusted.contains("target-snapshots/*"));
+        assert!(trusted.contains("s3:GetObject"));
+        assert!(!trusted.contains("s3:PutObject"));
+
+        let trusted = policy("trusted", "kithara-trusted").to_string();
+        assert!(!trusted.contains("target-snapshots/*"));
     }
 
     #[test]

@@ -22,7 +22,7 @@ tls-rustls = ["kithara-events/tls-rustls"]
 tls-native = ["kithara-events/tls-native"]
 
 [dependencies]
-kithara-events = { workspace = true, features = ["downloader"] }
+kithara-events = { workspace = true, default-features = false, features = ["abr", "downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 

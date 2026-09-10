@@ -26,8 +26,8 @@ network-manual = []
 [dependencies]
 kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
 cochlea-features = { workspace = true }

@@ -75,6 +75,11 @@ pub(crate) struct CiLaneConfig {
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
     pub(crate) github_runner: Option<String>,
+    /// The protected GitHub runner label used by this lane on `main`.
+    pub(crate) github_runner_main: Option<String>,
+    /// Immutable trusted Cargo target snapshot this lane restores before it
+    /// builds. The key names a compatible Cargo invocation, not a revision.
+    pub(crate) target_snapshot: Option<String>,
     pub(crate) timeout_minutes: u32,
     /// Checkout depth. Zero is full history, which a lane comparing against a
     /// base revision needs and a shallow clone does not carry.
@@ -217,6 +222,26 @@ impl CiProjectConfig {
             }
             if lane.github_runner.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.github_runner must not be empty");
+            }
+            if lane
+                .github_runner_main
+                .as_deref()
+                .is_some_and(str::is_empty)
+            {
+                bail!("ext.ci.lanes.{name}.github_runner_main must not be empty");
+            }
+            if lane.target_snapshot.as_deref().is_some_and(str::is_empty) {
+                bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
+            }
+            if lane.target_snapshot.is_some()
+                && lane
+                    .steps
+                    .iter()
+                    .any(|step| step.env.contains_key("CARGO_TARGET_DIR"))
+            {
+                bail!(
+                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must not override CARGO_TARGET_DIR"
+                );
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
@@ -830,6 +855,38 @@ timeout_minutes = 30
         assert!(
             error.to_string().contains("the GitHub fleet is Linux"),
             "the error must name the fleet: {error}"
+        );
+    }
+
+    #[test]
+    fn a_target_snapshot_lane_may_not_move_cargo_after_restore() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.snapshot]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+target_snapshot = "linux-test-release"
+steps = [{ args = ["test"], label = "suite", env = { CARGO_TARGET_DIR = "{target}/other" } }]
+role = "gate"
+timeout_minutes = 30
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("a snapshot must restore where Cargo will build");
+        assert!(
+            error
+                .to_string()
+                .contains("must not override CARGO_TARGET_DIR"),
+            "the error must explain the snapshot/Cargo target contract: {error}"
         );
     }
 

@@ -210,10 +210,14 @@ pub mod prelude {
     };
     #[cfg(feature = "decode")]
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
-    #[cfg(feature = "events")]
+    #[cfg(all(feature = "events", feature = "audio"))]
+    pub use kithara_events::AudioEvent;
+    #[cfg(all(feature = "events", feature = "file"))]
+    pub use kithara_events::FileEvent;
+    #[cfg(all(feature = "events", feature = "hls"))]
     pub use kithara_events::HlsEvent;
     #[cfg(feature = "events")]
-    pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
+    pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]

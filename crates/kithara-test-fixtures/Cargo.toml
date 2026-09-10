@@ -13,6 +13,44 @@ name = "kithara-fixture-export"
 path = "src/bin/export.rs"
 test = false
 
+[features]
+# Reading prepared assets is the normal case. Generation is a separate producer
+# step, so consumers do not compile FFmpeg/FDK merely to name an accessor.
+default = []
+generate = [
+    "dep:kithara-analysis",
+    "dep:kithara-audio",
+    "dep:kithara-bufpool",
+    "dep:kithara-decode",
+    "dep:kithara-drm",
+    "dep:kithara-encode",
+    "dep:kithara-events",
+    "dep:kithara-platform",
+    "dep:kithara-resampler",
+    "dep:kithara-signal",
+    "dep:kithara-stream",
+    "dep:kithara-test-macros",
+    "dep:aes",
+    "dep:bon",
+    "dep:bytes",
+    "dep:cbc",
+    "dep:cochlea-render",
+    "dep:cochlea-score",
+    "dep:delegate",
+    "dep:futures-lite",
+    "dep:hex",
+    "dep:hls_m3u8",
+    "dep:inventory",
+    "dep:num-traits",
+    "dep:rayon",
+    "dep:reqwest",
+    "dep:serde",
+    "dep:sha2",
+    "dep:thiserror",
+    "dep:toml",
+    "dep:url",
+]
+
 [dependencies]
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -27,10 +65,9 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# `PcmSource` and `EncodedTrack`. The crate refuses to build with no backend,
-# and `ffmpeg` is the one the build script already pulls in, so this adds no
-# compilation.
-kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "ffmpeg", "tls-rustls"] }
+# `PcmSource` and `EncodedTrack` are shared data contracts; consuming prepared
+# fixtures does not need an encoder backend.
+kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 # `AudioCodec` for the fMP4 sample entries.
 kithara-stream = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 
@@ -39,39 +76,39 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 delegate = { workspace = true }
 
 [build-dependencies]
-kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"] }
-kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
-kithara-drm = { workspace = true }
-kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
-kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-resampler = { workspace = true, features = ["resample-rubato"] }
-kithara-signal = { workspace = true }
-kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-kithara-test-macros = { workspace = true }
+kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-bufpool = { workspace = true, features = ["test-utils"], optional = true }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-drm = { workspace = true, optional = true }
+kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"], optional = true }
+kithara-events = { workspace = true, optional = true }
+kithara-platform = { workspace = true, optional = true }
+kithara-resampler = { workspace = true, features = ["resample-rubato"], optional = true }
+kithara-signal = { workspace = true, optional = true }
+kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+kithara-test-macros = { workspace = true, optional = true }
 
-aes = { workspace = true }
-bon = { workspace = true }
+aes = { workspace = true, optional = true }
+bon = { workspace = true, optional = true }
 
-bytes = { workspace = true }
-cbc = { workspace = true }
-cochlea-render = { workspace = true }
-cochlea-score = { workspace = true }
-delegate = { workspace = true }
-futures-lite = { workspace = true }
-hex = { workspace = true }
-hls_m3u8 = { workspace = true }
-inventory = { workspace = true }
-num-traits = { workspace = true }
-rayon = { workspace = true }
-reqwest = { workspace = true, features = ["blocking", "rustls"] }
-serde = { workspace = true }
-sha2 = { workspace = true }
-thiserror = { workspace = true }
-toml = { workspace = true }
-url = { workspace = true }
+bytes = { workspace = true, optional = true }
+cbc = { workspace = true, optional = true }
+cochlea-render = { workspace = true, optional = true }
+cochlea-score = { workspace = true, optional = true }
+delegate = { workspace = true, optional = true }
+futures-lite = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hls_m3u8 = { workspace = true, optional = true }
+inventory = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
+serde = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
