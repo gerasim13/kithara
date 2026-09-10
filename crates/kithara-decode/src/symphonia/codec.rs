@@ -173,6 +173,25 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
+        let frames = self
+            .decoder
+            .codec_params()
+            .max_frames_per_packet
+            .unwrap_or_else(|| {
+                self.codec
+                    .map_or(0, |codec| u64::from(access_unit_frames(codec)))
+            });
+        let samples = usize::try_from(frames)?
+            .checked_mul(usize::from(self.spec.channels))
+            .ok_or(DecodeError::InvalidData {
+                detail: "codec output sample count overflow",
+            })?;
+        out.ensure_len(samples)?;
+        out.clear();
+        Ok(())
+    }
+
     #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,

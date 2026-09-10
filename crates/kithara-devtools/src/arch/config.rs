@@ -116,6 +116,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
     #[serde(default)]
+    pub(crate) smoothing_primitive_sites: SmoothingPrimitiveSitesThreshold,
+    #[serde(default)]
     pub(crate) tokio_dep_quarantine: TokioDepQuarantineThreshold,
     #[serde(default)]
     pub(crate) trait_impl_count: TraitImplCountThreshold,
@@ -665,6 +667,33 @@ impl Default for CancelRootSitesThreshold {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct SmoothingPrimitiveSitesThreshold {
+    #[serde(default)]
+    pub(crate) allowed_files: Vec<String>,
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
+    #[serde(default = "default_smoothing_primitive_patterns")]
+    pub(crate) patterns: Vec<String>,
+}
+
+fn default_smoothing_primitive_patterns() -> Vec<String> {
+    ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+        .map(String::from)
+        .to_vec()
+}
+
+impl Default for SmoothingPrimitiveSitesThreshold {
+    fn default() -> Self {
+        Self {
+            allowed_files: Vec::new(),
+            exempt_crates: Vec::new(),
+            patterns: default_smoothing_primitive_patterns(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TokioDepQuarantineThreshold {
     /// Crates whose *production* tokio coupling is not yet migrated to the
     /// platform re-exports (W6 quarantine debt). Entries here are tracked work
@@ -1111,6 +1140,10 @@ mod tests {
             ["CancelToken::root", "CancelToken::never"]
         );
         assert_eq!(
+            thresholds.smoothing_primitive_sites.patterns,
+            ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+        );
+        assert_eq!(
             thresholds.tokio_dep_quarantine.quarantined,
             ["tokio", "tokio-util", "tokio-stream"]
         );
@@ -1135,6 +1168,9 @@ exempt_files = ["crates/demo/src/lib.rs"]
 [cancel_root_sites]
 exempt_crates = ["kithara-demo"]
 
+[smoothing_primitive_sites]
+allowed_files = ["crates/demo/src/gain.rs"]
+
 [tokio_dep_quarantine]
 allowed_crates = ["kithara-demo"]
 
@@ -1152,6 +1188,10 @@ excluded_subtrees = ["demo/"]
         assert_eq!(
             thresholds.cancel_root_sites.patterns,
             ["CancelToken::root", "CancelToken::never"]
+        );
+        assert_eq!(
+            thresholds.smoothing_primitive_sites.patterns,
+            ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
         );
         assert_eq!(
             thresholds.tokio_dep_quarantine.quarantined,

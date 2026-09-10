@@ -3,8 +3,8 @@ use std::fmt;
 use fdk_aac::dec::{Decoder, DecoderError, Transport};
 use symphonia::core::{
     audio::{
-        AsGenericAudioBufferRef, AudioBuffer, AudioMut, AudioSpec, Channels, GenericAudioBufferRef,
-        layouts,
+        AsGenericAudioBufferRef, Audio, AudioBuffer, AudioMut, AudioSpec, Channels,
+        GenericAudioBufferRef, layouts,
     },
     codecs::{
         CodecInfo,
@@ -31,8 +31,6 @@ impl Consts {
         8_000, 7_350,
     ];
 
-    /// Maximum ADTS frame size encoded by its 13-bit frame-length field.
-    const MAX_ADTS_FRAME_BYTES: usize = 0x1fff;
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
     const MAX_SAMPLES: usize = 8192;
@@ -59,10 +57,7 @@ const fn channel_layout(channels: u8) -> Option<Channels> {
     })
 }
 
-/// Minimal AAC stream descriptor used to build an ADTS header for each
-/// fed packet. Populated either from `AudioSpecificConfig`
-/// (`extra_data`) at construction time, or refined from
-/// `Decoder::stream_info()` once the first packet has decoded.
+/// AAC configuration supplied at construction and refined from decoded metadata.
 #[derive(Clone, Copy, Debug)]
 struct AacStreamConfig {
     /// AAC core sample rate (pre-SBR/PS upsampling).
@@ -71,8 +66,7 @@ struct AacStreamConfig {
     channels: u8,
     /// MPEG-4 Audio Object Type (1=Main, 2=LC, 5=SBR, 29=PS, …).
     object_type: u8,
-    /// Index into [`Consts::AAC_SAMPLE_RATES`](Consts::AAC_SAMPLE_RATES)
-    /// for ADTS header byte 2/3.
+    /// Index into [`Consts::AAC_SAMPLE_RATES`](Consts::AAC_SAMPLE_RATES).
     sample_rate_index: u8,
 }
 
@@ -85,10 +79,13 @@ impl TryFrom<&[u8]> for AacStreamConfig {
         }
         let mut bs = BitReaderLtr::new(extra);
         let mut object_type = read_object_type(&mut bs)?;
-        let mut sample_rate = read_sample_rate(&mut bs)?;
+        let sample_rate = read_sample_rate(&mut bs)?;
         let mut channels = read_channel_config(&mut bs)?;
         if object_type == 5 || object_type == 29 {
-            sample_rate = read_sample_rate(&mut bs)?;
+            if object_type == 29 {
+                channels = 2;
+            }
+            read_sample_rate(&mut bs)?;
             object_type = read_object_type(&mut bs)?;
             if object_type == 22 {
                 channels = read_channel_config(&mut bs)?;
@@ -158,21 +155,14 @@ fn read_channel_config(bs: &mut BitReaderLtr<'_>) -> Result<u8> {
     u8::try_from(idx).map_err(|_| Error::DecodeError("aac: channel_config overflows u8"))
 }
 
-/// Construct a 7-byte ADTS header (no CRC) wrapping a raw AAC payload
-/// of `payload_len` bytes — fdk-aac's `Transport::Adts` decoder
-/// expects every fed packet to carry this prefix.
-fn build_adts_header(cfg: AacStreamConfig, payload_len: usize) -> [u8; 7] {
-    let frame_length = u16::try_from(7 + payload_len).unwrap_or(u16::MAX);
-    let adts_object_type = cfg.object_type.saturating_sub(1);
-    [
-        0xFF,
-        0xF1,
-        (adts_object_type << 6) | (cfg.sample_rate_index << 2) | ((cfg.channels >> 2) & 0x01),
-        ((cfg.channels & 0x03) << 6) | u8::try_from((frame_length >> 11) & 0x03).unwrap_or(0),
-        u8::try_from((frame_length >> 3) & 0xFF).unwrap_or(0),
-        (u8::try_from(frame_length & 0x07).unwrap_or(0) << 5) | 0x1F,
-        0xFC,
-    ]
+fn audio_specific_config(cfg: AacStreamConfig) -> Result<[u8; 2]> {
+    if cfg.sample_rate_index >= 13 || cfg.channels == 0 || cfg.channels > 7 {
+        return unsupported_error("aac: invalid ADTS stream configuration");
+    }
+    Ok([
+        (cfg.object_type << 3) | (cfg.sample_rate_index >> 1),
+        (cfg.sample_rate_index << 7) | (cfg.channels << 3),
+    ])
 }
 
 fn audio_buffer(
@@ -194,17 +184,11 @@ pub(crate) struct AacDecoder {
     buf: AudioBuffer<i16>,
     codec_params: AudioCodecParameters,
     decoder: Decoder,
-    /// `Transport::Raw` when fmp4 / M4A supplied an
-    /// `AudioSpecificConfig` via `extra_data` (packets are raw AAC
-    /// frames); `Transport::Adts` when the upstream is ADTS-framed
-    /// (each packet carries its own header — bare HLS AAC, .aac
-    /// files).
-    transport: Transport,
     pcm: [i16; Consts::MAX_SAMPLES],
-    adts: [u8; Consts::MAX_ADTS_FRAME_BYTES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
+    reset_error: Option<Error>,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
     /// first successful decode, decremented as each chunk consumes it.
@@ -219,7 +203,6 @@ impl fmt::Debug for AacDecoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AacDecoder")
             .field("config", &self.config)
-            .field("transport", &self.transport)
             .field("delay_remaining", &self.delay_remaining)
             .field("metadata_validated", &self.metadata_validated)
             .finish_non_exhaustive()
@@ -227,26 +210,6 @@ impl fmt::Debug for AacDecoder {
 }
 
 impl AacDecoder {
-    /// Build a fresh fdk-aac C decoder from the stored codec parameters.
-    ///
-    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac C handle
-    /// owns MDCT/QMF/SBR overlap-add state that survives across `fill`/`decode_frame`
-    /// and has no public mid-stream flush, so the only way to return it to a cold
-    /// (zero-overlap) state after a seek is to drop and re-create it. Without this, the
-    /// first access unit decoded after a seek inherits the pre-seek overlap-add tail
-    /// and emits contaminated PCM (a ~2-AU phase shift at seek seams).
-    fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
-        let mut decoder = Decoder::new(transport);
-        if matches!(transport, Transport::Raw)
-            && let Some(extra) = &params.extra_data
-        {
-            decoder
-                .config_raw(extra)
-                .map_err(|e| Error::DecodeError(e.message()))?;
-        }
-        Ok(decoder)
-    }
-
     fn configure_metadata(&mut self) -> Result<()> {
         let info = self.decoder.stream_info();
         let core_rate = u32::try_from(info.aacSampleRate).unwrap_or(self.config.sample_rate);
@@ -261,7 +224,13 @@ impl AacDecoder {
             sample_rate: core_rate,
             sample_rate_index: sample_rate_index(core_rate),
         };
-        self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
+        let layout = channel_layout(channels)
+            .ok_or(Error::Unsupported("aac: unsupported number of channels"))?;
+        if *self.buf.spec() != AudioSpec::new(output_rate, layout)
+            || self.buf.capacity() < samples_per_frame
+        {
+            self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
+        }
         self.codec_params.sample_rate = Some(output_rate);
         self.delay_remaining = info.outputDelay;
         self.metadata_validated = true;
@@ -278,23 +247,51 @@ impl AacDecoder {
     }
 
     fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {
-        let (config, transport) = if let Some(extra) = &params.extra_data {
-            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
+        let config = if let Some(extra) = &params.extra_data {
+            AacStreamConfig::try_from(&extra[..])?
         } else {
-            (AacStreamConfig::try_from(params)?, Transport::Adts)
+            AacStreamConfig::try_from(params)?
         };
-        let decoder = Self::build_decoder(transport, params)?;
-        let buf = audio_buffer(config.channels, config.sample_rate, 1024)?;
+        let mut decoder = Decoder::new(Transport::Raw);
+        let generated;
+        let extra = if let Some(extra) = params.extra_data.as_deref() {
+            extra
+        } else {
+            generated = audio_specific_config(config)?;
+            &generated
+        };
+        decoder
+            .config_raw(extra)
+            .map_err(|error| Error::DecodeError(error.message()))?;
+        let info = decoder.stream_info();
+        let core_rate = u32::try_from(info.aacSampleRate)
+            .map_err(|_| Error::DecodeError("aac: invalid configured core rate"))?;
+        let output_rate = if info.extSamplingRate > 0 {
+            u32::try_from(info.extSamplingRate)
+                .map_err(|_| Error::DecodeError("aac: invalid configured output rate"))?
+        } else {
+            core_rate
+        };
+        let frames = u64::try_from(info.aacSamplesPerFrame)
+            .ok()
+            .and_then(|frames| frames.checked_mul(u64::from(output_rate)))
+            .and_then(|frames| frames.checked_div(u64::from(core_rate)))
+            .filter(|frames| *frames > 0)
+            .ok_or(Error::DecodeError("aac: invalid configured frame size"))?;
+        let capacity = usize::try_from(frames)
+            .map_err(|_| Error::DecodeError("aac: configured frame size overflow"))?;
+        let buf = audio_buffer(config.channels, output_rate, capacity)?;
+        let mut codec_params = params.clone();
+        codec_params.max_frames_per_packet = Some(frames);
         Ok(Self {
             decoder,
             config,
             buf,
-            transport,
-            codec_params: params.clone(),
-            adts: [0; Consts::MAX_ADTS_FRAME_BYTES],
+            codec_params,
             pcm: [0; Consts::MAX_SAMPLES],
             delay_remaining: 0,
             metadata_validated: false,
+            reset_error: None,
         })
     }
 }
@@ -312,28 +309,17 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn decode_ref(&mut self, packet: &PacketRef<'_>) -> Result<GenericAudioBufferRef<'_>> {
+        if let Some(error) = self.reset_error.take() {
+            return Err(error);
+        }
         let mut reader = packet.as_buf_reader();
         let payload = reader.read_buf_bytes_available_ref();
-        match self.transport {
-            Transport::Raw => {
-                self.decoder
-                    .fill(payload)
-                    .map_err(|e| Error::DecodeError(e.message()))?;
-            }
-            Transport::Adts => {
-                let header = build_adts_header(self.config, payload.len());
-                let frame_len = header
-                    .len()
-                    .checked_add(payload.len())
-                    .filter(|length| *length <= Consts::MAX_ADTS_FRAME_BYTES)
-                    .ok_or(Error::DecodeError("aac: ADTS frame exceeds 13-bit length"))?;
-                let (header_out, payload_out) = self.adts[..frame_len].split_at_mut(header.len());
-                header_out.copy_from_slice(&header);
-                payload_out.copy_from_slice(payload);
-                self.decoder
-                    .fill(&self.adts[..frame_len])
-                    .map_err(|e| Error::DecodeError(e.message()))?;
-            }
+        let consumed = self
+            .decoder
+            .fill(payload)
+            .map_err(|error| Error::DecodeError(error.message()))?;
+        if consumed != payload.len() {
+            return decode_error("aac: incomplete packet accepted by decoder");
         }
 
         match self.decoder.decode_frame(&mut self.pcm) {
@@ -368,7 +354,7 @@ impl AudioDecoder for AacDecoder {
             .saturating_sub(u32::try_from(delay_frames).unwrap_or(u32::MAX));
 
         self.buf.clear();
-        self.buf.render_uninit(None);
+        self.buf.render_uninit(Some(frames_in_chunk));
         self.buf.copy_from_slice_interleaved(&pcm);
         self.buf.trim(delay_frames + extra_trim_start, trim_end);
 
@@ -384,17 +370,12 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn reset(&mut self) {
-        // WHY: Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add state returns to cold (zero).
-        match Self::build_decoder(self.transport, &self.codec_params) {
-            Ok(decoder) => self.decoder = decoder,
-            Err(e) => tracing::warn!(
-                target: "kithara_decode::symphonia::aac_fdk",
-                error = %e,
-                "AAC decoder rebuild on reset failed; keeping existing decoder"
-            ),
+        match Self::try_new(&self.codec_params, AudioDecoderOptions::default()) {
+            Ok(codec) => *self = codec,
+            Err(error) => self.reset_error = Some(error),
         }
-        self.delay_remaining = 0;
-        self.metadata_validated = false;
+        self.buf.clear();
+        self.delay_remaining = self.decoder.stream_info().outputDelay;
     }
 }
 
@@ -420,5 +401,32 @@ impl RegisterableAudioDecoder for AacDecoder {
         Self: Sized,
     {
         Ok(Box::new(Self::try_new(params, *opts)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use symphonia::core::{
+        audio::Audio,
+        codecs::audio::{AudioCodecParameters, AudioDecoderOptions},
+    };
+
+    use super::{AacDecoder, AacStreamConfig};
+
+    #[kithara::test]
+    fn explicit_he_v2_prepares_stereo_output_at_extension_rate() {
+        let extra = [0xeb, 0x8a, 0x08, 0x00];
+        let config = AacStreamConfig::try_from(extra.as_slice()).expect("HE-AAC v2 config");
+        assert_eq!(config.sample_rate, 22_050);
+        assert_eq!(config.channels, 2);
+        let mut params = AudioCodecParameters::new();
+        params.extra_data = Some(Box::from(extra));
+        let decoder = AacDecoder::try_new(&params, AudioDecoderOptions::default())
+            .expect("prepare HE-AAC v2");
+        assert_eq!(decoder.buf.spec().rate(), 44_100);
+        assert_eq!(decoder.buf.spec().channels().count(), 2);
+        assert_eq!(decoder.buf.capacity(), 2048);
+        assert_eq!(decoder.codec_params.max_frames_per_packet, Some(2048));
     }
 }

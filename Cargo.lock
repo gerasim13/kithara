@@ -2869,6 +2869,7 @@ dependencies = [
  "portable-atomic",
  "ringbuf 0.4.8",
  "rtgc",
+ "serde",
  "smallvec",
  "thiserror 2.0.18",
  "thunderdome",
@@ -4649,6 +4650,7 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-utils",
+ "serial_test",
 ]
 
 [[package]]
@@ -5287,6 +5289,7 @@ dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-utils",
+ "serial_test",
  "tempfile",
  "wasm-bindgen",
  "web-sys",

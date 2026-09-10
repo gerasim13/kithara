@@ -15,6 +15,7 @@ use kithara::{
         sync::{Arc, Mutex},
         thread,
         time::{Duration, Instant},
+        tokio::task::spawn_blocking,
     },
     play::Resource,
     record::{
@@ -195,7 +196,12 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
         .await
         .expect("release output group");
     let report = wait_recording(&recording_handle);
-    broadcast_handle.stop();
+    let broadcast_handle = spawn_blocking(move || {
+        broadcast_handle.stop();
+        broadcast_handle
+    })
+    .await
+    .expect("broadcast drain task completes");
 
     assert_eq!(
         report.frames,
