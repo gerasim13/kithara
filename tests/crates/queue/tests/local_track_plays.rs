@@ -363,28 +363,20 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // BOTH endpoints are event-sourced on the `PlaybackProgress` cadence —
-    // `start_pos` blocks for the next progress event, `end_pos` drains the
-    // latest buffered across the window — so the comparison never touches the
-    // REAL-clock-gated tick cache, which goes stale once these waits collapse
-    // real time. Each cursor read sits beside its own endpoint, so the two
-    // reporting lags cancel instead of adding.
+    // Both endpoints are built the same way — discard the backlog, block for
+    // a FRESH `PlaybackProgress`, read the cursor beside it — because
+    // `assert_playhead_tracks_renderer` spends its whole slack on the
+    // difference of the two reporting lags, and only identical sourcing makes
+    // that difference cancel.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
     let cursor_start = queue.host().position();
     time::sleep(Duration::from_secs(2)).await;
-    // Playback is live across the window, so progress events are buffered:
-    // `drain_latest_position` returns the latest of them (the window end)
-    // without touching the tick-cache fallback. The explicit
-    // `next_progress_position` guard covers the rare empty-buffer race so
-    // `end_pos` is always event-sourced, never the stale cache.
-    let end_pos = match drain_latest_position(&mut rx) {
-        Some(pos) => pos,
-        None => next_progress_position(&mut rx, Duration::from_secs(10))
-            .await
-            .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
-    };
+    let _ = drain_latest_position(&mut rx);
+    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
     let cursor_end = queue.host().position();
     assert_playhead_tracks_renderer(
         end_pos - start_pos,

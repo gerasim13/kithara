@@ -31,8 +31,10 @@ const CHANNELS: u16 = 2;
 pub const RENDER_PACE: Duration = Duration::from_millis(10);
 /// Slack a playhead-against-cursor comparison needs. The product publishes
 /// `PlaybackProgress` only once the reported position has moved
-/// `PROGRESS_EMIT_MIN_DELTA_MS`, so an endpoint sourced from an event can sit
-/// that far from the cursor snapshot taken beside it.
+/// `PROGRESS_EMIT_MIN_DELTA_MS`, so an endpoint sourced from an event sits
+/// that far from the cursor snapshot taken beside it — a lag that cancels
+/// across a window whose two endpoints carry the same one, and consumes this
+/// entire budget across a window whose endpoints do not.
 const PROGRESS_QUANTUM_SECS: f64 = 0.1;
 
 pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
@@ -402,9 +404,10 @@ impl MixTapProbe {
 }
 
 /// Asserts the position the player reported over one measurement window tracks
-/// the frames the renderer put through it. Take `frames` as the difference of
-/// two [`OfflineHostHarness::position`] reads, each beside the endpoint that
-/// produced `gain`.
+/// the frames the renderer put through it. Read both endpoints the same way —
+/// the same freshness of position, an [`OfflineHostHarness::position`] read
+/// beside each — or the difference of the two reporting lags spends the slack
+/// below before playback ever gets to.
 ///
 /// The two numbers are kept by different owners — the cursor by the offline
 /// renderer, the position by the player — so their agreement is a property of
