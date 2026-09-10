@@ -10,6 +10,22 @@ use crate::{codec::CodecPriming, error::DecodeResult};
 /// and emit raw codec frames with timing metadata. The codec layer
 /// ([`crate::codec::FrameCodec`]) consumes those frames into PCM.
 pub(crate) trait Demuxer: Send {
+    /// Prepare container storage and metadata outside the real-time decode core.
+    ///
+    /// # Errors
+    /// Returns source, parser, or pool-budget failures encountered during preparation.
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        Ok(())
+    }
+
+    /// Borrow a frame using only resources prepared by `prepare_frame`.
+    ///
+    /// # Errors
+    /// Returns the same frame errors as `next_frame`.
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.next_frame()
+    }
+
     /// Segment index of the frame from the last `next_frame`.
     /// `None` for non-segmented sources.
     fn current_segment_index(&self) -> Option<u32> {
@@ -134,4 +150,24 @@ pub(crate) enum DemuxSeekOutcome {
     /// The seek target lies past the stream's end; `duration` is the
     /// total stream duration.
     PastEof { duration: Duration },
+}
+
+/// Timing and pending state for a packet retained in its demuxer's buffer.
+pub(crate) enum PreparedPacket {
+    Frame { pts: Duration, duration: Duration },
+    Pending(PendingReason),
+    Eof,
+}
+
+impl From<DemuxOutcome<'_>> for PreparedPacket {
+    fn from(outcome: DemuxOutcome<'_>) -> Self {
+        match outcome {
+            DemuxOutcome::Frame(frame) => Self::Frame {
+                pts: frame.pts,
+                duration: frame.duration,
+            },
+            DemuxOutcome::Pending(reason) => Self::Pending(reason),
+            DemuxOutcome::Eof => Self::Eof,
+        }
+    }
 }

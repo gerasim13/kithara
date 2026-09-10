@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_short_mp3, temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -32,11 +32,10 @@ async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<
             ))
             .build(),
     );
-    OfflineQueue::new(
-        HostConfig::offline(pools.clone())
-            .pacing(Duration::from_millis(10))
-            .build(),
+    OfflineQueue::paced(
+        HostConfig::offline(pools.clone()).build(),
         Queue::new(QueueConfig::builder().player(player).store(store).build()),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue")

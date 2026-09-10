@@ -167,7 +167,7 @@ where
         SessionEpoch::new(0),
         SyncMemberKind::Group,
     );
-    let root_view = RootView::new(&root);
+    let root_view = RootView::new(&root, sample_rate);
     SessionState::new(root, root_view, sample_rate, None, start_stream_fn)
 }
 

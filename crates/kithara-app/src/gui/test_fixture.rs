@@ -23,7 +23,8 @@ use crate::{
 
 pub(super) fn state() -> Kithara {
     let config = config();
-    let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    let mut host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        .expect("test host");
     let decks: Vec<Deck> = (0..2)
         .map(|index| {
             Deck::build(DeckId(index), &config, &mut host).expect("host accepts the test deck")

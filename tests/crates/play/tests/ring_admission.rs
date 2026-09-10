@@ -10,6 +10,8 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
+#[cfg(feature = "no-block")]
+use kithara::platform::no_block::force_panic_mode;
 use kithara::{
     self,
     events::EventBus,
@@ -60,12 +62,13 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
+            gate_smoothing: kithara::play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
             sample_rate: SAMPLE_RATE,
         })
         .expect("register player command")
     {
-        Reply::PlayerRegistered(player_id) => player_id,
+        Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => panic!("register player failed: {error}"),
         _ => panic!("unexpected register player reply"),
     };
@@ -373,4 +376,13 @@ impl AudioNodeProcessor for PanickingProcessor {
     ) -> ProcessStatus {
         panic!("ring fixture panic")
     }
+}
+
+#[cfg(feature = "no-block")]
+#[kithara::test(tokio, flash(false))]
+#[should_panic(expected = "[no_block]")]
+async fn session_command_bridge_does_not_suppress_runtime_blocking() {
+    let _mode = force_panic_mode();
+    let session = ManualRingSession::start(config(1)).expect("ring session");
+    let _ = session.exec(Cmd::QuerySampleRate);
 }

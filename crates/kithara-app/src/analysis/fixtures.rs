@@ -122,7 +122,8 @@ pub(crate) fn revision_held(rx: &watch::Receiver<Option<AnalysisProgress>>) -> O
 
 pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
-    let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    let mut host =
+        AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)

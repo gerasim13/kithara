@@ -60,7 +60,6 @@ impl<S> HostConfig<S> {
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
         #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
         #[builder(default = TaskConfig::new())] task: TaskConfig,
-        #[cfg(any(test, feature = "probe"))] pacing: Option<Duration>,
     ) -> Self {
         Self::Offline {
             pools,
@@ -70,19 +69,7 @@ impl<S> HostConfig<S> {
             declared_latency,
             worker,
             task,
-            #[cfg(any(test, feature = "probe"))]
-            pacing,
             dispatcher: Box::new(dispatcher),
-        }
-    }
-
-    /// Optional automatic test/probe render cadence.
-    #[cfg(any(test, feature = "probe"))]
-    #[must_use]
-    pub const fn pacing(&self) -> Option<Duration> {
-        match self {
-            Self::Offline { pacing, .. } => *pacing,
-            Self::Realtime { .. } => None,
         }
     }
 }
@@ -116,8 +103,6 @@ where
             worker,
             dispatcher,
             task,
-            #[cfg(any(test, feature = "probe"))]
-            pacing,
         } = config
         else {
             unreachable!("offline runtime requires offline Host config");
@@ -136,8 +121,6 @@ where
                 max_block_frames,
                 declick_frames,
                 declared_latency,
-                #[cfg(any(test, feature = "probe"))]
-                pacing,
             },
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();

@@ -354,7 +354,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            queue.clear();
+            harness.run(&queue, |q| q.clear()).await;
             drop(queue);
             drop(server);
             panic!(
@@ -368,7 +368,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         }
     }
 
-    queue.clear();
+    harness.run(&queue, |q| q.clear()).await;
     drop(queue);
     drop(server);
     harness.close().await;

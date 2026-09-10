@@ -3,7 +3,7 @@ use kithara_warp::RenderSnapshot;
 
 use crate::{
     api::SlotId,
-    bridge::{PlaybackShared, SharedEq, SlotControl},
+    bridge::{PlaybackShared, SlotControl},
 };
 
 pub(super) struct SlotTable {
@@ -59,9 +59,6 @@ impl SlotTable {
             #[expr($.map(|control| Arc::clone(&control.playback)))]
             #[call(get)]
             pub(super) fn playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
-            #[expr($.map(|control| control.eq.clone()))]
-            #[call(get)]
-            pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
             #[expr($.and_then(SlotControl::latest_render_snapshot))]
             #[call(get)]
             pub(super) fn render_snapshot(&self, slot: SlotId) -> Option<RenderSnapshot>;

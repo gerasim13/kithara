@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::{OfflineQueue, QueueTicker, offline_gain_window},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -186,9 +186,7 @@ async fn build_queue_with_tick(
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
-    let session = HostConfig::offline(pools.clone())
-        .pacing(Duration::from_millis(10))
-        .build();
+    let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(session.sample_rate())
@@ -197,7 +195,7 @@ async fn build_queue_with_tick(
             ))
             .build(),
     );
-    let queue = OfflineQueue::new(
+    let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
@@ -205,6 +203,7 @@ async fn build_queue_with_tick(
                 .store(store.clone())
                 .build(),
         ),
+        RENDER_PACE,
     )
     .await
     .expect("create product offline queue");
@@ -364,42 +363,26 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
-    // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
-    // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
-    // blocks for the next progress event (parking the virtual clock so the
-    // render worker is live), `end_pos` drains the latest progress buffered
-    // across the window — so the comparison never touches the REAL-clock-gated
-    // tick cache, which goes stale once these waits collapse real time.
+    // Both endpoints are built the same way — discard the backlog, block for
+    // a FRESH `PlaybackProgress`, read the cursor beside it — because
+    // `assert_playhead_tracks_renderer` spends its whole slack on the
+    // difference of the two reporting lags, and only identical sourcing makes
+    // that difference cancel.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
+    let cursor_start = queue.host().position();
     time::sleep(Duration::from_secs(2)).await;
-    // Playback is live across the window, so progress events are buffered:
-    // `drain_latest_position` returns the latest of them (the window end)
-    // without touching the tick-cache fallback. The explicit
-    // `next_progress_position` guard covers the rare empty-buffer race so
-    // `end_pos` is always event-sourced, never the stale cache.
-    let end_pos = match drain_latest_position(&mut rx) {
-        Some(pos) => pos,
-        None => next_progress_position(&mut rx, Duration::from_secs(10))
-            .await
-            .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
-    };
-    let gain = end_pos - start_pos;
-    let pacing = queue.host().pacing().expect("paced offline queue");
-    let gain_window = offline_gain_window(
-        2.0,
-        queue.host().spec().sample_rate,
-        queue.host().max_block_frames(),
-        pacing,
-    );
-    assert!(
-        gain_window.contains(&gain),
-        "position gain out of offline-realtime window [{label}]: got \
-         {gain:.2}s over 2s wall clock (expected {gain_window:?}; \
-         start={start_pos:.2} end={end_pos:.2})"
+    let _ = drain_latest_position(&mut rx);
+    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
+    let cursor_end = queue.host().position();
+    assert_playhead_tracks_renderer(
+        end_pos - start_pos,
+        cursor_end - cursor_start,
+        queue.host().spec(),
+        &label,
     );
 
     queue.remove(track_id).expect("remove");
