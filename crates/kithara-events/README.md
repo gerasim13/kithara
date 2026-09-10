@@ -33,24 +33,22 @@ assert_eq!(rx.try_recv()?.event.0, 42);
 
 ## Key Types
 
-<table>
-
-<tr><th>Type</th><th>Role</th></tr>
-
-<tr><td><code>EventBus</code></td><td>Clone-able broadcast publisher; <code>publish()</code> works from both async and blocking contexts</td></tr>
-
-<tr><td><code>BusScope</code></td><td>Hierarchical scope used to attribute events to player/track/peer subtrees</td></tr>
-
-<tr><td><code>EventReceiver</code></td><td>Subscriber handle returned by <code>EventBus::subscribe()</code></td></tr>
-
-<tr><td><code>Event</code></td><td>Marker trait for a concrete event type</td></tr>
-
-<tr><td><code>SeekEpoch</code></td><td>Monotonic seek-generation tag carried across subsystems</td></tr>
-
-</table>
+| Type | Role |
+| --- | --- |
+| `EventBus` | Scoped typed publisher |
+| `BusScope` | Hierarchical scope and inherited labels |
+| `Envelope` | Event value with publication metadata |
+| `EventReceiver` | Receiver for an `EventSet` |
+| `DeferredBus` | Fixed-capacity deferred publisher |
+| `Event` | Marker trait and derive for event values |
+| `EventSet` | Consumer-owned set and derive |
+| `SlotId` | Bus identity for a player slot |
+| `TrackId` | Bus identity for a queue item |
 
 ## Features
 
-Domain event modules are currently feature-gated; the bus and consumer sets are independent of those gates.
+None.
 
-See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for detailed contracts, invariants, and internals.
+## Integration
+
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-events) for detailed contracts and ownership rules.

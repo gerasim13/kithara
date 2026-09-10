@@ -5014,16 +5014,12 @@ name = "kithara-events"
 version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
- "delegate",
  "derive_more",
  "fieldwork",
  "kithara-derive",
- "kithara-events",
  "kithara-platform",
- "kithara-signal",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "num-traits",
  "portable-atomic",
  "smallvec",
  "wasm-bindgen-test",
