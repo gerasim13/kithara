@@ -6,6 +6,7 @@ pub mod audit;
 pub mod audit_clippy;
 pub mod ci_report;
 pub mod clippy;
+mod cohesion;
 pub mod common;
 pub mod ctx;
 pub mod format;

@@ -29,6 +29,9 @@ pub(crate) struct LinuxHost {
     pub(crate) cache_root: PathBuf,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
+    /// A mode-0600 file with the scoped S3 settings every runner inherits.
+    #[serde(default)]
+    pub(crate) sccache_s3_env_file: Option<PathBuf>,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
     /// Serialised last: TOML requires tables after plain values.

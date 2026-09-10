@@ -170,6 +170,7 @@ pub(super) struct Assessment {
     pub(super) content_digest: Option<String>,
     #[serde(skip)]
     pub(super) output_directory: PathBuf,
+    pub(super) lcom4: crate::cohesion::Report,
     pub(super) scope: Scope,
     pub(super) revision: String,
     pub(super) summary: Summary,

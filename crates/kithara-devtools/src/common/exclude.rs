@@ -94,7 +94,7 @@ fn collect_declared_test_modules(
 }
 
 /// Whether the attributes carry a cfg that holds in no build but a test one.
-fn attrs_are_test_only(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn attrs_are_test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| match &a.meta {
         Meta::List(list) if list.path.is_ident("cfg") => {
             syn::parse2::<Meta>(list.tokens.clone()).is_ok_and(|m| cfg_predicate_is_test_only(&m))

@@ -42,6 +42,7 @@ usdt = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 backtrace = { workspace = true, optional = true }
+serial_test = { workspace = true }
 
 [target.'cfg(rtsan)'.dependencies]
 pin-project-lite = { workspace = true }

@@ -23,7 +23,7 @@ use kithara::platform::{
 #[cfg(feature = "flash")]
 const SIGNAL_BACKSTOP: Duration = Duration::from_secs(5);
 
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn platform_mutex_is_explored_by_loom() {
     let value = Arc::new(Mutex::new(0));
     let other = Arc::clone(&value);
@@ -48,7 +48,7 @@ fn wait_until_ready(condvar: &Condvar, mut ready: MutexGuard<'_, bool>) {
     }
 }
 
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn platform_condvar_is_explored_by_loom() {
     let state = Arc::new((Mutex::new(false), Condvar::default()));
     let waiter_state = Arc::clone(&state);
@@ -64,7 +64,7 @@ fn platform_condvar_is_explored_by_loom() {
     assert!(waiter.join().is_ok());
 }
 
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn platform_channel_is_explored_by_loom() {
     let (sender, receiver) = mpsc::channel();
     let producer = thread::spawn(move || sender.send(7));
@@ -73,7 +73,7 @@ fn platform_channel_is_explored_by_loom() {
     assert!(matches!(producer.join(), Ok(Ok(()))));
 }
 
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn platform_atomics_are_explored_by_loom() {
     let published = Arc::new(AtomicBool::new(false));
     let producer_flag = Arc::clone(&published);
@@ -89,7 +89,7 @@ fn platform_atomics_are_explored_by_loom() {
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn platform_spawn_propagates_flash_ambient() {
     let child = thread::spawn(ambient_snapshot);
 
@@ -97,7 +97,7 @@ fn platform_spawn_propagates_flash_ambient() {
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn thread_gate_closes_hls_snapshot_probe_park_race() {
     let gate = Arc::new(ThreadGate::default());
     let ready = Arc::new(AtomicBool::new(false));
@@ -118,7 +118,7 @@ fn thread_gate_closes_hls_snapshot_probe_park_race() {
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(loom)]
+#[kithara_test_utils::kithara::test(loom)]
 fn thread_gate_refreshes_waiter_after_thread_handoff() {
     let gate = Arc::new(ThreadGate::default());
 
