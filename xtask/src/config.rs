@@ -234,13 +234,14 @@ impl CiProjectConfig {
                 bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
             }
             if lane.target_snapshot.is_some()
-                && lane
-                    .steps
-                    .iter()
-                    .any(|step| step.env.contains_key("CARGO_TARGET_DIR"))
+                && lane.steps.iter().any(|step| {
+                    step.env
+                        .get("CARGO_TARGET_DIR")
+                        .is_some_and(|target| target != TARGET_PLACEHOLDER)
+                })
             {
                 bail!(
-                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must not override CARGO_TARGET_DIR"
+                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}"
                 );
             }
             if lane.label.is_empty() {
@@ -883,9 +884,7 @@ timeout_minutes = 30
             .validate()
             .expect_err("a snapshot must restore where Cargo will build");
         assert!(
-            error
-                .to_string()
-                .contains("must not override CARGO_TARGET_DIR"),
+            error.to_string().contains("must keep CARGO_TARGET_DIR"),
             "the error must explain the snapshot/Cargo target contract: {error}"
         );
     }

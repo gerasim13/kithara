@@ -412,7 +412,8 @@ mod tests {
         assert_eq!(
             object(&"a".repeat(64), &"b".repeat(64)),
             format!(
-                "{Snapshot::PREFIX}/{}/{}.tar",
+                "{}/{}/{}.tar",
+                Snapshot::PREFIX,
                 "a".repeat(64),
                 "b".repeat(64)
             )
