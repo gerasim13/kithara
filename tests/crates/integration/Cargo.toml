@@ -79,7 +79,6 @@ audio = [
 # native default: native C++ decoder and stretch backends cannot compile there.
 wasm = [
     "dep:kithara",
-    "kithara-test-fixtures/generate",
     "kithara/full",
     "kithara/queue",
     "kithara/probe",

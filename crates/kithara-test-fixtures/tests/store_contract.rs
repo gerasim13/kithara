@@ -101,7 +101,6 @@ fn the_namespace_uses_the_explicit_cache_revision() {
 }
 
 #[kithara::test(native, flash(false))]
-#[cfg(feature = "generate")]
 fn an_embedded_asset_has_no_file_to_read() {
     let embedded = assets::marked_sine_wav_a440_6s();
     assert_eq!(
@@ -112,7 +111,6 @@ fn an_embedded_asset_has_no_file_to_read() {
 }
 
 #[kithara::test(native, flash(false))]
-#[cfg(feature = "generate")]
 fn an_embedded_asset_carries_the_bytes_that_were_stored() {
     let embedded = assets::marked_sine_wav_a440_6s();
     let stored = assets::MANIFEST

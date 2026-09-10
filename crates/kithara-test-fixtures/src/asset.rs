@@ -155,7 +155,7 @@ fn store_path(entry: &AssetEntry) -> PathBuf {
 #[cfg(target_arch = "wasm32")]
 fn store_path(entry: &AssetEntry) -> PathBuf {
     panic!(
-        "fixture `{}` needs the `generate` feature on wasm32",
+        "fixture `{}` is not embedded and has no filesystem on wasm32",
         entry.name
     )
 }
