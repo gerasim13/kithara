@@ -1,7 +1,8 @@
 use kithara::{
+    assets::AssetEvent,
     events::{
-        AssetEvent, AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, FileEvent, HlsEvent,
-        QueueEvent, SessionEvent,
+        AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, FileEvent, HlsEvent, QueueEvent,
+        SessionEvent,
     },
     play::PlayerEvent,
     stream::DownloaderEvent,
@@ -582,14 +583,15 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroU64};
 
     use kithara::{
+        assets::{AssetEvent, EvictReason},
         events::{
-            AssetEvent, AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass,
-            DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent, DrmEvent,
-            EngineEvent, EvictReason, FileEvent, FrameDomain, GaplessSpan, HlsEvent, ItemRole,
-            KeyFailureStage, KeySource, MediaTime, PlaybackResamplerKind, PlayerStatus, QueueEvent,
-            QueueRepeatMode, ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent,
-            SlotId, StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind,
-            TrackId, TrackRef, TrackStatus,
+            AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
+            DecoderBackend, DecoderChangeCause, DecoderEvent, DjEvent, DrmEvent, EngineEvent,
+            FileEvent, FrameDomain, GaplessSpan, HlsEvent, ItemRole, KeyFailureStage, KeySource,
+            MediaTime, PlaybackResamplerKind, PlayerStatus, QueueEvent, QueueRepeatMode,
+            ResamplerKind, RouteChangeReason, RouteDescription, SessionEvent, SlotId,
+            StretchBackendKind, TimeControlStatus, TotalBytesSource, TrackFailureKind, TrackId,
+            TrackRef, TrackStatus,
         },
         platform::{sync::Arc, time::Duration},
         play::PlayerEvent,

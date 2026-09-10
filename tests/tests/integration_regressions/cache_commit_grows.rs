@@ -3,8 +3,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::{AssetStore, StorageBackend},
-    events::AssetEvent,
+    assets::{AssetEvent, AssetStore, StorageBackend},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},

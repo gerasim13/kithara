@@ -1,7 +1,7 @@
-use kithara::{abr::AbrEvent, stream::DownloaderEvent};
+use kithara::{abr::AbrEvent, assets::AssetEvent, stream::DownloaderEvent};
 use kithara_events::{
-    AssetEvent, AudioEvent, BusEvent, DecoderEvent, EventSet, FileEvent, HlsEvent, ItemEvent,
-    PlayerEvent, QueueEvent, TransportEvent,
+    AudioEvent, BusEvent, DecoderEvent, EventSet, FileEvent, HlsEvent, ItemEvent, PlayerEvent,
+    QueueEvent, TransportEvent,
 };
 
 /// Domains inspected by shared integration-test waits and event predicates.

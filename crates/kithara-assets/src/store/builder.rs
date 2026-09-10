@@ -484,14 +484,15 @@ fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use std::fs;
 
-    use kithara_events::{AssetEvent, EventBus, EvictReason};
+    use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
-        AssetResourceState, AssetWriter, AssetsError, ResourceAcquisition, ResourceKey,
+        AssetEvent, AssetResourceState, AssetWriter, AssetsError, EvictReason, ResourceAcquisition,
+        ResourceKey,
         decorator::Capabilities,
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };

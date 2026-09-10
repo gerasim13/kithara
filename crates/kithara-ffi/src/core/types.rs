@@ -1,7 +1,8 @@
 use kithara::{
+    assets::EvictReason,
     events::{
         AdvanceReason, AudioCodecKind, ContainerKind, DecodeErrorClass, DecodeErrorKind,
-        DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
+        DecoderBackend, DecoderChangeCause, FrameDomain, KeyFailureStage, KeySource,
         PlaybackResamplerKind, QueueRepeatMode, ResamplerKind, RouteChangeReason,
         StretchBackendKind, TotalBytesSource, TrackFailureKind, TrackId, TrackStatus as TS,
     },

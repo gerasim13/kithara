@@ -1,7 +1,7 @@
-use kithara::{abr::AbrEvent, stream::DownloaderEvent};
+use kithara::{abr::AbrEvent, assets::AssetEvent, stream::DownloaderEvent};
 use kithara_events::{
-    AssetEvent, AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, EventSet, FileEvent,
-    HlsEvent, PlayerEvent, QueueEvent, SessionEvent,
+    AudioEvent, DecoderEvent, DjEvent, DrmEvent, EngineEvent, EventSet, FileEvent, HlsEvent,
+    PlayerEvent, QueueEvent, SessionEvent,
 };
 
 #[derive(Clone, Debug, EventSet)]

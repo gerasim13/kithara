@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::Event;
+use kithara_events::Event;
 
 /// Reason an asset was evicted from the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -15,8 +15,6 @@ mod scope;
 mod seek;
 mod topic;
 
-#[cfg(feature = "asset")]
-mod asset;
 #[cfg(feature = "audio")]
 mod audio;
 #[cfg(feature = "decoder")]
@@ -32,8 +30,6 @@ mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
-#[cfg(feature = "asset")]
-pub use asset::{AssetEvent, EvictReason};
 #[cfg(feature = "audio")]
 pub use audio::{
     AudioEvent, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation, TrackFailureKind,
