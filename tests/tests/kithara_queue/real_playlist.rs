@@ -3,12 +3,12 @@
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    events::{AdvanceReason, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::{
         time::{Duration, sleep, timeout},
         tokio::sync::OnceCell,
     },
-    queue::{QueueControl, TrackSource, Transition},
+    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_app::{document::Config, pools::AppPools};
 use kithara_integration_tests::{

@@ -4,7 +4,7 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
-    queue::{Queue, QueueConfig, QueueControl, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{

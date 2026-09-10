@@ -13,13 +13,16 @@
 use std::path::Path;
 
 use kithara::{
-    events::{AdvanceReason, QueueEvent, TrackId},
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
     play::{Resource, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition,
+        test_utils::QueueProbe,
+    },
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

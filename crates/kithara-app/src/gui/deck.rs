@@ -1,9 +1,8 @@
 use kithara::{
     abr::AbrMode,
-    events::AdvanceReason,
     platform::sync::Arc,
     play::effects::eq::GainDb,
-    queue::{TrackId, Transition},
+    queue::{AdvanceReason, TrackId, Transition},
 };
 use tracing::{debug, error};
 

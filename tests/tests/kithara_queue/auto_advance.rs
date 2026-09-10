@@ -4,10 +4,12 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    events::{AdvanceReason, QueueEvent},
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, QueueControl, RepeatMode, Transition, test_utils::QueueProbe},
+    queue::{
+        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode, Transition,
+        test_utils::QueueProbe,
+    },
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -194,7 +196,7 @@ async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
         Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
-            mode: kithara::events::QueueRepeatMode::One,
+            mode: kithara::queue::QueueRepeatMode::One,
         }))
     ));
     assert_eq!(
@@ -250,7 +252,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first(
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
         Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
-            mode: kithara::events::QueueRepeatMode::All,
+            mode: kithara::queue::QueueRepeatMode::All,
         }))
     ));
     assert_eq!(
@@ -698,7 +700,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
 /// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
 async fn queue_stops_live_playback_when_last_track_ends(constant_three: &'static [u8]) {
-    use kithara::{events::QueueEvent, platform::tokio::sync::broadcast::error::TryRecvError};
+    use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
     const TRACK_SECS: f64 = 0.4;
 

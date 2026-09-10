@@ -12,13 +12,13 @@
 use kithara::{
     audio::AudioEvent,
     bufpool::HasPool,
-    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::{
         thread::active_named_thread_count,
         time::{Duration, Instant, sleep, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    queue::QueueControl,
+    queue::{QueueControl, QueueEvent, TrackStatus},
 };
 
 use crate::{event::TestEvent, offline::OfflinePlayer};

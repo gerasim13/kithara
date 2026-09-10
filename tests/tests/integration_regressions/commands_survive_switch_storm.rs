@@ -5,12 +5,11 @@ use std::collections::HashSet;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
-    events::QueueEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::{
         DownloaderEvent, RequestId, RequestMethod,
         dl::{Downloader, DownloaderConfig},

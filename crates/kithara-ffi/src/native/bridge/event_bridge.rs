@@ -1,5 +1,5 @@
 use kithara::{
-    events::{Envelope, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{Envelope, EventReceiver, TrackId},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -9,6 +9,7 @@ use kithara::{
         tokio::sync::broadcast,
     },
     play::{PlayerEvent, TimeControlStatus},
+    queue::{QueueEvent, TrackStatus},
 };
 
 use crate::{
@@ -380,15 +381,16 @@ mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
     use kithara::{
-        events::{
-            AdvanceReason, EventBus, QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackStatus,
-        },
+        events::{EventBus, SlotId, TrackId},
         platform::{
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
         play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
-        queue::{QueueConfig, test_utils::QueueProbe},
+        queue::{
+            AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus,
+            test_utils::QueueProbe,
+        },
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};

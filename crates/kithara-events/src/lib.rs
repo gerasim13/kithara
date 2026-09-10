@@ -14,9 +14,6 @@ mod receiver;
 mod scope;
 mod topic;
 
-#[cfg(feature = "queue")]
-mod queue;
-
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;
 pub use deferred::DeferredBus;
@@ -28,7 +25,5 @@ pub use kithara_platform::tokio::{
     sync::broadcast::error::{RecvError, TryRecvError},
 };
 pub use meta::{Envelope, EventMeta, ScopeLabel};
-#[cfg(feature = "queue")]
-pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use receiver::{EventReceiver, TopicReceiver};
 pub use scope::BusScope;

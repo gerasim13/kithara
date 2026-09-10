@@ -1,5 +1,8 @@
-use kithara::play::{EngineEvent, PlayerEvent, SessionEvent};
-use kithara_events::{EventSet, QueueEvent};
+use kithara::{
+    play::{EngineEvent, PlayerEvent, SessionEvent},
+    queue::QueueEvent,
+};
+use kithara_events::EventSet;
 
 #[derive(Clone, Debug, EventSet)]
 #[non_exhaustive]

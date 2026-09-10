@@ -1,9 +1,10 @@
 use delegate::delegate;
 use kithara_bufpool::HasPool;
-use kithara_events::{EventBus, QueueEvent};
+use kithara_events::EventBus;
 use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::QueueControl;
+use crate::event::QueueEvent;
 
 impl<S> QueueControl<S>
 where

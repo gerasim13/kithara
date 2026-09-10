@@ -1,9 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::time::{Duration, timeout},
-    queue::QueueControl,
+    queue::{QueueControl, QueueEvent, TrackStatus},
 };
 use kithara_app::{pools::AppPools, sources::build_source};
 use kithara_integration_tests::{event::TestEvent, kithara, offline::LazyAppQueueFixture};

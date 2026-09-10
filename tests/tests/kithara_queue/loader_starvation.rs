@@ -13,7 +13,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
-    events::{TrackId, TrackStatus},
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -22,7 +22,7 @@ use kithara::{
         time::{Duration, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{

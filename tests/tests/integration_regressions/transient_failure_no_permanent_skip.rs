@@ -3,13 +3,13 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
-    events::{QueueEvent, TrackId},
+    events::TrackId,
     hls::{AbrMode, HlsConfigPatch},
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time, time::Duration, tokio},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::{
         DownloaderEvent,
         dl::{Downloader, DownloaderConfig},

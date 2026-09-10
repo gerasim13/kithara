@@ -5,7 +5,7 @@ use std::path::Path;
 use kithara::{
     abr::AbrEvent,
     audio::AudioEvent,
-    events::{AdvanceReason, EventReceiver},
+    events::EventReceiver,
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -13,7 +13,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{Resource, ResourceConfig, ResourceSrc, effects::eq::generate_log_spaced_bands},
-    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{

@@ -9,10 +9,6 @@ description = "Hierarchical event bus for the audio pipeline."
 keywords = ["events", "audio", "observer", "pubsub", "player"]
 categories = ["asynchronous"]
 
-[features]
-default = ["queue"]
-queue = []
-
 [dependencies]
 kithara-derive = { workspace = true }
 kithara-platform = { workspace = true }

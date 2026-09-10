@@ -4,10 +4,9 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{QueueControl, Transition, test_utils::QueueProbe},
+    queue::{QueueControl, TrackStatus, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{

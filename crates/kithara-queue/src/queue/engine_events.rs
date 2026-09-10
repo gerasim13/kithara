@@ -2,15 +2,16 @@ use std::sync::PoisonError;
 
 use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, Envelope, EventSet, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{Envelope, EventSet, TrackId};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{ItemEvent, ItemRole, PlayerEvent};
+use kithara_play::{ItemRole, PlayerEvent};
 use tracing::debug;
 
 use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
+use crate::event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus};
 
 impl<S> QueueControl<S>
 where
@@ -196,11 +197,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, QueueEvent};
+    use kithara_events::DEFAULT_EVENT_BUS_CAPACITY;
     use kithara_play::PlayerEvent;
     use kithara_test_utils::kithara;
 
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {

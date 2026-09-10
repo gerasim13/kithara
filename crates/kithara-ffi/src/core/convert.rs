@@ -1,8 +1,8 @@
 use kithara::{
     assets::AssetEvent,
     audio::{AudioEvent, DecoderEvent},
-    events::QueueEvent,
     play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
+    queue::QueueEvent,
     stream::DownloaderEvent,
 };
 use kithara_file::FileEvent;
@@ -589,13 +589,14 @@ mod tests {
             DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
             TrackFailureKind,
         },
-        events::{QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackStatus},
+        events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
         play::{
             DjEvent, EngineEvent, ItemRole, MediaTime, PlayerEvent, PlayerStatus,
             RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
             TimeControlStatus, TrackRef,
         },
+        queue::{QueueEvent, QueueRepeatMode, TrackStatus},
         signal::AudioSpec,
         stream::{AudioCodec, CancelReason, ContainerFormat, DownloaderEvent, RequestId},
     };
@@ -1246,7 +1247,7 @@ mod tests {
             (
                 QueueEvent::CurrentTrackAdvance {
                     id: Some(id),
-                    reason: kithara::events::AdvanceReason::NaturalEof,
+                    reason: kithara::queue::AdvanceReason::NaturalEof,
                 },
                 |event| matches!(event, FfiPlayerEvent::CurrentItemAdvanced { item_id: Some(item_id), reason: FfiAdvanceReason::NaturalEof } if *item_id == TrackId::from(21_u64)),
             ),

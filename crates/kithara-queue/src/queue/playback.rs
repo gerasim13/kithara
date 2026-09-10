@@ -1,12 +1,11 @@
 use kithara_bufpool::HasPool;
-use kithara_events::TrackStatus;
 use kithara_play::{PlayError, SeekOutcome};
 
 use super::{
     QueueControl,
     types::{CachedPosition, PendingSelect, PlaybackView, Transition},
 };
-use crate::error::QueueError;
+use crate::{error::QueueError, event::TrackStatus};
 
 impl<S> QueueControl<S>
 where
@@ -222,7 +221,7 @@ where
             /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
             /// events to act on `ItemDidPlayToEnd` (filtered) and forward
             /// `CurrentItemChanged` as
-            /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+            /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
             ///
             /// # Errors
             /// Forwards `PlayError` from `PlayerImpl::tick`.
@@ -235,14 +234,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{QueueEvent, SlotId, TrackId};
+    use kithara_events::{SlotId, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_play::{ItemRole, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
-    use crate::queue::{
-        state::tests::make_queue,
-        types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
+    use crate::{
+        event::QueueEvent,
+        queue::{
+            state::tests::make_queue,
+            types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
+        },
     };
 
     #[kithara::test(tokio)]

@@ -1,10 +1,11 @@
 use js_sys::Reflect;
 use kithara::{
-    events::{Envelope, EventReceiver, QueueEvent},
+    events::{Envelope, EventReceiver},
     platform::{
         time::{Duration, sleep},
         tokio::{sync::broadcast::error::RecvError, task::spawn as task_spawn},
     },
+    queue::QueueEvent,
 };
 use wasm_bindgen::JsValue;
 use web_sys::{BroadcastChannel, console};

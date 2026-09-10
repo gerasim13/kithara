@@ -3,14 +3,14 @@ use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 #[cfg(any(test, feature = "probe"))]
-use kithara_events::{AdvanceReason, QueueEvent};
-use kithara_events::{TrackId, TrackStatus};
+use kithara_events::TrackId;
 #[cfg(any(test, feature = "probe"))]
 use kithara_play::SelectTransition;
 
 use crate::{
     attempts::LoadClass,
     error::QueueError,
+    event::{AdvanceReason, QueueEvent, TrackStatus},
     queue::{
         QueueControl,
         types::{PendingSelect, SelectPhase, Transition},

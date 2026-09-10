@@ -1,9 +1,10 @@
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::{EventReceiver, EventSet, QueueEvent, QueueRepeatMode, TrackId};
+use kithara_events::{EventReceiver, EventSet, TrackId};
 
 use super::QueueControl;
 use crate::{
+    event::{QueueEvent, QueueRepeatMode},
     navigation::RepeatMode,
     track::{TrackEntry, TrackRecord, TrackSource},
 };
@@ -51,7 +52,7 @@ where
     }
 
     /// Subscribe to the unified event stream:
-    /// [`QueueEvent`](kithara_events::QueueEvent) + underlying player /
+    /// [`QueueEvent`](crate::event::QueueEvent) + underlying player /
     /// audio / hls / file events.
     #[must_use]
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {

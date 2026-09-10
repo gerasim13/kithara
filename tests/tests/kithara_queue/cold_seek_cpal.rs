@@ -2,7 +2,7 @@
 
 use kithara::{
     decode::DecoderBackend,
-    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,7 +13,7 @@ use kithara::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};

@@ -3,6 +3,7 @@
 mod attempts;
 mod config;
 mod error;
+mod event;
 mod loader;
 mod navigation;
 mod queue;
@@ -12,7 +13,8 @@ mod track;
 
 pub use config::{QueueConfig, QueueConfigPatch};
 pub use error::QueueError;
-pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
+pub use event::{AdvanceReason, ItemEvent, QueueEvent, QueueRepeatMode, TrackStatus};
+pub use kithara_events::TrackId;
 pub use navigation::{NavigationState, RepeatMode};
 #[cfg(any(test, feature = "probe"))]
 pub use queue::test_utils;

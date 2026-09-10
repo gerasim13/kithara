@@ -5,7 +5,8 @@ use kithara::{
     hls::HlsEvent,
     host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
-    play::{ItemEvent, PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
+    play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
+    queue::ItemEvent,
     stream::DownloaderEvent,
     warp::{StretchControls, StretchKind},
 };

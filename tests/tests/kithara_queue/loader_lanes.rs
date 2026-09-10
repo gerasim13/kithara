@@ -8,7 +8,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::AssetStore,
-    events::{TrackId, TrackStatus},
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -16,7 +16,7 @@ use kithara::{
         time::{Duration, Instant, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{

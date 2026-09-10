@@ -35,7 +35,7 @@ pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 ///
 /// Owns a [`PlayerImpl`] and a private async track loader, plus
 /// queue-level state (ordered tracks, navigation, pending-select).
-/// Publishes [`QueueEvent`](kithara_events::QueueEvent) on the shared
+/// Publishes [`QueueEvent`](crate::event::QueueEvent) on the shared
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
 #[doc(hidden)]
@@ -56,7 +56,7 @@ where
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
     /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
+    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
     ///
     /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
@@ -338,7 +338,7 @@ where
             pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
             pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
-            pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
+            pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
         }
         to self.crossfade_armed_for {
             #[call(load)]
@@ -376,7 +376,7 @@ pub(crate) mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_events::{Envelope, EventReceiver, QueueEvent};
+    use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::{Duration, Instant, timeout},
@@ -389,7 +389,10 @@ pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools};
+    use crate::{
+        event::QueueEvent,
+        test_pools::{TestPools, pools},
+    };
 
     pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(sample_rate) => sample_rate,

@@ -429,13 +429,6 @@ pub enum PlayerEvent {
 
 #[derive(Clone, Debug, Event)]
 #[non_exhaustive]
-pub enum ItemEvent {
-    PlaybackLikelyToKeepUp,
-    PlaybackStalled,
-}
-
-#[derive(Clone, Debug, Event)]
-#[non_exhaustive]
 pub enum EngineEvent {
     Started,
     Stopped,

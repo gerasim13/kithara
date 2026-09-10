@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
+use kithara_events::TrackId;
 use kithara_play::SelectTransition;
 
 #[cfg(test)]
@@ -8,7 +8,11 @@ use super::{
     QueueControl,
     types::{PendingSelect, Transition},
 };
-use crate::{attempts::LoadClass, error::QueueError};
+use crate::{
+    attempts::LoadClass,
+    error::QueueError,
+    event::{AdvanceReason, QueueEvent, TrackStatus},
+};
 
 mod apply;
 mod navigation;
@@ -96,18 +100,19 @@ where
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
             }
-            _ => Err(QueueError::NotReady(id)),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::QueueEvent;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue

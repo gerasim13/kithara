@@ -21,7 +21,6 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ConsumerWakeMode,
-    events::QueueEvent,
     platform::{
         sync::{Arc, Mutex, mpsc},
         time::{self, Duration},
@@ -32,7 +31,7 @@ use kithara::{
         ResourceSrc, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq, SlotId,
         player::PlayerControlSource, slot_channels,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     TestTempDir,

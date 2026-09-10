@@ -11,10 +11,10 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{SlotId, TrackId, TrackStatus},
+    events::{SlotId, TrackId},
     platform::sync::Arc,
     play::{ItemRole, PlayerEvent, TrackRef},
-    queue::{QueueControl, Transition, test_utils::QueueProbe},
+    queue::{QueueControl, TrackStatus, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{

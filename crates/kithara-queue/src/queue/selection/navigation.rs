@@ -1,9 +1,10 @@
 use kithara_bufpool::HasPool;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
+use kithara_events::TrackId;
 use tracing::debug;
 
 use crate::{
     error::QueueError,
+    event::{AdvanceReason, QueueEvent, TrackStatus},
     navigation::RepeatMode,
     queue::{QueueControl, types::Transition},
     track::TrackEntry,

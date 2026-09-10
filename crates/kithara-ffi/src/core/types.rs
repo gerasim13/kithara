@@ -4,13 +4,13 @@ use kithara::{
         DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,
         PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
     },
-    events::{AdvanceReason, QueueRepeatMode, TrackId, TrackStatus as TS},
+    events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
         ItemStatus, PlayError, PlayerStatus, RouteChangeReason, StretchBackendKind,
         TimeControlStatus, TimeRange,
     },
-    queue::{RepeatMode, Transition},
+    queue::{AdvanceReason, QueueRepeatMode, RepeatMode, TrackStatus as TS, Transition},
     stream::{AudioCodec, CancelReason, ContainerFormat},
 };
 use kithara_file::TotalBytesSource;
@@ -238,8 +238,8 @@ pub enum FfiTrackStatus {
     Cancelled,
 }
 
-impl From<kithara::events::TrackStatus> for FfiTrackStatus {
-    fn from(s: kithara::events::TrackStatus) -> Self {
+impl From<kithara::queue::TrackStatus> for FfiTrackStatus {
+    fn from(s: kithara::queue::TrackStatus) -> Self {
         match s {
             TS::Loading => Self::Loading,
             TS::Slow => Self::Slow,
