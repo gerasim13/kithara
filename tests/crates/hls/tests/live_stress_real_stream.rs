@@ -9,11 +9,11 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
-    hls::{Hls, HlsConfig},
+    hls::{Hls, HlsConfig, HlsEvent},
     platform::{
         sync::Arc,
         time::Duration,
@@ -22,11 +22,12 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     signal::AudioChunk,
-    stream::Stream,
+    stream::{DownloaderEvent, RequestId, Stream},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,
     bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
     mixed_encrypted, mixed_plain, temp_dir,
 };
 use tracing::info;
@@ -233,7 +234,7 @@ fn spawn_live_stats_task(
             };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
                         locked.initial_variant = Some(initial.get());
                     }
@@ -241,24 +242,24 @@ fn spawn_live_stats_task(
                         locked.current_variant = Some(initial.get());
                     }
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                     locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) => {
                     if let Some(key) = parse_segment_url(url.as_str()) {
                         locked.pending_requests.insert(request_id, key);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(key) = locked.pending_requests.remove(&request_id) {
                         let entry = locked.network_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
@@ -464,7 +465,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             };
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
             match event {
-                Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
                         locked.initial_variant = Some(initial.get());
                     }
@@ -472,24 +473,24 @@ async fn live_ephemeral_revisit_sequence_regression(
                         locked.current_variant = Some(initial.get());
                     }
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                     locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) => {
                     if let Some(key) = parse_segment_url(url.as_str()) {
                         locked.pending_requests.insert(request_id, key);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(key) = locked.pending_requests.remove(&request_id) {
                         let entry = locked.network_hits.entry(key).or_insert(0);
                         *entry = entry.saturating_add(1);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
@@ -865,7 +866,7 @@ async fn live_stress_real_stream_seek_read_cache(
                 };
                 let mut locked = stats_bg.lock().expect("stats lock poisoned");
                 match event {
-                    Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
+                    TestEvent::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                         if locked.initial_variant.is_none() {
                             locked.initial_variant = Some(initial.get());
                         }
@@ -873,24 +874,28 @@ async fn live_stress_real_stream_seek_read_cache(
                             locked.current_variant = Some(initial.get());
                         }
                     }
-                    Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                    TestEvent::Abr(AbrEvent::VariantApplied { to, .. }) => {
                         locked.current_variant = Some(to.get());
                         locked.variant_switches = locked.variant_switches.saturating_add(1);
                     }
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
+                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id,
+                        url,
+                        ..
                     }) => {
                         if let Some(key) = parse_segment_url(url.as_str()) {
                             locked.pending_requests.insert(request_id, key);
                         }
                     }
-                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                        request_id, ..
+                    }) => {
                         if let Some(key) = locked.pending_requests.remove(&request_id) {
                             let entry = locked.network_hits.entry(key).or_insert(0);
                             *entry = entry.saturating_add(1);
                         }
                     }
-                    Event::Hls(HlsEvent::SegmentReadStart {
+                    TestEvent::Hls(HlsEvent::SegmentReadStart {
                         variant,
                         segment_index,
                         ..

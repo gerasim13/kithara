@@ -2,10 +2,9 @@
 
 use std::{cmp, hash, ops};
 
+use kithara_events::{Event, SlotId, TrackId};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
-
-use crate::{SlotId, TrackId};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -364,7 +363,7 @@ pub enum StretchBackendKind {
     Unknown,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum PlayerEvent {
     StatusChanged {
@@ -391,7 +390,9 @@ pub enum PlayerEvent {
     MuteChanged {
         muted: bool,
     },
-    CurrentItemChanged,
+    CurrentItemChanged {
+        item: Option<TrackId>,
+    },
     PrerollCompleted {
         success: bool,
     },
@@ -426,14 +427,7 @@ pub enum PlayerEvent {
     },
 }
 
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum ItemEvent {
-    PlaybackLikelyToKeepUp,
-    PlaybackStalled,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum EngineEvent {
     Started,
@@ -464,7 +458,7 @@ pub enum EngineEvent {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum SessionEvent {
     Interruption {
@@ -481,28 +475,6 @@ pub enum SessionEvent {
     },
 }
 
-/// Facts committed by the session transport owner.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum TransportEvent {
-    TempoCommitted {
-        beats_per_minute: f64,
-        revision: u64,
-    },
-    PlayStateCommitted {
-        playing: bool,
-        revision: u64,
-    },
-    SeekCommitted {
-        position_beats: f64,
-        revision: u64,
-    },
-    Failed {
-        revision: Option<u64>,
-        reason: String,
-    },
-}
-
 /// Audible movement through a track's beat map.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PlaybackDirection {
@@ -513,7 +485,7 @@ pub enum PlaybackDirection {
     Reverse,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Event)]
 #[non_exhaustive]
 pub enum DjEvent {
     BpmDetected {
@@ -543,4 +515,19 @@ pub enum DjEvent {
         follower: SlotId,
         offset_beats: f64,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn player_event_is_owned_by_kithara_play() {
+        assert_eq!(
+            ::core::any::type_name::<PlayerEvent>(),
+            "kithara_play::api::event::PlayerEvent"
+        );
+    }
 }

@@ -1,6 +1,5 @@
 use kithara::{
-    abr::AbrSettings,
-    events::{VariantDuration, VariantIndex, VariantInfo},
+    abr::{AbrSettings, VariantDuration, VariantIndex, VariantInfo},
     platform::time::Duration,
 };
 

@@ -3,8 +3,7 @@
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     self,
-    abr::{AbrController, AbrMode, AbrSettings},
-    events::{VariantDuration, VariantIndex, VariantInfo},
+    abr::{AbrController, AbrMode, AbrSettings, VariantDuration, VariantIndex, VariantInfo},
     platform::time::Duration,
 };
 

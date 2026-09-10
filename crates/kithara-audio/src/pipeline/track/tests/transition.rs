@@ -1,6 +1,6 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_decode::{DecodeError, DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
-use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -16,6 +16,7 @@ use super::rebuild::{
     route_signal_source_with_gapless_eof, route_signal_source_with_gaps,
 };
 use crate::{
+    DecoderChangeCause, DecoderEvent,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
@@ -1146,11 +1147,11 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
     while let Ok(envelope) = events.try_recv() {
         changed |= matches!(
             envelope.event,
-            Event::Decoder(DecoderEvent::DecoderChanged {
+            DecoderEvent::DecoderChanged {
                 cause: DecoderChangeCause::VariantSwitch,
                 variant: Some(1),
                 ..
-            })
+            }
         );
     }
     assert!(changed);

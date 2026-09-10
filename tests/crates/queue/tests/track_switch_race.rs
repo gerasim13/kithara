@@ -21,8 +21,9 @@
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -31,11 +32,13 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
+    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir,
+    event::TestEvent,
+    kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
 };
@@ -154,7 +157,7 @@ async fn build_queue(
 /// every absence window would consume real wall time.
 #[kithara::flash(true)]
 async fn next_queue_event<F>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     deadline: Duration,
     mut pred: F,
 ) -> Option<QueueEvent>
@@ -171,7 +174,7 @@ where
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
+            Ok(Ok(TestEvent::Queue(ev))) if pred(&ev) => return Some(ev),
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) | Err(_) => return None,
         }
@@ -431,7 +434,7 @@ async fn supersede_while_loading_cancels_slow_track(
 
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
-fn drain_event_backlog(rx: &mut EventReceiver) {
+fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv().map(|env| env.event) {

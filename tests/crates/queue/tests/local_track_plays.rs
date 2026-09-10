@@ -2,9 +2,11 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,11 +15,12 @@ use kithara::{
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    event::TestEvent,
     fixture_protocol::EncryptionRequest,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE, assert_playhead_tracks_renderer},
@@ -91,11 +94,11 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
 /// empty buffer means (a live-playback window waits for the next event; a
 /// PAUSE window — where progress is silent by design — reads the frozen
 /// `Queue::position_seconds()` explicitly).
-fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
+fn drain_latest_position(rx: &mut EventReceiver<TestEvent>) -> Option<f64> {
     let mut latest: Option<f64> = None;
     loop {
         match rx.try_recv().map(|env| env.event) {
-            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 latest = Some(position_ms as f64 / 1000.0);
             }
             Ok(_) => {}
@@ -107,12 +110,12 @@ fn drain_latest_position(rx: &mut EventReceiver) -> Option<f64> {
 }
 
 async fn receive_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     mut lagged: impl FnMut() -> Option<f64>,
 ) -> Result<f64, String> {
     loop {
         match rx.recv().await.map(|env| env.event) {
-            Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 return Ok(position_ms as f64 / 1000.0);
             }
             Ok(_) => {}
@@ -132,7 +135,10 @@ async fn receive_progress(
 /// anchors a window endpoint to the SAME event clock as `drain_latest_position`
 /// instead of the REAL-clock-gated tick cache. A buffered event already
 /// past is fine — it is still event-sourced and on the render cadence.
-async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> Result<f64, String> {
+async fn next_progress_position(
+    rx: &mut EventReceiver<TestEvent>,
+    deadline: Duration,
+) -> Result<f64, String> {
     timeout(deadline, receive_progress(rx, || None))
         .await
         .map_err(|_| format!("no PlaybackProgress within {deadline:?}"))?
@@ -144,7 +150,7 @@ async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> R
 /// whose REAL `sleep` would not park the engine. The fast-path seed keeps
 /// the first sample aligned with the current head.
 async fn sample_positions_via_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     count: usize,
     deadline: Duration,
@@ -391,7 +397,7 @@ async fn local_track_plays_end_to_end(
 }
 
 async fn wait_for_queue_event<F>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     mut pred: F,
     deadline: Duration,
 ) -> Option<QueueEvent>
@@ -401,7 +407,7 @@ where
     timeout(deadline, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Queue(ev)) => {
+                Ok(TestEvent::Queue(ev)) => {
                     if pred(&ev) {
                         return Some(ev);
                     }

@@ -3,17 +3,16 @@ mod prepare;
 use std::io::{Error as IoError, ErrorKind};
 
 use arc_swap::ArcSwap;
-use kithara_abr::{AbrDecision, PendingAbrClaim, PendingAbrDecision};
+use kithara_abr::{AbrDecision, AbrReason, PendingAbrClaim, PendingAbrDecision, VariantIndex};
 use kithara_bufpool::HasPool;
-use kithara_events::{AbrReason, SeekEpoch, VariantIndex};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use kithara_stream::{
-    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, SourcePhase, StreamError,
-    StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
-    VariantTransitionId, dl::FetchCmd,
+    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SeekEpoch, SourceError, SourcePhase,
+    StreamError, StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake,
+    VariantTransition, VariantTransitionId, dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -97,11 +96,7 @@ where
     }
 
     pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession<S>>> {
-        self.transition
-            .lock()
-            .incoming
-            .as_ref()
-            .map(|slot| Arc::clone(&slot.session))
+        self.publication.load().second.as_ref().map(Arc::clone)
     }
 
     pub(super) fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {

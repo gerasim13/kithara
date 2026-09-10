@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara::{
-    abr::AbrHandle,
-    events::{AbrMode, VariantIndex},
-};
+use kithara::abr::{AbrHandle, AbrMode, VariantIndex};
 
 /// Pin the ABR state to a fixed variant by switching the handle into
 /// `Manual` mode — same effect as a user-driven mode change without

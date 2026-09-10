@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use kithara_events::Event;
+
 /// Stage where a DRM key fetch failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -20,7 +22,7 @@ pub enum KeySource {
 }
 
 /// Events emitted during DRM key fetch / decrypt lifecycle.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Event)]
 #[non_exhaustive]
 pub enum DrmEvent {
     KeyFetchFailed {

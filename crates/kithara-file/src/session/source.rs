@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, ops::Range};
 use bon::Builder;
 use kithara_assets::{AssetReader, ReadSide};
 use kithara_bufpool::HasPool;
-use kithara_events::{EventBus, TotalBytesSource};
+use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
@@ -20,7 +20,7 @@ use super::{
     inner::{FileAssetCtx, FileInner, FileSourceCtx, FileTerminalState},
     segments::FileSegmentIndex,
 };
-use crate::{coord::FileCoord, error::SourceError as FileSourceError};
+use crate::{TotalBytesSource, coord::FileCoord, error::SourceError as FileSourceError};
 
 /// Inputs for constructing a local/cached file source.
 #[derive(Clone, Builder)]

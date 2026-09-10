@@ -13,7 +13,6 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 const SERVER_URL: &str = "http://127.0.0.1:3444";
 const POLL_MS: u64 = 50;
-const IDLE_GIVE_UP_MS: u64 = 5_000;
 const DEADLINE_MS: u64 = 10_000;
 const RESTART_SAMPLE: usize = 3;
 
@@ -196,9 +195,7 @@ where
     F: Fn(&[JsValue]) -> bool,
 {
     let mut waited = 0;
-    let mut idle = 0;
-    let mut seen = 0;
-    while waited < DEADLINE_MS && idle < IDLE_GIVE_UP_MS {
+    while waited < DEADLINE_MS {
         player.tick_js();
         sleep(Duration::from_millis(POLL_MS)).await;
         waited += POLL_MS;
@@ -207,12 +204,6 @@ where
         if done(&received) {
             return Some(waited);
         }
-        if received.len() == seen {
-            idle += POLL_MS;
-            continue;
-        }
-        seen = received.len();
-        idle = 0;
     }
     None
 }

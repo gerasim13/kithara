@@ -10,17 +10,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    audio::AudioEvent,
     bufpool::HasPool,
-    events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     platform::{
         thread::active_named_thread_count,
         time::{Duration, Instant, sleep, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    queue::QueueControl,
+    queue::{QueueControl, QueueEvent, TrackStatus},
 };
 
-use crate::offline::OfflinePlayer;
+use crate::{event::TestEvent, offline::OfflinePlayer};
 
 /// Poll cadence for [`wait_until`] and the queue-polling waits. This is the only
 /// timer `sleep` in the suite: a virtual tick that advances the flash clock so
@@ -79,7 +80,7 @@ where
 /// Wait until `queue.position_seconds()` reports at least `min_secs`, then
 /// return the observed position (seconds).
 ///
-/// Use this when only a `&Queue` is in hand. When an [`EventReceiver`] is
+/// Use this when only a `&Queue` is in hand. When an [`EventReceiver<TestEvent>`] is
 /// available, prefer [`wait_for_position_event`]: it reads sink-truth from
 /// `AudioEvent::PlaybackProgress`, which (unlike the tick-cached
 /// `position_seconds()`) does not go stale once an event-driven wait collapses
@@ -115,7 +116,7 @@ where
 /// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
 /// receiver cannot turn already-reached playback state into a timeout.
 pub async fn wait_for_position_event<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
@@ -140,7 +141,7 @@ where
                 .await
                 .map(|r| r.map(|env| env.event))
             {
-                Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+                Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     if position_ms >= min_ms {
                         return Ok(position_ms as f64 / 1000.0);
                     }
@@ -161,7 +162,7 @@ where
 
 /// Wait until `queue.position_seconds()` is within `tolerance` of `target`, then
 /// return the observed position. Queue-poll variant; prefer
-/// [`wait_for_position_near_event`] when an [`EventReceiver`] is available.
+/// [`wait_for_position_near_event`] when an [`EventReceiver<TestEvent>`] is available.
 pub async fn wait_for_position_near<S>(
     queue: &QueueControl<S>,
     target: f64,
@@ -183,7 +184,7 @@ where
     })
 }
 
-/// Event-driven [`wait_for_position_near`]: resolves the moment sink-truth
+/// TestEvent-driven [`wait_for_position_near`]: resolves the moment sink-truth
 /// `PlaybackProgress` or `SeekComplete` lands within `tolerance` of `target`,
 /// returning that position.
 ///
@@ -197,7 +198,7 @@ where
 /// whether the seek has landed, so there is nothing here for a cache read to
 /// fall back to.
 pub async fn wait_for_position_near_event<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     target: f64,
     tolerance: f64,
@@ -212,13 +213,13 @@ where
                 .await
                 .map(|r| r.map(|env| env.event))
             {
-                Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+                Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     let pos = position_ms as f64 / 1000.0;
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
                     }
                 }
-                Ok(Ok(Event::Audio(AudioEvent::SeekComplete { position, .. }))) => {
+                Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { position, .. }))) => {
                     let pos = position.as_secs_f64();
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
@@ -247,9 +248,9 @@ where
 /// is an error. This is the generic primitive behind the typed
 /// [`wait_for_position_event`] / [`wait_for_loader_done_event`].
 pub async fn wait_for_event(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     what: &str,
-    mut pred: impl FnMut(&Event) -> bool,
+    mut pred: impl FnMut(&TestEvent) -> bool,
     deadline: Duration,
 ) -> Result<(), String> {
     timeout(deadline, async {
@@ -310,7 +311,7 @@ where
 /// and `Lagged` re-read guard against an already-terminal status or a dropped
 /// event.
 pub async fn wait_for_loader_done_event<S>(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
     track_id: TrackId,
     deadline: Duration,
@@ -326,7 +327,7 @@ where
     timeout(deadline, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged { id, status }))
+                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }))
                     if id == track_id =>
                 {
                     if let Some(res) = loader_outcome(&status) {

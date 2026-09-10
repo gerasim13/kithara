@@ -2,9 +2,11 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,11 +15,13 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
+    kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event},
@@ -344,7 +348,7 @@ enum SeekLanded {
 /// within tolerance of `target`, or a `PlaybackProgress` position within
 /// tolerance. `Failed` is surfaced; the budget caps the wait.
 async fn wait_for_seek_landed(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
     target: f64,
@@ -358,17 +362,17 @@ async fn wait_for_seek_landed(
     let landed = timeout(budget, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     if ((position_ms as f64 / 1000.0) - target).abs() < 1.0 {
                         return Ok(());
                     }
                 }
-                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::SeekComplete { position, .. })) => {
                     if (position.as_secs_f64() - target).abs() < 1.0 {
                         return Ok(());
                     }
                 }
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged {
+                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged {
                     id,
                     status: TrackStatus::Failed(err),
                 })) if id == track_id => {
@@ -410,7 +414,7 @@ enum PostSeekAdvance {
 /// seek" on real PCM-commit progress. `Failed` is surfaced; the budget caps
 /// the wait and the timeout carries the last observed position.
 async fn wait_for_post_seek_advance(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
     target: f64,
@@ -430,13 +434,13 @@ async fn wait_for_post_seek_advance(
     let advanced = timeout(budget, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     let p = position_ms as f64 / 1000.0;
                     if (p - target) >= min_advance {
                         return Ok(());
                     }
                 }
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged {
+                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged {
                     id,
                     status: TrackStatus::Failed(err),
                 })) if id == track_id => {

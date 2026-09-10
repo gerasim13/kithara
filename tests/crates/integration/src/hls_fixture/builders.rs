@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use kithara::{
+    abr::{AbrMode, VariantIndex},
     assets::{AssetStore, StorageBackend},
-    events::VariantIndex,
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     platform::CancelToken,
     stream::Stream,
 };

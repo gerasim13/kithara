@@ -4,13 +4,13 @@ use std::{
     thread,
 };
 
-use kithara_abr::AbrState;
+use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_assets::{
     AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
     WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_events::{AbrMode, AbrReason, Event, EventBus, HlsEvent, VariantIndex};
+use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
@@ -27,6 +27,7 @@ use url::Url;
 
 use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
+    HlsEvent,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -247,7 +248,7 @@ fn queue_has_init(v: &HlsVariant) -> bool {
         .any(|p| matches!(p, PlannedFetch::Init))
 }
 
-fn collect_events(events: &mut kithara_events::EventReceiver) -> Vec<Event> {
+fn collect_events(events: &mut kithara_events::EventReceiver<HlsEvent>) -> Vec<HlsEvent> {
     std::iter::from_fn(|| events.try_recv().ok())
         .map(|envelope| envelope.event)
         .collect()
@@ -309,9 +310,9 @@ fn cache_complete_publishes_once_after_full_commit() {
         .filter(|event| {
             matches!(
                 event,
-                Event::Hls(HlsEvent::CacheComplete {
+                HlsEvent::CacheComplete {
                     total_bytes: Some(16),
-                })
+                }
             )
         })
         .count();

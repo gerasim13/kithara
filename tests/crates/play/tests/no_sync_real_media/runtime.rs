@@ -1,14 +1,16 @@
 use kithara::{
-    events::{
-        AudioEvent, BusEvent, DecoderEvent, DownloaderEvent, Event, EventReceiver, FileEvent,
-        HlsEvent, ItemEvent, PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
-    },
+    audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind, SeekLifecycleStage},
+    events::{BusEvent, EventReceiver},
+    file::FileEvent,
+    hls::HlsEvent,
     host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
-    play::{PlayError, PlayerImpl, Resource, SessionError},
+    play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
+    queue::ItemEvent,
+    stream::DownloaderEvent,
     warp::{StretchControls, StretchKind},
 };
-use kithara_integration_tests::offline::OfflineHostHarness;
+use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
 use serde::Serialize;
 
 use super::{CHANNELS, Case, SOURCE_RATE};
@@ -17,9 +19,9 @@ use crate::bufpool_ext::TestPools;
 pub(super) struct Deck {
     pub(super) player: HostOwned<PlayerImpl<TestPools>>,
     pub(super) reference: Resource,
-    pub(super) reference_events: EventReceiver,
+    pub(super) reference_events: EventReceiver<TestEvent>,
     pub(super) controls: Arc<StretchControls>,
-    pub(super) events: EventReceiver,
+    pub(super) events: EventReceiver<TestEvent>,
     pub(super) observation: DeckObservation,
     pub(super) seek_request_epoch: Option<u64>,
     pub(super) seek_complete_epoch: Option<u64>,
@@ -67,7 +69,7 @@ pub(super) fn drain_all_events(
         loop {
             match deck.events.try_recv() {
                 Ok(envelope) => match envelope.event {
-                    Event::Audio(AudioEvent::SeekLifecycle {
+                    TestEvent::Audio(AudioEvent::SeekLifecycle {
                         stage: SeekLifecycleStage::SeekRequest,
                         seek_epoch,
                         ..
@@ -79,7 +81,7 @@ pub(super) fn drain_all_events(
                             ));
                         }
                     }
-                    Event::Audio(AudioEvent::SeekComplete {
+                    TestEvent::Audio(AudioEvent::SeekComplete {
                         position,
                         seek_epoch,
                     }) => {
@@ -96,7 +98,7 @@ pub(super) fn drain_all_events(
                             deck.seek_complete_epoch = Some(seek_epoch);
                         }
                     }
-                    Event::Audio(AudioEvent::SeekRejected { epoch, target }) => {
+                    TestEvent::Audio(AudioEvent::SeekRejected { epoch, target }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) rejected seek to {:.3}s during {phase}",
@@ -110,7 +112,7 @@ pub(super) fn drain_all_events(
                             ));
                         }
                     }
-                    Event::Audio(AudioEvent::UnderrunStarted { seek_epoch, .. }) => {
+                    TestEvent::Audio(AudioEvent::UnderrunStarted { seek_epoch, .. }) => {
                         if matches!(policy, EventPolicy::MutedSeekSetup)
                             && deck.seek_request_epoch == Some(seek_epoch)
                         {
@@ -132,7 +134,7 @@ pub(super) fn drain_all_events(
                             ));
                         }
                     }
-                    Event::Audio(AudioEvent::UnderrunEnded { seek_epoch, .. }) => {
+                    TestEvent::Audio(AudioEvent::UnderrunEnded { seek_epoch, .. }) => {
                         if deck.muted_seek_underrun_epoch == Some(seek_epoch) {
                             deck.muted_seek_underrun_epoch = None;
                             if !matches!(policy, EventPolicy::MutedSeekSetup) {
@@ -143,14 +145,14 @@ pub(super) fn drain_all_events(
                             }
                         }
                     }
-                    Event::Audio(AudioEvent::TrackFailed { failure, .. }) => {
+                    TestEvent::Audio(AudioEvent::TrackFailed { failure, .. }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) reported track failure {failure:?} during {phase}",
                             deck.observation.label,
                         ));
                     }
-                    Event::Audio(AudioEvent::PlaybackResamplerConfigured {
+                    TestEvent::Audio(AudioEvent::PlaybackResamplerConfigured {
                         backend,
                         host_sample_rate,
                         source_sample_rate,
@@ -161,7 +163,7 @@ pub(super) fn drain_all_events(
                         host_sample_rate,
                         source_sample_rate,
                     }),
-                    Event::Decoder(DecoderEvent::DecoderChanged {
+                    TestEvent::Decoder(DecoderEvent::DecoderChanged {
                         sample_rate,
                         channels,
                         variant,
@@ -172,7 +174,7 @@ pub(super) fn drain_all_events(
                         deck.observation.decoder_channels.push(channels);
                         deck.observation.decoder_variants.push(variant);
                     }
-                    Event::Decoder(DecoderEvent::DecodeError {
+                    TestEvent::Decoder(DecoderEvent::DecodeError {
                         class,
                         kind,
                         detail,
@@ -181,49 +183,49 @@ pub(super) fn drain_all_events(
                         "deck {deck_index} ({}) decode error {class:?}/{kind:?} ({detail}) during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
+                    TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) reached player EOF during {phase}",
                             item.track(),
                         ));
                     }
-                    Event::Player(PlayerEvent::ItemDidFail { .. }) => {
+                    TestEvent::Player(PlayerEvent::ItemDidFail { .. }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) reported player track failure during {phase}",
                             deck.observation.label,
                         ));
                     }
-                    Event::Bus(BusEvent::Overflow { dropped, .. }) => failures.push(format!(
+                    TestEvent::Bus(BusEvent::Overflow { dropped, .. }) => failures.push(format!(
                         "deck {deck_index} ({}) event bus dropped {dropped} events during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Hls(HlsEvent::Error { error }) => failures.push(format!(
+                    TestEvent::Hls(HlsEvent::Error { error }) => failures.push(format!(
                         "deck {deck_index} ({}) HLS error {error:?} during {phase}",
                         deck.observation.label,
                     )),
-                    Event::File(FileEvent::Error { error }) => failures.push(format!(
+                    TestEvent::File(FileEvent::Error { error }) => failures.push(format!(
                         "deck {deck_index} ({}) file error {error:?} during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
+                    TestEvent::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
                         failures.push(format!(
                             "deck {deck_index} ({}) downloader request failed with {error:?} during {phase}",
                             deck.observation.label,
                         ));
                     }
-                    Event::Downloader(DownloaderEvent::RetryExhausted { error, .. }) => {
+                    TestEvent::Downloader(DownloaderEvent::RetryExhausted { error, .. }) => {
                         failures.push(format!(
                             "deck {deck_index} ({}) downloader exhausted retries with {error:?} during {phase}",
                             deck.observation.label,
                         ));
                     }
-                    Event::Item(ItemEvent::PlaybackStalled) => failures.push(format!(
+                    TestEvent::Item(ItemEvent::PlaybackStalled) => failures.push(format!(
                         "deck {deck_index} ({}) playback stalled during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Transport(event) => failures.push(format!(
+                    TestEvent::Transport(event) => failures.push(format!(
                         "deck {deck_index} ({}) emitted unexpected no-SYNC transport event {event:?} during {phase}",
                         deck.observation.label,
                     )),

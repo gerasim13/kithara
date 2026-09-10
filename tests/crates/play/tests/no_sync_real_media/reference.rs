@@ -1,12 +1,13 @@
 use kithara::{
-    audio::ReadOutcome,
-    events::{AudioEvent, DecoderEvent, Event, EventReceiver, SeekLifecycleStage},
+    audio::{AudioEvent, DecoderEvent, ReadOutcome, SeekLifecycleStage},
+    events::EventReceiver,
     platform::{
         time::{self, Duration},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{Resource, SeekOutcome},
 };
+use kithara_integration_tests::event::TestEvent;
 
 use super::{BLOCK_FRAMES, CHANNELS, CapturedAudio, Case, Deck, PRELOAD_TIMEOUT};
 
@@ -109,7 +110,7 @@ pub(super) async fn capture_references(
 
 async fn read_reference_pcm(
     resource: &mut Resource,
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     requested_frames: usize,
 ) -> Result<Vec<f32>, String> {
     if resource.spec().channels != CHANNELS {
@@ -158,7 +159,7 @@ async fn read_reference_pcm(
 }
 
 async fn wait_for_reference_seek_completion(
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     request_epoch: &mut Option<u64>,
     completion: &mut Option<u64>,
 ) -> Result<(), String> {
@@ -194,7 +195,7 @@ fn validate_reference_seek_barrier(
     Ok(())
 }
 
-fn drain_reference_events(events: &mut EventReceiver) {
+fn drain_reference_events(events: &mut EventReceiver<TestEvent>) {
     loop {
         match events.try_recv() {
             Ok(_) | Err(TryRecvError::Lagged(_)) => {}
@@ -204,7 +205,7 @@ fn drain_reference_events(events: &mut EventReceiver) {
 }
 
 fn drain_reference_seek_events(
-    events: &mut EventReceiver,
+    events: &mut EventReceiver<TestEvent>,
     request_epoch: &mut Option<u64>,
     completion: &mut Option<u64>,
 ) -> Result<(), String> {
@@ -223,27 +224,29 @@ fn drain_reference_seek_events(
 }
 
 fn observe_reference_seek_event(
-    event: Event,
+    event: TestEvent,
     request_epoch: &mut Option<u64>,
     completion: &mut Option<u64>,
 ) -> Result<(), String> {
     match event {
-        Event::Audio(AudioEvent::SeekLifecycle {
+        TestEvent::Audio(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
         }) => *request_epoch = Some(seek_epoch),
-        Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => *completion = Some(seek_epoch),
-        Event::Audio(AudioEvent::SeekRejected { epoch, target }) => {
+        TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
+            *completion = Some(seek_epoch)
+        }
+        TestEvent::Audio(AudioEvent::SeekRejected { epoch, target }) => {
             return Err(format!(
                 "reference rejected seek epoch {epoch} to {:.9}s",
                 target.as_secs_f64(),
             ));
         }
-        Event::Audio(AudioEvent::TrackFailed { failure, .. }) => {
+        TestEvent::Audio(AudioEvent::TrackFailed { failure, .. }) => {
             return Err(format!("reference track failed: {failure:?}"));
         }
-        Event::Decoder(DecoderEvent::DecodeError { detail, .. }) => {
+        TestEvent::Decoder(DecoderEvent::DecodeError { detail, .. }) => {
             return Err(format!("reference decode failed: {detail}"));
         }
         _ => {}

@@ -10,9 +10,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
     GaplessMode, GaplessProfile,
 };
-use kithara_events::{
-    AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
-};
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Condvar, Mutex, Notify},
     time::Duration,
@@ -32,6 +30,7 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use crate::{
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind,
     pipeline::{
         decode::{
             DecoderGeneration,
@@ -1740,7 +1739,7 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
 
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Decoder(DecoderEvent::DecoderChanged {
+        Ok(AudioLaneEvent::Decoder(DecoderEvent::DecoderChanged {
             cause: DecoderChangeCause::FormatBoundary,
             ..
         }))
@@ -1770,14 +1769,14 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
 
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Decoder(DecoderEvent::DecodeError {
+        Ok(AudioLaneEvent::Decoder(DecoderEvent::DecodeError {
             detail: "fixture decode failure",
             ..
         }))
     ));
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
-        Ok(Event::Audio(AudioEvent::TrackFailed {
+        Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
             failure: TrackFailureKind::Decode,
             seek_epoch: 0,
         }))

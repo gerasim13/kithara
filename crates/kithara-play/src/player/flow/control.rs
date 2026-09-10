@@ -1,10 +1,9 @@
-use kithara_events::RouteDescription;
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{RouteChangeReason, SessionEvent, SlotId},
+    api::{RouteChangeReason, RouteDescription, SessionEvent, SlotId},
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,

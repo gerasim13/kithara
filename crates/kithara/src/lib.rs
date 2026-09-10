@@ -206,18 +206,17 @@ pub mod prelude {
     pub use kithara_abr::AbrMode;
     #[cfg(feature = "audio")]
     pub use kithara_audio::{
-        Audio, AudioConfig, AudioControl, AudioRead, AudioReader, AudioSession, ResamplerQuality,
+        Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
+        ResamplerQuality,
     };
     #[cfg(feature = "decode")]
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "events")]
-    pub use kithara_events::HlsEvent;
-    #[cfg(feature = "events")]
-    pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
+    pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig};
+    pub use kithara_file::{File, FileConfig, FileEvent};
     #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig};
+    pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
         EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,

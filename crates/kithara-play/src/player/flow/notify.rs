@@ -1,7 +1,6 @@
 use std::{ops::Deref, sync::atomic::Ordering};
 
 use kithara_bufpool::HasPool;
-use kithara_events::Event;
 use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerRuntime;
@@ -41,14 +40,9 @@ where
             return;
         }
         let item = self.item_role(slot_id, notification);
-        let emitted = item
+        let emitted_any = item
             .as_ref()
-            .map(|item| player_events_from_notification(self, notification, item))
-            .unwrap_or_default();
-        let emitted_any = !emitted.is_empty();
-        for event in emitted {
-            self.core.engine.bus().publish(event);
-        }
+            .is_some_and(|item| publish_notification(self, notification, item));
 
         match notification {
             PlayerNotification::Requested => {
@@ -271,49 +265,58 @@ pub(crate) fn player_event_from_notification(
     }
 }
 
-fn player_events_from_notification<S>(
+fn publish_notification<S>(
     player: &PlayerRuntime<S>,
     notification: &PlayerNotification,
     item: &ItemRole,
-) -> Vec<Event> {
-    let mut events: Vec<Event> = Vec::new();
+) -> bool {
     match notification {
         PlayerNotification::PlaybackStarted { .. } => {
-            events.push(PlayerEvent::PlaybackStarted { item: item.clone() }.into());
+            player
+                .core
+                .engine
+                .bus()
+                .publish(PlayerEvent::PlaybackStarted { item: item.clone() });
+            true
         }
         PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Stop,
             ..
         } => {
-            let phase = player.phase.lock();
-            if phase
-                .pending()
-                .is_some_and(|pending| pending.state.activated())
-                && let Some(slot) = phase.slot()
-            {
-                events.push(
-                    EngineEvent::CrossfadeCompleted {
+            let slot = {
+                let phase = player.phase.lock();
+                phase
+                    .pending()
+                    .filter(|pending| pending.state.activated())
+                    .and_then(|_| phase.slot())
+            };
+            slot.is_some_and(|slot| {
+                player
+                    .core
+                    .engine
+                    .bus()
+                    .publish(EngineEvent::CrossfadeCompleted {
                         from: slot,
                         to: slot,
-                    }
-                    .into(),
-                );
-            }
+                    });
+                true
+            })
         }
-        _ => {}
+        _ => false,
     }
-    events
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Envelope, Event, EventReceiver, TrackId};
+    use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig, mock,
+        PlayWorker, PlayWorkerConfig,
+        api::PlayerEvent,
+        mock,
         player::{
             PlayerConfig, PlayerImpl,
             state::{PendingNext, PendingNextState},
@@ -382,11 +385,10 @@ mod tests {
 
     /// Each test dispatches exactly one notification, so the first role a
     /// start or an end carries is the one under test.
-    fn published_role(rx: &mut EventReceiver) -> Option<ItemRole> {
+    fn published_role(rx: &mut EventReceiver<PlayerEvent>) -> Option<ItemRole> {
         while let Ok(Envelope { event, .. }) = rx.try_recv() {
-            if let Event::Player(
-                PlayerEvent::PlaybackStarted { item } | PlayerEvent::ItemDidPlayToEnd { item },
-            ) = event
+            if let PlayerEvent::PlaybackStarted { item } | PlayerEvent::ItemDidPlayToEnd { item } =
+                event
             {
                 return Some(item);
             }

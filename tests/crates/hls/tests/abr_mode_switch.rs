@@ -4,14 +4,14 @@ use std::{
 };
 
 use kithara::{
+    abr::{AbrEvent, AbrReason},
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    decode::DecoderBackend,
-    events::{
-        AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
-        EventReceiver, HlsEvent, RequestId,
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
     },
-    hls::{AbrMode, Hls, HlsConfig},
+    decode::DecoderBackend,
+    events::{EventBus, EventReceiver},
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -20,13 +20,16 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
+    stream::{
+        AudioCodec, ContainerFormat, DownloaderEvent, MediaInfo, RequestId, Stream, StreamType,
+    },
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::SegmentGateHandle;
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     mixed_plain,
@@ -184,7 +187,7 @@ fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
 /// between drains.
 struct EventCollector {
     /// Receiver held for pull draining (see [`Self::drain`]).
-    rx: Mutex<EventReceiver>,
+    rx: Mutex<EventReceiver<TestEvent>>,
     /// In-flight request→(variant, seg) map, carried across drains.
     request_map: Mutex<HashMap<RequestId, (usize, usize)>>,
     /// Network fetches that completed (URL→variant/seg parsed at enqueue).
@@ -250,7 +253,10 @@ impl EventCollector {
     /// `significant_drop_tightening` from mis-suggesting an early drop
     /// inside the loop. Mirrors
     /// `kithara::platform::flash::system::wake::wait_set`.
-    fn drain_locked(&self, mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver>) {
+    fn drain_locked(
+        &self,
+        mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver<TestEvent>>,
+    ) {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         loop {
             let ev = match rx.try_recv().map(|env| env.event) {
@@ -266,31 +272,31 @@ impl EventCollector {
             };
             self.push_event_tail(format!("{ev:?}"));
             match &ev {
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) => {
                     if let Some(seg) = parse_segment_url(url.as_str()) {
                         self.request_map.lock().insert(*request_id, seg);
                     }
                 }
-                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                     if let Some(seg) = self.request_map.lock().remove(request_id) {
                         self.network_fetches.lock().insert(seg);
                     }
                 }
-                Event::Hls(HlsEvent::SegmentReadStart {
+                TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
                     segment_index,
                     ..
                 }) => {
                     self.reader_segments.lock().push((*variant, *segment_index));
                 }
-                Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                TestEvent::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                     info!(to = to.get(), ?reason, "VariantApplied");
                     self.applied_transitions.lock().push((to.get(), *reason));
                     self.switch_count.fetch_add(1, Ordering::Release);
                 }
-                Event::Audio(AudioEvent::SeekLifecycle {
+                TestEvent::Audio(AudioEvent::SeekLifecycle {
                     stage,
                     seek_epoch,
                     location,
@@ -299,7 +305,7 @@ impl EventCollector {
                         "SeekLifecycle({stage:?}, epoch={seek_epoch:?}, location={location:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::SeekComplete {
+                TestEvent::Audio(AudioEvent::SeekComplete {
                     position,
                     seek_epoch,
                 }) => {
@@ -307,7 +313,7 @@ impl EventCollector {
                         "SeekComplete(epoch={seek_epoch:?}, position={position:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::DecoderReady {
+                TestEvent::Audio(AudioEvent::DecoderReady {
                     base_offset,
                     variant,
                 }) => {
@@ -315,7 +321,7 @@ impl EventCollector {
                         "DecoderReady(base_offset={base_offset}, variant={variant:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::EndOfStream { .. }) => {
+                TestEvent::Audio(AudioEvent::EndOfStream { .. }) => {
                     self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}
@@ -809,14 +815,14 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "LoadSlow for the gated V0 segment",
         |event| {
             match event {
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
                 }) if parse_segment_url(url.as_str())
                     == Some((STALLED_VARIANT, STALLED_SEGMENT)) =>
                 {
                     stalled_requests.insert(*request_id);
                 }
-                Event::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
+                TestEvent::Downloader(DownloaderEvent::LoadSlow { request_id, .. })
                     if stalled_requests.contains(request_id) =>
                 {
                     saw_load_slow = true;
@@ -841,7 +847,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "stalled-boundary EscapeStalled rescue",
         |event| {
             match event {
-                Event::Abr(AbrEvent::VariantApplied { from, to, reason })
+                TestEvent::Abr(AbrEvent::VariantApplied { from, to, reason })
                     if from.get() == STALLED_VARIANT
                         && to.get() == RESCUE_VARIANT
                         && *reason == AbrReason::EscapeStalled =>
@@ -1618,7 +1624,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         let held = wait_for_event(
             &mut hold_rx,
             "TransitionHold for Manual(1)",
-            |ev| matches!(ev, Event::Decoder(DecoderEvent::TransitionHold { .. })),
+            |ev| matches!(ev, TestEvent::Decoder(DecoderEvent::TransitionHold { .. })),
             Duration::from_secs(25),
         )
         .await;
@@ -1775,7 +1781,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     wait_for_event(
         &mut seek_rx,
         "ReaderSeek after seek",
-        |ev| matches!(ev, Event::Hls(HlsEvent::ReaderSeek { .. })),
+        |ev| matches!(ev, TestEvent::Hls(HlsEvent::ReaderSeek { .. })),
         Duration::from_secs(20),
     )
     .await
@@ -2356,7 +2362,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     spawn(async move {
         loop {
             match applied_rx.recv().await.map(|env| env.event) {
-                Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+                Ok(TestEvent::Abr(AbrEvent::VariantApplied { to, .. })) => {
                     applied_bg.lock().push(to.get());
                 }
                 Ok(_) => {}

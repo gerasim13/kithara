@@ -1,15 +1,15 @@
 use std::sync::atomic::AtomicU64;
 
 use kithara_abr::AbrHandle;
-use kithara_events::{DeferredBus, Event};
+use kithara_events::DeferredBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_signal::AudioChunk;
 use kithara_stream::WorkerWake;
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, ConsumerWakeMode, EpochValidator, FailureSource, Fetch, Inlet, Outlet,
-    ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
+    AudioLaneEvent, ConsumerPhase, ConsumerWakeMode, EpochValidator, FailureSource, Fetch, Inlet,
+    Outlet, ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
     park::receive_is_nonblocking,
 };
 use crate::{SourceEnd, SourceSpan};
@@ -339,7 +339,7 @@ const fn resolve_wake_mode(mode: ConsumerWakeMode, block_on_underrun: bool) -> C
 
 pub(super) fn create_channels(
     audio_buffer_chunks: usize,
-    emit: Arc<DeferredBus<Event>>,
+    emit: Arc<DeferredBus<AudioLaneEvent>>,
     reader_wake: &Arc<ThreadWake>,
 ) -> (Outlet<Fetch<AudioChunk>>, Inlet<Fetch<AudioChunk>>) {
     let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(Arc::clone(reader_wake), emit));

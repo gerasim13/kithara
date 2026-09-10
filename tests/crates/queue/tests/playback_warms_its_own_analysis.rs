@@ -6,12 +6,11 @@ use std::num::NonZeroU32;
 use kithara::{
     analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     assets::{AssetStore, StorageBackend},
-    events::TrackStatus,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource},
+    queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     resampler::NoResamplerBackend,
     signal::AudioSpec,
     stream::dl::{Downloader, DownloaderConfig},

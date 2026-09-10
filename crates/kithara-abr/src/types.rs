@@ -1,8 +1,3 @@
-pub use kithara_events::{
-    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError, VariantDuration,
-    VariantIndex, VariantInfo,
-};
-
 pub use crate::{
     controller::{AbrPeerId, AbrSettings, AbrSettingsPatch},
     state::{AbrDecision, AbrTicket, PendingAbrClaim, PendingAbrDecision},
@@ -12,7 +7,7 @@ pub use crate::{
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{AbrMode, VariantIndex};
+    use crate::{AbrMode, VariantIndex};
 
     #[kithara::test]
     #[case(AbrMode::Auto(None))]

@@ -1,20 +1,20 @@
 use kithara::{
     audio::AudioReader,
-    events::{Event, EventReceiver, PlayerEvent},
+    events::EventReceiver,
     host::HostConfig,
     platform::sync::Arc,
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
         bridge::RtMetricsSnapshot, player::PlayerControl,
     },
 };
 
 use super::{OfflineHostHarness, OfflineResident, host::offline_pools};
-use crate::bufpool_ext::TestPools;
+use crate::{bufpool_ext::TestPools, event::TestEvent};
 
 /// Product Player and Host wired for deterministic finite rendering.
 pub struct OfflinePlayer {
-    events: EventReceiver,
+    events: EventReceiver<TestEvent>,
     player: OfflineResident<PlayerImpl<TestPools>, TestPools>,
     worker: PlayWorker<TestPools>,
 }
@@ -117,15 +117,17 @@ impl OfflinePlayer {
         let mut notifications = Vec::new();
         while let Ok(envelope) = self.events.try_recv() {
             let kind = match envelope.event {
-                Event::Player(PlayerEvent::PlaybackStarted { .. }) => {
+                TestEvent::Player(PlayerEvent::PlaybackStarted { .. }) => {
                     Some(NotificationKind::PlaybackStarted)
                 }
-                Event::Player(PlayerEvent::ItemDidPlayToEnd { .. })
-                | Event::Player(PlayerEvent::ItemDidFail { .. }) => {
+                TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })
+                | TestEvent::Player(PlayerEvent::ItemDidFail { .. }) => {
                     Some(NotificationKind::PlaybackStopped)
                 }
-                Event::Player(PlayerEvent::PrefetchRequested) => Some(NotificationKind::Requested),
-                Event::Player(PlayerEvent::HandoverRequested { .. }) => {
+                TestEvent::Player(PlayerEvent::PrefetchRequested) => {
+                    Some(NotificationKind::Requested)
+                }
+                TestEvent::Player(PlayerEvent::HandoverRequested { .. }) => {
                     Some(NotificationKind::HandoverRequested)
                 }
                 _ => None,

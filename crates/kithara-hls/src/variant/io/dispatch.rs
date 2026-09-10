@@ -1,9 +1,8 @@
 use kithara_assets::AssetsError;
 use kithara_bufpool::HasPool;
-use kithara_events::RequestPriority;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::StorageError;
-use kithara_stream::dl::FetchCmd;
+use kithara_stream::{RequestPriority, dl::FetchCmd};
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 

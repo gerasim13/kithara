@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    audio::AudioEvent,
     decode::DecoderBackend,
-    events::{AudioEvent, Event},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -12,6 +12,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     fixture_protocol::DelayRule,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -117,7 +118,7 @@ async fn cold_seek_far_segment_hls_offline(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+            Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                 let pos_secs = position_ms as f64 / 1000.0;
                 if pos_secs > seek_target + 0.5 {
                     confirmed = true;

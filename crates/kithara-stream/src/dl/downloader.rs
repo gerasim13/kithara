@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
-use kithara_events::{EventBus, RequestId};
+use kithara_events::EventBus;
 use kithara_net::HttpClient;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{keep_worker_alive, spawn};
@@ -19,6 +19,7 @@ use super::{
     peer::{Peer, PeerHandle, PeerInner},
     registry::{FetchProgress, Registry},
 };
+use crate::RequestId;
 
 /// Unified downloader — sole HTTP client owner and fetch orchestrator.
 ///
@@ -87,14 +88,14 @@ pub(super) struct DownloaderInner {
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
     pub(super) max_concurrent: usize,
     pub(super) peer_cmd_channel_capacity: usize,
-    /// Monotonic source of [`kithara_events::RequestId`]s assigned to
+    /// Monotonic source of [`crate::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
     next_request_id: AtomicU64,
 }
 
 impl DownloaderInner {
-    /// Allocate a fresh [`kithara_events::RequestId`].
+    /// Allocate a fresh [`crate::RequestId`].
     pub(super) fn next_request_id(&self) -> RequestId {
         let raw = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let nz = std::num::NonZeroU64::new(raw.max(1))

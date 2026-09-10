@@ -10,13 +10,15 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
+    events::{SlotId, TrackId},
     platform::sync::Arc,
-    queue::{QueueControl, Transition, test_utils::QueueProbe},
+    play::{ItemRole, PlayerEvent, TrackRef},
+    queue::{QueueControl, TrackStatus, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
+    event::TestEvent,
     offline::{OfflinePlayerHarness, offline_queue_fixture, resource_from_reader_with_src},
 };
 use kithara_test_fixtures::integration_fixtures::constant_loud;
@@ -108,7 +110,7 @@ fn publish_leading_failure(harness: &OfflinePlayerHarness, id: TrackId) {
     harness
         .player()
         .bus()
-        .publish(Event::Player(PlayerEvent::ItemDidFail {
+        .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
             item: ItemRole::Leading(TrackRef::new(id, SlotId::new(0), Arc::from(REPEATED_SRC))),
         }));
 }

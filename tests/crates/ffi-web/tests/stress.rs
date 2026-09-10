@@ -1,8 +1,9 @@
 use gloo_timers::future::TimeoutFuture;
+use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
+    events::EventBus,
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
     // every test body, and naming it here shadows nothing but a warning.
@@ -13,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     fixture_protocol::DataMode,
 };
 use kithara_test_fixtures::signal;
@@ -907,7 +909,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
     );
 }
 
-/// Event-level regression guard for seek behavior in browser path:
+/// TestEvent-level regression guard for seek behavior in browser path:
 /// one seek command should produce one seek-complete, and playback progress
 /// after that seek should advance without extra backward resets.
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -983,21 +985,21 @@ async fn stress_seek_events_single_reset_and_monotonic_progress(
 
         loop {
             match events_rx.try_recv().map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
                     stage: SeekLifecycleStage::SeekRequest,
                     seek_epoch,
                     ..
                 })) => {
                     target_seek_epoch = Some(seek_epoch);
                 }
-                Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. })) => {
                     if target_seek_epoch == Some(seek_epoch) {
                         seek_complete_for_target += 1;
                         seek_complete_seen = true;
                         playback_positions.clear();
                     }
                 }
-                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
                     position_ms,
                     seek_epoch,
                     ..

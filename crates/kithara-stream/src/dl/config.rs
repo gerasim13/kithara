@@ -27,7 +27,7 @@ pub struct DownloaderConfig {
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
-    /// [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow)
+    /// [`DownloaderEvent::LoadSlow`](crate::DownloaderEvent::LoadSlow)
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
     #[builder(default = Duration::from_secs(2))]

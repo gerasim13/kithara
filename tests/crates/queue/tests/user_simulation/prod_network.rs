@@ -10,9 +10,9 @@
 //! Everything here is on the public internet: the scenario that reached the
 //! corporate slicer moved out with the rest of what CI cannot serve.
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
-    events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{

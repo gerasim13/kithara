@@ -1,17 +1,18 @@
 use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
-#[cfg(any(test, feature = "probe"))]
-use kithara_events::TrackStatus;
-use kithara_events::{AdvanceReason, QueueEvent, TrackId};
+use kithara_events::TrackId;
 
 use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Placement, SelectPhase, Transition, extract_track_name},
 };
+#[cfg(any(test, feature = "probe"))]
+use crate::event::TrackStatus;
 use crate::{
     attempts::LoadClass,
     error::QueueError,
+    event::{AdvanceReason, QueueEvent},
     navigation::NavigationState,
     track::{TrackRecord, TrackSource},
 };
@@ -354,12 +355,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{ItemRole, PlayerEvent, QueueEvent, SlotId, TrackRef};
     use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, SlotId, TrackRef};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::state::tests::{make_queue, wait_for_queue_event};
+    use crate::{
+        event::QueueEvent,
+        queue::state::tests::{make_queue, wait_for_queue_event},
+    };
 
     fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue

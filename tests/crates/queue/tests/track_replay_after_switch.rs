@@ -4,8 +4,9 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     assets::AssetStore,
-    events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
+    events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -13,11 +14,12 @@ use kithara::{
         time::{self, Duration, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -195,13 +197,13 @@ async fn wait_for_loader_done(
 /// instead of hanging.
 #[kithara::flash(true)]
 async fn wait_for_current_track(
-    rx: &mut kithara::events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
     expected: TrackId,
     deadline: Duration,
 ) {
     let wait = async {
         while let Ok(ev) = rx.recv().await.map(|env| env.event) {
-            if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
+            if let TestEvent::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
                 && id == expected
             {
                 return;

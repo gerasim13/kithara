@@ -2,7 +2,8 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::{AudioEvent, Event, PlayerEvent},
+    audio::AudioEvent,
+    events::PlayerEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -13,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     kithara,
     offline::OfflineQueue,
     temp_dir,
@@ -49,21 +51,29 @@ fn render_and_tick(queue: &OfflineQueue<TestPools>) {
     queue.tick().expect("tick queue");
 }
 
-fn drain_warmup(rx: &mut kithara::events::EventReceiver, latest_position: &mut Option<f64>) {
+fn drain_warmup(
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
+    latest_position: &mut Option<f64>,
+) {
     while let Ok(envelope) = rx.try_recv() {
-        if let Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = envelope.event {
+        if let TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }) = envelope.event {
             *latest_position = Some(position_ms as f64 / 1000.0);
         }
     }
 }
 
-fn drain_seek_events(rx: &mut kithara::events::EventReceiver, observation: &mut SeekEvents) {
+fn drain_seek_events(
+    rx: &mut kithara::events::EventReceiver<TestEvent>,
+    observation: &mut SeekEvents,
+) {
     while let Ok(envelope) = rx.try_recv() {
         match envelope.event {
-            Event::Audio(AudioEvent::SeekComplete { .. }) => observation.seek_complete = true,
-            Event::Audio(AudioEvent::SeekRejected { .. }) => observation.seek_rejected = true,
-            Event::Audio(AudioEvent::EndOfStream { .. }) => observation.end_of_stream = true,
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => observation.item_ended = true,
+            TestEvent::Audio(AudioEvent::SeekComplete { .. }) => observation.seek_complete = true,
+            TestEvent::Audio(AudioEvent::SeekRejected { .. }) => observation.seek_rejected = true,
+            TestEvent::Audio(AudioEvent::EndOfStream { .. }) => observation.end_of_stream = true,
+            TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => {
+                observation.item_ended = true
+            }
             _ => {}
         }
     }

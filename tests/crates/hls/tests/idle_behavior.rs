@@ -7,7 +7,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl},
-    events::{Event, EventBus},
+    events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
+    event::TestEvent,
     hls_server::packaged_test_server,
     temp_dir,
 };
@@ -201,7 +202,7 @@ async fn idle_prefetch_is_capped(
         {
             // A downloader event arrived inside the window: still active,
             // keep waiting. Lagged is also "events are flowing".
-            Ok(Ok(Event::Downloader(_)))
+            Ok(Ok(TestEvent::Downloader(_)))
             | Ok(Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
             // Non-downloader event: ignore, keep waiting for quiescence.
             Ok(Ok(_)) => {}

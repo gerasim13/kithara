@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara_decode::ChunkRetire;
-use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
+use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
 use kithara_stream::{
@@ -18,6 +18,7 @@ pub(crate) use crate::pipeline::{
     stream::shared::SharedStream,
 };
 use crate::{
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, TrackFailureKind,
     pipeline::{
         decode::{
             gate::ReadinessGate,
@@ -62,7 +63,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
-    pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
+    pub(crate) emit: Option<Arc<DeferredBus<AudioLaneEvent>>>,
     pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
@@ -177,13 +178,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let CurrentFsm::Failed(handle) = &new
             && let Some(ref emit) = self.emit
         {
-            emit.enqueue(
-                AudioEvent::TrackFailed {
-                    failure: map_track_failure_kind(handle.data()),
-                    seek_epoch: self.seek_obs.epoch(),
-                }
-                .into(),
-            );
+            emit.enqueue(AudioEvent::TrackFailed {
+                failure: map_track_failure_kind(handle.data()),
+                seek_epoch: self.seek_obs.epoch(),
+            });
         }
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;

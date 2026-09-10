@@ -8,6 +8,7 @@ mod batch;
 mod cmd;
 mod config;
 mod downloader;
+mod event;
 mod peer;
 mod registry;
 mod response;
@@ -23,6 +24,6 @@ pub use cmd::{
 };
 pub use config::{DownloaderConfig, DownloaderConfigPatch};
 pub use downloader::Downloader;
-pub use kithara_events::{RequestMethod, RequestPriority};
+pub use event::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use peer::{Peer, PeerHandle};
 pub use response::{BodyStream, FetchResponse};

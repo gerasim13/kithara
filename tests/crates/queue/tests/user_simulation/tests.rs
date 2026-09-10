@@ -4,8 +4,8 @@
 use std::fmt::Write;
 
 use kithara::{
+    abr::AbrMode,
     decode::DecoderBackend,
-    events::AbrMode,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},

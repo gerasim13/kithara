@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "kithara derive macros: #[derive(Patch)] for configuration documents and #[derive(Ranged)] for bounded scalars."
+description = "kithara derive macros for configuration documents, bounded scalars, events, and event sets."
 keywords = ["audio", "config", "serde", "macros", "kithara"]
 categories = ["config", "development-tools"]
 

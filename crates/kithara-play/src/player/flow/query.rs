@@ -1,5 +1,5 @@
 use delegate::delegate;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerRuntime;
@@ -93,7 +93,7 @@ impl<S> PlayerRuntime<S> {
     }
 
     /// Subscribe to player events.
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.core.engine.bus().subscribe()
     }
 

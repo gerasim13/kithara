@@ -2,22 +2,26 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    events::{
-        AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
-    },
+    audio::AudioEvent,
+    events::{EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep, timeout},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
+        ResourceSrc,
+    },
+    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    event::TestEvent,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
@@ -53,7 +57,7 @@ const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 
 #[kithara::flash(true)]
 async fn wait_for_status(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
@@ -70,7 +74,7 @@ async fn wait_for_status(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
+            Ok(Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
                 if status == target {
@@ -97,13 +101,13 @@ enum ScrubOutcome {
     BudgetElapsed { last_position: Option<f64> },
 }
 
-/// Drain `Event::Player` until either the scrub target is reached
+/// Drain `TestEvent::Player` until either the scrub target is reached
 /// (root recovery), `ItemDidFail` fires for the scrubbed src (the
 /// bug), or `budget` elapses.
 #[kithara::flash(true)]
 async fn observe_scrub_outcome(
     queue: &QueueControl<TestPools>,
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     target_src: &str,
     seek_target: f64,
     budget: Duration,
@@ -127,7 +131,7 @@ async fn observe_scrub_outcome(
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(Event::Player(PlayerEvent::ItemDidFail { item })))
+            Ok(Ok(TestEvent::Player(PlayerEvent::ItemDidFail { item })))
                 if item.track().src.as_ref() == target_src =>
             {
                 return ScrubOutcome::ItemDidFail {
@@ -154,7 +158,7 @@ async fn observe_scrub_outcome(
 /// pacing wait — the function returns the moment progress is observed.
 #[kithara::flash(true)]
 async fn wait_for_playback_progress(
-    rx: &mut EventReceiver,
+    rx: &mut EventReceiver<TestEvent>,
     baseline_secs: f64,
     budget: Duration,
 ) -> Option<f64> {
@@ -162,7 +166,7 @@ async fn wait_for_playback_progress(
     let fut = async {
         loop {
             match rx.recv().await.map(|env| env.event) {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                     let pos_secs = position_ms as f64 / 1000.0;
                     if pos_secs > baseline_secs {
                         return Some(pos_secs);
@@ -178,7 +182,7 @@ async fn wait_for_playback_progress(
 
 struct Harness {
     queue: OfflineQueue<TestPools>,
-    rx: EventReceiver,
+    rx: EventReceiver<TestEvent>,
     master_url: String,
     tick: QueueTicker,
 }
