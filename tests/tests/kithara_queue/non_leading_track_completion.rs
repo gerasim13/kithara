@@ -11,8 +11,9 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
+    events::{SlotId, TrackId, TrackStatus},
     platform::sync::Arc,
+    play::{ItemRole, PlayerEvent, TrackRef},
     queue::{QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };

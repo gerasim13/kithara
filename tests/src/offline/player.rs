@@ -1,10 +1,10 @@
 use kithara::{
     audio::AudioReader,
-    events::{EventReceiver, PlayerEvent},
+    events::EventReceiver,
     host::HostConfig,
     platform::sync::Arc,
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
         bridge::RtMetricsSnapshot, player::PlayerControl,
     },
 };

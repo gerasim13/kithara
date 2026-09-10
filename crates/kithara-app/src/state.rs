@@ -5,10 +5,7 @@ use kithara::analysis::Coverage;
 use kithara::{
     abr::{AbrHandle, AbrMode, VariantInfo},
     analysis::{AnalysisProgress, BeatSnapshot, FrameRange},
-    events::{
-        BpmInfo, DjEvent, EngineEvent, Envelope, EventReceiver, MediaTime, PlayerEvent,
-        SessionEvent, SlotId, TrackId,
-    },
+    events::{Envelope, EventReceiver, SlotId, TrackId},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -19,7 +16,10 @@ use kithara::{
             task,
         },
     },
-    play::{StretchControls, effects::eq::GainDb},
+    play::{
+        BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent, StretchControls,
+        effects::eq::GainDb,
+    },
     prelude::EngineLoadSnapshot,
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
@@ -658,13 +658,13 @@ fn variant_short_label(v: &VariantInfo) -> String {
 mod tests {
     use ::kithara::{
         analysis::{AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState},
-        events::PlayerEvent,
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
             time::{self, Duration},
             tokio::{sync::mpsc, task},
         },
+        play::PlayerEvent,
         queue::QueueEvent,
     };
     use kithara_test_utils::kithara;

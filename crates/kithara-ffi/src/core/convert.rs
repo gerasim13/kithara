@@ -1,8 +1,8 @@
 use kithara::{
     assets::AssetEvent,
     audio::{AudioEvent, DecoderEvent},
-    events::{DjEvent, EngineEvent, QueueEvent, SessionEvent},
-    play::PlayerEvent,
+    events::QueueEvent,
+    play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
     stream::DownloaderEvent,
 };
 use kithara_file::FileEvent;
@@ -589,13 +589,13 @@ mod tests {
             DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
             TrackFailureKind,
         },
-        events::{
-            DjEvent, EngineEvent, ItemRole, MediaTime, PlayerStatus, QueueEvent, QueueRepeatMode,
-            RouteChangeReason, RouteDescription, SessionEvent, SlotId, StretchBackendKind,
-            TimeControlStatus, TrackId, TrackRef, TrackStatus,
-        },
+        events::{QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackStatus},
         platform::{sync::Arc, time::Duration},
-        play::PlayerEvent,
+        play::{
+            DjEvent, EngineEvent, ItemRole, MediaTime, PlayerEvent, PlayerStatus,
+            RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
+            TimeControlStatus, TrackRef,
+        },
         signal::AudioSpec,
         stream::{AudioCodec, CancelReason, ContainerFormat, DownloaderEvent, RequestId},
     };
@@ -1498,7 +1498,7 @@ mod tests {
         assert!(matches!(
             FfiPlayerEvent::try_from(&DjEvent::BpmDetected {
                 slot: SlotId::new(7),
-                info: kithara::events::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
+                info: kithara::play::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
             }),
             Ok(FfiPlayerEvent::DjBpmDetected {
                 slot: 7,

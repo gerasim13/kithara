@@ -5,14 +5,17 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
-    events::{EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
+    events::{EventReceiver, QueueEvent, TrackId, TrackStatus},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, Instant, sleep, timeout},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
+        ResourceSrc,
+    },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };

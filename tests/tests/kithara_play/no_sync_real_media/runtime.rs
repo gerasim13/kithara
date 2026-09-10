@@ -1,11 +1,11 @@
 use kithara::{
     audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind, SeekLifecycleStage},
-    events::{BusEvent, EventReceiver, ItemEvent, PlayerEvent},
+    events::{BusEvent, EventReceiver},
     file::FileEvent,
     hls::HlsEvent,
     host::HostOwned,
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
-    play::{PlayError, PlayerImpl, Resource, SessionError},
+    play::{ItemEvent, PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
     stream::DownloaderEvent,
     warp::{StretchControls, StretchKind},
 };

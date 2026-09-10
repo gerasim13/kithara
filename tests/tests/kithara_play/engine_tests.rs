@@ -126,7 +126,7 @@ fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
 #[kithara::test]
 fn engine_subscribe_works() {
     let engine = make_engine();
-    let _rx = engine.subscribe::<kithara::events::EngineEvent>();
+    let _rx = engine.subscribe::<kithara::play::EngineEvent>();
 }
 
 #[kithara::test]

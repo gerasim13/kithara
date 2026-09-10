@@ -381,14 +381,13 @@ mod tests {
 
     use kithara::{
         events::{
-            AdvanceReason, EventBus, ItemRole, QueueEvent, QueueRepeatMode, SlotId, TrackId,
-            TrackRef, TrackStatus,
+            AdvanceReason, EventBus, QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackStatus,
         },
         platform::{
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
-        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
         queue::{QueueConfig, test_utils::QueueProbe},
     };
     use kithara_file::{FileError, FileEvent};

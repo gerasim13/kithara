@@ -152,12 +152,13 @@ mod tests {
 
     use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
     use kithara_decode::{DecodeError, TrackMetadata};
-    use kithara_events::{Envelope, PlayerEvent};
+    use kithara_events::Envelope;
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::api::PlayerEvent;
 
     struct EofReader {
         spec: AudioSpec,

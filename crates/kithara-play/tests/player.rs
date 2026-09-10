@@ -2,10 +2,11 @@ use std::num::NonZeroU32;
 
 use kithara_bufpool::testing::{TestPools, pools};
 use kithara_decode::GaplessMode;
-use kithara_events::{Envelope, PlayerEvent, PlayerStatus};
+use kithara_events::Envelope;
 use kithara_play::{
-    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
-    StretchControls, effects::eq::generate_log_spaced_bands, mock, player::PlayerControlSource,
+    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
+    SelectTransition, StretchControls, effects::eq::generate_log_spaced_bands, mock,
+    player::PlayerControlSource,
 };
 use kithara_test_utils::kithara;
 use kithara_warp::WarpConfig;

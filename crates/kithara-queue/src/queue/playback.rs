@@ -235,8 +235,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{ItemRole, PlayerEvent, QueueEvent, SlotId, TrackId, TrackRef};
+    use kithara_events::{QueueEvent, SlotId, TrackId};
     use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
     use crate::queue::{

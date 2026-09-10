@@ -4,9 +4,10 @@ use kithara::{
     audio::{AudioEvent, DecoderEvent},
     file::FileEvent,
     hls::HlsEvent,
+    play::{ItemEvent, PlayerEvent, TransportEvent},
     stream::DownloaderEvent,
 };
-use kithara_events::{BusEvent, EventSet, ItemEvent, PlayerEvent, QueueEvent, TransportEvent};
+use kithara_events::{BusEvent, EventSet, QueueEvent};
 
 /// Domains inspected by shared integration-test waits and event predicates.
 #[derive(Clone, Debug, EventSet)]

@@ -7,7 +7,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
     decode::DecoderBackend,
-    events::{EventReceiver, PlayerEvent},
+    events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -19,8 +19,8 @@ use kithara::{
         },
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
+        ResourceConfig, ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},

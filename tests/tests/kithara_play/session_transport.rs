@@ -3,9 +3,9 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    events::{EventBus, EventReceiver, TransportEvent},
+    events::{EventBus, EventReceiver},
     platform::tokio::sync::broadcast::error::TryRecvError,
-    play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo},
+    play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo, TransportEvent},
 };
 use kithara_integration_tests::{
     event::TestEvent,

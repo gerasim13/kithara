@@ -253,12 +253,14 @@ mod tests {
         Player(PlayerEvent),
     }
 
-    use kithara_events::{EngineEvent, Envelope, PlayerEvent};
+    use kithara_events::Envelope;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig, mock,
+        PlayWorker, PlayWorkerConfig,
+        api::{EngineEvent, PlayerEvent},
+        mock,
         player::PlayerConfig,
         test_pools::{TestPools, pools},
     };

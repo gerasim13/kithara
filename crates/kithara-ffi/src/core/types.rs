@@ -4,12 +4,12 @@ use kithara::{
         DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,
         PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
     },
-    events::{
-        AdvanceReason, QueueRepeatMode, RouteChangeReason, StretchBackendKind, TrackId,
-        TrackStatus as TS,
-    },
+    events::{AdvanceReason, QueueRepeatMode, TrackId, TrackStatus as TS},
     platform::{sync::Arc, time::Duration},
-    play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
+    play::{
+        ItemStatus, PlayError, PlayerStatus, RouteChangeReason, StretchBackendKind,
+        TimeControlStatus, TimeRange,
+    },
     queue::{RepeatMode, Transition},
     stream::{AudioCodec, CancelReason, ContainerFormat},
 };

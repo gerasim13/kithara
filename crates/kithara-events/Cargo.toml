@@ -10,8 +10,7 @@ keywords = ["events", "audio", "observer", "pubsub", "player"]
 categories = ["asynchronous"]
 
 [features]
-default = ["player", "queue"]
-player = []
+default = ["queue"]
 queue = []
 
 [dependencies]

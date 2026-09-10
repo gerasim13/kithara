@@ -448,7 +448,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
     constant_loud: &'static [u8],
     constant_quiet: &'static [u8],
 ) {
-    use kithara::{events::PlayerEvent, platform::tokio::sync::broadcast::error::TryRecvError};
+    use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
 
     const TRACK_SECS: f64 = 1.0;
     const CROSSFADE_SECS: f32 = 0.2;

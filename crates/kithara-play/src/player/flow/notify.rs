@@ -308,13 +308,15 @@ fn publish_notification<S>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Envelope, EventReceiver, PlayerEvent, TrackId};
+    use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig, mock,
+        PlayWorker, PlayWorkerConfig,
+        api::PlayerEvent,
+        mock,
         player::{
             PlayerConfig, PlayerImpl,
             state::{PendingNext, PendingNextState},

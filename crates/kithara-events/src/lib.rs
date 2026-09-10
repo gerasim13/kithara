@@ -14,8 +14,6 @@ mod receiver;
 mod scope;
 mod topic;
 
-#[cfg(feature = "player")]
-mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
@@ -30,13 +28,6 @@ pub use kithara_platform::tokio::{
     sync::broadcast::error::{RecvError, TryRecvError},
 };
 pub use meta::{Envelope, EventMeta, ScopeLabel};
-#[cfg(feature = "player")]
-pub use play::{
-    BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemRole, ItemStatus, MediaTime,
-    PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
-    RouteDescription, SessionEvent, StretchBackendKind, TimeControlStatus, TimeRange, TrackRef,
-    TransportEvent, WaitingReason,
-};
 #[cfg(feature = "queue")]
 pub use queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use receiver::{EventReceiver, TopicReceiver};

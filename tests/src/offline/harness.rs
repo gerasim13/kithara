@@ -2,11 +2,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     decode::GaplessMode,
-    events::{EventReceiver, PlayerEvent},
+    events::EventReceiver,
     host::{HostConfig, HostOwned},
     platform::{sync::Mutex, tokio::sync::broadcast::error::TryRecvError},
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
         effects::eq::EqBandConfig,
         player::{Player, PlayerControl, PlayerControlSource},
     },
