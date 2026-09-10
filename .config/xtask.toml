@@ -1766,7 +1766,7 @@ steps = [
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["main", "nightly"]
+kinds = ["weekly"]
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
@@ -1784,7 +1784,7 @@ steps = [
   ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["main", "nightly"]
+kinds = ["weekly"]
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
@@ -1808,7 +1808,7 @@ steps = [
   ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
-kinds = ["main", "nightly"]
+kinds = ["weekly"]
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
