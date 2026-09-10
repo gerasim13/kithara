@@ -1,11 +1,11 @@
 use kithara::{
     abr::AbrEvent,
     assets::AssetEvent,
-    audio::{AudioEvent, DecoderEvent},
     play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
     queue::QueueEvent,
     stream::DownloaderEvent,
 };
+use kithara_audio::{AudioEvent, DecoderEvent};
 use kithara_events::EventSet;
 use kithara_file::FileEvent;
 use kithara_hls::{DrmEvent, HlsEvent};

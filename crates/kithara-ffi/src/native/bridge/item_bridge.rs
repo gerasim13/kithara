@@ -1,6 +1,5 @@
 use kithara::{
     abr::{AbrEvent, AbrMode},
-    audio::AudioEvent,
     events::{Envelope, EventReceiver},
     platform::{
         CancelToken,
@@ -9,6 +8,7 @@ use kithara::{
         tokio::sync::broadcast,
     },
 };
+use kithara_audio::AudioEvent;
 
 use crate::{
     core::event_set::ItemBusEvent,

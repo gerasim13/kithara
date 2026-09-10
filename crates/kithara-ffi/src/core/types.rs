@@ -1,9 +1,5 @@
 use kithara::{
     assets::EvictReason,
-    audio::{
-        DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,
-        PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
-    },
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -12,6 +8,10 @@ use kithara::{
     },
     queue::{AdvanceReason, QueueRepeatMode, RepeatMode, TrackStatus as TS, Transition},
     stream::{AudioCodec, CancelReason, ContainerFormat},
+};
+use kithara_audio::{
+    DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, FrameDomain,
+    PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
 };
 use kithara_file::TotalBytesSource;
 use kithara_hls::{KeyFailureStage, KeySource};

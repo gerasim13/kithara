@@ -5156,6 +5156,7 @@ dependencies = [
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-audio",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
