@@ -65,9 +65,7 @@ pub(crate) fn run(
         }
         process.run_command(&mut command, &step.label)?;
     }
-    if kind == PipelineKind::Main.name()
-        && let Some(fingerprint) = target_snapshot
-    {
+    if let Some(fingerprint) = target_snapshot {
         snapshot::publish_for_lane(&process.target_dir(), &fingerprint)?;
     }
     Ok(())

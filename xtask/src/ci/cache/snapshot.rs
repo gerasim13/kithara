@@ -15,14 +15,16 @@ use tempfile::NamedTempFile;
 use tracing::info;
 
 use super::current_client_environment;
-use crate::ci::environment::CacheTrust;
 
 struct Snapshot;
 
 impl Snapshot {
     const SCHEMA: &str = "kithara-target-snapshot-v1";
     const PREFIX: &str = "target-snapshots";
-    const TRUSTED_BUCKET: &str = "kithara-trusted";
+
+    fn object(fingerprint: &str, checksum: &str) -> String {
+        format!("{}/{fingerprint}/{checksum}.tar", Self::PREFIX)
+    }
 }
 
 #[derive(Debug, Args)]
@@ -42,14 +44,14 @@ enum SnapshotCommand {
         #[arg(long, default_value = "host")]
         target: String,
     },
-    /// Restore a trusted immutable snapshot into an empty private target directory.
+    /// Restore an immutable snapshot into an empty private target directory.
     Restore {
         #[arg(long)]
         target: PathBuf,
         #[arg(long)]
         fingerprint: String,
     },
-    /// Publish an immutable target snapshot from a trusted job.
+    /// Publish an immutable target snapshot in this job's cache scope.
     Publish {
         #[arg(long)]
         target: PathBuf,
@@ -127,10 +129,6 @@ fn fingerprint(lane: &str, profile: &str, target: &str, root: &Path) -> Result<S
 }
 
 fn publish(target: &Path, fingerprint: &str) -> Result<()> {
-    ensure!(
-        CacheTrust::from_environment()? == CacheTrust::Trusted,
-        "only a trusted CI job may publish a target snapshot"
-    );
     validate_fingerprint(fingerprint)?;
     require_target(target, false)?;
     let archive = NamedTempFile::new().context("create target snapshot archive")?;
@@ -145,7 +143,7 @@ fn publish(target: &Path, fingerprint: &str) -> Result<()> {
         "archive target snapshot",
     )?;
     let checksum = sha256(archive.path())?;
-    let object = object(fingerprint, &checksum);
+    let object = Snapshot::object(fingerprint, &checksum);
     let client = Client::load()?;
     if client.exists(&object)? {
         info!(%fingerprint, %checksum, "target snapshot already exists");
@@ -211,10 +209,6 @@ fn require_target(target: &Path, may_create: bool) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn object(fingerprint: &str, checksum: &str) -> String {
-    format!("{}/{fingerprint}/{checksum}.tar", Snapshot::PREFIX)
 }
 
 fn validate_fingerprint(value: &str) -> Result<()> {
@@ -293,6 +287,10 @@ fn require_success(output: &Output, what: &str) -> Result<()> {
 }
 
 struct Client {
+    // Cargo fingerprints retain registry source paths under CARGO_HOME. The
+    // snapshot therefore has to follow the same trust-scoped bucket as that
+    // home or every restored dependency is immediately stale.
+    bucket: String,
     endpoint: String,
     environment: BTreeMap<String, String>,
 }
@@ -304,7 +302,12 @@ impl Client {
             .get("SCCACHE_ENDPOINT")
             .cloned()
             .context("cache environment has no endpoint")?;
+        let bucket = environment
+            .get("SCCACHE_BUCKET")
+            .cloned()
+            .context("cache environment has no bucket")?;
         Ok(Self {
+            bucket,
             endpoint,
             environment,
         })
@@ -342,7 +345,7 @@ impl Client {
         let mut command = self.command()?;
         let status = command
             .arg("stat")
-            .arg(Self::remote(object))
+            .arg(self.remote(object))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
@@ -353,12 +356,9 @@ impl Client {
         let mut command = self.command()?;
         let output = command
             .args(["ls", "--json"])
-            .arg(Self::remote(&format!(
-                "{}/{fingerprint}/",
-                Snapshot::PREFIX
-            )))
+            .arg(self.remote(&format!("{}/{fingerprint}/", Snapshot::PREFIX)))
             .output()?;
-        require_success(&output, "list trusted target snapshots")?;
+        require_success(&output, "list target snapshots")?;
         let mut objects = String::from_utf8(output.stdout)
             .context("snapshot storage listing is not UTF-8")?
             .lines()
@@ -385,7 +385,7 @@ impl Client {
     fn copy(&self, source: &Path, object: &str) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command.arg("cp").arg(source).arg(Self::remote(object)),
+            command.arg("cp").arg(source).arg(self.remote(object)),
             "upload target snapshot",
         )
     }
@@ -393,13 +393,13 @@ impl Client {
     fn copy_from(&self, object: &str, destination: &Path) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command.arg("cp").arg(Self::remote(object)).arg(destination),
+            command.arg("cp").arg(self.remote(object)).arg(destination),
             "download target snapshot",
         )
     }
 
-    fn remote(object: &str) -> String {
-        format!("snapshot/{}/{object}", Snapshot::TRUSTED_BUCKET)
+    fn remote(&self, object: &str) -> String {
+        format!("snapshot/{}/{object}", self.bucket)
     }
 }
 
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn target_snapshot_names_are_unambiguous_and_safe() {
         assert_eq!(
-            object(&"a".repeat(64), &"b".repeat(64)),
+            Snapshot::object(&"a".repeat(64), &"b".repeat(64)),
             format!(
                 "{}/{}/{}.tar",
                 Snapshot::PREFIX,
@@ -422,6 +422,20 @@ mod tests {
         assert!(validate_fingerprint("../trusted").is_err());
         assert!(validate_component("audio", "lane").is_ok());
         assert!(validate_component("audio/../trusted", "lane").is_err());
+    }
+
+    #[test]
+    fn target_snapshots_stay_in_the_compiler_cache_scope() {
+        let client = Client {
+            bucket: "kithara-review".to_owned(),
+            endpoint: String::new(),
+            environment: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            client.remote("target-snapshots/fingerprint/archive.tar"),
+            "snapshot/kithara-review/target-snapshots/fingerprint/archive.tar"
+        );
     }
 
     #[test]
