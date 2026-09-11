@@ -14,16 +14,25 @@ use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
 use crate::StretchControls;
 
-/// Smoothing of the player's plain playback-rate multiplier.
-pub const DEFAULT_RATE_SMOOTHING: SmootherConfig = SmootherConfig {
-    smooth_seconds: 0.02,
-    settle_epsilon: DEFAULT_SETTLE_EPSILON,
-};
+struct Defaults;
 
-const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
+impl Defaults {
+    const ACTIVATION_BLEND_FRAMES: NonZeroUsize = match NonZeroUsize::new(40) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+    const RATE_SMOOTHING: SmootherConfig = SmootherConfig {
+        smooth_seconds: 0.02,
+        settle_epsilon: DEFAULT_SETTLE_EPSILON,
+    };
+    const SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+}
+
+/// Smoothing of the player's plain playback-rate multiplier.
+pub const DEFAULT_RATE_SMOOTHING: SmootherConfig = Defaults::RATE_SMOOTHING;
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -33,6 +42,10 @@ const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) 
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct WarpConfig {
+    /// Output frames blended when a new region plan activates.
+    #[builder(default = Defaults::ACTIVATION_BLEND_FRAMES)]
+    #[field(get, copy)]
+    activation_blend_frames: NonZeroUsize,
     /// Live temporal controls consumed by the resident Warp lane. Not a
     /// document key: this is the handle the UI and the deck already share, so
     /// a document naming a stretch ratio would be overwritten by the first
@@ -56,7 +69,7 @@ pub struct WarpConfig {
     #[patch(nested)]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
-    #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
+    #[builder(default = Defaults::SOURCE_BLOCK_FRAMES)]
     #[field(get, copy)]
     source_block_frames: NonZeroUsize,
     /// Plain multiplier smoothing in the player's RT render pass.
@@ -94,6 +107,21 @@ mod tests {
             config.render_quantum_frames().map(NonZeroUsize::get),
             expected
         );
+    }
+
+    #[kithara::test]
+    fn activation_blend_is_configurable_in_output_frames() {
+        let configured = NonZeroUsize::new(64).expect("fixture blend is non-zero");
+        let default = WarpConfig::builder().build();
+        let custom = WarpConfig::builder()
+            .activation_blend_frames(configured)
+            .build();
+
+        assert_eq!(
+            default.activation_blend_frames(),
+            Defaults::ACTIVATION_BLEND_FRAMES
+        );
+        assert_eq!(custom.activation_blend_frames(), configured);
     }
 
     /// Backend geometry merges one engine at a time: a patch naming only

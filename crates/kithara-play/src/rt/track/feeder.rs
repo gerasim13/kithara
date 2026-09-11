@@ -23,6 +23,7 @@ pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
     last_source_end: Option<SourceEnd>,
+    last_warp_map_revision: u64,
     source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,
     channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
@@ -132,6 +133,7 @@ impl PlayerResource {
             write_len: 0,
             write_pos: 0,
             last_source_end: None,
+            last_warp_map_revision: 0,
             eof_seen: false,
             failed: false,
         })
@@ -175,9 +177,13 @@ impl PlayerResource {
                         source_end = source.end()
                     );
                     self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
+                    self.last_warp_map_revision =
+                        kithara_signal::render_warp_map_revision(source.render_revision());
                 }
                 (None, Some(source)) => {
                     self.last_source_end = Some(SourceEnd::new(source.end(), source.sample_rate()));
+                    self.last_warp_map_revision =
+                        kithara_signal::render_warp_map_revision(source.render_revision());
                 }
                 (_, None) => {}
             }
@@ -283,11 +289,14 @@ impl PlayerResource {
             .min(self.channel_buffers[0].len())
     }
 
-    pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
+    pub(crate) fn presentation_source_end(
+        &self,
+        sample_rate: NonZeroU32,
+    ) -> Option<(SourceEnd, u64)> {
         let source_end = self.last_source_end?;
         (source_end.sample_rate() == sample_rate
             && source_end.sample_rate() == self.resource.get().spec().sample_rate)
-            .then_some(source_end)
+            .then_some((source_end, self.last_warp_map_revision))
     }
 
     /// Read audio frames into the output buffers for the given range.
@@ -470,9 +479,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn partial_scratch_consumption_preserves_the_render_revision() {
+    fn partial_scratch_consumption_preserves_render_provenance() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
-        let source = SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(7));
+        let revision = kithara_signal::pack_render_revision(7, 11)
+            .expect("fixture revisions fit the provenance word");
+        let source =
+            SourceSpan::new(100, 130, rate).map(|span| span.with_render_revision(revision));
         let mut span = SourceWindow {
             source,
             frames: 10,
@@ -482,7 +494,7 @@ mod tests {
         assert_eq!(
             span.take(4),
             (
-                SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(7)),
+                SourceSpan::new(100, 112, rate).map(|span| span.with_render_revision(revision)),
                 12
             )
         );
@@ -490,7 +502,7 @@ mod tests {
         assert_eq!(
             span.take(6),
             (
-                SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(7)),
+                SourceSpan::new(112, 130, rate).map(|span| span.with_render_revision(revision)),
                 18
             )
         );

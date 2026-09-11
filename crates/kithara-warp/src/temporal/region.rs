@@ -1,6 +1,8 @@
 use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
 
+use crate::WarpCursor;
+
 /// One uniform-tempo region of the grid: `[start_frame, end_frame)` in
 /// source frames with one asset tempo.
 #[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
@@ -31,6 +33,9 @@ impl GridSegment {
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct RegionPlan {
+    /// Exact source/output relation prepared for this plan.
+    #[field(with, option_set_some)]
+    activation: Option<WarpCursor>,
     /// Segments sorted by `start_frame`, non-overlapping.
     segments: Vec<GridSegment>,
 }
@@ -73,7 +78,10 @@ impl RegionPlan {
                 return Err(RegionPlanError::Overlap { index });
             }
         }
-        Ok(Self { segments })
+        Ok(Self {
+            activation: None,
+            segments,
+        })
     }
 
     /// Resolve the region covering `frame`: a plan segment, or the gap
@@ -161,6 +169,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{GridSegment, RegionPlan, RegionPlanError};
+    use crate::{SessionFrame, WarpMap, WarpMapRevision};
 
     fn seg(start: u64, end: u64, ratio: f64) -> GridSegment {
         GridSegment::new(start, end, ratio)
@@ -199,5 +208,16 @@ mod tests {
             assert_eq!(region.beats_per_second(), correction);
             assert!(region.contains(frame));
         }
+    }
+
+    #[kithara::test]
+    fn activation_carries_the_exact_source_output_relation() {
+        let activation =
+            WarpMap::identity(WarpMapRevision::first()).reanchor(24_000, SessionFrame::new(48_000));
+        let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
+            .expect("fixture plan")
+            .with_activation(activation);
+
+        assert_eq!(plan.activation(), Some(&activation));
     }
 }

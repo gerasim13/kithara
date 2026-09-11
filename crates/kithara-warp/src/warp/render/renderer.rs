@@ -12,7 +12,7 @@ use num_traits::cast::AsPrimitive;
 use super::renderer_target::PreparedTarget;
 use crate::{
     ActiveRegion, RegionPlan, RegionPlanSlot, RenderContext, RenderReader, RenderSnapshot,
-    StretchControls, SyncMode, WarpConfig, temporal::RateTarget,
+    StretchControls, SyncMode, WarpConfig, WarpMapRevision, temporal::RateTarget,
 };
 
 #[cfg(test)]
@@ -21,6 +21,7 @@ mod tests;
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
     pub(super) activation: Option<PreparedActivation>,
+    pub(super) warp_map: Option<WarpMapRevision>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
     pub(super) active_frames: usize,
@@ -115,6 +116,8 @@ pub struct WarpRenderer<S> {
     pub(super) primed_source_debt: u64,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
+    /// Latest warp map whose exact source/output anchor was rendered.
+    pub(super) applied_warp_map: Option<WarpMapRevision>,
 }
 
 impl<S> WarpRenderer<S>
@@ -173,6 +176,7 @@ where
             pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
+            applied_warp_map: None,
             primed_source_debt: 0,
             reset_pending: false,
             rebuild_pending: false,
@@ -234,6 +238,7 @@ where
         self.prepared_quantum = None;
         self.prepared_context = None;
         self.rendered_source_end = None;
+        self.applied_warp_map = None;
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
@@ -423,6 +428,30 @@ where
             self.rate_context = Some(context.clone());
         }
         snapshot
+    }
+
+    pub(super) fn map_at_exact_frontier(
+        &self,
+        snapshot: Option<&RenderSnapshot>,
+        source: u64,
+    ) -> Option<WarpMapRevision> {
+        let activation = self.plan.as_ref()?.activation()?;
+        if self.applied_warp_map == Some(activation.revision()) || source != activation.source() {
+            return None;
+        }
+        let snapshot = snapshot?;
+        let output = self
+            .committed
+            .as_ref()
+            .filter(|committed| {
+                committed.context().session_epoch() == snapshot.context().session_epoch()
+            })
+            .map_or_else(
+                || snapshot.frontier().output(),
+                |committed| committed.frontier().output(),
+            )
+            .max(snapshot.frontier().output());
+        (output == activation.output()).then_some(activation.revision())
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.

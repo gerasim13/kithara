@@ -1,6 +1,7 @@
 use kithara_warp::{
-    AssetFrame, Beat, BeatAlignment, BeatGridQuery, BeatGridSnapshot, BeatGridState, MapPoint,
-    MapPosition, MapRegion, PresentationFrontier, SessionFrame, SyncOperationId, WarpMapRevision,
+    AssetFrame, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridState,
+    MapPoint, MapPosition, MapRegion, PresentationFrontier, SessionFrame, SyncOperationId,
+    WarpMapRevision,
 };
 use num_traits::ToPrimitive;
 
@@ -11,6 +12,8 @@ pub(crate) struct PreparedSync {
     pub(crate) operation: SyncOperationId,
     pub(crate) warp_map: WarpMapRevision,
     pub(crate) activation: SessionFrame,
+    pub(crate) source: u64,
+    pub(crate) target: BeatGridId,
 }
 
 /// The beat alignment of one grid member onto its owner's grid and the
@@ -19,6 +22,7 @@ pub(crate) struct PreparedSync {
 pub(super) struct MemberAlignment {
     pub(super) alignment: BeatAlignment,
     pub(super) activation: SessionFrame,
+    pub(super) source: u64,
 }
 
 /// Aligns the member's beat under the frontier's source frame onto the next
@@ -64,9 +68,22 @@ pub(super) fn align_member(
     let MapPosition::Session(activation) = *position.value().value() else {
         return Err(MapRegion::point(output));
     };
+    let BeatGridQuery::Resolved(position) =
+        member.position_at(MapPoint::new(member.stamp(), member_beat))
+    else {
+        return Err(MapRegion::point(source));
+    };
+    let MapPosition::Asset(source_frame) = *position.value().value() else {
+        return Err(MapRegion::point(source));
+    };
+    let source = f64::from(source_frame)
+        .round()
+        .to_u64()
+        .ok_or_else(|| MapRegion::point(source))?;
     Ok(MemberAlignment {
         alignment: BeatAlignment::new(MapPoint::new(member.stamp(), member_beat), target),
         activation,
+        source,
     })
 }
 

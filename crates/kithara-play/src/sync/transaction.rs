@@ -290,6 +290,8 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         operation: operation_id,
         warp_map,
         activation: aligned.activation,
+        source: aligned.source,
+        target: *target,
     });
     Ok(SyncAdmission::Prepared {
         operation: operation_id,

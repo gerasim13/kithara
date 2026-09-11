@@ -388,9 +388,13 @@ impl PlayerTrack {
             self.handle_failed_end(sink.notifications);
             return TrackReadOutcome::Failed;
         };
-        if let Some(source) = self.resource.presentation_source_end(context.sample_rate()) {
-            self.resource
-                .publish_render(&context, presentation_frontier(&context, source.frame()));
+        if let Some((source, warp_map_revision)) =
+            self.resource.presentation_source_end(context.sample_rate())
+        {
+            self.resource.publish_render(
+                &context,
+                presentation_frontier(&context, source.frame(), warp_map_revision),
+            );
         } else {
             self.resource.clear_render();
         }
@@ -428,10 +432,18 @@ impl PlayerTrack {
     }
 }
 
-fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
+fn presentation_frontier(
+    context: &RenderContext,
+    source: u64,
+    warp_map_revision: u64,
+) -> PresentationFrontier {
     PresentationFrontier::builder()
         .source(source)
         .output(context.output_frames().start)
+        .maybe_warp_map(
+            std::num::NonZeroU64::new(warp_map_revision)
+                .map(kithara_warp::WarpMapRevision::from_raw),
+        )
         .build()
 }
 
@@ -457,7 +469,7 @@ mod tests {
         .for_output_range(40..80)
         .expect("fixture subrange is valid");
 
-        let frontier = presentation_frontier(&context, 8_000);
+        let frontier = presentation_frontier(&context, 8_000, 0);
 
         assert_eq!(frontier.source(), 8_000);
         assert_eq!(frontier.output(), SessionFrame::new(1_040));

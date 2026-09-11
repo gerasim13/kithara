@@ -2,7 +2,7 @@ use kithara_platform::sync::Arc;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, ReconcileCause,
     SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember, SyncOperation,
-    SyncStatusSnapshot, TopologyOperation,
+    SyncStatusSnapshot, TopologyOperation, WarpMap,
 };
 use tracing::warn;
 
@@ -85,23 +85,46 @@ where
                 segments,
             },
         );
-        let sync = &self.sync;
-        #[cfg(target_arch = "wasm32")]
-        let sync = sync.owned()?;
         self.replan_track(item);
-        let (load, transport) = sync.generations();
+        let (load, transport) = {
+            let sync = &self.sync;
+            #[cfg(target_arch = "wasm32")]
+            let sync = sync.owned()?;
+            sync.generations()
+        };
         let frontier = self.runtime.presentation_frontier();
-        self.transact_sync(SyncOperation::Reconcile {
+        let admission = self.transact_sync(SyncOperation::Reconcile {
             target: id,
             load,
             transport,
             cause,
             frontier,
-        })
+        })?;
+        let prepared = {
+            let sync = &self.sync;
+            #[cfg(target_arch = "wasm32")]
+            let sync = sync.owned()?;
+            sync.prepared()
+        };
+        if let Some(prepared) = prepared.filter(|prepared| prepared.target == id)
+            && let Some(grid) = self.runtime.core.items.track_grid(item)
+        {
+            let plan = grid
+                .segments
+                .region_plan()
+                .inspect_err(|error| warn!(%error, %item, "track grid has no region plan"))
+                .ok()
+                .map(|plan| {
+                    let activation = WarpMap::identity(prepared.warp_map)
+                        .reanchor(prepared.source, prepared.activation);
+                    Arc::new(plan.with_activation(activation))
+                });
+            self.runtime.core.items.set_track_plan(item, plan);
+        }
+        Ok(admission)
     }
 
-    /// Acknowledges the prepared warp map once the deck's presentation
-    /// frontier has reached its activation frame.
+    /// Acknowledges the prepared warp map once matching PCM reaches presentation.
     ///
     /// # Errors
     ///
@@ -114,7 +137,7 @@ where
             return Ok(None);
         };
         let frontier = self.runtime.presentation_frontier();
-        if frontier.output() < prepared.activation {
+        if !prepared_is_presented(frontier, prepared.activation, prepared.warp_map) {
             return Ok(None);
         }
         let (load, transport) = sync.generations();
@@ -154,5 +177,39 @@ where
             let (error, _): (SyncError, SyncOperation<PlayerMember>) = rejected.into();
             error
         })
+    }
+}
+
+fn prepared_is_presented(
+    frontier: kithara_warp::PresentationFrontier,
+    activation: kithara_warp::SessionFrame,
+    warp_map: kithara_warp::WarpMapRevision,
+) -> bool {
+    frontier.output() >= activation && frontier.warp_map() == Some(warp_map)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_warp::{PresentationFrontier, SessionFrame, WarpMapRevision};
+
+    use super::prepared_is_presented;
+
+    #[kithara::test]
+    fn buffered_pcm_from_the_previous_map_cannot_acknowledge_a_prepared_map() {
+        let activation = SessionFrame::new(24_000);
+        let revision = WarpMapRevision::first();
+        let old_pcm = PresentationFrontier::builder()
+            .source(24_000)
+            .output(activation)
+            .build();
+        let applied_pcm = PresentationFrontier::builder()
+            .source(24_000)
+            .output(activation)
+            .warp_map(revision)
+            .build();
+
+        assert!(!prepared_is_presented(old_pcm, activation, revision));
+        assert!(prepared_is_presented(applied_pcm, activation, revision));
     }
 }

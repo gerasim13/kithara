@@ -482,7 +482,8 @@ mod tests {
             Duration::from_millis(3),
         );
         first.meta.frame_offset = 100;
-        first.meta.render_revision = 7;
+        first.meta.render_revision = kithara_signal::pack_render_revision(7, 9)
+            .expect("fixture revisions fit the provenance word");
         let mut second = timed_chunk(
             &pools,
             &cursor_half,
@@ -492,7 +493,8 @@ mod tests {
             Duration::from_millis(5),
         );
         second.meta.frame_offset = 1_000;
-        second.meta.render_revision = 7;
+        second.meta.render_revision = kithara_signal::pack_render_revision(7, 9)
+            .expect("fixture revisions fit the provenance word");
         let mut changed = timed_chunk(
             &pools,
             &cursor_half,
@@ -502,7 +504,8 @@ mod tests {
             Duration::from_millis(7),
         );
         changed.meta.frame_offset = 2_000;
-        changed.meta.render_revision = 8;
+        changed.meta.render_revision = kithara_signal::pack_render_revision(8, 9)
+            .expect("fixture revisions fit the provenance word");
         data_tx
             .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
             .expect("first rendered chunk reaches ring");
@@ -543,7 +546,12 @@ mod tests {
         assert_eq!(count.get(), 5);
         assert_eq!(
             source_span,
-            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(7))
+            SourceSpan::new(100, 110, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(7, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
 
         let second_read = cursor
@@ -564,7 +572,12 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(110, 112, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(8, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
 
         let final_read = cursor
@@ -585,7 +598,12 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(8))
+            SourceSpan::new(112, 114, rate).map(|span| {
+                span.with_render_revision(
+                    kithara_signal::pack_render_revision(8, 9)
+                        .expect("fixture revisions fit the provenance word"),
+                )
+            })
         );
     }
 

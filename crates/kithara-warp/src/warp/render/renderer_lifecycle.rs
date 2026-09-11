@@ -364,7 +364,12 @@ where
         self.prepared_context = None;
         let rate = self.rate;
         let speed = rate.speed();
-        chunk.meta.render_revision = rate.revision();
+        let rate_revision = rate.revision();
+        chunk.meta.render_revision = kithara_signal::pack_render_revision(
+            rate_revision,
+            self.applied_warp_map.map_or(0, u64::from),
+        )
+        .unwrap_or(rate_revision);
         self.render_at(chunk, speed, snapshot, None)
     }
 
@@ -414,7 +419,7 @@ where
             self.commit_rate_render(
                 snapshot,
                 output.frames(),
-                output.meta.render_revision,
+                kithara_signal::render_rate_revision(output.meta.render_revision),
                 speed,
             );
         }
@@ -428,8 +433,21 @@ where
             return None;
         }
         let snapshot = self.prepared_context.take();
-        chunk.meta.render_revision = prepared.rate.revision();
-        self.render_at(chunk, prepared.speed, snapshot, Some(prepared))
+        let rate_revision = prepared.rate.revision();
+        chunk.meta.render_revision = kithara_signal::pack_render_revision(
+            rate_revision,
+            self.applied_warp_map.map_or(0, u64::from),
+        )
+        .unwrap_or(rate_revision);
+        let revision = prepared.warp_map;
+        let mut output = self.render_at(chunk, prepared.speed, snapshot, Some(prepared))?;
+        if let Some(revision) = revision {
+            self.applied_warp_map = Some(revision);
+            output.meta.render_revision =
+                kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
+                    .unwrap_or(rate_revision);
+        }
+        Some(output)
     }
 
     /// Discard renderer state after a source discontinuity.
@@ -437,5 +455,6 @@ where
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
+        self.applied_warp_map = None;
     }
 }

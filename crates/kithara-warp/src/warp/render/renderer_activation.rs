@@ -189,6 +189,8 @@ where
             self.clear_pending_source();
         }
         self.prepared_context = self.select_context(meta.frame_offset);
+        let warp_map =
+            self.map_at_exact_frontier(self.prepared_context.as_ref(), meta.frame_offset);
         let rate = self.rate;
         let speed = rate.speed();
         let result = self
@@ -212,6 +214,7 @@ where
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
                     activation,
+                    warp_map,
                     rate,
                     speed,
                     active_frames,

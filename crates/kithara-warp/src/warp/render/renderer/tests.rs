@@ -8,8 +8,9 @@ use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    PresentationFrontier, RateTarget, RegionPlanSlot, RenderContext, RenderPublisher, SessionBeat,
-    SessionEpoch, SessionFrame, SyncMode, TransportRevision, Warp, WarpConfig,
+    GridSegment, PresentationFrontier, RateTarget, RegionPlan, RegionPlanSlot, RenderContext,
+    RenderPublisher, SessionBeat, SessionEpoch, SessionFrame, SyncMode, TransportRevision, Warp,
+    WarpConfig, WarpMap, WarpMapRevision,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -178,6 +179,32 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     assert_eq!(snapshot.context(), &context);
     assert_eq!(snapshot.frontier().source(), 42);
     assert_eq!(snapshot.frontier().output(), SessionFrame::new(1_001));
+}
+
+#[kithara::test]
+fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
+    let controls = StretchControls::new(1.0);
+    let (mut renderer, slot) = planned_renderer(controls);
+    let revision = WarpMapRevision::first();
+    let plan = RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)])
+        .expect("fixture plan")
+        .with_activation(WarpMap::identity(revision).reanchor(0, SessionFrame::new(0)));
+    slot.install(Some(Arc::new(plan)));
+    let pools = renderer.pools.clone();
+    let input = chunk(&pools, &[0.0; 256]);
+
+    let frames = renderer
+        .prepare_quantum(input.meta, input.frames())
+        .expect("exact anchor is plannable");
+    assert_eq!(frames.get(), input.frames());
+    let output = renderer
+        .render_quantum(input)
+        .expect("exact anchor renders PCM");
+
+    assert_eq!(
+        kithara_signal::render_warp_map_revision(output.meta.render_revision),
+        u64::from(revision)
+    );
 }
 
 fn publish_rate(publisher: &RenderPublisher, rate: RateTarget, source: u64) {

@@ -536,6 +536,15 @@ fn reconcile(
     target: BeatGridId,
     cause: ReconcileCause,
 ) -> SyncAdmission {
+    reconcile_at(group, target, cause, frontier_at_zero())
+}
+
+fn reconcile_at(
+    group: &mut GroupState<PlayerMember>,
+    target: BeatGridId,
+    cause: ReconcileCause,
+    frontier: PresentationFrontier,
+) -> SyncAdmission {
     let (load, transport) = group.generations();
     group
         .transact(SyncOperation::Reconcile {
@@ -543,9 +552,27 @@ fn reconcile(
             load,
             transport,
             cause,
-            frontier: frontier_at_zero(),
+            frontier,
         })
         .expect("reconcile is admitted")
+}
+
+#[kithara::test]
+fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let frontier = PresentationFrontier::builder()
+        .source(10_000)
+        .output(SessionFrame::new(5_000))
+        .build();
+
+    let admission = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+    assert_eq!(prepared.source, 24_000);
+    assert_eq!(prepared.activation, SessionFrame::new(24_000));
 }
 
 #[kithara::test]
@@ -598,6 +625,10 @@ fn a_complete_grid_is_prepared_on_the_next_deck_beat_and_locks_on_acknowledge() 
         SessionFrame::new(0),
         "a frontier on beat 0 activates on beat 0"
     );
+    let prepared = group.prepared().expect("prepared relation");
+    assert_eq!(prepared.source, 0);
+    assert_eq!(prepared.target, track);
+    assert_eq!(prepared.warp_map, warp_map);
     assert!(
         matches!(group.status(), SyncStatusSnapshot::Prepared { .. }),
         "{:?}",
