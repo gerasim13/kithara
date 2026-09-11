@@ -1,4 +1,4 @@
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "probe-capture"))]
 use std::collections::HashMap;
 use std::{
     ops::Deref,
@@ -28,7 +28,7 @@ use crate::{
 /// Test-only respawn resource cache. Aliased so the field declaration
 /// stays free of the structural `Arc<Mutex<HashMap<…>>>` god-map
 /// pattern (see `arch.no-arc-mutex-godmap`).
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "probe-capture"))]
 pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 
 /// AVQueuePlayer-analogue orchestration facade.
@@ -70,13 +70,13 @@ where
     /// production register/insert paths do not arm autoplay yet (see
     /// `register_for_test` / `complete_load_for_test`). Gated with the
     /// same `cfg` so the field carries no cost outside tests.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(super) should_autoplay: bool,
     /// First registered track id awaiting autoplay-on-load. Set when
     /// `autoplay = true` and the queue has no active selection;
     /// consumed when the matching id finishes loading.
     /// [`CrossfadeArm::Disarmed`] = no pending target.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(super) autoplay_target: AtomicTrackId,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
@@ -94,7 +94,7 @@ where
     /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
     /// re-selected. Lets harness tests exercise the respawn path
     /// without a real loader.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(super) test_resources: Arc<Mutex<TestResources>>,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
@@ -183,9 +183,9 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture"))]
             should_autoplay,
-            #[cfg(not(any(test, feature = "probe")))]
+            #[cfg(not(any(test, feature = "probe-capture")))]
                 should_autoplay: _,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
@@ -212,18 +212,18 @@ where
             loader,
             tracks,
             bus,
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture"))]
             should_autoplay,
             admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture"))]
             autoplay_target: AtomicTrackId::disarmed(),
             cached_position: AtomicCachedPosition::unknown(),
         });

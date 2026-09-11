@@ -4,7 +4,7 @@ mod dispatch;
 mod graph;
 pub(crate) mod protocol;
 pub(crate) mod state;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "probe-capture"))]
 pub mod testing;
 mod transport;
 

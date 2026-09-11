@@ -77,7 +77,7 @@ bench = false
 [dependencies]
 kithara = { workspace = true, features = [
     "full",
-    "probe",
+    "probe-capture",
     "test-utils",
     "symphonia",
     "backend-cpal",

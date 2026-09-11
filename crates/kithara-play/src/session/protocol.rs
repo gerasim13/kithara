@@ -109,7 +109,7 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(any(test, feature = "probe-capture"))]
         SetPlayerMasterVolumes {
             levels: Vec<PlayerLevel>,
         },
@@ -237,7 +237,7 @@ mod handle {
     };
     use kithara_warp::BeatGridId;
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     use super::wire::PlayerLevel;
     use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError, rt::StreamShape};
@@ -463,7 +463,7 @@ mod handle {
             .map(|_| ())
         }
 
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(any(test, feature = "probe-capture"))]
         pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
             if levels.is_empty() {
                 return Ok(());

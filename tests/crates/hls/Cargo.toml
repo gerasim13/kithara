@@ -20,10 +20,10 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
+kithara = { workspace = true, features = ["full", "queue", "probe-capture", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 
 bytes = { workspace = true }
 hex = { workspace = true }

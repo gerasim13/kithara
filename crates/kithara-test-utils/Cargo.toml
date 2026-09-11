@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "kithara test runtime: probe/hang/mock helpers (no-op in release)."
-keywords = ["audio", "testing", "kithara", "probe"]
+keywords = ["audio", "testing", "kithara", "probe-capture"]
 categories = ["development-tools::testing"]
 
 [features]
@@ -14,7 +14,8 @@ flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
-probe = ["dep:backtrace", "dep:usdt", "tracing-subscriber/env-filter"]
+probe-capture = ["dep:backtrace", "tracing-subscriber/env-filter"]
+usdt = ["dep:usdt"]
 # HTTP backend forwarding.
 client-reqwest = []
 client-wreq = []

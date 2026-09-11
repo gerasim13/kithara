@@ -25,13 +25,13 @@ kithara = { workspace = true, features = [
     "mock",
     "net",
     "platform",
-    "probe",
+    "probe-capture",
     "stream",
     "tokio-net",
 ] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }

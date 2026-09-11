@@ -23,13 +23,13 @@ no-block = ["kithara/no-block"]
 kithara = { workspace = true, default-features = false, features = [
     "assets",
     "platform",
-    "probe",
+    "probe-capture",
     "storage",
     "tokio-net",
 ] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 
 [lints]
 workspace = true

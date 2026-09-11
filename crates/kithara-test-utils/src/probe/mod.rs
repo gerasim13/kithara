@@ -1,12 +1,12 @@
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "probe")))]
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "probe-capture")))]
 pub mod capture;
 
-#[cfg(not(feature = "probe"))]
+#[cfg(not(any(test, feature = "probe-capture", feature = "usdt")))]
 mod noop;
-#[cfg(feature = "probe")]
+#[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
 mod real;
 
-#[cfg(not(feature = "probe"))]
+#[cfg(not(any(test, feature = "probe-capture", feature = "usdt")))]
 pub use noop::*;
-#[cfg(feature = "probe")]
+#[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
 pub use real::*;

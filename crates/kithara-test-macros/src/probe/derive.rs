@@ -124,18 +124,24 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             fn record_probe(&self, name: &'static str) {
                 let _ = name;
                 #(#field_consume)*
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
                 {
-                    let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
-                    ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
-                    ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
-                    ::tracing::event!(
-                        target: #target,
-                        ::tracing::Level::TRACE,
-                        probe = name,
-                        #(#tracing_pairs),*
-                    );
+                    #[cfg(feature = "usdt")]
+                    {
+                        ::kithara_test_utils::probe::register_probes();
+                        ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
+                    }
+                    #[cfg(any(test, feature = "probe-capture"))]
+                    {
+                        let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
+                        ::tracing::event!(
+                            target: #target,
+                            ::tracing::Level::TRACE,
+                            probe = name,
+                            #(#tracing_pairs),*
+                        );
+                    }
                 }
             }
         }

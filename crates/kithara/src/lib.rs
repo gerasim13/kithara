@@ -174,7 +174,7 @@ pub mod storage {
 
 #[cfg(feature = "test-utils")]
 pub use kithara_test_utils::{kithara::mock, no_block};
-#[cfg(feature = "probe")]
+#[cfg(feature = "probe-capture")]
 pub use kithara_test_utils::{
     kithara::{fixture, test},
     kithara_facade::{allow_block, flash, no_block},

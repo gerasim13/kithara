@@ -93,7 +93,7 @@ fn wire_fields(
         .zip(&arg_slots)
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
             }
@@ -104,7 +104,7 @@ fn wire_fields(
         .zip(&computed_slots)
         .map(|((_, expression), slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expression);
             }
@@ -174,10 +174,8 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let body = if probe_return {
         quote! {
             let __probe_ret = (|| #block)();
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture", feature = "usdt"))]
             {
-                let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
-                ::kithara_test_utils::probe::register_probes();
                 ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
             }
             __probe_ret
@@ -217,7 +215,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let track_caller_attr = if probe_return {
         quote! {}
     } else {
-        quote! { #[cfg_attr(any(test, feature = "probe"), track_caller)] }
+        quote! { #[cfg_attr(any(test, feature = "probe-capture"), track_caller)] }
     };
 
     Ok(quote! {
@@ -284,10 +282,14 @@ fn build_emit_entry_event(
         return quote! {};
     }
     quote! {
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(feature = "usdt")]
+        {
+            ::kithara_test_utils::probe::register_probes();
+            ::kithara_test_utils::probe::#fire_fn(#fn_name_str, #(#probe_idents),*);
+        }
+        #[cfg(any(test, feature = "probe-capture"))]
         {
             let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
-            ::kithara_test_utils::probe::register_probes();
             let __probe_caller = ::core::panic::Location::caller();
             let __probe_seq: u64 = ::kithara_test_utils::probe::next_probe_seq();
             let __probe_thread_seq: u64 =
@@ -297,7 +299,6 @@ fn build_emit_entry_event(
             let __probe_install_id: u64 =
                 ::kithara_test_utils::probe::current_install_id();
             #capture_caller_fn
-            ::kithara_test_utils::probe::#fire_fn(#fn_name_str, #(#probe_idents),*);
             ::tracing::event!(
                 target: #target,
                 ::tracing::Level::TRACE,
@@ -339,6 +340,27 @@ mod tests {
             expanded.block.stmts.last(),
             Some(Stmt::Expr(Expr::MethodCall(call), None)) if call.method == "total_bytes"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn usdt_and_test_capture_have_separate_emit_blocks() -> syn::Result<()> {
+        let input: ItemFn = parse_quote! {
+            fn advance(frames: u64) {
+                let _ = frames;
+            }
+        };
+        let filter = ProbeFilter {
+            args: Some(vec![parse_quote!(frames)]),
+            ..ProbeFilter::default()
+        };
+
+        let expanded = expand(&input, filter)?.to_string();
+
+        assert!(expanded.contains("cfg (feature = \"usdt\")"));
+        assert!(expanded.contains("cfg (any (test , feature = \"probe-capture\"))"));
+        assert_eq!(expanded.matches("register_probes").count(), 1);
+        assert_eq!(expanded.matches("rtsan :: permit").count(), 1);
         Ok(())
     }
 }

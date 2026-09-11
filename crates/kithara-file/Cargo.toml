@@ -23,11 +23,12 @@ client-wreq = ["kithara-net/client-wreq", "kithara-stream/client-wreq", "kithara
 tls-rustls = ["kithara-net/tls-rustls", "kithara-stream/tls-rustls", "kithara-abr/tls-rustls"]
 tls-native = ["kithara-net/tls-native", "kithara-stream/tls-native", "kithara-abr/tls-native"]
 # No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
+# (which emit `cfg(any(test, feature = "probe-capture"))`) don't trigger
 # `unexpected_cfgs` warnings on this crate. No production code is
 # gated by this feature; the probe arg is observed via USDT in test
 # builds only.
-probe = []
+probe-capture = []
+usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -61,7 +62,7 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe-capture", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

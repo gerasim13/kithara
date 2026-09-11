@@ -108,9 +108,8 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 /// Register all USDT probes embedded in the binary with the host
 /// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
 /// from multiple init paths — guarded by an internal `OnceLock`. On
-/// wasm32, Android, under Miri, and in production builds (`feature = "probe"`
-/// disabled), this is a no-op stub - the optional `usdt` crate is not pulled
-/// in.
+/// wasm32, Android, under Miri, and builds without the `usdt` feature, this is
+/// a no-op stub - the optional `usdt` crate is not pulled in.
 pub fn register_probes() {
     imp::register();
 }
@@ -128,7 +127,7 @@ pub fn register_probes() {
 /// every event so tests can assert on call-site identity by symbol
 /// name (`assert_eq!(evt.caller_fn(), Some("…::format_change_segment_range"))`)
 /// rather than by fragile `file.rs:line` strings.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "probe-capture"))]
 #[must_use]
 pub fn caller_fn_above(probe_fn_name: &str) -> Option<String> {
     let mut found_self = false;
@@ -169,7 +168,7 @@ pub fn caller_fn_above(probe_fn_name: &str) -> Option<String> {
     result
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", not(feature = "probe-capture")))]
 pub fn caller_fn_above(_probe_fn_name: &str) -> Option<String> {
     None
 }
@@ -295,7 +294,7 @@ pub fn current_thread_u64() -> u64 {
     not(target_arch = "wasm32"),
     not(target_os = "android"),
     not(miri),
-    feature = "probe"
+    feature = "usdt"
 ))]
 mod imp {
     use std::sync::OnceLock;
@@ -313,7 +312,7 @@ mod imp {
     target_arch = "wasm32",
     target_os = "android",
     miri,
-    not(feature = "probe")
+    not(feature = "usdt")
 ))]
 mod imp {
     pub(super) fn register() {}

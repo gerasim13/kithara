@@ -61,7 +61,7 @@ audio = [
     "kithara/net",
     "kithara/platform",
     "kithara/play",
-    "kithara/probe",
+    "kithara/probe-capture",
     "kithara/record",
     "kithara/resample-rubato",
     "kithara/resampler",
@@ -82,7 +82,7 @@ wasm = [
     "dep:kithara",
     "kithara/full",
     "kithara/queue",
-    "kithara/probe",
+    "kithara/probe-capture",
     "kithara/mock",
     "kithara/test-utils",
     "kithara/symphonia",
@@ -118,7 +118,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe-capture", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }

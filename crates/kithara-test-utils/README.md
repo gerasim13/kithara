@@ -38,8 +38,8 @@ trait Service {
 }
 ```
 
-Probe sites compile to no-ops unless the emitting crate's `probe` feature is
-enabled in the test build. The capture helper records every probe
+Probe sites emit USDT only when the emitting crate's `usdt` feature is enabled.
+The separate `probe-capture` test feature records every probe
 `tracing::event!` into a process-wide recorder so a test can snapshot and assert
 on the full sequence. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-utils) for the tracing-layer
 rationale, the process-wide subscriber contract, and the `#[serial]`
@@ -51,11 +51,11 @@ requirement.
 
 <tr><th>Module</th><th>Feature</th><th>Role</th></tr>
 
-<tr><td><code>test</code></td><td><code>cfg(any(test, feature = "probe"))</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+<tr><td><code>test</code></td><td><code>cfg(any(test, feature = "probe-capture"))</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
 
 <tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
 
-<tr><td><code>probe</code></td><td><code>probe</code></td><td>USDT probe runtime helpers consumed by code annotated with <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when disabled</td></tr>
+<tr><td><code>probe</code></td><td><code>usdt</code> / <code>probe-capture</code></td><td>USDT runtime and test tracing capture consumed by <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when both are disabled</td></tr>
 
 <tr><td><code>mock</code></td><td><code>mock</code></td><td><code>unimock</code> glue for trait-level mocks</td></tr>
 
@@ -81,7 +81,9 @@ requirement.
 
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
 
-<tr><td><code>probe</code></td><td>no</td><td>Pulls <code>usdt</code>; enables real USDT probe emission (otherwise no-op)</td></tr>
+<tr><td><code>usdt</code></td><td>no</td><td>Pulls <code>usdt</code> and enables real USDT emission</td></tr>
+
+<tr><td><code>probe-capture</code></td><td>no</td><td>Enables the test tracing recorder and caller-symbol metadata</td></tr>
 
 <tr><td><code>client-reqwest</code></td><td>no</td><td>Forward the reqwest HTTP backend through <code>kithara-events</code></td></tr>
 
@@ -93,7 +95,8 @@ requirement.
 
 </table>
 
-Consumer crates typically enable `mock` and `probe` in their `[dev-dependencies]` while keeping the default `hang` feature on.
+Consumer crates typically enable `mock` and `probe-capture` in their
+`[dev-dependencies]` while keeping the default `hang` feature on.
 
 ## Integration
 

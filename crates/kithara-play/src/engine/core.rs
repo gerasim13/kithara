@@ -297,7 +297,7 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
         &self.session
     }
@@ -354,7 +354,7 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(super) const fn start_lock(&self) -> &Mutex<()> {
         &self.start_lock
     }

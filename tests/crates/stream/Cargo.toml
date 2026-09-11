@@ -24,12 +24,12 @@ no-block = ["kithara/no-block"]
 kithara = { workspace = true, default-features = false, features = [
     "events",
     "platform",
-    "probe",
+    "probe-capture",
     "storage",
     "stream",
     "tokio-net",
 ] }
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 
 futures = { workspace = true }
 thiserror = { workspace = true }

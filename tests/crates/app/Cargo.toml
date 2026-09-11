@@ -26,12 +26,12 @@ kithara = { workspace = true, features = [
     "bufpool",
     "platform",
     "play",
-    "probe",
+    "probe-capture",
 ] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 
 num-traits = { workspace = true }
 url = { workspace = true }

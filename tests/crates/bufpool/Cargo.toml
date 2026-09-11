@@ -23,11 +23,11 @@ no-block = ["kithara/no-block"]
 kithara = { workspace = true, default-features = false, features = [
     "bufpool",
     "platform",
-    "probe",
+    "probe-capture",
     "tokio-net",
 ] }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe-capture"] }
 serial_test = { workspace = true }
 
 [lints]

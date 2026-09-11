@@ -234,7 +234,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
 }
 
 impl<B: AudioBackend, S> SessionState<B, S> {
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology.

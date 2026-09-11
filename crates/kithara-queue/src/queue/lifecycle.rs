@@ -7,7 +7,7 @@ use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Placement, SelectPhase, Transition, extract_track_name},
 };
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "probe-capture"))]
 use crate::event::TrackStatus;
 use crate::{
     attempts::LoadClass,
@@ -78,7 +78,7 @@ where
             drop(navigation);
             self.write_armed_for(CrossfadeArm::Disarmed);
             self.write_cached_position(CachedPosition::Unknown);
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "probe-capture"))]
             self.autoplay_target.store(CrossfadeArm::Disarmed);
             self.player.remove_all_items();
             ids
@@ -92,7 +92,7 @@ where
         }
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     fn complete_load_for_test_inner(&self, id: TrackId, resource: kithara_play::Resource) {
         let index = {
             let guard = self.lock_tracks();
@@ -199,7 +199,7 @@ where
     /// player slot for an id previously created via
     /// [`Self::register_for_test`]. Mirrors the synchronous portion of
     /// the loader's `apply_after_load` callback.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(in crate::queue) fn probe_complete_load(
         &self,
         id: TrackId,
@@ -212,7 +212,7 @@ where
     /// Test helper: convenience for the common case where load order
     /// matches register order. Equivalent to
     /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(in crate::queue) fn probe_insert_loaded(
         &self,
         resource: kithara_play::Resource,
@@ -227,7 +227,7 @@ where
     /// EOF — selected in navigation and already consumed by the player.
     /// The next advance onto it must reload it (repeat-one) instead of
     /// picking a pre-loaded successor.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(in crate::queue) fn probe_mark_played(&self, id: TrackId) {
         let _admission = self.lock_admission();
         let index = {
@@ -243,7 +243,7 @@ where
     /// Test helper: register a placeholder track entry without starting
     /// a real loader. Pair with [`Self::complete_load_for_test`] to
     /// drive the loaded resource into the player on demand.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     #[must_use]
     pub(in crate::queue) fn probe_register(&self) -> TrackId {
         let _admission = self.lock_admission();
@@ -255,7 +255,7 @@ where
     /// `Failed` track is re-selected. This emulates the loader-respawn
     /// path the production code uses without dispatching the real
     /// loader, so harness tests can exercise replay-after-EOF.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     pub(in crate::queue) fn probe_supply_respawn_resource(
         &self,
         id: TrackId,
@@ -268,7 +268,7 @@ where
             .insert(id, resource);
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "probe-capture"))]
     fn register_for_test_inner(&self) -> TrackId {
         let id = TrackId::allocate();
         let url = format!("test://memory/{}", id.as_u64());
