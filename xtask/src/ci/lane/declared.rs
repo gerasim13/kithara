@@ -41,7 +41,7 @@ pub(crate) fn run(
     for check in &lane.pinned {
         require_pinned_version(process, check, pins, tools)?;
     }
-    let target_snapshot = lane
+    let target_snapshot_to_publish = lane
         .target_snapshot
         .as_deref()
         .map(|key| {
@@ -65,7 +65,7 @@ pub(crate) fn run(
         }
         process.run_command(&mut command, &step.label)?;
     }
-    if let Some(fingerprint) = target_snapshot {
+    if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
         snapshot::publish_for_lane(&process.target_dir(), &fingerprint)?;
     }
     Ok(())

@@ -73,7 +73,7 @@ pub(super) fn run(args: &SnapshotArgs) -> Result<()> {
         SnapshotCommand::Restore {
             target,
             fingerprint,
-        } => restore(target, fingerprint),
+        } => restore(target, fingerprint).map(|_| ()),
         SnapshotCommand::Publish {
             target,
             fingerprint,
@@ -81,10 +81,14 @@ pub(super) fn run(args: &SnapshotArgs) -> Result<()> {
     }
 }
 
-pub(crate) fn restore_for_lane(key: &str, target: &Path, root: &Path) -> Result<String> {
+pub(crate) fn restore_for_lane(key: &str, target: &Path, root: &Path) -> Result<Option<String>> {
     let fingerprint = fingerprint(key, "cargo", "host", root)?;
-    restore(target, &fingerprint)?;
-    Ok(fingerprint)
+    let restored = restore(target, &fingerprint)?;
+    Ok(snapshot_to_publish(fingerprint, restored))
+}
+
+fn snapshot_to_publish(fingerprint: String, restored: bool) -> Option<String> {
+    (!restored).then_some(fingerprint)
 }
 
 pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str) -> Result<()> {
@@ -154,13 +158,13 @@ fn publish(target: &Path, fingerprint: &str) -> Result<()> {
     Ok(())
 }
 
-fn restore(target: &Path, fingerprint: &str) -> Result<()> {
+fn restore(target: &Path, fingerprint: &str) -> Result<bool> {
     validate_fingerprint(fingerprint)?;
     require_target(target, true)?;
     let client = Client::load()?;
     let Some(object) = client.latest(fingerprint)? else {
-        info!(%fingerprint, "no trusted target snapshot exists");
-        return Ok(());
+        info!(%fingerprint, "no target snapshot exists");
+        return Ok(false);
     };
     let expected = object
         .rsplit_once('/')
@@ -182,7 +186,7 @@ fn restore(target: &Path, fingerprint: &str) -> Result<()> {
         "restore target snapshot",
     )?;
     info!(%fingerprint, object, "restored immutable target snapshot");
-    Ok(())
+    Ok(true)
 }
 
 fn require_target(target: &Path, may_create: bool) -> Result<()> {
@@ -435,6 +439,15 @@ mod tests {
         assert_eq!(
             client.remote("target-snapshots/fingerprint/archive.tar"),
             "snapshot/kithara-review/target-snapshots/fingerprint/archive.tar"
+        );
+    }
+
+    #[test]
+    fn a_restored_snapshot_is_not_published_again() {
+        assert_eq!(snapshot_to_publish("hit".to_owned(), true), None);
+        assert_eq!(
+            snapshot_to_publish("miss".to_owned(), false),
+            Some("miss".to_owned())
         );
     }
 
