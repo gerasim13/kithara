@@ -445,7 +445,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
@@ -455,7 +454,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
@@ -465,7 +463,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
@@ -475,7 +472,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
@@ -485,7 +481,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
@@ -495,7 +490,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
@@ -507,7 +501,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch

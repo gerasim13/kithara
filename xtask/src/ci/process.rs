@@ -80,6 +80,10 @@ impl Process {
         }
     }
 
+    pub(crate) const fn is_recording(&self) -> bool {
+        matches!(&self.mode, Mode::Record(_))
+    }
+
     fn record(&self, step: Step) -> bool {
         let Mode::Record(recording) = &self.mode else {
             return false;
