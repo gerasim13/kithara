@@ -48,6 +48,11 @@ pub(crate) fn run(
             let mc = process.resolve_program(tools.program("mc"))?;
             let cargo_home = process
                 .environment_path("CARGO_HOME")
+                .or_else(|| {
+                    process
+                        .environment_path("HOME")
+                        .map(|home| home.join(".cargo"))
+                })
                 .context("prepared CI environment has no CARGO_HOME")?;
             snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &cargo_home, &mc)
         })

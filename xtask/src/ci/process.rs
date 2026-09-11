@@ -117,7 +117,11 @@ impl Process {
     }
 
     pub(crate) fn environment_path(&self, name: &str) -> Option<PathBuf> {
-        self.vars.get(OsStr::new(name)).map(PathBuf::from)
+        self.vars
+            .get(OsStr::new(name))
+            .cloned()
+            .or_else(|| env::var_os(name))
+            .map(PathBuf::from)
     }
 
     /// A command that runs inside a subdirectory of the checkout. Build tools
@@ -412,6 +416,16 @@ mod tests {
 
         assert!(error.downcast_ref::<ChildFailure>().is_some());
         assert_eq!(error.to_string(), "fixture command failed (exit code 7)");
+    }
+
+    #[test]
+    fn environment_paths_fall_back_to_the_executor_environment() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+
+        assert_eq!(
+            process.environment_path("PATH").as_deref(),
+            env::var_os("PATH").as_deref().map(Path::new)
+        );
     }
 
     #[test]
