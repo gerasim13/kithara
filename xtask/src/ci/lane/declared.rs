@@ -46,7 +46,10 @@ pub(crate) fn run(
         .as_deref()
         .map(|key| {
             let mc = process.resolve_program(tools.program("mc"))?;
-            snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &mc)
+            let cargo_home = process
+                .environment_path("CARGO_HOME")
+                .context("prepared CI environment has no CARGO_HOME")?;
+            snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &cargo_home, &mc)
         })
         .transpose()?;
     for step in &lane.steps {

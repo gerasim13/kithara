@@ -19,7 +19,7 @@ use super::current_client_environment;
 struct Snapshot;
 
 impl Snapshot {
-    const SCHEMA: &str = "kithara-target-snapshot-v1";
+    const SCHEMA: &str = "kithara-target-snapshot-v2";
     const PREFIX: &str = "target-snapshots";
 
     fn object(fingerprint: &str, checksum: &str) -> String {
@@ -67,7 +67,11 @@ pub(super) fn run(args: &SnapshotArgs) -> Result<()> {
             profile,
             target,
         } => {
-            println!("{}", fingerprint(lane, profile, target, Path::new("."))?);
+            let cargo_home = env::var_os("CARGO_HOME").map_or_else(PathBuf::new, PathBuf::from);
+            println!(
+                "{}",
+                fingerprint(lane, profile, target, Path::new("."), &cargo_home)?
+            );
             Ok(())
         }
         SnapshotCommand::Restore {
@@ -85,9 +89,10 @@ pub(crate) fn restore_for_lane(
     key: &str,
     target: &Path,
     root: &Path,
+    cargo_home: &Path,
     mc: &Path,
 ) -> Result<Option<String>> {
-    let fingerprint = fingerprint(key, "cargo", "host", root)?;
+    let fingerprint = fingerprint(key, "cargo", "host", root, cargo_home)?;
     let restored = restore(target, &fingerprint, mc)?;
     Ok(snapshot_to_publish(fingerprint, restored))
 }
@@ -100,7 +105,13 @@ pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, mc: &Path) -> R
     publish(target, fingerprint, mc)
 }
 
-fn fingerprint(lane: &str, profile: &str, target: &str, root: &Path) -> Result<String> {
+fn fingerprint(
+    lane: &str,
+    profile: &str,
+    target: &str,
+    root: &Path,
+    cargo_home: &Path,
+) -> Result<String> {
     validate_component(lane, "lane")?;
     validate_component(profile, "profile")?;
     validate_component(target, "target")?;
@@ -122,6 +133,8 @@ fn fingerprint(lane: &str, profile: &str, target: &str, root: &Path) -> Result<S
         rustflags.as_bytes(),
         encoded_rustflags.as_bytes(),
         image.as_bytes(),
+        root.as_os_str().as_encoded_bytes(),
+        cargo_home.as_os_str().as_encoded_bytes(),
     ] {
         hash.update((value.len() as u64).to_le_bytes());
         hash.update(value);
@@ -465,10 +478,51 @@ mod tests {
         fs::create_dir_all(root.path().join(".config")).unwrap();
         fs::write(root.path().join("Cargo.lock"), "first").unwrap();
         fs::write(root.path().join(".config/ci-pins.toml"), "pins").unwrap();
-        let first = fingerprint("audio", "test-release", "host", root.path()).unwrap();
+        let cargo_home = root.path().join("cargo");
+        let first = fingerprint("audio", "test-release", "host", root.path(), &cargo_home).unwrap();
         fs::write(root.path().join("Cargo.lock"), "second").unwrap();
-        let second = fingerprint("audio", "test-release", "host", root.path()).unwrap();
+        let second =
+            fingerprint("audio", "test-release", "host", root.path(), &cargo_home).unwrap();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn fingerprint_separates_non_portable_paths() {
+        let first_root = tempfile::tempdir().unwrap();
+        let second_root = tempfile::tempdir().unwrap();
+        for root in [&first_root, &second_root] {
+            fs::create_dir_all(root.path().join(".config")).unwrap();
+            fs::write(root.path().join("Cargo.lock"), "lock").unwrap();
+            fs::write(root.path().join(".config/ci-pins.toml"), "pins").unwrap();
+        }
+
+        let first = fingerprint(
+            "audio",
+            "test-release",
+            "host",
+            first_root.path(),
+            Path::new("/cache/review/cargo"),
+        )
+        .unwrap();
+        let second = fingerprint(
+            "audio",
+            "test-release",
+            "host",
+            first_root.path(),
+            Path::new("/cache/quarantine/cargo"),
+        )
+        .unwrap();
+        let third = fingerprint(
+            "audio",
+            "test-release",
+            "host",
+            second_root.path(),
+            Path::new("/cache/review/cargo"),
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
+        assert_ne!(first, third);
     }
 
     #[test]
