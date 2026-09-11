@@ -19,7 +19,7 @@ use super::current_client_environment;
 struct Snapshot;
 
 impl Snapshot {
-    const SCHEMA: &str = "kithara-target-snapshot-v2";
+    const SCHEMA: &str = "kithara-target-snapshot-v3";
     const PREFIX: &str = "target-snapshots";
 
     fn object(fingerprint: &str, checksum: &str) -> String {

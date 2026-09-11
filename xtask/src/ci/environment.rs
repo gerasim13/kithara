@@ -532,7 +532,7 @@ fn prepare_build_target(
     _config: &CiConfig,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
     let job_id = env::var("CI_JOB_ID").ok();
-    let target = build_target_dir(
+    let backing = build_target_dir(
         project_root,
         shared_root,
         target_scope,
@@ -540,12 +540,60 @@ fn prepare_build_target(
         is_gitlab(),
         job_id.as_deref(),
     )?;
-    fs::create_dir_all(&target)
-        .with_context(|| format!("creating CI build cache {}", target.display()))?;
+    fs::create_dir_all(&backing)
+        .with_context(|| format!("creating CI build cache {}", backing.display()))?;
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
-    let lease = lease::hold(&target);
+    let lease = lease::hold(&backing);
+    let target = expose_build_target(project_root, &backing, is_gitlab(), cfg!(windows))?;
     Ok((target, lease))
+}
+
+fn expose_build_target(
+    project_root: &Path,
+    backing: &Path,
+    gitlab: bool,
+    target_is_windows: bool,
+) -> Result<PathBuf> {
+    if !gitlab || target_is_windows {
+        return Ok(backing.to_path_buf());
+    }
+
+    let target = project_root.join("target");
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.file_type().is_symlink(),
+                "stable CI target path is not a symlink: {}",
+                target.display()
+            );
+            fs::remove_file(&target)
+                .with_context(|| format!("replacing stale CI target link {}", target.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading CI target link {}", target.display()));
+        }
+    }
+    create_target_link(backing, &target)?;
+    Ok(target)
+}
+
+#[cfg(unix)]
+fn create_target_link(backing: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(backing, target).with_context(|| {
+        format!(
+            "linking stable CI target {} to {}",
+            target.display(),
+            backing.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
+    unreachable!("Windows keeps its build target in the checkout")
 }
 
 /// Refuse a job only once there is nothing left to reclaim and nothing left to
@@ -1145,6 +1193,36 @@ mod tests {
                 Some("../trusted"),
             )
             .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitlab_jobs_keep_one_cargo_visible_target_over_private_backings() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        let first = root.path().join("cache/job-4711/cargo");
+        let second = root.path().join("cache/job-4712/cargo");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "[workspace]").unwrap();
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        let visible = expose_build_target(&project, &first, true, false).unwrap();
+        fs::write(visible.join("first"), "owned by the first job").unwrap();
+        let same_visible = expose_build_target(&project, &second, true, false).unwrap();
+        fs::write(same_visible.join("second"), "owned by the second job").unwrap();
+
+        assert_eq!(visible, project.join("target"));
+        assert_eq!(same_visible, visible);
+        assert!(first.join("first").is_file());
+        assert!(!first.join("second").exists());
+        assert!(second.join("second").is_file());
+        assert!(!second.join("first").exists());
+        assert!(
+            build_cache::persistent_target_dirs(&project)
+                .unwrap()
+                .is_empty()
         );
     }
 
