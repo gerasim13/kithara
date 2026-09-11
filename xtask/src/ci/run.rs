@@ -883,6 +883,18 @@ mod tests {
     }
 
     #[test]
+    fn gitlab_setup_leaves_the_lane_target_path_unclaimed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+
+        assert!(!common.contains("target/xtask-self-cache"));
+        assert!(!common.contains("before_script:"));
+    }
+
+    #[test]
     fn verdict_uses_the_macos_cache_group() {
         assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
     }
