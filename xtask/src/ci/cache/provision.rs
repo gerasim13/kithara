@@ -115,7 +115,7 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
         &json!({
             "Rules": [{
                 "ID": "cache-retention", "Status": "Enabled",
-                "Filter": {"Prefix": ""}, "Expiration": {"Days": 7}
+                "Filter": {"Prefix": ""}, "Expiration": {"Days": 1}
             }]
         }),
     )?;
