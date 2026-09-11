@@ -328,6 +328,8 @@ fn scheduled_revision_resource(
     slot.install(Some(Arc::new(plan)));
     let mut resource = Resource::from_reader(RevisionReader::new(replacement_frames), None);
     resource.region_plan = Some(slot);
+    resource.activation_blend_frames =
+        Some(NonZeroUsize::new(40).expect("fixture activation blend is non-zero"));
     PlayerResource::new(resource, Arc::from("revision"), &pools())
         .unwrap_or_else(|error| panic!("test player resource: {error}"))
 }
@@ -367,7 +369,10 @@ fn scheduled_revision_switches_only_at_its_host_frame_with_a_complete_suffix(
     assert_eq!(source_frames, 10);
     let mut expected = [1.0; 10];
     if let Some(start) = switched_at {
-        expected[start..].fill(2.0);
+        for (frame, sample) in expected[start..].iter_mut().enumerate() {
+            let incoming_gain = frame as f32 / 40.0;
+            *sample = 1.0f32.mul_add(1.0 - incoming_gain, 2.0 * incoming_gain);
+        }
     }
     assert_eq!(left, expected);
     assert_eq!(right, expected);
@@ -378,6 +383,57 @@ fn scheduled_revision_switches_only_at_its_host_frame_with_a_complete_suffix(
             .map(|(_source, revision)| revision),
         Some(expected_revision)
     );
+}
+
+#[kithara::test]
+fn activation_blends_real_old_and_new_pcm_for_forty_frames_across_chunks() {
+    const BLEND_FRAMES: usize = 40;
+    const CHUNK_FRAMES: usize = 31;
+    let mut resource = scheduled_revision_resource(100, BLEND_FRAMES);
+    let mut rendered = Vec::new();
+
+    for start in [100, 131] {
+        let context = RenderContext::new(
+            SessionFrame::new(start)
+                ..SessionFrame::new(
+                    start + i64::try_from(CHUNK_FRAMES).expect("chunk length fits i64"),
+                ),
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid");
+        let mut left = [0.0; CHUNK_FRAMES];
+        let mut right = [0.0; CHUNK_FRAMES];
+        let mut output = [&mut left[..], &mut right[..]];
+        let (outcome, _) = resource.read_with_context(
+            Some(&context),
+            None,
+            &mut output,
+            0..CHUNK_FRAMES,
+            &RtMetrics::default(),
+        );
+        assert_eq!(
+            outcome,
+            crate::rt::track::ReadOutcome::Full {
+                frames: CHUNK_FRAMES
+            }
+        );
+        assert_eq!(left, right);
+        rendered.extend(left);
+    }
+
+    for (frame, sample) in rendered.iter().copied().enumerate() {
+        let expected = if frame < BLEND_FRAMES {
+            let incoming_gain = f32::from(u16::try_from(frame).expect("blend frame fits u16"))
+                / f32::from(u16::try_from(BLEND_FRAMES).expect("blend length fits u16"));
+            1.0f32.mul_add(1.0 - incoming_gain, 2.0 * incoming_gain)
+        } else {
+            2.0
+        };
+        assert_eq!(sample.to_bits(), expected.to_bits(), "frame {frame}");
+    }
 }
 
 fn warped_player_resource(

@@ -8,9 +8,17 @@ use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::FrameCount;
 use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
+use num_traits::ToPrimitive;
 
 use super::feeder::{PlayerResource, ReadOutcome, activation_prefix, combine_reads};
 use crate::{bridge::RtMetrics, resource::RenderActivation, worker::ServiceClass};
+
+#[derive(Clone, Copy)]
+enum ActivationTailStatus {
+    Disabled,
+    Ready,
+    Unavailable,
+}
 
 impl PlayerResource {
     /// Read audio frames into the output buffers for the given range.
@@ -55,10 +63,15 @@ impl PlayerResource {
         };
         let frames_to_read = range.end - range.start;
         if prefix_frames == 0 {
+            let tail = self.prepare_activation_tail(metrics);
             self.present_scheduled_seek();
-            if let Some(required) = NonZeroUsize::new(frames_to_read) {
-                let _status = self.sync_render_revision(activation, required);
+            if let Some(required) = NonZeroUsize::new(frames_to_read)
+                && self.sync_render_revision(activation, required)
+                    == RevisionFloorStatus::WaitingForReplacement
+            {
+                return self.read_current(Some(context), track_id, output, range, metrics);
             }
+            self.arm_activation_blend(tail);
             return self.read_current(Some(context), track_id, output, range, metrics);
         }
 
@@ -84,9 +97,15 @@ impl PlayerResource {
         }
 
         let suffix_frames = frames_to_read - prefix_frames;
+        let tail = self.prepare_activation_tail(metrics);
         self.present_scheduled_seek();
         let required = NonZeroUsize::new(suffix_frames).expect("activation suffix is non-zero");
-        let _status = self.sync_render_revision(activation, required);
+        if self.sync_render_revision(activation, required)
+            == RevisionFloorStatus::WaitingForReplacement
+        {
+            return self.read_current(Some(context), track_id, output, range, metrics);
+        }
+        self.arm_activation_blend(tail);
         let Some(suffix_context) = context.for_output_range(prefix_frames..frames_to_read) else {
             return (ReadOutcome::Failed, prefix_source_frames);
         };
@@ -132,6 +151,7 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][range.start..range.start + frames_to_write]
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
+                self.apply_activation_blend(output, range.start, frames_to_write);
             }
 
             let Some(source_frames) = self.consume_source(frames_to_write, context, track_id)
@@ -183,6 +203,63 @@ impl PlayerResource {
             }
             (ReadOutcome::Full { frames: 0 }, 0)
         }
+    }
+
+    fn prepare_activation_tail(&mut self, metrics: &RtMetrics) -> ActivationTailStatus {
+        let frames = self.activation_blend_frames;
+        if self.activation_tail.is_none() {
+            return ActivationTailStatus::Disabled;
+        }
+        self.fill_scratch(frames, metrics);
+        if self.write_len < frames {
+            return ActivationTailStatus::Unavailable;
+        }
+        let Some(activation_tail) = self.activation_tail.as_mut() else {
+            return ActivationTailStatus::Disabled;
+        };
+        for (tail, buffered) in activation_tail.iter_mut().zip(&self.channel_buffers) {
+            tail[..frames].copy_from_slice(&buffered[..frames]);
+        }
+        ActivationTailStatus::Ready
+    }
+
+    fn arm_activation_blend(&mut self, status: ActivationTailStatus) {
+        self.activation_blend_pos = match status {
+            ActivationTailStatus::Ready => 0,
+            ActivationTailStatus::Disabled | ActivationTailStatus::Unavailable => {
+                self.activation_blend_frames
+            }
+        };
+    }
+
+    fn apply_activation_blend(
+        &mut self,
+        output: &mut [&mut [f32]],
+        output_start: usize,
+        frames: usize,
+    ) {
+        let Some(activation_tail) = self.activation_tail.as_ref() else {
+            return;
+        };
+        let remaining = self
+            .activation_blend_frames
+            .saturating_sub(self.activation_blend_pos);
+        let blended = frames.min(remaining);
+        let denominator = self.activation_blend_frames.to_f32().unwrap_or(f32::MAX);
+        for offset in 0..blended {
+            let frame = self.activation_blend_pos + offset;
+            let incoming_gain = frame.to_f32().unwrap_or(f32::MAX) / denominator;
+            let outgoing_gain = 1.0 - incoming_gain;
+            for (incoming, outgoing) in output
+                .iter_mut()
+                .zip(activation_tail)
+                .take(Self::STEREO_CHANNELS)
+            {
+                let incoming = &mut incoming[output_start + offset];
+                *incoming = outgoing[frame].mul_add(outgoing_gain, *incoming * incoming_gain);
+            }
+        }
+        self.activation_blend_pos += blended;
     }
 
     fn sync_render_revision(
@@ -254,6 +331,7 @@ impl PlayerResource {
         self.resource.get().clear_render();
         self.eof_seen = false;
         self.failed = false;
+        self.activation_blend_pos = self.activation_blend_frames;
     }
 
     pub(super) const fn scratch_frames(sample_rate: u32) -> FrameCount {

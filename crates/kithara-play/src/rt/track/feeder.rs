@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, num::NonZeroU32};
+use std::{
+    collections::VecDeque,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_audio::{SourceEnd, SourceSpan};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
@@ -27,6 +30,9 @@ pub struct PlayerResource {
     pub(super) source_spans: VecDeque<SourceWindow>,
     pub(super) resource: WasmSend<Resource>,
     pub(super) channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
+    pub(super) activation_tail: Option<[SampleBuffer; Self::STEREO_CHANNELS]>,
+    pub(super) activation_blend_frames: usize,
+    pub(super) activation_blend_pos: usize,
     pub(super) eof_seen: bool,
     pub(super) failed: bool,
     pub(super) render_revision_floor: u64,
@@ -175,10 +181,24 @@ impl PlayerResource {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
         let left = pools.get_with_len::<f32>(buffer_frames)?;
         let right = pools.get_with_len::<f32>(buffer_frames)?;
+        let activation_blend_frames = resource
+            .activation_blend_frames()
+            .map_or(0, NonZeroUsize::get);
+        let activation_tail = if activation_blend_frames == 0 {
+            None
+        } else {
+            Some([
+                pools.get_with_len::<f32>(activation_blend_frames)?,
+                pools.get_with_len::<f32>(activation_blend_frames)?,
+            ])
+        };
 
         Ok(Self {
             src,
             channel_buffers: [left, right],
+            activation_tail,
+            activation_blend_frames,
+            activation_blend_pos: activation_blend_frames,
             source_spans: VecDeque::with_capacity(buffer_frames),
             resource: WasmSend::new(resource),
             write_len: 0,

@@ -79,6 +79,8 @@ pub struct Resource {
     /// Region plan slot of the resident Warp lane; `None` for a plain reader.
     #[field(get, deref = false)]
     region_plan: Option<Arc<RegionPlanSlot>>,
+    #[field(get, copy)]
+    activation_blend_frames: Option<NonZeroUsize>,
     reader: ReaderOwner,
 }
 
@@ -217,6 +219,7 @@ impl Resource {
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
             region_plan: None,
+            activation_blend_frames: None,
         };
         if preload && let Err(error) = resource.reader.1.preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
@@ -241,6 +244,7 @@ impl Resource {
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
+        let activation_blend_frames = config.warp().activation_blend_frames();
         let mut audio = worker.open(config).await?;
         let priority = audio.priority();
         let region_plan = audio.region_plan();
@@ -255,6 +259,7 @@ impl Resource {
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
         resource.region_plan = Some(region_plan);
+        resource.activation_blend_frames = Some(activation_blend_frames);
         Ok(resource)
     }
 
