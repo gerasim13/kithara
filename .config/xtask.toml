@@ -516,11 +516,7 @@ default = false
 features = ["no-block"]
 
 [test.net_backends.wreq]
-features = [
-  "client-wreq",
-  "kithara-net/client-wreq",
-  "kithara-test-utils/client-wreq",
-]
+features = ["client-wreq"]
 
 [test.net_backends.apple]
 features = ["kithara/apple-net"]

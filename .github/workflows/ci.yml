@@ -6,7 +6,17 @@ name: CI
 on:
   push:
   workflow_call:
+    inputs:
+      ui:
+        description: Run the GPU UI suite.
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      ui:
+        description: Run the GPU UI suite.
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -112,6 +122,14 @@ jobs:
       role: gate
       kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
 
+  ui:
+    name: UI
+    needs: gate
+    if: >-
+      vars.KITHARA_GPU_RUNNER_LABELS != ''
+      && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || inputs.ui)
+    uses: ./.github/workflows/ui.yml
+
   # This is the one stable required status. GitHub treats a skipped job as an
   # acceptable required check, so the aggregate must run unconditionally and
   # reject every result other than an executed success.
@@ -125,12 +143,14 @@ jobs:
       - authorize
       - gate
       - lanes
+      - ui
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every CI job to have executed successfully
         env:
           RESULTS: ${{ toJSON(needs) }}
+          UI_REQUIRED: ${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || inputs.ui) }}
         run: |
           python3 - <<'PY'
           import json
@@ -138,10 +158,12 @@ jobs:
           import sys
 
           results = json.loads(os.environ["RESULTS"])
+          ui_required = os.environ["UI_REQUIRED"] == "true"
           incomplete = {
               name: job["result"]
               for name, job in results.items()
               if job["result"] != "success"
+              and not (name == "ui" and job["result"] == "skipped" and not ui_required)
           }
           if incomplete:
               print(f"required CI jobs did not execute successfully: {incomplete}")

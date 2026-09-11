@@ -72,10 +72,12 @@ import os
 import sys
 
 results = json.loads(os.environ["RESULTS"])
+ui_required = os.environ["UI_REQUIRED"] == "true"
 incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
+    and not (name == "ui" and job["result"] == "skipped" and not ui_required)
 }
 if incomplete:
     print(f"required CI jobs did not execute successfully: {incomplete}")
@@ -431,6 +433,12 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some("${{ toJSON(needs) }}")
     );
     assert_eq!(
+        mapping_field(env, "UI_REQUIRED").as_str(),
+        Some(
+            "${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || inputs.ui) }}"
+        )
+    );
+    assert_eq!(
         mapping_field(step, "run")
             .as_str()
             .expect("required step is a script")
@@ -439,8 +447,8 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
-// One entry reacts to every push, and it is the gate. Workflows may still react
-// to a restricted branch set, such as the UI suite on `main`.
+// One entry reacts to every push. Optional suites belong inside that run so a
+// commit has one verdict rather than independent CI and UI results.
 #[test]
 fn the_gate_is_the_only_workflow_every_push_starts() {
     let mut entries = Vec::new();
@@ -1741,6 +1749,18 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
 // restate what it runs.
 #[test]
 fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
+    let ci = github_workflow("ci.yml");
+    let ui = workflow_job(workflow_jobs(&ci), "ui");
+    assert_eq!(
+        mapping_field(ui, "uses").as_str(),
+        Some("./.github/workflows/ui.yml")
+    );
+    let condition = mapping_field(ui, "if")
+        .as_str()
+        .expect("the UI call is conditional");
+    assert!(condition.contains("github.event.repository.default_branch"));
+    assert!(condition.contains("inputs.ui"));
+
     let text = github_workflow_text("ui.yml");
     assert!(
         text.contains("just ci lane deep-ui"),
