@@ -23,6 +23,7 @@ brew_formulae = [
   "gitlab-runner",
   "jq",
   "lima",
+  "minio-mc",
   "node",
   "openjdk@17",
   "pkg-config",

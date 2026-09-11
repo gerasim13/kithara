@@ -59,6 +59,9 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
+    if lane.target_snapshot.is_some() {
+        process.require_tools(&["mc"])?;
+    }
     let snapshot = lane
         .target_snapshot
         .as_deref()
