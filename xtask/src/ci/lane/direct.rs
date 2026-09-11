@@ -59,7 +59,8 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
-    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
+    declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -214,5 +215,26 @@ args = {step_args}
                  one; found `{forbidden}` in direct.rs's production code"
             );
         }
+    }
+
+    #[test]
+    fn declared_lanes_own_target_snapshot_lifecycle_for_both_executors() {
+        let root = workspace_root();
+        let direct = fs::read_to_string(root.join("xtask/src/ci/lane/direct.rs"))
+            .expect("direct lane source is readable");
+        let declared = fs::read_to_string(root.join("xtask/src/ci/lane/declared.rs"))
+            .expect("declared lane source is readable");
+        let production = |source: String| {
+            source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("lane source has a production half")
+                .to_owned()
+        };
+
+        assert!(!production(direct).contains("snapshot::"));
+        let declared = production(declared);
+        assert!(declared.contains("snapshot::restore_for_lane"));
+        assert!(declared.contains("snapshot::publish_for_lane"));
     }
 }

@@ -445,7 +445,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
@@ -455,7 +454,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
@@ -465,7 +463,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
@@ -475,7 +472,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
@@ -485,7 +481,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
@@ -495,7 +490,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
@@ -507,7 +501,6 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch
@@ -1849,81 +1842,81 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
-  just test run --no-block=on --profile ci --timings
+  just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_FINGERPRINT=content
     CARGO_BUILD_JOBS=2
     CARGO_LOG=cargo::compiler::fingerprint=info
-    CARGO_TARGET_DIR=<root>/target/ci-tests
+    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
@@ -2297,50 +2290,34 @@
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
-  chromium --version
-  chromedriver --version
   just test wasm chrome webcodecs
 # web-firefox / branch
   <require os> linux

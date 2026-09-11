@@ -80,6 +80,10 @@ impl Process {
         }
     }
 
+    pub(crate) const fn is_recording(&self) -> bool {
+        matches!(&self.mode, Mode::Record(_))
+    }
+
     fn record(&self, step: Step) -> bool {
         let Mode::Record(recording) = &self.mode else {
             return false;
@@ -114,6 +118,14 @@ impl Process {
         self.vars
             .get(OsStr::new("CARGO_TARGET_DIR"))
             .map_or_else(|| self.root.join("target"), PathBuf::from)
+    }
+
+    pub(crate) fn environment_path(&self, name: &str) -> Option<PathBuf> {
+        self.vars
+            .get(OsStr::new(name))
+            .cloned()
+            .or_else(|| env::var_os(name))
+            .map(PathBuf::from)
     }
 
     /// A command that runs inside a subdirectory of the checkout. Build tools
@@ -245,6 +257,11 @@ impl Process {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn resolve_program(&self, program: &str) -> Result<PathBuf> {
+        self.find_executable(program)
+            .with_context(|| format!("required CI command is missing: {program}"))
     }
 
     fn find_executable(&self, program: &str) -> Option<PathBuf> {
@@ -403,6 +420,16 @@ mod tests {
 
         assert!(error.downcast_ref::<ChildFailure>().is_some());
         assert_eq!(error.to_string(), "fixture command failed (exit code 7)");
+    }
+
+    #[test]
+    fn environment_paths_fall_back_to_the_executor_environment() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+
+        assert_eq!(
+            process.environment_path("PATH").as_deref(),
+            env::var_os("PATH").as_deref().map(Path::new)
+        );
     }
 
     #[test]

@@ -18,6 +18,21 @@ lanes:loom:
   script:
     - just ci run linux-loom
 
+lanes:fixtures:
+  extends: .lane-job
+  script:
+    - just ci run linux-fixtures
+
+lanes:tooling:
+  extends: .lane-job
+  script:
+    - just ci run linux-tooling
+
+lanes:harness:
+  extends: .lane-job
+  script:
+    - just ci run linux-harness
+
 # Live HLS packaging. It reports rather than judges: `allow_failure`, and out of
 # `verdict`'s `needs`, because the feature ships to nobody yet.
 #

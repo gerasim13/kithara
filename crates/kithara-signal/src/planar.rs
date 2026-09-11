@@ -351,7 +351,7 @@ fn subrange(
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_test_fixtures::fixtures::{negative_pcm_ramp, pcm_ramp};
+    use kithara_core_test_fixtures::{negative_pcm_ramp, pcm_ramp};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -364,7 +364,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn reserve_resize_and_front_truncation_preserve_channel_major_data(pcm_ramp: Vec<f32>) {
+    fn reserve_resize_and_front_truncation_preserve_channel_major_data() {
+        let pcm_ramp = pcm_ramp();
         let pools = pools_with_budget(128 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(3))
             .expect("initial planar storage fits");
@@ -411,10 +412,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn incremental_resize_grows_stride_geometrically(
-        pcm_ramp: Vec<f32>,
-        negative_pcm_ramp: Vec<f32>,
-    ) {
+    fn incremental_resize_grows_stride_geometrically() {
+        let pcm_ramp = pcm_ramp();
+        let negative_pcm_ramp = negative_pcm_ramp();
         let pools = pools_with_budget(1_024 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(0))
             .expect("empty planar storage is valid");
