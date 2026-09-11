@@ -602,6 +602,48 @@ fn manual_mode_restating_a_queued_target_claims_it_as_manual() {
     );
 }
 
+/// A listener's pick is a new intent even when the machine happened to want
+/// the same variant. The attempt already in flight for it may die for reasons
+/// of its own — a discarded session, a rebuilt reader — and every holder of
+/// its ticket may say so. Sharing that ticket makes the command and the dead
+/// attempt one object, and the command goes down with it, unheard.
+#[kithara::test]
+fn a_manual_pick_outlives_the_abort_of_the_attempt_it_restated() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UrgentDownSwitch);
+    let in_flight = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("the queued rescue must be claimable");
+
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+
+    assert!(
+        !state.abort_pending(in_flight.ticket()),
+        "the aborted attempt must not answer for the manual pick that replaced it"
+    );
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
+/// Re-pinning a manual override the slot already carries is one command said
+/// twice. A fresh ticket there would orphan the attempt already running for
+/// it and start the same switch over.
+#[kithara::test]
+fn re_pinning_the_same_manual_override_keeps_its_attempt() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UrgentDownSwitch);
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    let claimed = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("the manual pick must be claimable");
+
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+
+    assert!(
+        state.abort_pending(claimed.ticket()),
+        "one command twice is one attempt, and its ticket still answers for it"
+    );
+}
+
 /// The restated switch keeps the target the controller queued — claiming it
 /// for the user must not re-aim it.
 #[kithara::test]
