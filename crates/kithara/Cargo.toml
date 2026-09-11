@@ -14,6 +14,7 @@ default = [
     "audio",
     "bufpool",
     "decode",
+    "download",
     "events",
     "file",
     "hls",
@@ -46,6 +47,7 @@ all = [
     "bufpool",
     "client-reqwest",
     "decode",
+    "download",
     "drm",
     "encode",
     "events",
@@ -82,6 +84,7 @@ audio = ["dep:kithara-audio"]
 broadcast = ["output", "dep:kithara-broadcast"]
 bufpool = ["dep:kithara-bufpool"]
 decode = ["dep:kithara-decode"]
+download = ["dep:kithara-download"]
 drm = ["dep:kithara-drm"]
 encode = ["dep:kithara-encode"]
 events = ["dep:kithara-events"]
@@ -110,6 +113,7 @@ workspace-hack = ["dep:kithara-workspace-hack"]
 client-reqwest = [
     "kithara-analysis?/client-reqwest",
     "kithara-net?/client-reqwest",
+    "kithara-download?/client-reqwest",
     "kithara-stream?/client-reqwest",
     "kithara-assets?/client-reqwest",
     "kithara-broadcast?/client-reqwest",
@@ -128,6 +132,7 @@ client-reqwest = [
 client-wreq = [
     "kithara-analysis?/client-wreq",
     "kithara-net?/client-wreq",
+    "kithara-download?/client-wreq",
     "kithara-stream?/client-wreq",
     "kithara-assets?/client-wreq",
     "kithara-broadcast?/client-wreq",
@@ -146,6 +151,7 @@ client-wreq = [
 tls-rustls = [
     "kithara-analysis?/tls-rustls",
     "kithara-net?/tls-rustls",
+    "kithara-download?/tls-rustls",
     "kithara-stream?/tls-rustls",
     "kithara-assets?/tls-rustls",
     "kithara-broadcast?/tls-rustls",
@@ -164,6 +170,7 @@ tls-rustls = [
 tls-native = [
     "kithara-analysis?/tls-native",
     "kithara-net?/tls-native",
+    "kithara-download?/tls-native",
     "kithara-stream?/tls-native",
     "kithara-assets?/tls-native",
     "kithara-broadcast?/tls-native",
@@ -279,6 +286,7 @@ probe = [
     "kithara-play?/probe",
     "kithara-queue?/probe",
     "kithara-storage?/probe",
+    "kithara-download?/probe",
     "kithara-stream?/probe",
     "kithara-test-utils/probe",
     "kithara-worker?/probe",
@@ -331,7 +339,7 @@ apple-fused-src = [
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
-apple-net = ["kithara-net?/client-apple", "kithara-stream?/client-apple"]
+apple-net = ["kithara-net?/client-apple", "kithara-download?/client-apple", "kithara-stream?/client-apple"]
 android = [
     "kithara-analysis?/android",
     "kithara-audio?/android",
@@ -344,6 +352,7 @@ full = [
     "audio",
     "bufpool",
     "decode",
+    "download",
     "events",
     "file",
     "hls",
@@ -368,6 +377,7 @@ kithara-audio = { workspace = true, optional = true, default-features = false }
 kithara-broadcast = { workspace = true, optional = true, default-features = false }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true, default-features = false }
+kithara-download = { workspace = true, optional = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, optional = true, default-features = false }
 kithara-events = { workspace = true, optional = true }

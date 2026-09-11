@@ -1,5 +1,6 @@
 use kithara::{
     audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind, SeekLifecycleStage},
+    download::DownloaderEvent,
     events::{BusEvent, EventReceiver},
     file::FileEvent,
     hls::HlsEvent,
@@ -7,7 +8,6 @@ use kithara::{
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
     queue::ItemEvent,
-    stream::DownloaderEvent,
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};

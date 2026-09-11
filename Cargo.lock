@@ -4591,6 +4591,7 @@ dependencies = [
  "kithara-broadcast",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-download",
  "kithara-drm",
  "kithara-encode",
  "kithara-events",
@@ -5074,6 +5075,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-download"
+version = "0.0.1-alpha4"
+dependencies = [
+ "axum",
+ "bon",
+ "bytes",
+ "futures",
+ "humantime-serde",
+ "kithara-abr",
+ "kithara-bufpool",
+ "kithara-derive",
+ "kithara-events",
+ "kithara-net",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "serde",
+ "serde_yaml_ng",
+ "thunderdome",
+ "tracing",
+ "url",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-drm"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -5234,6 +5260,7 @@ dependencies = [
  "kithara-assets",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-download",
  "kithara-events",
  "kithara-net",
  "kithara-platform",
@@ -5318,6 +5345,7 @@ dependencies = [
  "kithara-assets",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-download",
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
@@ -5579,6 +5607,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-download",
  "kithara-drm",
  "kithara-events",
  "kithara-file",
@@ -5645,6 +5674,7 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-download",
  "kithara-events",
  "kithara-platform",
  "kithara-play",
@@ -5768,38 +5798,24 @@ dependencies = [
 name = "kithara-stream"
 version = "0.0.1-alpha4"
 dependencies = [
- "axum",
  "bitflags 2.13.0",
  "bon",
- "bytes",
- "dashmap",
  "delegate",
  "derive_more",
  "fieldwork",
- "futures",
  "hotpath",
- "humantime-serde",
  "kithara-abr",
  "kithara-bufpool",
- "kithara-derive",
- "kithara-events",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "serde",
- "serde_yaml_ng",
- "tempfile",
  "thiserror 2.0.18",
- "thunderdome",
  "tracing",
  "unimock",
- "url",
- "wasm-bindgen-futures",
  "wasm-bindgen-test",
- "wasm_safe_thread",
 ]
 
 [[package]]

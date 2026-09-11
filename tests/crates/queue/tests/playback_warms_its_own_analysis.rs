@@ -6,6 +6,7 @@ use std::num::NonZeroU32;
 use kithara::{
     analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     assets::{AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
@@ -13,7 +14,6 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     resampler::NoResamplerBackend,
     signal::AudioSpec,
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper,

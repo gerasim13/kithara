@@ -89,7 +89,7 @@ uuid = { workspace = true }
 # `FDK_archdef.h` has no branch for MSVC on ARM64 and stops at `fatal error
 # C1021: invalid preprocessor command`, so that one target goes without.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
-kithara = { workspace = true, features = ["fdk-aac"] }
+kithara = { workspace = true, features = ["download", "fdk-aac"] }
 
 # `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
 # already drops the dependency for that target (see its `Cargo.toml`), so
@@ -97,7 +97,7 @@ kithara = { workspace = true, features = ["fdk-aac"] }
 # exist, the same failure wasm32 gets if it asks for the feature that block
 # above never lists.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, features = ["stretch-bungee"] }
+kithara = { workspace = true, features = ["download", "stretch-bungee"] }
 
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
@@ -141,7 +141,7 @@ tower-http = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, features = ["download", "client-reqwest", "tls-rustls"] }
 
 # --- Apple hardware backend (macOS/iOS only) ---
 # Forwarded so `DecoderBackend::Apple` is in scope for tests that
@@ -149,11 +149,12 @@ kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, features = [
+    "download",
     "full",
     "queue",
     "probe",
@@ -181,6 +182,7 @@ uuid = { workspace = true, features = ["v4"] }
 # C++ libraries and `kithara-stretch` declares them for non-wasm targets only,
 # so on wasm the feature compiles a module whose imports do not exist.
 kithara = { workspace = true, default-features = false, features = [
+    "download",
     "full",
     "queue",
     "probe",
@@ -219,7 +221,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["android", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "android", "client-wreq"] }
 
 [dev-dependencies]
 toml = { workspace = true }

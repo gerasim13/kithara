@@ -6,15 +6,13 @@ use std::fmt::Write;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::{
-        AudioCodec,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,

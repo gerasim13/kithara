@@ -9,18 +9,17 @@ use std::{
 use kithara::{
     abr::Abr,
     assets::{AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig, FetchCmd, Peer},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::Arc,
         thread::active_named_thread_count,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
     },
-    stream::{
-        Stream,
-        dl::{Downloader, DownloaderConfig, FetchCmd, Peer},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir,

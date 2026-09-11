@@ -2,19 +2,19 @@
 
 use kithara::{
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant, timeout},
+        CancelToken, time,
+        time::{Duration, Instant, timeout},
     },
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};
 use kithara_test_utils::off_thread::OffThread;

@@ -4,12 +4,9 @@
 //!
 //! ## Design goals
 //! - `Reader`: sync `Read + Seek` via direct Source calls
-//! - `dl::Downloader`: unified download orchestrator (owns `HttpClient`,
-//!   dispatches `FetchCmd` with per-chunk writer callbacks)
 
 #![forbid(unsafe_code)]
 
-pub mod dl;
 mod error;
 mod hooks;
 mod media;
@@ -27,7 +24,6 @@ mod wake;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use dl::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use kithara_storage::WaitOutcome;

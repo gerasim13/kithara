@@ -428,7 +428,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -445,7 +445,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-no-block.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -462,7 +462,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-backtrace.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -480,7 +480,7 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_download=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
 
 [stress.modes.diagnostic-full.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"

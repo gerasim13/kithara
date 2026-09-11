@@ -3,13 +3,13 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
+    download::{Downloader, DownloaderConfig},
     events::PlayerEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,

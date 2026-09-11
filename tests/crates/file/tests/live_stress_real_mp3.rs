@@ -3,6 +3,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    download::DownloaderEvent,
     file::{File, FileConfig, FileEvent},
     platform::{
         sync::Arc,
@@ -12,7 +13,7 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     signal::AudioChunk,
-    stream::{DownloaderEvent, Stream},
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
