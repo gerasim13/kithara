@@ -561,15 +561,15 @@ fn expose_build_target(
 
     let target = project_root.join("target");
     match fs::symlink_metadata(&target) {
-        Ok(metadata) => {
-            ensure!(
-                metadata.file_type().is_symlink(),
-                "stable CI target path is not a symlink: {}",
-                target.display()
-            );
+        Ok(metadata) if metadata.file_type().is_symlink() => {
             fs::remove_file(&target)
                 .with_context(|| format!("replacing stale CI target link {}", target.display()))?;
         }
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir_all(&target)
+                .with_context(|| format!("removing legacy checkout target {}", target.display()))?;
+        }
+        Ok(_) => bail!("CI target path is not a directory: {}", target.display()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error)
@@ -1205,6 +1205,8 @@ mod tests {
         let second = root.path().join("cache/job-4712/cargo");
         fs::create_dir_all(&project).unwrap();
         fs::write(project.join("Cargo.toml"), "[workspace]").unwrap();
+        fs::create_dir_all(project.join("target/xtask-self-cache")).unwrap();
+        fs::write(project.join("target/stale"), "legacy checkout target").unwrap();
         fs::create_dir_all(&first).unwrap();
         fs::create_dir_all(&second).unwrap();
 
@@ -1215,6 +1217,7 @@ mod tests {
 
         assert_eq!(visible, project.join("target"));
         assert_eq!(same_visible, visible);
+        assert!(!first.join("stale").exists());
         assert!(first.join("first").is_file());
         assert!(!first.join("second").exists());
         assert!(second.join("second").is_file());
