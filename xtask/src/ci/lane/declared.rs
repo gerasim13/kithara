@@ -5,7 +5,7 @@ use kithara_devtools::common::tools::ToolsConfig;
 use toml::Value;
 
 use crate::{
-    ci::{config::CiPins, process::Process, run::PipelineKind},
+    ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
     config::{
         CiLaneConfig, CiLanePin, PIN_PREFIX, ROOT_PLACEHOLDER, SELF_PROGRAM, TARGET_PLACEHOLDER,
     },
@@ -41,6 +41,31 @@ pub(crate) fn run(
     for check in &lane.pinned {
         require_pinned_version(process, check, pins, tools)?;
     }
+    let target_snapshot_to_publish = if process.is_recording() {
+        None
+    } else {
+        lane.target_snapshot
+            .as_deref()
+            .map(|key| {
+                let mc = process.resolve_program(tools.program("mc"))?;
+                let cargo_home = process
+                    .environment_path("CARGO_HOME")
+                    .or_else(|| {
+                        process
+                            .environment_path("HOME")
+                            .map(|home| home.join(".cargo"))
+                    })
+                    .context("prepared CI environment has no CARGO_HOME")?;
+                snapshot::restore_for_lane(
+                    key,
+                    &process.target_dir(),
+                    process.root(),
+                    &cargo_home,
+                    &mc,
+                )
+            })
+            .transpose()?
+    };
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
         let mut command = if role == SELF_PROGRAM {
@@ -56,6 +81,10 @@ pub(crate) fn run(
             command.env(key, resolve(value, process, pins)?);
         }
         process.run_command(&mut command, &step.label)?;
+    }
+    if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
+        let mc = process.resolve_program(tools.program("mc"))?;
+        snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc)?;
     }
     Ok(())
 }

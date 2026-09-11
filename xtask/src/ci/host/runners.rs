@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -278,20 +279,28 @@ impl<'a> RunnerManager<'a> {
         let lane_config = MAC_CONFIG_PATH;
         let image = &self.config.pins.linux_image;
         let provisioned_image = format!("{PROVISIONED_LINUX_IMAGE_ENV}={image}");
-        let sccache_s3 = self
+        let sccache_environment = self
             .config
             .host
             .sccache_s3_env_file
             .as_deref()
             .map(client_environment)
-            .transpose()?
+            .transpose()?;
+        let sccache_s3 = sccache_environment
+            .clone()
+            .into_iter()
+            .flatten()
+            .map(|(name, value)| format!(", \"{name}={value}\""))
+            .collect::<String>();
+        let docker_sccache_s3 = sccache_environment
+            .map(docker_client_environment)
             .into_iter()
             .flatten()
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{sccache_s3}]\n\
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
@@ -461,6 +470,23 @@ pub(super) fn docker_socket(home: &Path, profile: &str) -> PathBuf {
 
 pub(super) fn docker_host(home: &Path, profile: &str) -> String {
     format!("unix://{}", docker_socket(home, profile).display())
+}
+
+fn docker_client_environment(
+    mut environment: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    if let Some(endpoint) = environment.get_mut("SCCACHE_ENDPOINT") {
+        for prefix in ["http://127.0.0.1:", "https://127.0.0.1:"] {
+            if let Some(port) = endpoint.strip_prefix(prefix) {
+                let scheme = prefix
+                    .split_once("://")
+                    .map_or("http", |(scheme, _)| scheme);
+                *endpoint = format!("{scheme}://host.docker.internal:{port}");
+                break;
+            }
+        }
+    }
+    environment
 }
 
 pub(super) struct Tokens {
@@ -988,7 +1014,7 @@ mod tests {
         let env_file = directory.path().join("cache.env");
         fs::write(
             &env_file,
-            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://127.0.0.1:19000\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write cache environment");
         fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600))
@@ -1011,7 +1037,12 @@ mod tests {
         )
         .expect("runner config is TOML");
 
-        for runner in rendered["runners"].as_array().expect("runners") {
+        for (index, runner) in rendered["runners"]
+            .as_array()
+            .expect("runners")
+            .iter()
+            .enumerate()
+        {
             assert!(
                 runner["environment"]
                     .as_array()
@@ -1019,6 +1050,20 @@ mod tests {
                     .iter()
                     .any(|value| value.as_str() == Some("SCCACHE_BUCKET=cache")),
                 "{} does not inherit the S3 cache: {runner}",
+                runner["name"]
+            );
+            let endpoint = if index == 0 {
+                "SCCACHE_ENDPOINT=http://host.docker.internal:19000"
+            } else {
+                "SCCACHE_ENDPOINT=http://127.0.0.1:19000"
+            };
+            assert!(
+                runner["environment"]
+                    .as_array()
+                    .expect("runner environment")
+                    .iter()
+                    .any(|value| value.as_str() == Some(endpoint)),
+                "{} cannot reach the S3 endpoint: {runner}",
                 runner["name"]
             );
         }

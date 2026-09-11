@@ -28,7 +28,9 @@ pub(crate) fn install_double(bin: &Path, role: &str) -> PathBuf {
     );
     fs::create_dir_all(bin).expect("create the tool directory");
     let destination = bin.join(format!("{role}{}", std::env::consts::EXE_SUFFIX));
-    fs::copy(&source, &destination).expect("install the fake tool");
+    let staging = bin.join(format!(".{role}.new{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(&source, &staging).expect("stage the fake tool");
+    fs::rename(staging, &destination).expect("publish the fake tool");
     destination
 }
 

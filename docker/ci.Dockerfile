@@ -1,6 +1,8 @@
 ARG RUST_BASE_DIGEST
 ARG RUST_VERSION
-FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST}
+ARG SCCACHE_S3_IMAGE
+FROM ${SCCACHE_S3_IMAGE} AS minio-client
+FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST} AS ci-base
 
 ARG AST_GREP_VERSION
 ARG CARGO_CRAP_VERSION
@@ -59,12 +61,14 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
-    clang libclang-dev lld llvm pkg-config \
-    bubblewrap socat ripgrep nodejs npm \
+    clang libclang-dev lld llvm mold ninja-build pkg-config \
+    bubblewrap socat ripgrep nodejs npm tar zstd \
     mesa-vulkan-drivers \
     libasound2-dev libdbus-1-dev libssl-dev \
     libavcodec-dev libavformat-dev libavfilter-dev libavdevice-dev \
     libavutil-dev libswresample-dev libswscale-dev libpostproc-dev \
+    && test "$(dpkg-query -W -f='${Version}' chromium)" = \
+            "$(dpkg-query -W -f='${Version}' chromium-driver)" \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian ships CMake 3.25, and a vendored native dependency requires 3.30 or
@@ -159,36 +163,43 @@ RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfm
  && ln -s "${RUSTUP_HOME}/toolchains/${NIGHTLY_TOOLCHAIN}-${host}" \
       "${RUSTUP_HOME}/toolchains/nightly-${host}"
 
+FROM ci-base AS tool-builder
+
+# Install CI-only Cargo executables away from Cargo's own home. The final
+# image copies only these binaries, leaving the registry and install target in
+# this disposable build stage.
+ENV CARGO_INSTALL_ROOT=/opt/kithara-ci-tools
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/tmp/cargo-install-target \
     CARGO_TARGET_DIR=/tmp/cargo-install-target \
-    cargo install --locked --version "${AST_GREP_VERSION}" ast-grep \
- && cargo install --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
- && cargo install --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
- && cargo install --locked --version "${CARGO_GEIGER_VERSION}" cargo-geiger \
- && cargo install --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
- && cargo install --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
- && cargo install --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
- && cargo install --locked --version "${CARGO_MODULES_VERSION}" cargo-modules \
- && cargo install --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
- && cargo install --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
- && cargo install --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
- && cargo install --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
- && cargo install --locked --version "${CARGO_SORT_VERSION}" cargo-sort \
- && cargo install --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
+    cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${AST_GREP_VERSION}" ast-grep \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_GEIGER_VERSION}" cargo-geiger \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MODULES_VERSION}" cargo-modules \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MUTANTS_VERSION}" cargo-mutants \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_NEXTEST_VERSION}" cargo-nextest \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_SEMVER_CHECKS_VERSION}" cargo-semver-checks \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_SHEAR_VERSION}" cargo-shear \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_SORT_VERSION}" cargo-sort \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
       cargo-workspace-unused-pub \
- && cargo install --locked --version "${JUST_VERSION}" just \
- && cargo install --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
- && cargo install --locked --version "${SCCACHE_VERSION}" sccache \
- && cargo install --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
- && cargo install --locked --version "${TAPLO_CLI_VERSION}" taplo-cli \
- && cargo install --locked --version "${TIDY_JSON_VERSION}" tidy-json \
- && cargo install --locked --version "${TRUNK_VERSION}" trunk \
- && cargo install --locked --version "${TYPOS_CLI_VERSION}" typos-cli \
- && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
- && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
- && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${JUST_VERSION}" just \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SCCACHE_VERSION}" sccache \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${TAPLO_CLI_VERSION}" taplo-cli \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${TIDY_JSON_VERSION}" tidy-json \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${TRUNK_VERSION}" trunk \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${TYPOS_CLI_VERSION}" typos-cli \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${WASM_PACK_VERSION}" wasm-pack \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${WASM_SLIM_VERSION}" wasm-slim
 
 # lockbud is a rustc driver, not a published crate, so it is installed from git
 # at a pinned commit and built by the same nightly it links `rustc_driver`
@@ -198,8 +209,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/tmp/cargo-install-target \
     CARGO_TARGET_DIR=/tmp/cargo-install-target \
-    cargo "+${LOCKBUD_TOOLCHAIN}" install --locked \
+    cargo "+${LOCKBUD_TOOLCHAIN}" install --root "${CARGO_INSTALL_ROOT}" --locked \
       --git https://github.com/BurtonQin/lockbud --rev "${LOCKBUD_REV}" lockbud
+
+FROM ci-base
+
+# Keep the runtime image feature-compatible with the former single-stage
+# image. `lld` remains the configured default; a lane can opt into `mold` with
+# its target-scoped Cargo Rust flags, while `ninja` is available to native
+# dependencies that select it.
+COPY --from=tool-builder /opt/kithara-ci-tools/bin/ /usr/local/cargo/bin/
+
+# The cache service image is already digest-pinned in ci-pins. Reusing its
+# client keeps S3 protocol behaviour identical for compiler cache and target
+# snapshots without a second unpinned download.
+COPY --from=minio-client /usr/bin/mc /usr/local/bin/mc
 
 # The account a job runs as. It is declared here rather than in the image that
 # starts the runner because images built on top of this one have state to hand

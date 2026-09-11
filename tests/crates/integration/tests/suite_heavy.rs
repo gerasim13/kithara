@@ -10,3 +10,6 @@ mod common;
 mod multi_instance;
 
 mod offline_browser;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod no_sync_passthrough;

@@ -23,7 +23,7 @@ hack:
 # Routed through xtask so the lane holds the shared target directory's job
 # lease for the whole comparison, like every other build lane.
 semver BASELINE="HEAD~1":
-    just _xtask semver --baseline "{{ BASELINE }}"
+    just _xtask semver --baseline "{{ BASELINE }}" --baseline-feature backend-cpal
 
 geiger:
     cargo geiger --all-targets --all-dependencies --output-format Ascii

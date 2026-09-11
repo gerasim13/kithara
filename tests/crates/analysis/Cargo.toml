@@ -27,8 +27,8 @@ kithara = { workspace = true, features = [
     "resampler",
     "signal",
 ] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["probe"] }
 
 [lints]

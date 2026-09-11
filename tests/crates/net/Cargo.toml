@@ -29,7 +29,7 @@ kithara = { workspace = true, features = [
     "stream",
     "tokio-net",
 ] }
-kithara-integration-tests = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all"] }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 

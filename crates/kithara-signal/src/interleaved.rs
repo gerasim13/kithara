@@ -129,7 +129,7 @@ impl<'a> InterleavedView<'a> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_test_fixtures::fixtures::{channel_signals, pcm_ramp, stereo_pair};
+    use kithara_core_test_fixtures::{channel_signals, pcm_ramp, stereo_pair};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -151,7 +151,8 @@ mod tests {
     #[case::seven_channels(7)]
     #[case::eight_channels(8)]
     #[case::wide_nine_channels(9)]
-    fn planar_round_trip(#[case] channels: u16, channel_signals: [Vec<f32>; 9]) {
+    fn planar_round_trip(#[case] channels: u16) {
+        let channel_signals = channel_signals();
         let frames = FrameCount::new(5);
         let source = &channel_signals[usize::from(channels) - 1];
         let interleaved =
@@ -187,8 +188,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn caller_channel_destination_is_checked(stereo_pair: Vec<f32>) {
-        let source = stereo_pair;
+    fn caller_channel_destination_is_checked() {
+        let source = stereo_pair();
         let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
             .expect("stereo fixture shape is exact");
         let mut left = [0.0; 2];
@@ -212,8 +213,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn caller_channel_destination_receives_each_channel(stereo_pair: Vec<f32>) {
-        let source = stereo_pair;
+    fn caller_channel_destination_receives_each_channel() {
+        let source = stereo_pair();
         let view = InterleavedView::new(&source, spec(2), FrameCount::new(2))
             .expect("stereo fixture shape is exact");
         let mut left = [0.0; 2];
@@ -227,7 +228,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn non_zero_planar_range_interleaves_only_selected_frames(pcm_ramp: Vec<f32>) {
+    fn non_zero_planar_range_interleaves_only_selected_frames() {
+        let pcm_ramp = pcm_ramp();
         let pools = pools_with_budget(64 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec(2), FrameCount::new(4)).expect("planar storage fits");
@@ -252,7 +254,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn range_shape_and_capacity_failures_are_typed(pcm_ramp: Vec<f32>) {
+    fn range_shape_and_capacity_failures_are_typed() {
+        let pcm_ramp = pcm_ramp();
         let source = &pcm_ramp[..4];
         assert_eq!(
             InterleavedView::new(source, spec(2), FrameCount::new(3)),

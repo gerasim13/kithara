@@ -8,9 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
@@ -75,8 +76,9 @@ impl SccacheSlot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum CacheTrust {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CacheTrust {
     Quarantine,
     Review,
     Trusted,
@@ -87,7 +89,7 @@ impl CacheTrust {
     /// root covers everything that can appear in it.
     pub(super) const ALL: [Self; 3] = [Self::Quarantine, Self::Review, Self::Trusted];
 
-    fn from_environment() -> Result<Self> {
+    pub(super) fn from_environment() -> Result<Self> {
         match env::var("KITHARA_CACHE_TRUST")
             .unwrap_or_else(|_| "review".into())
             .as_str()
@@ -99,7 +101,7 @@ impl CacheTrust {
         }
     }
 
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Quarantine => "quarantine",
             Self::Review => "review",
@@ -507,14 +509,18 @@ fn build_target_dir(
     target_scope: &str,
     target_is_windows: bool,
     gitlab: bool,
-    concurrent_id: Option<&str>,
-    slots: usize,
+    job_id: Option<&str>,
 ) -> Result<PathBuf> {
     if gitlab && !target_is_windows {
-        let slot = disposable_slot(concurrent_id, slots)?;
+        let job_id = job_id.context("CI_JOB_ID must identify the GitLab job")?;
+        ensure!(
+            !job_id.is_empty() && job_id.bytes().all(|byte| byte.is_ascii_digit()),
+            "CI_JOB_ID must be decimal digits"
+        );
         return Ok(shared_root
             .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
-            .join(format!("{target_scope}-slot-{slot}")));
+            .join(format!("{target_scope}-job-{job_id}"))
+            .join("cargo"));
     }
     Ok(project_root.join("target"))
 }
@@ -523,24 +529,71 @@ fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    config: &CiConfig,
+    _config: &CiConfig,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
-    let target = build_target_dir(
+    let job_id = env::var("CI_JOB_ID").ok();
+    let backing = build_target_dir(
         project_root,
         shared_root,
         target_scope,
         cfg!(windows),
         is_gitlab(),
-        concurrent_id.as_deref(),
-        config.host.job_concurrency,
+        job_id.as_deref(),
     )?;
-    fs::create_dir_all(&target)
-        .with_context(|| format!("creating CI build cache {}", target.display()))?;
+    fs::create_dir_all(&backing)
+        .with_context(|| format!("creating CI build cache {}", backing.display()))?;
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
-    let lease = lease::hold(&target);
+    let lease = lease::hold(&backing);
+    let target = expose_build_target(project_root, &backing, is_gitlab(), cfg!(windows))?;
     Ok((target, lease))
+}
+
+fn expose_build_target(
+    project_root: &Path,
+    backing: &Path,
+    gitlab: bool,
+    target_is_windows: bool,
+) -> Result<PathBuf> {
+    if !gitlab || target_is_windows {
+        return Ok(backing.to_path_buf());
+    }
+
+    let target = project_root.join("target");
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(&target)
+                .with_context(|| format!("replacing stale CI target link {}", target.display()))?;
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir_all(&target)
+                .with_context(|| format!("removing legacy checkout target {}", target.display()))?;
+        }
+        Ok(_) => bail!("CI target path is not a directory: {}", target.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading CI target link {}", target.display()));
+        }
+    }
+    create_target_link(backing, &target)?;
+    Ok(target)
+}
+
+#[cfg(unix)]
+fn create_target_link(backing: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(backing, target).with_context(|| {
+        format!(
+            "linking stable CI target {} to {}",
+            target.display(),
+            backing.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
+    unreachable!("Windows keeps its build target in the checkout")
 }
 
 /// Refuse a job only once there is nothing left to reclaim and nothing left to
@@ -689,6 +742,7 @@ fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiCon
     let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
+            config.host.host_root.join("toolchains/shared-bin"),
             config.host.android_home.join("cmdline-tools/latest/bin"),
             config.host.android_home.join("emulator"),
             config.host.android_home.join("platform-tools"),
@@ -757,6 +811,21 @@ mod tests {
                 .unwrap()
                 .index(),
             0
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_jobs_can_resolve_provisioned_shared_tools() {
+        let config = super::super::config::fixture();
+        let mut vars = BTreeMap::new();
+
+        set_path(&mut vars, Path::new("/ci-home"), &config).unwrap();
+
+        let paths = env::split_paths(vars.get(OsStr::new("PATH")).unwrap()).collect::<Vec<_>>();
+        assert!(
+            paths.contains(&config.host.host_root.join("toolchains/shared-bin")),
+            "CI PATH omits provisioned shared tools: {paths:?}"
         );
     }
 
@@ -1087,40 +1156,76 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_targets_live_in_the_persistent_runner_slot() {
+    fn gitlab_targets_are_private_to_one_job() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
             "review-linux-aarch64",
             false,
             true,
-            Some("1"),
-            3,
+            Some("4711"),
         )
         .unwrap();
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-slot-1")
+            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
+        );
+        assert_ne!(
+            target,
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                false,
+                true,
+                Some("4712"),
+            )
+            .unwrap()
+        );
+        assert!(
+            build_target_dir(
+                Path::new("/builds/disrupt/kithara"),
+                Path::new("/cache"),
+                "review-linux-aarch64",
+                false,
+                true,
+                Some("../trusted"),
+            )
+            .is_err()
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn macos_gitlab_targets_live_in_the_persistent_runner_slot() {
-        let target = build_target_dir(
-            Path::new("/builds/disrupt/kithara"),
-            Path::new("/cache"),
-            "review-macos-aarch64",
-            false,
-            true,
-            Some("1"),
-            3,
-        )
-        .unwrap();
+    fn gitlab_jobs_keep_one_cargo_visible_target_over_private_backings() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        let first = root.path().join("cache/job-4711/cargo");
+        let second = root.path().join("cache/job-4712/cargo");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "[workspace]").unwrap();
+        fs::create_dir_all(project.join("target/xtask-self-cache")).unwrap();
+        fs::write(project.join("target/stale"), "legacy checkout target").unwrap();
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
 
-        assert_eq!(
-            target,
-            Path::new("/cache/target-slots/review-macos-aarch64-slot-1")
+        let visible = expose_build_target(&project, &first, true, false).unwrap();
+        fs::write(visible.join("first"), "owned by the first job").unwrap();
+        let same_visible = expose_build_target(&project, &second, true, false).unwrap();
+        fs::write(same_visible.join("second"), "owned by the second job").unwrap();
+
+        assert_eq!(visible, project.join("target"));
+        assert_eq!(same_visible, visible);
+        assert!(!first.join("stale").exists());
+        assert!(first.join("first").is_file());
+        assert!(!first.join("second").exists());
+        assert!(second.join("second").is_file());
+        assert!(!second.join("first").exists());
+        assert!(
+            build_cache::persistent_target_dirs(&project)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -1133,7 +1238,6 @@ mod tests {
             false,
             false,
             None,
-            3,
         )
         .unwrap();
 

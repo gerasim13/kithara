@@ -1,0 +1,10 @@
+[package]
+name = "kithara-core-test-fixtures"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

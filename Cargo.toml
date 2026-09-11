@@ -212,17 +212,18 @@ kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha4", defau
 kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha4", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
+kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4" }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", default-features = false }
-kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
+kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4", default-features = false }
 kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
-kithara-integration-tests = { path = "tests/crates/integration" }
+kithara-integration-tests = { path = "tests/crates/integration", default-features = false }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha4" }
@@ -235,7 +236,7 @@ kithara-signal = { path = "crates/kithara-signal", version = "0.0.1-alpha4" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha4", default-features = false }
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", default-features = false }
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha4", default-features = false }
-kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha4" }
+kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha4", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
 kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha4" }
@@ -569,6 +570,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-bufpool-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-core-test-fixtures]
 opt-level = 1
 
 [profile.test-release.package.kithara-decode-tests]

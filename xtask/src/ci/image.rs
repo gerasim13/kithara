@@ -14,6 +14,9 @@ pub(crate) struct ImageArgs {
     /// Reviewed build pins tracked in the repository.
     #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
     pins: PathBuf,
+    /// Tag a disposable validation image without replacing the pinned fleet image.
+    #[arg(long)]
+    tag: Option<String>,
     #[command(subcommand)]
     command: ImageCommand,
 }
@@ -72,7 +75,9 @@ pub(crate) fn run(args: &ImageArgs) -> Result<()> {
     build(
         &process,
         args.command.dockerfile(),
-        args.command.tag(&pins),
+        args.tag
+            .as_deref()
+            .unwrap_or_else(|| args.command.tag(&pins)),
         &args.command.build_args(&pins, &root)?,
     )
 }
@@ -105,6 +110,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
     let mut args = vec![
         ("RUST_VERSION", pins.stable_toolchain.clone()),
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
+        ("SCCACHE_S3_IMAGE", pins.sccache_s3_image.clone()),
         ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),
         ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
         ("LOCKBUD_TOOLCHAIN", pins.lockbud_toolchain.clone()),

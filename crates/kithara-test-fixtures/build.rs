@@ -1,10 +1,10 @@
-//! Materializes every registered asset into the shared store and writes one
-//! accessor per case into `OUT_DIR`.
-//!
-//! `src/defs/` and `src/registry.rs` compile only here — the library never sees
-//! them, which is what keeps encoding itself out of the target build.
-//! `src/signal/` and `src/store.rs` are shared: the same sources, reached from
-//! two roots.
+// Materializes every registered asset into the shared store and writes one
+// accessor per case into `OUT_DIR`.
+//
+// `src/defs/` and `src/registry.rs` compile only here — the library never sees
+// them, which is what keeps encoding itself out of the target build.
+// `src/signal/` and `src/store.rs` are shared: the same sources, reached from
+// two roots.
 
 #[path = "src/context.rs"]
 mod context;
@@ -44,7 +44,9 @@ use registry::{AssetBuild, AssetDef};
 
 use self::context::BuildContext;
 
-const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
+fn remote_fixtures_env() -> &'static str {
+    "KITHARA_REMOTE_FIXTURES"
+}
 
 /// Rejects two cases that would produce one accessor, before either is written.
 fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef)> {
@@ -59,6 +61,7 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
         let id = store::asset_id(def.func, def.case);
         resolved.push((name, id, *def));
     }
+    resolved.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
     resolved
 }
 
@@ -110,10 +113,10 @@ fn materialize_one(
     if store::has_entry(namespace, id, def.ext) {
         return None;
     }
-    if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
+    if def.optional && std::env::var_os(remote_fixtures_env()).is_none() {
         return Some((
             name.clone(),
-            format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
+            format!("remote hydration disabled; set {}", remote_fixtures_env()),
         ));
     }
     let _lock = store::lock_entry(namespace, id)
@@ -188,8 +191,7 @@ fn codegen(
     let mut out = String::new();
     let mut manifest = String::new();
     let mut by_name = String::new();
-    for (name, id, def) in resolved {
-        let entry = format!("ENTRY_{}", name.to_uppercase());
+    for (index, (name, id, def)) in resolved.iter().enumerate() {
         let path = store::entry_path(namespace, id, def.ext);
         let path = path.to_str().unwrap_or_else(|| {
             panic!("kithara-test-fixtures: the store path for `{name}` is not valid UTF-8")
@@ -198,13 +200,20 @@ fn codegen(
         let unavailable = unavailable
             .get(name)
             .map_or_else(|| "None".to_owned(), |reason| format!("Some({reason:?})"));
+        let _ = writeln!(
+            manifest,
+            "    &crate::asset::AssetEntry {{ name: {name:?}, id: {id:?}, ext: {ext:?}, content_type: {content_type:?}, unavailable: {unavailable} }},",
+            ext = def.ext,
+        );
         // rustc records an `include_bytes!` path in dep-info, so cargo tracks
         // the store entry an embedded accessor was built from. An on-disk
         // accessor reads the file at run time, which wasm has no way to do.
         let (cfg, body) = if def.embed {
             (
                 "",
-                format!("    crate::asset::Asset::embedded(&{entry}, include_bytes!({path:?}))"),
+                format!(
+                    "    crate::asset::Asset::embedded(MANIFEST[{index}], include_bytes!({path:?}))"
+                ),
             )
         } else {
             (
@@ -212,19 +221,17 @@ fn codegen(
                 format!(
                     "    static BYTES: ::std::sync::OnceLock<Vec<u8>> = \
                      ::std::sync::OnceLock::new();\n    \
-                     crate::asset::Asset::on_disk(&{entry}, &BYTES)"
+                     static PATH: ::std::sync::OnceLock<::std::path::PathBuf> = \
+                     ::std::sync::OnceLock::new();\n    \
+                     crate::asset::Asset::on_disk(MANIFEST[{index}], &BYTES, &PATH)"
                 ),
             )
         };
         let _ = write!(
             out,
-            "static {entry}: crate::asset::AssetEntry = crate::asset::AssetEntry {{\n    \
-             name: {name:?},\n    id: {id:?},\n    path: {path:?},\n    \
-             content_type: {content_type:?},\n    unavailable: {unavailable},\n}};\n\n\
-             {cfg}#[must_use]\n\
+            "{cfg}#[must_use]\n\
              pub fn {name}() -> crate::asset::Asset {{\n{body}\n}}\n\n",
         );
-        let _ = writeln!(manifest, "    &{entry},");
         let _ = writeln!(
             by_name,
             "    {}({name:?}, {name}),",
@@ -248,7 +255,7 @@ fn codegen(
 
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
-    println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
+    println!("cargo:rerun-if-env-changed={}", remote_fixtures_env());
 
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
     assert!(
