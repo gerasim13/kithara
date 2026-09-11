@@ -2362,6 +2362,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
+target_snapshot = "macos-test-release"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
@@ -2378,7 +2379,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_TARGET_DIR = "{target}/ci-tests", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_LOG = "cargo::compiler::fingerprint=info", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "platforms"
 kinds = [
