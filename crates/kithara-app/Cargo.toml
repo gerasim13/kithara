@@ -133,7 +133,7 @@ serde_yaml_ng = { workspace = true }
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "offline", "probe", "ui-capture"] }
 kithara-encode = { workspace = true, default-features = false }
-kithara-test-fixtures = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 

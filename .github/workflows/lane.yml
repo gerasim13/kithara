@@ -68,11 +68,9 @@ env:
   # called workflow inherits nothing from its caller, so every workflow that
   # runs a lane on that fleet says it for itself.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  # Compiled artifacts survive checkout cleaning in the runner's cache mount.
-  # The host also preserves this runner's work folder so checkout leaves
-  # unchanged build-script inputs at their existing modification times.
-  # xtask leases the target during the lane; reports stay in the workspace.
-  CARGO_TARGET_DIR: /cache/target
+  # The target is private to this job. A lane restores a verified immutable
+  # snapshot before Cargo starts; no two jobs can write the restored tree.
+  CARGO_TARGET_DIR: /cache/target/jobs/${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow

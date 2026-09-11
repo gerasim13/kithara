@@ -441,13 +441,10 @@ fn report_lane(
 ) -> Result<()> {
     let process = Process::recording(
         root,
-        Recording::default()
-            .with_reply(
-                tools.program("xcodebuild"),
-                &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-            )
-            .with_reply("chromium", &ci_config.pins.chromium_version)
-            .with_reply("chromedriver", &ci_config.pins.chromium_version),
+        Recording::default().with_reply(
+            tools.program("xcodebuild"),
+            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+        ),
     );
     let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
     let recorded = process
@@ -689,14 +686,11 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let version = ci_config.pins.chromium_version.clone();
                 let recording = Recording::default()
                     .with_reply(
                         project.tools.program("xcodebuild"),
                         &format!("Xcode {}", ci_config.pins.expected_xcode_version),
                     )
-                    .with_reply("chromium", &version)
-                    .with_reply("chromedriver", &version)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
                     .with_reply("xcrun", r#"{"testNodes":[]}"#);
@@ -886,6 +880,18 @@ mod tests {
                 .all(|line| !line.trim().starts_with("image:")),
             "the pipeline must not override the local image provisioned in runner config"
         );
+    }
+
+    #[test]
+    fn gitlab_setup_leaves_the_lane_target_path_unclaimed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+
+        assert!(!common.contains("target/xtask-self-cache"));
+        assert!(!common.contains("before_script:"));
     }
 
     #[test]

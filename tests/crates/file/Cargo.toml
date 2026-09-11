@@ -22,8 +22,8 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 [dependencies]
 kithara = { workspace = true, features = ["download", "full", "probe", "symphonia", "resample-rubato"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-integration-tests = { workspace = true }
-kithara-test-fixtures = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
 
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
 
