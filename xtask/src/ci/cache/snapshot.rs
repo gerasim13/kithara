@@ -73,17 +73,22 @@ pub(super) fn run(args: &SnapshotArgs) -> Result<()> {
         SnapshotCommand::Restore {
             target,
             fingerprint,
-        } => restore(target, fingerprint).map(|_| ()),
+        } => restore(target, fingerprint, Path::new("mc")).map(|_| ()),
         SnapshotCommand::Publish {
             target,
             fingerprint,
-        } => publish(target, fingerprint),
+        } => publish(target, fingerprint, Path::new("mc")),
     }
 }
 
-pub(crate) fn restore_for_lane(key: &str, target: &Path, root: &Path) -> Result<Option<String>> {
+pub(crate) fn restore_for_lane(
+    key: &str,
+    target: &Path,
+    root: &Path,
+    mc: &Path,
+) -> Result<Option<String>> {
     let fingerprint = fingerprint(key, "cargo", "host", root)?;
-    let restored = restore(target, &fingerprint)?;
+    let restored = restore(target, &fingerprint, mc)?;
     Ok(snapshot_to_publish(fingerprint, restored))
 }
 
@@ -91,8 +96,8 @@ fn snapshot_to_publish(fingerprint: String, restored: bool) -> Option<String> {
     (!restored).then_some(fingerprint)
 }
 
-pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str) -> Result<()> {
-    publish(target, fingerprint)
+pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
+    publish(target, fingerprint, mc)
 }
 
 fn fingerprint(lane: &str, profile: &str, target: &str, root: &Path) -> Result<String> {
@@ -132,7 +137,7 @@ fn fingerprint(lane: &str, profile: &str, target: &str, root: &Path) -> Result<S
     Ok(hex::encode(hash.finalize()))
 }
 
-fn publish(target: &Path, fingerprint: &str) -> Result<()> {
+fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
     validate_fingerprint(fingerprint)?;
     require_target(target, false)?;
     let archive = NamedTempFile::new().context("create target snapshot archive")?;
@@ -148,7 +153,7 @@ fn publish(target: &Path, fingerprint: &str) -> Result<()> {
     )?;
     let checksum = sha256(archive.path())?;
     let object = Snapshot::object(fingerprint, &checksum);
-    let client = Client::load()?;
+    let client = Client::load(mc)?;
     if client.exists(&object)? {
         info!(%fingerprint, %checksum, "target snapshot already exists");
         return Ok(());
@@ -158,10 +163,10 @@ fn publish(target: &Path, fingerprint: &str) -> Result<()> {
     Ok(())
 }
 
-fn restore(target: &Path, fingerprint: &str) -> Result<bool> {
+fn restore(target: &Path, fingerprint: &str, mc: &Path) -> Result<bool> {
     validate_fingerprint(fingerprint)?;
     require_target(target, true)?;
-    let client = Client::load()?;
+    let client = Client::load(mc)?;
     let Some(object) = client.latest(fingerprint)? else {
         info!(%fingerprint, "no target snapshot exists");
         return Ok(false);
@@ -297,10 +302,11 @@ struct Client {
     bucket: String,
     endpoint: String,
     environment: BTreeMap<String, String>,
+    program: PathBuf,
 }
 
 impl Client {
-    fn load() -> Result<Self> {
+    fn load(program: &Path) -> Result<Self> {
         let environment = current_client_environment()?;
         let endpoint = environment
             .get("SCCACHE_ENDPOINT")
@@ -314,6 +320,7 @@ impl Client {
             bucket,
             endpoint,
             environment,
+            program: program.to_owned(),
         })
     }
 
@@ -326,7 +333,7 @@ impl Client {
             .environment
             .get("AWS_SECRET_ACCESS_KEY")
             .context("cache secret missing")?;
-        let output = Command::new("mc")
+        let output = Command::new(&self.program)
             .args([
                 "alias",
                 "set",
@@ -342,7 +349,7 @@ impl Client {
             .output()
             .context("configure snapshot storage client")?;
         require_success(&output, "configure snapshot storage client")?;
-        Ok(Command::new("mc"))
+        Ok(Command::new(&self.program))
     }
 
     fn exists(&self, object: &str) -> Result<bool> {
@@ -434,6 +441,7 @@ mod tests {
             bucket: "kithara-review".to_owned(),
             endpoint: String::new(),
             environment: BTreeMap::new(),
+            program: PathBuf::from("mc"),
         };
 
         assert_eq!(

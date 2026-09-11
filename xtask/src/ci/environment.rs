@@ -694,7 +694,6 @@ fn set_path(vars: &mut BTreeMap<OsString, OsString>, home: &Path, config: &CiCon
     let mut paths = vec![home.join(".cargo/bin")];
     if cfg!(target_os = "macos") {
         paths.extend([
-            config.host.host_root.join("toolchains/shared-bin"),
             config.host.android_home.join("cmdline-tools/latest/bin"),
             config.host.android_home.join("emulator"),
             config.host.android_home.join("platform-tools"),
@@ -763,21 +762,6 @@ mod tests {
                 .unwrap()
                 .index(),
             0
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_jobs_can_run_provisioned_shared_tools() {
-        let config = super::super::config::fixture();
-        let mut vars = BTreeMap::new();
-
-        set_path(&mut vars, Path::new("/ci-home"), &config).unwrap();
-
-        let paths = env::split_paths(vars.get(OsStr::new("PATH")).unwrap()).collect::<Vec<_>>();
-        assert!(
-            paths.contains(&config.host.host_root.join("toolchains/shared-bin")),
-            "CI PATH omits provisioned shared tools: {paths:?}"
         );
     }
 
