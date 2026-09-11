@@ -103,13 +103,18 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let _audio = worker.open(config).await.unwrap();
 }
 
+/// The bus gives one channel per event type, so "the first event" is a
+/// property only within a single topic: a receiver spanning several of them
+/// reports whichever member it polls first, not whichever was published first.
+/// Subscribing to the decoder topic alone is what makes the assertion below a
+/// property of publication order rather than of declaration order.
 #[kithara::test(tokio)]
 async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let bus = EventBus::new(16);
-    let mut events = bus.subscribe();
+    let mut events = bus.subscribe::<DecoderEvent>();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(config.stream().clone())
         .maybe_hint(config.hint().map(str::to_owned))
         .events(bus)
@@ -119,13 +124,13 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
     let expected_backend = DecoderBackend::Symphonia;
 
     match events.try_recv().map(|env| env.event) {
-        Ok(TestEvent::Decoder(DecoderEvent::DecoderChanged {
+        Ok(DecoderEvent::DecoderChanged {
             backend,
             sample_rate,
             channels,
             cause,
             ..
-        })) => {
+        }) => {
             assert_eq!(backend, expected_backend);
             assert_eq!(sample_rate, audio.spec().sample_rate.get());
             assert_eq!(channels, audio.spec().channels);
