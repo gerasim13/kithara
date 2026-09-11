@@ -924,6 +924,7 @@ prefix_args = [
 program = "cargo"
 owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
 default_features = [
+  "kithara-app/backend-cpal",
   "kithara-ui/capture",
   "kithara-ui/gpu",
   "kithara-ui/masonry",
