@@ -471,27 +471,67 @@ mod tests {
         );
     }
 
+    /// The worker leaves its coalescing window either when the debounce
+    /// elapses or when the burst reaches `force_every_n_ops`. Sizing the
+    /// burst to the cap leaves the cap as the only exit, so every signal
+    /// provably shares one window and the flush count states how the hub
+    /// coalesces rather than how the machine scheduled this thread.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn worker_coalesces_burst_into_single_flush() {
-        let hub = FlushHub::new(CancelToken::never(), fast_policy());
-        let src = CountingSource::new("burst");
-        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+        const BURST: usize = 5;
 
-        for _ in 0..5 {
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(10),
+                force_every_n_ops: NonZeroUsize::new(BURST).unwrap(),
+                poll_interval: Duration::from_millis(20),
+            },
+        );
+        let (parked_tx, parked_rx) = mpsc::channel();
+        *hub.wait.idle_park.lock() = Some(parked_tx);
+        let (flushed_tx, flushed_rx) = mpsc::channel();
+        let src = CountingSource::with_completion("burst", flushed_tx);
+        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+        parked_rx.recv().unwrap();
+
+        for _ in 0..BURST {
             src.dirty.store(true, Ordering::Release);
             hub.signal();
         }
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while src.flush_count() == 0 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
-        }
-
+        flushed_rx.recv().unwrap();
         assert_eq!(
             src.flush_count(),
             1,
-            "5 signals must coalesce into one flush",
+            "{BURST} signals must coalesce into one flush",
         );
+        assert_eq!(flushed_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    /// The other exit from the window, which the burst above no longer
+    /// reaches: a lone signal waits the debounce out. Waiting on the
+    /// flush itself keeps the window length out of the claim.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn worker_flushes_once_the_debounce_window_elapses() {
+        let hub = FlushHub::new(CancelToken::never(), fast_policy());
+        let (parked_tx, parked_rx) = mpsc::channel();
+        *hub.wait.idle_park.lock() = Some(parked_tx);
+        let (flushed_tx, flushed_rx) = mpsc::channel();
+        let src = CountingSource::with_completion("debounced", flushed_tx);
+        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+        parked_rx.recv().unwrap();
+
+        src.dirty.store(true, Ordering::Release);
+        hub.signal();
+
+        flushed_rx.recv().unwrap();
+        assert_eq!(
+            src.flush_count(),
+            1,
+            "a debounced signal ends in exactly one flush"
+        );
+        assert_eq!(flushed_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
