@@ -20,25 +20,21 @@ default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 client-reqwest = [
     "kithara-play/client-reqwest",
     "kithara-download/client-reqwest",
-    "kithara-stream/client-reqwest",
     "kithara-abr/client-reqwest",
 ]
 client-wreq = [
     "kithara-play/client-wreq",
     "kithara-download/client-wreq",
-    "kithara-stream/client-wreq",
     "kithara-abr/client-wreq",
 ]
 tls-rustls = [
     "kithara-play/tls-rustls",
     "kithara-download/tls-rustls",
-    "kithara-stream/tls-rustls",
     "kithara-abr/tls-rustls",
 ]
 tls-native = [
     "kithara-play/tls-native",
     "kithara-download/tls-native",
-    "kithara-stream/tls-native",
     "kithara-abr/tls-native",
 ]
 # Software decoder pass-through (see kithara-play). Required unless an
@@ -64,7 +60,6 @@ kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
-kithara-stream = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 
 bon = { workspace = true }
