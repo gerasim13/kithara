@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
+    events::EventReceiver,
     platform::sync::Arc,
     play::Resource,
     queue::{
@@ -190,14 +191,14 @@ async fn repeat_one_natural_advance_keeps_current_track(constant_three: &'static
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
         .expect("select repeat-one track");
-    let mut receiver = queue.subscribe();
+    let mut receiver: EventReceiver<QueueEvent> = queue.subscribe();
     queue.set_repeat(RepeatMode::One);
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
-        Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
+        Ok(QueueEvent::RepeatModeChanged {
             mode: kithara::queue::QueueRepeatMode::One,
-        }))
+        })
     ));
     assert_eq!(
         harness
@@ -246,14 +247,14 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first(
         .run(&queue, move |q| q.select(last, Transition::None))
         .await
         .expect("select last repeat-all track");
-    let mut receiver = queue.subscribe();
+    let mut receiver: EventReceiver<QueueEvent> = queue.subscribe();
     queue.set_repeat(RepeatMode::All);
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
-        Ok(TestEvent::Queue(QueueEvent::RepeatModeChanged {
+        Ok(QueueEvent::RepeatModeChanged {
             mode: kithara::queue::QueueRepeatMode::All,
-        }))
+        })
     ));
     assert_eq!(
         harness

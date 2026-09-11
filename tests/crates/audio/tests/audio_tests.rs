@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, num::NonZeroU32};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -13,6 +13,7 @@ use kithara::{
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
+    signal::AudioSpec,
     stream::{ContainerFormat, MediaInfo, SeekEpoch},
 };
 use kithara_integration_tests::{
@@ -103,18 +104,19 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let _audio = worker.open(config).await.unwrap();
 }
 
-/// The bus gives one channel per event type, so "the first event" is a
-/// property only within a single topic: a receiver spanning several of them
-/// reports whichever member it polls first, not whichever was published first.
-/// Subscribing to the decoder topic alone is what makes the assertion below a
-/// property of publication order rather than of declaration order.
+/// The decoder topic opens with the initial `DecoderChanged`.
+///
+/// The receiver takes that one topic on purpose. A multi-member set polls its
+/// members in declaration order, so a worker that already enqueued
+/// `AudioEvent::FormatDetected` on its first pass would preempt this event on
+/// a shared receiver no matter which was published first.
 #[kithara::test(tokio)]
 async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
     let bus = EventBus::new(16);
-    let mut events = bus.subscribe::<DecoderEvent>();
+    let mut events: EventReceiver<DecoderEvent> = bus.subscribe();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(config.stream().clone())
         .maybe_hint(config.hint().map(str::to_owned))
         .events(bus)
@@ -138,6 +140,33 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
         }
         other => panic!("expected initial DecoderChanged event, got {other:?}"),
     }
+}
+
+/// A receiver over several topics reports no order between them.
+///
+/// It polls its members in declaration order and yields the first that holds
+/// an event, so `TestEvent`'s `Audio` preempts a `Decoder` event published
+/// before it. Publication order survives only inside one topic.
+#[kithara::test]
+fn a_shared_receiver_prefers_its_earlier_declared_topic() {
+    let bus = EventBus::new(16);
+    let mut shared: EventReceiver<TestEvent> = bus.subscribe();
+    let mut decoder: EventReceiver<DecoderEvent> = bus.subscribe();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+
+    bus.publish(DecoderEvent::TransitionHold {
+        source_exhausted: false,
+    });
+    bus.publish(AudioEvent::FormatDetected { spec });
+
+    assert!(matches!(
+        shared.try_recv().map(|env| env.event),
+        Ok(TestEvent::Audio(AudioEvent::FormatDetected { .. }))
+    ));
+    assert!(matches!(
+        decoder.try_recv().map(|env| env.event),
+        Ok(DecoderEvent::TransitionHold { .. })
+    ));
 }
 
 #[kithara::test]
