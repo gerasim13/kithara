@@ -1581,6 +1581,42 @@ kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
+# Warp stays opt-in while its product contract is completed. An empty kind
+# membership keeps ordinary pushes and scheduled runs unchanged; Dispatch's
+# existing `only` input is the single admission path.
+[ext.ci.lanes.deep-warp]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "-p",
+    "kithara-warp",
+    "--features",
+    "stretch-signalsmith",
+  ], label = "Warp owner tests", env = { CARGO_BUILD_JOBS = "2" } },
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "-p",
+    "kithara-play-tests",
+    "--test",
+    "play",
+    "-E",
+    "test(~sync_) - test(~sync_listening) - test(~no_sync_)",
+  ], label = "Warp product tests", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = []
+timeout_minutes = 180
+
 # The lane name is the only place the browser is decided; the harness lane it
 # calls carries that name into the run, so a run started here and a run started
 # by hand exercise the same browser.

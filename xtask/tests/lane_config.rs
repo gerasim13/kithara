@@ -386,3 +386,47 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
         }
     }
 }
+
+#[test]
+fn warp_lane_is_manual_only_and_runs_owner_and_product_tests() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lane = &config["ext"]["ci"]["lanes"]["deep-warp"];
+
+    assert_eq!(lane["role"].as_str(), Some("deep"));
+    assert_eq!(lane["kinds"].as_array().map(Vec::len), Some(0));
+    assert_eq!(lane["kinds_github"].as_array().map(Vec::len), Some(0));
+
+    let steps = lane["steps"].as_array().expect("Warp lane has steps");
+    let args: Vec<Vec<&str>> = steps
+        .iter()
+        .map(|step| {
+            step["args"]
+                .as_array()
+                .expect("Warp lane step has arguments")
+                .iter()
+                .map(|arg| arg.as_str().expect("Warp lane argument is a string"))
+                .collect()
+        })
+        .collect();
+    assert!(args.iter().any(|args| {
+        args.windows(2).any(|pair| pair == ["-p", "kithara-warp"])
+            && args
+                .windows(2)
+                .any(|pair| pair == ["--features", "stretch-signalsmith"])
+    }));
+    assert!(args.iter().any(|args| {
+        args.windows(2)
+            .any(|pair| pair == ["-p", "kithara-play-tests"])
+            && args.windows(2).any(|pair| pair == ["--test", "play"])
+            && args.windows(2).any(|pair| {
+                pair == [
+                    "-E",
+                    "test(~sync_) - test(~sync_listening) - test(~no_sync_)",
+                ]
+            })
+    }));
+}
