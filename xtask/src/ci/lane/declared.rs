@@ -1,4 +1,4 @@
-use std::{env, path::Path};
+use std::env;
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
@@ -45,13 +45,8 @@ pub(crate) fn run(
         .target_snapshot
         .as_deref()
         .map(|key| {
-            process.require_tools(&["mc"])?;
-            snapshot::restore_for_lane(
-                key,
-                &process.target_dir(),
-                process.root(),
-                Path::new(tools.program("mc")),
-            )
+            let mc = process.resolve_program(tools.program("mc"))?;
+            snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &mc)
         })
         .transpose()?;
     for step in &lane.steps {
@@ -71,11 +66,8 @@ pub(crate) fn run(
         process.run_command(&mut command, &step.label)?;
     }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
-        snapshot::publish_for_lane(
-            &process.target_dir(),
-            &fingerprint,
-            Path::new(tools.program("mc")),
-        )?;
+        let mc = process.resolve_program(tools.program("mc"))?;
+        snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc)?;
     }
     Ok(())
 }

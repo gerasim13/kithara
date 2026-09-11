@@ -247,6 +247,11 @@ impl Process {
         Ok(())
     }
 
+    pub(crate) fn resolve_program(&self, program: &str) -> Result<PathBuf> {
+        self.find_executable(program)
+            .with_context(|| format!("required CI command is missing: {program}"))
+    }
+
     fn find_executable(&self, program: &str) -> Option<PathBuf> {
         let path = Path::new(program);
         if path.components().count() > 1 {
