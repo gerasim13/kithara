@@ -1,5 +1,5 @@
 use firewheel::param::smoother::SmootherConfig;
-use kithara_audio::SeekBegin;
+use kithara_audio::{ScheduledSeek, SeekBegin};
 use kithara_events::TrackId;
 use kithara_output::LiveOutput;
 use kithara_platform::{
@@ -125,6 +125,18 @@ impl SlotControl {
         }
     }
 
+    pub(crate) fn begin_track_seek(
+        &self,
+        item_id: TrackId,
+        position: Duration,
+    ) -> Option<ScheduledSeek> {
+        self.seek
+            .0
+            .iter()
+            .find(|(bound_id, _)| *bound_id == item_id)
+            .map(|(_, handle)| handle.begin_scheduled(position))
+    }
+
     pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
         self.render.0.push((item_id, reader));
     }
@@ -159,6 +171,60 @@ impl SlotControl {
         self.seek.0.retain(|(bound_id, bound_handle)| {
             *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use kithara_audio::SeekOutcome;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    struct CountSeek(AtomicUsize);
+
+    impl SeekBegin for CountSeek {
+        fn begin(&self, position: Duration) -> SeekOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            }
+        }
+
+        fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
+            ScheduledSeek {
+                epoch: 7,
+                outcome: self.begin(position),
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn track_seek_begins_only_the_named_binding() {
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let first = TrackId::allocate();
+        let second = TrackId::allocate();
+        let first_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        let second_seek = Arc::new(CountSeek(AtomicUsize::new(0)));
+        control.bind_seek(first, first_seek.clone());
+        control.bind_seek(second, second_seek.clone());
+
+        let target = Duration::from_secs(3);
+        assert_eq!(
+            control.begin_track_seek(second, target),
+            Some(ScheduledSeek {
+                epoch: 7,
+                outcome: SeekOutcome::Landed {
+                    target,
+                    landed_at: target,
+                },
+            })
+        );
+        assert_eq!(first_seek.0.load(Ordering::Relaxed), 0);
+        assert_eq!(second_seek.0.load(Ordering::Relaxed), 1);
     }
 }
 

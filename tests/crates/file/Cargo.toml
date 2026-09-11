@@ -20,12 +20,12 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, features = ["full", "probe", "symphonia", "resample-rubato"] }
+kithara = { workspace = true, features = ["full", "usdt", "symphonia", "resample-rubato"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "usdt"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }

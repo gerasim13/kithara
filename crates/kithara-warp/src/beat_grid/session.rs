@@ -161,3 +161,101 @@ impl BeatGridView for SessionGridView {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+
+    use super::SessionGridView;
+    use crate::{
+        Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridView, BeatOrdinal,
+        FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts, SessionAnchor, SessionBeat,
+        SessionEpoch, SessionFrame,
+    };
+
+    #[kithara::test]
+    fn session_grid_round_trips_beats_and_preserves_declared_meter() {
+        for (sample_rate, beats_per_bar, downbeat, next_bar) in
+            [(44_100, 3, 2, 5.0), (48_000, 7, -1, 6.0)]
+        {
+            let anchor = SessionAnchor::new(
+                SessionFrame::new(1_000),
+                SessionBeat::new(2.0).expect("finite anchor beat"),
+                2.0,
+                NonZeroU32::new(sample_rate).expect("sample rate"),
+            )
+            .expect("session anchor");
+            let meter = Meter::new(beats_per_bar)
+                .expect("meter")
+                .with_downbeat(BeatOrdinal::new(downbeat));
+            let view = SessionGridView::new(
+                BeatGridId::allocate().expect("grid id"),
+                BeatGridRevision::first(),
+                SessionEpoch::new(3),
+                anchor,
+                Some(MeterFacts::new(
+                    meter,
+                    BeatEvidence::Declared,
+                    FrameUncertainty::ZERO,
+                )),
+            );
+
+            for beat in [1.5, 2.0, 3.0, next_bar] {
+                let beat = Beat::new(beat).expect("finite beat");
+                let position = match view.position_at(MapPoint::new(view.stamp(), beat)) {
+                    BeatGridQuery::Resolved(position) => position,
+                    other => panic!("beat must resolve, got {other:?}"),
+                };
+                let round_trip = match view.beat_at(*position.value()) {
+                    BeatGridQuery::Resolved(beat) => beat,
+                    other => panic!("position must resolve, got {other:?}"),
+                };
+                assert_eq!(*round_trip.value().value(), beat);
+            }
+
+            let queried = match view.meter_at(MapPoint::new(
+                view.stamp(),
+                Beat::new(2.0).expect("finite beat"),
+            )) {
+                BeatGridQuery::Resolved(meter) => meter,
+                other => panic!("meter must resolve, got {other:?}"),
+            };
+            assert_eq!(*queried.value(), meter);
+        }
+    }
+
+    #[kithara::test]
+    fn meterless_session_grid_does_not_invent_bar_phase() {
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(0.0).expect("finite beat"),
+            2.0,
+            NonZeroU32::new(48_000).expect("sample rate"),
+        )
+        .expect("session anchor");
+        let view = SessionGridView::new(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            anchor,
+            None,
+        );
+
+        assert!(matches!(
+            view.meter_at(MapPoint::new(
+                view.stamp(),
+                Beat::new(0.0).expect("finite beat")
+            )),
+            BeatGridQuery::Unavailable(_)
+        ));
+        assert!(matches!(
+            view.beat_at(MapPoint::new(
+                view.stamp(),
+                MapPosition::Session(SessionFrame::new(-12_000))
+            )),
+            BeatGridQuery::Resolved(_)
+        ));
+    }
+}

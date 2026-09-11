@@ -46,7 +46,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "usdt", "hang"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
@@ -156,7 +156,7 @@ kithara = { workspace = true, features = ["apple", "client-wreq"] }
 kithara = { workspace = true, features = [
     "full",
     "queue",
-    "probe",
+    "usdt",
     "mock",
     "test-utils",
     "symphonia",
@@ -184,7 +184,7 @@ uuid = { workspace = true, features = ["v4"] }
 kithara = { workspace = true, default-features = false, features = [
     "full",
     "queue",
-    "probe",
+    "usdt",
     "mock",
     "test-utils",
     "symphonia",

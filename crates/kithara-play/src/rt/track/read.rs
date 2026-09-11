@@ -268,8 +268,13 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        let (outcome, source_frames) =
-            resource.read_with_context(context, &mut scratch_window, 0..range.len(), metrics);
+        let (outcome, source_frames) = resource.read_with_context(
+            context,
+            Some(self.item_id),
+            &mut scratch_window,
+            0..range.len(),
+            metrics,
+        );
         self.served_media_frames += AsPrimitive::<f64>::as_(source_frames);
         match outcome {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
@@ -398,7 +403,20 @@ impl PlayerTrack {
         } else {
             self.resource.clear_render();
         }
-        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
+        let outcome = self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink);
+        if let Some((source, warp_map_revision)) =
+            self.resource.presentation_source_end(context.sample_rate())
+        {
+            self.resource.publish_render(
+                &context,
+                presentation_frontier_at(
+                    context.output_frames().end,
+                    source.frame(),
+                    warp_map_revision,
+                ),
+            );
+        }
+        outcome
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -437,9 +455,17 @@ fn presentation_frontier(
     source: u64,
     warp_map_revision: u64,
 ) -> PresentationFrontier {
+    presentation_frontier_at(context.output_frames().start, source, warp_map_revision)
+}
+
+fn presentation_frontier_at(
+    output: kithara_warp::SessionFrame,
+    source: u64,
+    warp_map_revision: u64,
+) -> PresentationFrontier {
     PresentationFrontier::builder()
         .source(source)
-        .output(context.output_frames().start)
+        .output(output)
         .maybe_warp_map(
             std::num::NonZeroU64::new(warp_map_revision)
                 .map(kithara_warp::WarpMapRevision::from_raw),

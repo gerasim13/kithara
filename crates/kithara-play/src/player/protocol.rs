@@ -4,9 +4,9 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor,
-    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation,
-    SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, ReconcileCause, SegmentSet,
+    SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
@@ -135,8 +135,33 @@ where
         &mut self,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        let align_now = matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: kithara_warp::SyncIntent::AlignNow,
+                ..
+            }
+        );
+        let alignment_source = match &operation {
+            SyncOperation::Sync { source, .. } => Some(*source),
+            _ => None,
+        };
         let now = self.runtime.presentation_frontier().output();
         let (admission, projection) = self.sync.transact_at(operation, now)?;
+        let reconcile_cause = if align_now {
+            ReconcileCause::AlignmentRequested
+        } else {
+            ReconcileCause::TransportChanged
+        };
+        if (align_now || matches!(admission, SyncAdmission::StateChanged { .. }))
+            && let Some(reconciled) =
+                self.reconcile_current_grid(reconcile_cause, alignment_source)?
+        {
+            if let Some(projection) = projection {
+                self.runtime.core.engine.publish_deck_grid(projection);
+            }
+            return Ok(reconciled);
+        }
         if let Some(projection) = projection {
             self.runtime.core.engine.publish_deck_grid(projection);
         }

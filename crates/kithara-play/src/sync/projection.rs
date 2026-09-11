@@ -1,7 +1,7 @@
 use kithara_warp::{RateTarget, RenderContext, SessionAnchor, SyncMode};
 
 /// Immutable projection of the deck owner into the output callback.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum DeckGrid {
     #[default]
     Off,

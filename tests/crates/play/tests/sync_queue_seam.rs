@@ -10,9 +10,10 @@ use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
     events::TrackId,
     platform::{time::Duration, tokio::task::spawn_blocking},
-    warp::{AssetAxis, BeatGridState, SyncAdmission},
+    warp::{AssetAxis, BeatGridState, SessionFrame, SyncAdmission},
 };
 use kithara_integration_tests::{
+    audio_artifact::write_audio_artifact,
     cochlea::{
         CochleaReport, marked_synchronization_failures, synchronization_failures,
         time_stretch_failures,
@@ -364,7 +365,7 @@ async fn synced_house_deck() -> ProductHarness {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
-    let harness = synced_house_deck().await;
+    let mut harness = synced_house_deck().await;
     let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
     let admission = harness
         .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
@@ -379,6 +380,7 @@ async fn a_complete_track_grid_is_prepared_on_the_synced_deck() {
 #[ignore = "ignored-red: prepared alignment is not yet delivered to the renderer as a versioned source/output map with exact-frame activation (next Warp phase), 2026-09-10"]
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn published_track_grids_align_the_rendered_beats() {
+    let recorder = probe_capture::install();
     let case = DOWNTEMPO_HOUSE_SYNC;
     let grids = [
         asset_grid(
@@ -388,6 +390,7 @@ async fn published_track_grids_align_the_rendered_beats() {
         asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS),
     ];
     let mut tracks = Vec::new();
+    let mut capture_origins = Vec::new();
     for audible in 0..case.decks() {
         let mut harness =
             ProductHarness::new_for_provider(case, DOWNTEMPO_HOUSE_PROVIDER, audible).await;
@@ -399,6 +402,7 @@ async fn published_track_grids_align_the_rendered_beats() {
             )
             .await;
         harness.request_sync(case).await;
+        let mut activation = SessionFrame::new(0);
         for (deck, grid) in grids.iter().enumerate() {
             let admission = harness
                 .publish_track_grid(
@@ -409,14 +413,24 @@ async fn published_track_grids_align_the_rendered_beats() {
                 )
                 .await
                 .expect("publish score grid");
-            assert!(
-                matches!(admission, SyncAdmission::Prepared { .. }),
-                "covered score grid must prepare alignment: {admission:?}"
-            );
+            let SyncAdmission::Prepared {
+                activation: prepared,
+                ..
+            } = admission
+            else {
+                panic!("covered score grid must prepare alignment: {admission:?}");
+            };
+            activation = activation.max(prepared);
         }
+        let rendered = i64::try_from(harness.rendered_frames).unwrap_or(i64::MAX);
+        let until_activation = i64::from(activation).saturating_sub(rendered).max(0);
+        let settle_frames = usize::try_from(until_activation)
+            .unwrap_or(usize::MAX)
+            .saturating_add(usize::try_from(bar_frames(case.final_bpm())).unwrap_or(usize::MAX));
         let _ = harness
-            .capture_frames(case, Fixture::SAMPLE_RATE as usize, harness.block_frames)
+            .capture_frames(case, settle_frames, harness.block_frames)
             .await;
+        capture_origins.push(harness.rendered_frames);
         tracks.push(
             harness
                 .capture_frames(
@@ -436,12 +450,59 @@ async fn published_track_grids_align_the_rendered_beats() {
         Fixture::SAMPLE_RATE,
         case.final_bpm(),
     );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let mix = tracks[0]
+        .iter()
+        .zip(tracks[1])
+        .map(|(left, right)| (left + right) * 0.5)
+        .collect::<Vec<_>>();
+    let artifact = write_audio_artifact(
+        "published-track-grids-align-rendered-beats",
+        Fixture::SAMPLE_RATE,
+        Fixture::CHANNELS,
+        &[
+            ("deck-1", tracks[0]),
+            ("deck-2", tracks[1]),
+            ("mix", mix.as_slice()),
+        ],
+        &serde_json::json!({
+            "oracle": "marked_synchronization_failures",
+            "target_bpm": case.final_bpm(),
+            "beat_phase_spread_frames": 0,
+            "bar_phase_spread_beats": 0,
+        }),
+    )
+    .expect("write oracle-checked sync audio artifact");
+    if let Some(path) = artifact {
+        eprintln!("KITHARA_AUDIO_ARTIFACT oracle: {}", path.display());
+    }
+    assert!(
+        failures.is_empty(),
+        "{}\ncapture_origins={capture_origins:?}\nswapped={:?}\ntransition={:?}\nnear={:?}\nplanned={:?}\nprime={:?}\npcm_activation={:?}",
+        failures.join("\n"),
+        recorder.events_with_probe("warp_plan_swapped"),
+        recorder.events_with_probe("warp_transition_primed"),
+        recorder
+            .events_with_probe("warp_activation_near")
+            .into_iter()
+            .filter(|event| event
+                .u64("output")
+                .is_some_and(|output| (115_900..=116_350).contains(&output)))
+            .collect::<Vec<_>>(),
+        recorder.events_with_probe("warp_activation_planned"),
+        recorder.events_with_probe("prime_activation"),
+        recorder
+            .events_with_probe("pcm_consumed")
+            .into_iter()
+            .filter(|event| event
+                .u64("output_start")
+                .is_some_and(|output| (185_700..=186_100).contains(&output)))
+            .collect::<Vec<_>>(),
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 async fn a_building_track_grid_defers_until_it_completes() {
-    let harness = synced_house_deck().await;
+    let mut harness = synced_house_deck().await;
     let item = harness.ids[0][0];
     let grid = asset_grid(Fixture::RHYTHM_HOUSE_124, Fixture::HOUSE_ANALYSIS);
     let building = harness

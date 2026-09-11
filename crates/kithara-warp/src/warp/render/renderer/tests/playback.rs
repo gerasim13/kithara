@@ -62,6 +62,52 @@ fn source_span_is_planned_from_the_output_quantum(
 }
 
 #[kithara::test]
+#[cfg(feature = "stretch-signalsmith")]
+fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) {
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(false);
+    controls.set_backend(StretchKind::Signalsmith);
+    let (mut renderer, slot) = super::planned_renderer(controls);
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+    let first_frames = 32;
+    let first = render_serviced(&mut renderer, chunk(&pools, &warp_sine[..first_frames * 2]))
+        .expect("initial passthrough renders");
+    assert_eq!(&first.samples[..], &warp_sine[..first_frames * 2]);
+    slot.install(Some(Arc::new(
+        crate::RegionPlan::new(vec![crate::GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("unity grid plan"),
+    )));
+
+    let mut meta = AudioChunkInfo {
+        spec: spec(),
+        frame_offset: first_frames as u64,
+        timestamp: spec()
+            .duration_for(first_frames as u64)
+            .expect("source timestamp"),
+        ..AudioChunkInfo::default()
+    };
+    let frames = renderer
+        .prepare_quantum(meta, 128)
+        .expect("next source span is plannable")
+        .get();
+    meta.frames = u32::try_from(frames).expect("source span fits u32");
+    meta.end_timestamp = spec()
+        .duration_for((first_frames + frames) as u64)
+        .expect("source end timestamp");
+    let expected = &warp_sine[first_frames * 2..(first_frames + frames) * 2];
+    let mut input = chunk(&pools, expected);
+    input.meta = meta;
+    let next = renderer.render_quantum(input).expect("unity grid renders");
+
+    assert_eq!(&next.samples[..], expected);
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some(((first_frames + frames) as u64, spec().sample_rate))
+    );
+}
+
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -72,6 +118,7 @@ fn live_activation_primes_from_passthrough_history(
     warp_sine: Vec<f32>,
 ) {
     let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder()
         .stretch(Arc::clone(&controls))
@@ -143,6 +190,55 @@ fn live_activation_primes_from_passthrough_history(
     assert!(output.frames() > 0);
 }
 
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[kithara::test]
+fn distant_reanchor_keeps_each_source_quantum_bounded(warp_sine: Vec<f32>) {
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(false);
+    let (mut renderer, slot) = super::planned_renderer(controls);
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+    let initial_frames = 4_096;
+    render_serviced(
+        &mut renderer,
+        chunk(&pools, &warp_sine[..initial_frames * 2]),
+    )
+    .expect("initial unity PCM renders");
+
+    let revision = crate::WarpMapRevision::first();
+    slot.install(Some(Arc::new(
+        crate::RegionPlan::new(vec![crate::GridSegment::new(0, u64::MAX, 1.0)])
+            .expect("same-rate replacement plan")
+            .with_activation(crate::WarpMap::identity(revision).reanchor(
+                initial_frames as u64 + 768,
+                crate::SessionFrame::new(initial_frames as i64 + 36_032),
+            )),
+    )));
+    let meta = AudioChunkInfo {
+        frame_offset: initial_frames as u64,
+        spec: spec(),
+        timestamp: spec()
+            .duration_for(initial_frames as u64)
+            .expect("fixture timestamp"),
+        ..AudioChunkInfo::default()
+    };
+
+    let frames = renderer
+        .prepare_quantum(meta, warp_sine.len() / 2 - initial_frames)
+        .expect("distant transition is plannable")
+        .get();
+    assert!(
+        frames <= renderer.source_block_frames.get(),
+        "one transition quantum requested {frames} frames; limit is {}",
+        renderer.source_block_frames
+    );
+}
+
+#[kithara::test]
 #[kithara::test]
 fn rendered_quantum_keeps_the_rate_revision_selected_during_planning(warp_sine: Vec<f32>) {
     let controls = StretchControls::new(1.0);
@@ -483,6 +579,56 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
         peak.abs_diff(want) <= 4,
         "vinyl pitch did not follow speed: peak bin {peak}, expected {want}"
     );
+}
+
+#[kithara::test]
+#[cfg(feature = "stretch-signalsmith")]
+fn vinyl_varispeed_preserves_periodic_attack_positions() {
+    const SPEED: f32 = 1.25;
+    const PERIOD: usize = 4_096;
+    const FRAMES: usize = PERIOD * 6;
+
+    let mut input = vec![0.0; FRAMES * usize::from(Consts::CH)];
+    for frame in (PERIOD..FRAMES).step_by(PERIOD) {
+        input[frame * usize::from(Consts::CH)] = 1.0;
+        input[frame * usize::from(Consts::CH) + 1] = 1.0;
+    }
+
+    let output = render(&mut vinyl(StretchKind::Signalsmith, SPEED), &input);
+    let mono: Vec<f32> = output
+        .iter()
+        .step_by(usize::from(Consts::CH))
+        .copied()
+        .collect();
+    for source_frame in (PERIOD..FRAMES).step_by(PERIOD) {
+        let expected = (source_frame as f32 / SPEED).round() as usize;
+        let start = expected.saturating_sub(256);
+        let end = expected.saturating_add(257).min(mono.len());
+        let actual = mono[start..end]
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.abs().total_cmp(&right.abs()))
+            .map(|(offset, _)| start + offset)
+            .expect("attack search window is non-empty");
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "vinyl attack moved from frame {expected} to {actual}"
+        );
+    }
+}
+
+#[kithara::test]
+#[cfg(feature = "stretch-signalsmith")]
+fn vinyl_accepts_rates_below_one_quarter_when_the_engine_declares_them() {
+    const SPEED: f32 = 0.125;
+    const FRAMES: usize = 1_024;
+
+    let mut input = vec![0.0; FRAMES * usize::from(Consts::CH)];
+    input[usize::from(Consts::CH)..usize::from(Consts::CH) * 2].fill(1.0);
+
+    let output = render(&mut vinyl(StretchKind::Signalsmith, SPEED), &input);
+
+    assert_eq!(output.len() / usize::from(Consts::CH), FRAMES * 8);
 }
 
 #[kithara::test]

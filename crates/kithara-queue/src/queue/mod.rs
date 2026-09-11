@@ -21,7 +21,7 @@ mod playback;
 mod player;
 mod selection;
 mod state;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 pub mod test_utils;
 mod types;
 

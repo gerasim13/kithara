@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -12,11 +13,16 @@ use kithara::{
     },
     encode::EncodeConfig,
     record::{RecordingConfig, RecordingCore},
+    warp::BeatGridSnapshot,
 };
 use kithara_app::recording::AssetPartSink;
+use kithara_test_utils::probe::capture::{self as probe_capture, Recorder};
 use serde::Serialize;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::{
+    artifact_timeline::ArtifactTimeline,
+    bufpool_ext::{TestPools, pools},
+};
 
 const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
 static ATTEMPT: AtomicU64 = AtomicU64::new(0);
@@ -38,6 +44,9 @@ pub struct AudioArtifactTap {
     markers: Vec<Marker>,
     frames: u64,
     channels: u16,
+    timeline: ArtifactTimeline,
+    source_grids: BTreeMap<u64, BeatGridSnapshot>,
+    probes: Recorder,
 }
 
 #[derive(Serialize)]
@@ -59,6 +68,9 @@ impl AudioArtifactTap {
             markers: Vec::new(),
             frames: 0,
             channels,
+            timeline: ArtifactTimeline::default(),
+            source_grids: BTreeMap::new(),
+            probes: probe_capture::install(),
         }))
     }
 
@@ -76,6 +88,16 @@ impl AudioArtifactTap {
             frame: self.frames,
             label: label.to_owned(),
         });
+        self.timeline
+            .point("control", self.frames, "command", label);
+    }
+
+    pub fn timeline(&mut self) -> &mut ArtifactTimeline {
+        &mut self.timeline
+    }
+
+    pub fn source_grid(&mut self, track: u64, grid: BeatGridSnapshot) {
+        self.source_grids.insert(track, grid);
     }
 }
 
@@ -91,12 +113,30 @@ impl Drop for AudioArtifactTap {
                 None
             }
         };
+        self.timeline.record_probes(&self.probes.snapshot());
+        for (&track, grid) in &self.source_grids {
+            self.timeline.record_source_grid(track, grid);
+        }
+        let timeline = if self.timeline.is_empty() {
+            None
+        } else {
+            self.set
+                .write_bytes("timeline.svg", self.timeline.svg().as_bytes())
+                .and_then(|reader| audio_artifact_path(&reader))
+                .map_err(|error| {
+                    eprintln!("KITHARA_AUDIO_ARTIFACT timeline not published: {error}");
+                    error
+                })
+                .ok()
+        };
         let manifest = serde_json::json!({
             "frames": self.frames,
             "channels": self.channels,
             "sample_rate": self.set.sample_rate,
             "markers": self.markers,
             "output": output,
+            "timeline": timeline,
+            "timeline_events": self.timeline.events(),
         });
         match self
             .set
@@ -196,7 +236,13 @@ impl AudioArtifactSet {
     /// Serialize and atomically publish the set manifest.
     pub fn write_manifest<T: Serialize>(&self, manifest: &T) -> io::Result<AssetReader<TestPools>> {
         let bytes = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
-        let key = self.key("manifest.json")?;
+        self.write_bytes("manifest.json", &bytes)
+    }
+
+    /// Atomically publish one non-audio artifact in this set.
+    pub fn write_bytes(&self, name: &str, bytes: &[u8]) -> io::Result<AssetReader<TestPools>> {
+        validate_artifact_name(name)?;
+        let key = self.key(name)?;
         let writer = match self
             .scope
             .store()
@@ -212,7 +258,7 @@ impl AudioArtifactSet {
             }
             _ => return Err(io::Error::other("unexpected manifest acquisition phase")),
         };
-        writer.write_at(0, &bytes).map_err(io::Error::other)?;
+        writer.write_at(0, bytes).map_err(io::Error::other)?;
         writer
             .commit(Some(
                 u64::try_from(bytes.len()).map_err(|_| io::Error::other("manifest too large"))?,
@@ -285,4 +331,18 @@ fn validate_label(label: &str) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_artifact_name(name: &str) -> io::Result<()> {
+    let mut parts = name.split('.');
+    let stem = parts.next().unwrap_or_default();
+    let extension = parts.next().unwrap_or_default();
+    if parts.next().is_some() || extension.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("artifact name must contain one extension: {name}"),
+        ));
+    }
+    validate_label(stem)?;
+    validate_label(extension)
 }

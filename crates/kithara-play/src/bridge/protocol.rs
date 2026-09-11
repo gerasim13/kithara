@@ -21,6 +21,8 @@ pub enum PlayerCmd {
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
+    /// Present a decoder seek for one track at its installed Warp activation.
+    ScheduleSeek { item_id: TrackId, seek_epoch: u64 },
     /// Set the paused state.
     SetPaused(bool),
     /// Update the fade duration.
@@ -49,6 +51,14 @@ impl fmt::Debug for PlayerCmd {
             } => f
                 .debug_struct("Seek")
                 .field("seconds", seconds)
+                .field("seek_epoch", seek_epoch)
+                .finish(),
+            Self::ScheduleSeek {
+                item_id,
+                seek_epoch,
+            } => f
+                .debug_struct("ScheduleSeek")
+                .field("item_id", item_id)
                 .field("seek_epoch", seek_epoch)
                 .finish(),
             Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),

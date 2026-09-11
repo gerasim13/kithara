@@ -39,7 +39,7 @@ pub use bridge::{
     TrackTransition,
 };
 pub use effects::eq::EqBandConfig;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 pub use engine::apply_mix;
 pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl};
 pub use error::PlayError;

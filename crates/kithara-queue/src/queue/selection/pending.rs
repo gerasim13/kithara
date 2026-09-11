@@ -1,12 +1,12 @@
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 use std::sync::PoisonError;
 
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 use kithara_play::SelectTransition;
 
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 use crate::event::{AdvanceReason, QueueEvent};
 use crate::{
     attempts::LoadClass,
@@ -104,7 +104,7 @@ where
     /// synchronously, bypassing the real loader. Returns `Some(result)`
     /// when the test path took the request, `None` to fall through to
     /// the production loader respawn.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "usdt"))]
     pub(in crate::queue) fn try_replant_test_resource(
         &self,
         id: TrackId,
@@ -146,7 +146,7 @@ where
         Some(Ok(()))
     }
 
-    #[cfg(not(any(test, feature = "probe")))]
+    #[cfg(not(any(test, feature = "usdt")))]
     pub(in crate::queue) fn try_replant_test_resource(
         &self,
         _id: TrackId,

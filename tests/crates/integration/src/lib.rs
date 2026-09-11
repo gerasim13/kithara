@@ -20,6 +20,8 @@ pub mod apple_warmup;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod architecture_trace;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod artifact_timeline;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;
 pub mod assets_ext;
 #[cfg(not(target_arch = "wasm32"))]

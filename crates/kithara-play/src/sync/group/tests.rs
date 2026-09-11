@@ -3,9 +3,9 @@ use std::num::NonZeroU32;
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AlignmentSource, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot,
-    BeatGridState, BeatsPerMinute, MapPoint, MapPosition, SessionAnchor, SessionBeat, SessionEpoch,
-    SessionFrame, SyncAdmission, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
-    SyncOperation,
+    BeatGridState, BeatsPerMinute, MapPoint, MapPosition, PresentationFrontier, SessionAnchor,
+    SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncError, SyncGroup, SyncIntent,
+    SyncMemberKind, SyncMode, SyncOperation,
 };
 
 use super::GroupState;
@@ -31,7 +31,12 @@ fn rejected_state_change_preserves_mode_and_tempo(#[case] intent: Option<SyncInt
             target: group.id(),
             load: group.generations.0,
             transport: group.generations.1,
-            source: AlignmentSource::Prepared,
+            source: AlignmentSource::Prepared(
+                PresentationFrontier::builder()
+                    .source(0)
+                    .output(SessionFrame::new(0))
+                    .build(),
+            ),
             activation: SessionFrame::new(0),
             intent,
         },
@@ -114,7 +119,12 @@ fn rejected_grid_change_preserves_the_whole_deck_transaction() {
         target: group.id(),
         load: group.generations.0,
         transport: group.generations.1,
-        source: AlignmentSource::Prepared,
+        source: AlignmentSource::Prepared(
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .build(),
+        ),
         activation: SessionFrame::new(0),
         intent: SyncIntent::Enable,
     };
@@ -157,7 +167,12 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
                 target: group.id(),
                 load: group.generations.0,
                 transport: group.generations.1,
-                source: AlignmentSource::Prepared,
+                source: AlignmentSource::Prepared(
+                    PresentationFrontier::builder()
+                        .source(0)
+                        .output(SessionFrame::new(0))
+                        .build(),
+                ),
                 activation: now,
                 intent: SyncIntent::Disable,
             },
@@ -210,7 +225,12 @@ fn enabling_without_a_parent_withdraws_local_geometry() {
                 target: id,
                 load: group.generations.0,
                 transport: group.generations.1,
-                source: AlignmentSource::Prepared,
+                source: AlignmentSource::Prepared(
+                    PresentationFrontier::builder()
+                        .source(0)
+                        .output(SessionFrame::new(0))
+                        .build(),
+                ),
                 activation: SessionFrame::new(0),
                 intent: SyncIntent::Enable,
             },

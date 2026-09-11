@@ -64,6 +64,11 @@ impl ItemQueue {
         }
     }
 
+    pub(crate) fn current_item_id(&self) -> Option<TrackId> {
+        let playlist = self.playlist.lock();
+        playlist.item_id(playlist.current())
+    }
+
     pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();

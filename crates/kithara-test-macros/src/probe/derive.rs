@@ -124,7 +124,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             fn record_probe(&self, name: &'static str) {
                 let _ = name;
                 #(#field_consume)*
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "usdt"))]
                 {
                     let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
                     ::kithara_test_utils::probe::register_probes();

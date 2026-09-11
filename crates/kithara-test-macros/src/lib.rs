@@ -7,7 +7,7 @@
 //! - [`probe`] — `#[kithara::probe]`, `kithara::probe_event!`, and
 //!   `#[derive(kithara::Probe)]`
 //!   (USDT + tracing instrumentation; auto-gated
-//!   `cfg(any(test, feature = "probe"))`, with the emit wrapped in a
+//!   `cfg(any(test, feature = "usdt"))`, with the emit wrapped in a
 //!   `kithara_test_utils::rtsan::permit` guard so probes stay active but
 //!   `RTSan`-transparent under `--cfg rtsan`).
 //! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
@@ -120,7 +120,7 @@ pub fn facade_allow_block(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.
-/// Body is gated by `cfg(any(test, feature = "probe"))` → no-op in production;
+/// Body is gated by `cfg(any(test, feature = "usdt"))` → no-op in production;
 /// emit is wrapped in `rtsan::permit`, so under `--cfg rtsan` probes stay active
 /// but `RTSan` does not flag them.
 #[proc_macro_attribute]
@@ -162,7 +162,7 @@ pub fn rtsan_allow_blocking(_attr: TokenStream, item: TokenStream) -> TokenStrea
 }
 
 /// `#[derive(kithara::Probe)]` — generates `record_probe()` for value-type probes.
-/// Body is gated by `cfg(any(test, feature = "probe"))`; emit is wrapped in
+/// Body is gated by `cfg(any(test, feature = "usdt"))`; emit is wrapped in
 /// `rtsan::permit` (active but `RTSan`-transparent under `--cfg rtsan`).
 #[proc_macro_derive(Probe, attributes(probe))]
 pub fn derive_probe(input: TokenStream) -> TokenStream {

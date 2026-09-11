@@ -7,7 +7,7 @@ use kithara_warp::{
 
 use super::{
     TempoSource,
-    prepare::{PreparedSync, align_member},
+    prepare::{AlignmentPolicy, PreparedSync, align_member},
     topology::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
         preview_topology, routed_group, validate_topology_candidate,
@@ -144,7 +144,7 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
             operation,
         )),
         SyncOperation::Sync { intent, .. } => match intent {
-            SyncIntent::Enable => state_changed(
+            SyncIntent::Enable | SyncIntent::AlignNow => state_changed(
                 grid,
                 &mut slots,
                 (SyncMode::HostSync, TempoSource::Inherited),
@@ -241,7 +241,10 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
     operation: SyncOperation<G>,
 ) -> Result<SyncAdmission, SyncRejected<G>> {
     let SyncOperation::Reconcile {
-        target, frontier, ..
+        target,
+        source,
+        cause,
+        ..
     } = &operation
     else {
         return Err(SyncRejected::new(
@@ -266,7 +269,19 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         ));
     };
     let (alignment_slot, member_grid) = member;
-    let aligned = match align_member(grid, &member_grid, *frontier) {
+    let previous_alignment = *alignment_slot;
+    let aligned = match align_member(
+        grid,
+        &member_grid,
+        previous_alignment,
+        source.frontier(),
+        source.preparation_source(),
+        AlignmentPolicy {
+            playback_rate: source.playback_rate(),
+            align_downbeat: *cause != kithara_warp::ReconcileCause::AlignmentRequested,
+            require_future_source: source.requires_future_cue(),
+        },
+    ) {
         Ok(aligned) => aligned,
         Err(required) => return deferred(grid, &mut slots, operation, required),
     };

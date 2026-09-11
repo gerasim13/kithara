@@ -54,8 +54,8 @@ where
 
     /// Whether the queue auto-starts playback once the first registered track
     /// finishes loading. A document cannot name this: the field is read only
-    /// under `cfg(any(test, feature = "probe"))` (`queue/lifecycle.rs`), and
-    /// `kithara-app` ships without `probe`, so a document key would configure
+    /// under `cfg(test)` (`queue/lifecycle.rs`), and
+    /// `kithara-app` ships without `usdt`, so a document key would configure
     /// nothing in the binary. It carries `#[patch(skip)]` for that reason, and
     /// naming it is refused rather than silently dropped.
     #[builder(default = true)]
@@ -158,8 +158,8 @@ mod document_tests {
         assert!(error.to_string().contains("concurrent_load_cap"), "{error}");
     }
 
-    /// `should_autoplay` is read only under `cfg(any(test, feature = "probe"))`
-    /// and `kithara-app` ships without `probe`, so a document key would
+    /// `should_autoplay` is read only under `cfg(test)`
+    /// and `kithara-app` ships without `usdt`, so a document key would
     /// configure nothing in the binary. Naming it is refused rather than
     /// silently dropped.
     #[kithara::test(native, flash(false))]

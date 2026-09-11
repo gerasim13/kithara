@@ -99,6 +99,8 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    /// Pitch mode represented by the currently prepared engine.
+    pub(super) current_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
@@ -139,10 +141,12 @@ where
     ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
+        let current_keylock = controls.keylock();
         let plan = plan_slot.load();
         let rate = controls.rate_target();
         let target = Self::prepare_target(
             current_kind,
+            current_keylock,
             config.backends(),
             config.source_block_frames(),
             spec,
@@ -157,6 +161,7 @@ where
             engine: target.engine,
             retired_engine: None,
             current_kind,
+            current_keylock,
             controls,
             plan_slot,
             pools,
@@ -465,7 +470,6 @@ where
         if !same {
             self.plan = want;
             self.region = None;
-            self.prepared_quantum = None;
             self.prepared_context = None;
         }
     }

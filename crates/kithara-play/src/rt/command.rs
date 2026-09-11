@@ -95,6 +95,14 @@ impl PlayerNodeProcessor {
                 } => {
                     self.apply_seek(seconds, seek_epoch);
                 }
+                PlayerCmd::ScheduleSeek {
+                    item_id,
+                    seek_epoch,
+                } => {
+                    if let Some(track) = self.tracks.get_mut(item_id) {
+                        track.schedule_seek(seek_epoch);
+                    }
+                }
                 PlayerCmd::SetPaused(paused) => {
                     let playing = !paused;
                     self.playback.playing.store(playing, Ordering::SeqCst);

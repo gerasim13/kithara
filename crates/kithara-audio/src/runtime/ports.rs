@@ -154,6 +154,10 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
+    pub(crate) fn fold<U>(&mut self, initial: U, fold: impl FnMut(U, &T) -> U) -> U {
+        self.consumer.iter().fold(initial, fold)
+    }
+
     delegate::delegate! {
         to self.consumer {
             /// Pop an item from the inlet. Returns `None` if empty.

@@ -9,7 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_test_macros as kithara;
-#[cfg(feature = "probe")]
+#[cfg(feature = "usdt")]
 use tracing as _;
 
 use crate::{Priority, Task, TaskControl, TaskId};

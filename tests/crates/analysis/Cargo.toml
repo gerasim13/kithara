@@ -22,14 +22,14 @@ kithara = { workspace = true, features = [
     "audio",
     "bufpool",
     "platform",
-    "probe",
+    "usdt",
     "resample-rubato",
     "resampler",
     "signal",
 ] }
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["usdt"] }
 
 [lints]
 workspace = true

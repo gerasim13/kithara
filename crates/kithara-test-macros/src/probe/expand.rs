@@ -93,7 +93,7 @@ fn wire_fields(
         .zip(&arg_slots)
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "usdt"))]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
             }
@@ -104,7 +104,7 @@ fn wire_fields(
         .zip(&computed_slots)
         .map(|((_, expression), slot)| {
             quote! {
-                #[cfg(any(test, feature = "probe"))]
+                #[cfg(any(test, feature = "usdt"))]
                 let #slot: u64 =
                     ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expression);
             }
@@ -174,7 +174,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let body = if probe_return {
         quote! {
             let __probe_ret = (|| #block)();
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "usdt"))]
             {
                 let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
                 ::kithara_test_utils::probe::register_probes();
@@ -217,7 +217,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let track_caller_attr = if probe_return {
         quote! {}
     } else {
-        quote! { #[cfg_attr(any(test, feature = "probe"), track_caller)] }
+        quote! { #[cfg_attr(any(test, feature = "usdt"), track_caller)] }
     };
 
     Ok(quote! {
@@ -284,7 +284,7 @@ fn build_emit_entry_event(
         return quote! {};
     }
     quote! {
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(any(test, feature = "usdt"))]
         {
             let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
             ::kithara_test_utils::probe::register_probes();

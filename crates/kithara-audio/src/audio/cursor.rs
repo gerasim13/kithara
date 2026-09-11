@@ -54,6 +54,13 @@ impl ChunkCursor {
         self.current_chunk_consumed_frames = 0;
     }
 
+    pub(super) fn remaining_frames(&self, chunk: &AudioChunk) -> usize {
+        usize::try_from(
+            u64::from(chunk.meta.frames).saturating_sub(self.current_chunk_consumed_frames),
+        )
+        .unwrap_or(usize::MAX)
+    }
+
     fn copy_into(
         &mut self,
         chunk: &AudioChunk,

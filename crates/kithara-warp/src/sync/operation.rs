@@ -2,7 +2,7 @@ use super::{
     LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
     TransportRevision, WarpMapRevision,
 };
-use crate::{Beat, BeatGridId, BeatsPerMinute, MapPoint, MapRegion, SessionFrame};
+use crate::{Beat, BeatGridId, BeatsPerMinute, MapPoint, MapRegion, RateTarget, SessionFrame};
 
 /// A beat on a source grid aligned with a beat on a target grid.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -30,9 +30,55 @@ impl BeatAlignment {
 #[non_exhaustive]
 pub enum AlignmentSource {
     /// Decoded audio has not become audible and may be positioned before playback.
-    Prepared,
+    Prepared(PresentationFrontier),
     /// Decoded audio is already audible at the stated exact presentation frontier.
-    Audible(PresentationFrontier),
+    Audible {
+        /// Last source/output boundary copied into Host output.
+        presentation: PresentationFrontier,
+        /// Decoded source frontier beyond which a replacement can still be prepared.
+        preparation_source: u64,
+        /// Effective media seconds consumed per output second by the audible mapping.
+        playback_rate: RateTarget,
+    },
+}
+
+impl AlignmentSource {
+    /// Exact source/output frontier observed for this request.
+    #[must_use]
+    pub const fn frontier(self) -> PresentationFrontier {
+        match self {
+            Self::Prepared(frontier) => frontier,
+            Self::Audible { presentation, .. } => presentation,
+        }
+    }
+
+    /// First source coordinate that has not already passed decoder preparation.
+    #[must_use]
+    pub fn preparation_source(self) -> u64 {
+        if let Self::Audible {
+            preparation_source, ..
+        } = self
+        {
+            preparation_source
+        } else {
+            self.frontier().source()
+        }
+    }
+
+    /// Effective rate of an audible free-running mapping.
+    #[must_use]
+    pub const fn playback_rate(self) -> Option<RateTarget> {
+        match self {
+            Self::Prepared(_) => None,
+            Self::Audible { playback_rate, .. } => Some(playback_rate),
+        }
+    }
+
+    /// Whether the selected source cue must lie strictly after the frontier.
+    #[must_use]
+    pub const fn requires_future_cue(self) -> bool {
+        matches!(self, Self::Audible { .. })
+    }
 }
 
 /// One operation routed through the live synchronization-group owner.
@@ -88,8 +134,8 @@ pub enum SyncOperation<G: SyncGroup> {
         transport: TransportRevision,
         /// Change that requires reconciliation.
         cause: ReconcileCause,
-        /// Last source/output boundary consumed by the callback.
-        frontier: PresentationFrontier,
+        /// Playback state and exact source/output boundary being reconciled.
+        source: AlignmentSource,
     },
 }
 
@@ -179,6 +225,8 @@ pub enum SyncIntent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ReconcileCause {
+    /// A one-shot phase alignment was explicitly requested for the audible member.
+    AlignmentRequested,
     /// A previously unavailable grid became usable.
     GridAvailable,
     /// A newer grid revision materially changed the active relation.

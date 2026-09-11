@@ -116,6 +116,15 @@ pub struct RegionPlanSlot {
 }
 
 impl RegionPlanSlot {
+    /// Exact activation carried by the installed plan, if it has one.
+    #[must_use]
+    pub fn activation(&self) -> Option<WarpCursor> {
+        self.load()
+            .as_deref()
+            .and_then(RegionPlan::activation)
+            .copied()
+    }
+
     delegate::delegate! {
         to self.plan {
             /// The installed plan, if any.
@@ -166,9 +175,10 @@ impl ActiveRegion {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
-    use super::{GridSegment, RegionPlan, RegionPlanError};
+    use super::{GridSegment, RegionPlan, RegionPlanError, RegionPlanSlot};
     use crate::{SessionFrame, WarpMap, WarpMapRevision};
 
     fn seg(start: u64, end: u64, ratio: f64) -> GridSegment {
@@ -219,5 +229,20 @@ mod tests {
             .with_activation(activation);
 
         assert_eq!(plan.activation(), Some(&activation));
+    }
+
+    #[kithara::test]
+    fn slot_publishes_the_installed_plan_activation() {
+        let revision = WarpMapRevision::first();
+        let activation = WarpMap::identity(revision).reanchor(24_000, SessionFrame::new(48_000));
+        let plan = RegionPlan::new(vec![seg(0, 96_000, 2.0)])
+            .expect("fixture plan")
+            .with_activation(activation);
+        let slot = RegionPlanSlot::default();
+
+        slot.install(Some(Arc::new(plan)));
+        assert_eq!(slot.activation(), Some(activation));
+        slot.install(None);
+        assert_eq!(slot.activation(), None);
     }
 }

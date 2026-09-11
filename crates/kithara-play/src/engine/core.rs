@@ -2,9 +2,9 @@ mod registration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::ConsumerWakeMode;
+use kithara_audio::{ConsumerWakeMode, ScheduledSeek};
 use kithara_bufpool::PoolRegion;
-use kithara_events::{EventBus, EventReceiver, EventSet};
+use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -111,6 +111,18 @@ impl<S> EngineImpl<S> {
             handle.begin_seek(position);
         }
         drop(slots);
+    }
+
+    pub(crate) fn begin_track_seek(
+        &self,
+        slot: SlotId,
+        item: TrackId,
+        position: Duration,
+    ) -> Option<ScheduledSeek> {
+        self.slots
+            .lock()
+            .get(slot)
+            .and_then(|control| control.begin_track_seek(item, position))
     }
 
     pub(crate) fn cancel(&self) {
@@ -302,7 +314,7 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "usdt"))]
     pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
         &self.session
     }
@@ -359,7 +371,7 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "usdt"))]
     pub(super) const fn start_lock(&self) -> &Mutex<()> {
         &self.start_lock
     }

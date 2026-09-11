@@ -16,7 +16,7 @@ pub use error::QueueError;
 pub use event::{AdvanceReason, ItemEvent, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use kithara_events::TrackId;
 pub use navigation::{NavigationState, RepeatMode};
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 pub use queue::test_utils;
 pub use queue::{PlaybackView, Queue, QueueControl, Transition};
 pub use track::{TrackEntry, TrackSource};

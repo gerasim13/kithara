@@ -29,7 +29,7 @@ impl ProducerPort {
     }
 
     /// Create an isolated port and a consumer probe for unit tests.
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(any(test, feature = "usdt"))]
     pub fn probe(
         capacity: usize,
     ) -> (

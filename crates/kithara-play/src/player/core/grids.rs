@@ -1,8 +1,10 @@
 use kithara_platform::sync::Arc;
+#[cfg(feature = "usdt")]
+use kithara_test_macros as kithara;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, ReconcileCause,
-    SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember, SyncOperation,
-    SyncStatusSnapshot, TopologyOperation, WarpMap,
+    AlignmentSource, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
+    ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember,
+    SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation, WarpMap,
 };
 use tracing::warn;
 
@@ -86,6 +88,37 @@ where
             },
         );
         self.replan_track(item);
+        self.reconcile_item_grid(item, cause, None)
+            .map_err(|rejected| {
+                let (error, _) = rejected.into();
+                error
+            })?
+            .ok_or_else(|| SyncError::MemberNotFound {
+                group_id: self.sync.id(),
+                member_id: id,
+            })
+    }
+
+    pub(crate) fn reconcile_current_grid(
+        &mut self,
+        cause: ReconcileCause,
+        source: Option<AlignmentSource>,
+    ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
+        let Some(item) = self.runtime.core.items.current_item_id() else {
+            return Ok(None);
+        };
+        self.reconcile_item_grid(item, cause, source)
+    }
+
+    fn reconcile_item_grid(
+        &mut self,
+        item: TrackId,
+        cause: ReconcileCause,
+        source: Option<AlignmentSource>,
+    ) -> Result<Option<SyncAdmission>, SyncRejected<PlayerMember>> {
+        let Some(grid) = self.runtime.core.items.track_grid(item) else {
+            return Ok(None);
+        };
         let (load, transport) = {
             let sync = &self.sync;
             #[cfg(target_arch = "wasm32")]
@@ -93,12 +126,32 @@ where
             sync.generations()
         };
         let frontier = self.runtime.presentation_frontier();
-        let admission = self.transact_sync(SyncOperation::Reconcile {
-            target: id,
+        let source = source.unwrap_or_else(|| {
+            self.runtime.playback_snapshot().map_or(
+                AlignmentSource::Prepared(frontier),
+                |snapshot| {
+                    if snapshot.is_playing() {
+                        AlignmentSource::Audible {
+                            presentation: frontier,
+                            preparation_source: snapshot.preparation_source(
+                                frontier.source(),
+                                self.runtime.core.response_budget_frames,
+                            ),
+                            playback_rate: kithara_warp::RateTarget::default()
+                                .with_speed(snapshot.rate),
+                        }
+                    } else {
+                        AlignmentSource::Prepared(frontier)
+                    }
+                },
+            )
+        });
+        let admission = self.sync.transact(SyncOperation::Reconcile {
+            target: grid.id,
             load,
             transport,
             cause,
-            frontier,
+            source,
         })?;
         let prepared = {
             let sync = &self.sync;
@@ -106,9 +159,20 @@ where
             let sync = sync.owned()?;
             sync.prepared()
         };
-        if let Some(prepared) = prepared.filter(|prepared| prepared.target == id)
+        if let Some(prepared) = prepared.filter(|prepared| prepared.target == grid.id)
             && let Some(grid) = self.runtime.core.items.track_grid(item)
         {
+            #[cfg(feature = "usdt")]
+            {
+                kithara::probe_event!(
+                    warp_plan_published,
+                    warp_map_revision = u64::from(prepared.warp_map),
+                    presentation_source = source.frontier().source(),
+                    preparation_source = source.preparation_source(),
+                    activation_source = prepared.source,
+                    activation_output = u64::try_from(i64::from(prepared.activation)).unwrap_or(0)
+                );
+            }
             let plan = grid
                 .segments
                 .region_plan()
@@ -120,8 +184,33 @@ where
                     Arc::new(plan.with_activation(activation))
                 });
             self.runtime.core.items.set_track_plan(item, plan);
+
+            if let Some(slot) = self.runtime.slot() {
+                let sample_rate = self.runtime.core.engine.master_sample_rate().max(1);
+                let sample_rate = u64::from(sample_rate);
+                let target =
+                    kithara_platform::time::Duration::from_secs(prepared.source / sample_rate)
+                        + kithara_platform::time::Duration::from_nanos(
+                            prepared.source % sample_rate * 1_000_000_000 / sample_rate,
+                        );
+                if let Some(seek) = self
+                    .runtime
+                    .core
+                    .engine
+                    .begin_track_seek(slot, item, target)
+                    && matches!(seek.outcome, kithara_audio::SeekOutcome::Landed { .. })
+                    && let Err(error) =
+                        self.runtime
+                            .send_to_slot(crate::bridge::PlayerCmd::ScheduleSeek {
+                                item_id: item,
+                                seek_epoch: seek.epoch,
+                            })
+                {
+                    warn!(%error, %item, seek_epoch = seek.epoch, "scheduled Warp seek command was not admitted");
+                }
+            }
         }
-        Ok(admission)
+        Ok(Some(admission))
     }
 
     /// Acknowledges the prepared warp map once matching PCM reaches presentation.

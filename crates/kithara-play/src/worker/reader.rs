@@ -1,8 +1,8 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{
     Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
-    ReadOutcome, SeekBegin, SeekOutcome,
+    ReadOutcome, RevisionFloorStatus, SeekBegin, SeekOutcome, SourceEnd,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -120,6 +120,12 @@ impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
             fn preload(&mut self) -> Result<(), DecodeError>;
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
             fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
+            fn set_render_revision_floor(
+                &mut self,
+                revision: u64,
+                required_frames: NonZeroUsize,
+                presented_source: Option<SourceEnd>,
+            ) -> RevisionFloorStatus;
             fn sync_seek(&mut self);
         }
         to self.warp.source() {

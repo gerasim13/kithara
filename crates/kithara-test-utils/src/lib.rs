@@ -24,7 +24,7 @@ pub mod no_block;
 pub mod off_thread;
 pub mod probe;
 pub mod rtsan;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 pub mod test;
 
 pub mod kithara {

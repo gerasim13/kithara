@@ -2,18 +2,26 @@
 
 use std::path::PathBuf;
 
-use kithara::platform::time::Duration;
+use kithara::{
+    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
+    platform::time::Duration,
+    warp::{AssetAxis, BeatGridState, SegmentSet},
+};
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactSet, audio_artifact_path},
-    cochlea::{CochleaReport, mix_loudness_failures},
+    cochlea::{CochleaReport, mix_loudness_failures, synchronization_failures},
+    grid::segment_set,
     kithara,
 };
+use kithara_test_fixtures::assets::by_name;
 
 use super::sync_product_matrix::{
     AMBIENT_TRIP_HOP_PROVIDER, AMBIENT_TRIP_HOP_SYNC, BLOCK_FRAMES, CHANNELS, CROSS_STYLE_PROVIDER,
-    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, PreparedSources,
-    ProductHarness, Provider, SEQUENTIAL_SYNC, SyncCase, TECHNO_BREAKBEAT_PROVIDER,
-    TECHNO_BREAKBEAT_SYNC, listening_sources, prepared_sources,
+    CROSS_STYLE_SYNC, DOWNTEMPO_HOUSE_PROVIDER, DOWNTEMPO_HOUSE_SYNC, LIBRARY, LIBRARY_SYNC,
+    PreparedSources, ProductHarness, Provider, SEQUENTIAL_SYNC, STRAIGHT_LIBRARY,
+    STRAIGHT_LIBRARY_ALT, STRAIGHT_LIBRARY_ALT_SYNC, STRAIGHT_LIBRARY_SYNC, SyncCase,
+    TECHNO_BREAKBEAT_PROVIDER, TECHNO_BREAKBEAT_SYNC, TECHNO_LIBRARY, TECHNO_LIBRARY_SYNC,
+    listening_sources, prepared_sources,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
@@ -26,8 +34,14 @@ struct Capture {
 }
 
 async fn render_solo(case: SyncCase, provider: &PreparedSources, audible_deck: usize) -> Capture {
-    let mut harness = ProductHarness::new(case, provider, audible_deck).await;
+    let mut harness =
+        ProductHarness::new_for_block(case, provider, audible_deck, BLOCK_FRAMES).await;
+    prepare_fixture_grids(&mut harness, case, provider).await;
+    harness.request_sync(case).await;
+    harness.settle_sync_activation(case).await;
     let pcm = render_frames(&mut harness, case, CAPTURE_FRAMES).await;
+    let underruns = harness.underrun_failures();
+    harness.failures.extend(underruns);
     Capture {
         pcm,
         failures: harness.failures,
@@ -39,12 +53,14 @@ async fn render_mix(
     provider: &PreparedSources,
     target_bpm: Option<f64>,
 ) -> Capture {
-    let mut harness = ProductHarness::new(case, provider, 0).await;
+    let mut harness = ProductHarness::new_for_block(case, provider, 0, BLOCK_FRAMES).await;
+    prepare_fixture_grids(&mut harness, case, provider).await;
     for deck in &harness.decks {
         let control = deck.control().clone();
         harness.host.run(move || control.set_muted(false)).await;
     }
     harness.request_sync(case).await;
+    harness.settle_sync_activation(case).await;
 
     let pcm = if let Some(target_bpm) = target_bpm {
         let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
@@ -62,9 +78,73 @@ async fn render_mix(
     } else {
         render_frames(&mut harness, case, CAPTURE_FRAMES).await
     };
+    let underruns = harness.underrun_failures();
+    harness.failures.extend(underruns);
     Capture {
         pcm,
         failures: harness.failures,
+    }
+}
+
+fn analysis_name(source: &str) -> Option<String> {
+    source
+        .strip_prefix("rhythm_wav_")
+        .map(|case| format!("rhythm_expected_analysis_{case}"))
+        .or_else(|| {
+            source
+                .strip_prefix("library_flac_")
+                .map(|case| format!("library_analysis_{case}"))
+        })
+}
+
+fn fixture_grid(source: &str) -> SegmentSet {
+    const FINGERPRINT: &str = "rhythm-fixture:v1";
+
+    let analysis_name = analysis_name(source)
+        .unwrap_or_else(|| panic!("`{source}` has no analysis-sidecar naming contract"));
+    let asset = by_name(&analysis_name)
+        .unwrap_or_else(|| panic!("missing analysis fixture `{analysis_name}`"));
+    let file = AnalysisFile::parse(
+        asset.bytes(),
+        &AnalysisFingerprint::new(Some(FINGERPRINT), None),
+    )
+    .unwrap_or_else(|error| panic!("decode `{analysis_name}`: {error}"));
+    let analysis = file.latest().analysis();
+    let beat = analysis
+        .beat()
+        .unwrap_or_else(|| panic!("`{analysis_name}` has no beat analysis"));
+    let artifact: &BeatArtifact = beat.artifact();
+    let extent = analysis
+        .extent()
+        .unwrap_or_else(|| panic!("`{analysis_name}` has no source extent"));
+    let axis = AssetAxis::new(analysis.source_sample_rate(), extent);
+    let grid = segment_set(artifact, axis)
+        .unwrap_or_else(|error| panic!("`{analysis_name}` has no usable beat grid: {error}"));
+
+    grid
+}
+
+async fn prepare_fixture_grids(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    provider: &PreparedSources,
+) {
+    let sources = match provider.0 {
+        Provider::Rhythm(sources) | Provider::Library(sources) => sources,
+        _ => return,
+    };
+    for deck in 0..harness.decks.len() {
+        let source = sources[deck % sources.len()];
+        let grid = fixture_grid(source);
+        let _ = harness
+            .publish_track_grid(deck, harness.ids[deck][0], grid, BeatGridState::Complete)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{}: publish deck {deck} fixture grid: {error}", case.id())
+            });
+    }
+    if matches!(provider.0, Provider::Library(_)) {
+        harness.seek_staggered(case).await;
     }
 }
 
@@ -170,6 +250,30 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     source_cross_style_provider().await,
     None
 )]
+#[case::library_song2_slowtechno(
+    "library-song2-slowtechno",
+    LIBRARY_SYNC,
+    source_library_provider().await,
+    None
+)]
+#[case::library_straight_keylock(
+    "library-c343-g242-keylock",
+    STRAIGHT_LIBRARY_SYNC,
+    source_straight_library_provider().await,
+    None
+)]
+#[case::library_song1_track05_keylock(
+    "library-song1-track05-keylock",
+    STRAIGHT_LIBRARY_ALT_SYNC,
+    source_straight_library_alt_provider().await,
+    None
+)]
+#[case::library_newtechno_ryabina_keylock(
+    "library-newtechno-ryabina-keylock",
+    TECHNO_LIBRARY_SYNC,
+    source_techno_library_provider().await,
+    None
+)]
 async fn record_sync_listening_wavs(
     #[case] artifact_case: &str,
     #[case] case: SyncCase,
@@ -182,6 +286,7 @@ async fn record_sync_listening_wavs(
             panic!("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder")
         });
     let mut paths = Vec::with_capacity(case.decks() + 1);
+    let mut deck_pcm = Vec::with_capacity(case.decks());
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
@@ -193,6 +298,7 @@ async fn record_sync_listening_wavs(
             CHANNELS,
             case.sample_rate,
         ));
+        deck_pcm.push(capture.pcm);
         paths.push((label, path));
         failures.extend(capture.failures);
     }
@@ -207,6 +313,14 @@ async fn record_sync_listening_wavs(
         &deck_reports,
         LOUDNESS_TOLERANCE_LU,
     ));
+    let deck_slices = deck_pcm.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    failures.extend(synchronization_failures(
+        case.id(),
+        &deck_slices,
+        CHANNELS,
+        case.sample_rate,
+        case.final_bpm(),
+    ));
     if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
         failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
     }
@@ -217,6 +331,13 @@ async fn record_sync_listening_wavs(
         "sample_rate": case.sample_rate,
         "channels": CHANNELS,
         "capture_frames": CAPTURE_FRAMES,
+        "requested_start_seconds": case.start_seconds(),
+        "host_bpm": case.final_bpm(),
+        "keylock": case.keylock(),
+        "sources": match provider.0 {
+            Provider::Rhythm(sources) | Provider::Library(sources) => sources,
+            _ => &[],
+        },
         "failures": failures,
         "cochlea": {
             "decks": deck_reports,
@@ -275,4 +396,24 @@ async fn source_techno_breakbeat_provider() -> PreparedSources {
 #[kithara::fixture]
 async fn source_cross_style_provider() -> PreparedSources {
     prepared_sources(CROSS_STYLE_PROVIDER).await
+}
+
+#[kithara::fixture]
+async fn source_library_provider() -> PreparedSources {
+    prepared_sources(Provider::Library(LIBRARY)).await
+}
+
+#[kithara::fixture]
+async fn source_straight_library_provider() -> PreparedSources {
+    prepared_sources(Provider::Library(STRAIGHT_LIBRARY)).await
+}
+
+#[kithara::fixture]
+async fn source_straight_library_alt_provider() -> PreparedSources {
+    prepared_sources(Provider::Library(STRAIGHT_LIBRARY_ALT)).await
+}
+
+#[kithara::fixture]
+async fn source_techno_library_provider() -> PreparedSources {
+    prepared_sources(Provider::Library(TECHNO_LIBRARY)).await
 }

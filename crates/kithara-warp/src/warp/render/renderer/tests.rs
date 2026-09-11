@@ -207,6 +207,30 @@ fn an_exact_source_output_anchor_marks_the_rendered_pcm() {
     );
 }
 
+#[kithara::test]
+fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(false);
+    let (mut renderer, slot) = planned_renderer(controls);
+    renderer.prepare(spec());
+    let pools = renderer.pools.clone();
+    let samples = vec![0.25; 128 * usize::from(Consts::CH)];
+    let input = chunk(&pools, &samples);
+
+    renderer
+        .prepare_quantum(input.meta, input.frames())
+        .expect("current plan accepts the source quantum");
+    slot.install(Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 1.0)]).expect("replacement plan"),
+    )));
+    renderer.prepare(spec());
+
+    let output = renderer
+        .render_quantum(input)
+        .expect("accepted source quantum survives scheduler servicing");
+    assert_eq!(&*output.samples, samples);
+}
+
 fn publish_rate(publisher: &RenderPublisher, rate: RateTarget, source: u64) {
     let frame = SessionFrame::new(i64::try_from(source).expect("fixture frame fits"));
     let context = RenderContext::new(

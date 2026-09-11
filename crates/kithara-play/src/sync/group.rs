@@ -101,6 +101,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 SyncOperation::Sync {
                     intent: SyncIntent::Enable,
                     ..
+                }
+                | SyncOperation::Sync {
+                    intent: SyncIntent::AlignNow,
+                    ..
                 } => Some((SyncMode::HostSync, TempoSource::Inherited)),
                 SyncOperation::Sync {
                     intent: SyncIntent::Disable,

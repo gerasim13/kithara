@@ -4,7 +4,7 @@ use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
 use super::{PreloadGate, SeekOutcome};
-use crate::{AudioEvent, SeekLifecycleStage, SegmentLocation, traits::SeekBegin};
+use crate::{AudioEvent, ScheduledSeek, SeekLifecycleStage, SegmentLocation, traits::SeekBegin};
 
 /// The control-plane half of a seek: rebuilds the source's byte space, publishes a lifecycle event,
 /// nudges the peer and wakes the worker. Each takes a lock, so the audio thread only runs
@@ -40,15 +40,15 @@ impl SeekHandle {
             seek_prepare,
         }
     }
-}
 
-impl SeekBegin for SeekHandle {
-    fn begin(&self, position: Duration) -> SeekOutcome {
+    fn begin_inner(&self, position: Duration, present: bool) -> ScheduledSeek {
         if let Some(prepare) = &self.seek_prepare {
             prepare.prepare();
         }
         let epoch = self.seek.begin(position);
-        self.seek.mark_pending(epoch);
+        if present {
+            self.seek.mark_pending(epoch);
+        }
         self.bus.publish(AudioEvent::SeekLifecycle {
             seek_epoch: epoch,
             stage: SeekLifecycleStage::SeekRequest,
@@ -60,8 +60,8 @@ impl SeekBegin for SeekHandle {
         self.preload_gate.rearm();
         self.wake.wake();
 
-        trace!(?position, epoch, "seek begun");
-        match self.playhead.duration() {
+        trace!(?position, epoch, present, "seek begun");
+        let outcome = match self.playhead.duration() {
             Some(duration) if position >= duration => SeekOutcome::PastEof {
                 duration,
                 target: position,
@@ -70,7 +70,18 @@ impl SeekBegin for SeekHandle {
                 target: position,
                 landed_at: position,
             },
-        }
+        };
+        ScheduledSeek { epoch, outcome }
+    }
+}
+
+impl SeekBegin for SeekHandle {
+    fn begin(&self, position: Duration) -> SeekOutcome {
+        self.begin_inner(position, true).outcome
+    }
+
+    fn begin_scheduled(&self, position: Duration) -> ScheduledSeek {
+        self.begin_inner(position, false)
     }
 }
 

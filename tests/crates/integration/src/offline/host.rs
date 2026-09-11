@@ -16,6 +16,7 @@ use kithara::{
     play::{MixTapWriter, PlayError, TransportRevision, player::PlayerControlSource},
     queue::Queue,
     signal::AudioSpec,
+    warp::{BeatGrid, BeatGridSnapshot},
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -330,6 +331,19 @@ where
 
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
         self.off.call(|state| state.host.transport_revision()).await
+    }
+
+    pub async fn transport_revision_and_grid(
+        &self,
+    ) -> Result<(TransportRevision, BeatGridSnapshot), PlayError> {
+        self.off
+            .call(|state| {
+                state
+                    .host
+                    .transport_revision()
+                    .map(|revision| (revision, state.host.snapshot()))
+            })
+            .await
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {

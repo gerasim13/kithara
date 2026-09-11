@@ -17,7 +17,7 @@ ignored = ["serde", "unimock"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-probe = []
+usdt = []
 mock = ["dep:unimock"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
@@ -64,7 +64,7 @@ wasm_safe_thread = { workspace = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "usdt", "hang"] }
 
 dashmap = { workspace = true }
 serde_yaml_ng = { workspace = true }

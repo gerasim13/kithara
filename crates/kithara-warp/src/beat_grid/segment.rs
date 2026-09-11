@@ -402,6 +402,54 @@ mod tests {
     }
 
     #[kithara::test]
+    fn asset_grid_round_trips_a_nonzero_first_beat() {
+        let first = asset_frame(6_000.0);
+        let second = asset_frame(30_000.0);
+        let segment = MapSegment::new(
+            asset_marker(f64::from(first), 0),
+            asset_marker(f64::from(second), 1),
+            SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
+        )
+        .expect("nonzero first beat defines valid source geometry");
+        let grid = BeatGridSnapshot::segments(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            SegmentSet::new(
+                MapAxis::Asset(AssetAxis::new(sample_rate(), Consts::FRAME_COUNT)),
+                vec![segment],
+            )
+            .expect("segment set"),
+        )
+        .expect("asset grid");
+
+        for (frame, expected_beat) in [(6_000.0, 0.0), (18_000.0, 0.5), (30_000.0, 1.0)] {
+            let position = MapPoint::new(grid.stamp(), MapPosition::Asset(asset_frame(frame)));
+            let beat = match grid.beat_at(position) {
+                BeatGridQuery::Resolved(beat) => beat,
+                other => panic!("source frame must resolve, got {other:?}"),
+            };
+            assert_eq!(
+                *beat.value().value(),
+                Beat::new(expected_beat).expect("finite beat")
+            );
+            let round_trip = match grid.position_at(*beat.value()) {
+                BeatGridQuery::Resolved(position) => position,
+                other => panic!("source beat must resolve, got {other:?}"),
+            };
+            assert_eq!(*round_trip.value(), position);
+        }
+
+        assert!(matches!(
+            grid.beat_at(MapPoint::new(
+                grid.stamp(),
+                MapPosition::Asset(asset_frame(5_999.0))
+            )),
+            BeatGridQuery::OutsideDomain
+        ));
+    }
+
+    #[kithara::test]
     fn uncovered_eof_uses_grid_lifecycle_instead_of_current_geometry() {
         let asset_axis = AssetAxis::new(sample_rate(), Consts::FRAME_COUNT);
         let axis = MapAxis::Asset(asset_axis);

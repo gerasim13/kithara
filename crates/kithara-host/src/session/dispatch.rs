@@ -40,7 +40,7 @@ where
         }
         HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
-        #[cfg(any(test, feature = "probe"))]
+        #[cfg(any(test, feature = "usdt"))]
         HostCmd::RestartOutput { sample_rate } => restart_stream(state, sample_rate)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
@@ -200,7 +200,7 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        #[cfg(feature = "probe")]
+        #[cfg(feature = "usdt")]
         Cmd::SetPlayerMasterVolumes { levels } => {
             match controls::set_player_master_volumes(state, &levels) {
                 Ok(()) => Reply::Ok,

@@ -148,6 +148,12 @@ where
             .as_ref()
             .is_none_or(|staging| staging.capacity() != required);
         if needs_staging {
+            let staged_frames = self.staged_frames();
+            kithara_test_macros::probe_event!(
+                warp_staging_resized,
+                staged_frames,
+                required_frames = frames
+            );
             let mut buffer = self
                 .staging
                 .take()

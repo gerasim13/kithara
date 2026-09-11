@@ -6,7 +6,7 @@ use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "usdt"))]
 use crate::bridge::RtMetricsSnapshot;
 use crate::{
     EngineLoadSnapshot, EqBandConfig, PlayError, PlaybackSnapshot, PlayerStatus, Resource,
@@ -260,7 +260,7 @@ where
             #[must_use]
             pub fn engine_load(&self) -> EngineLoadSnapshot;
             /// Read the active audio slot's real-time counters for tests and probes.
-            #[cfg(any(test, feature = "probe"))]
+            #[cfg(any(test, feature = "usdt"))]
             #[must_use]
             pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot>;
             /// Number of EQ bands.

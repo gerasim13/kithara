@@ -4,11 +4,11 @@ use kithara_test_utils::kithara;
 use kithara_warp::{
     AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
     BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal, BeatsPerMinute,
-    FrameUncertainty, LoadGeneration, MapAxis, MapSegment, PresentationFrontier, ReconcileCause,
-    SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember,
-    SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation,
-    TransportRevision,
+    FrameUncertainty, LoadGeneration, MapAxis, MapSegment, Meter, MeterFacts, PresentationFrontier,
+    ReconcileCause, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat,
+    SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
+    TopologyOperation, TransportRevision,
 };
 
 use super::GroupState;
@@ -82,7 +82,7 @@ fn sync(target: BeatGridId, intent: SyncIntent) -> SyncOperation<PlayerMember> {
         target,
         load: LoadGeneration::first(),
         transport: TransportRevision::first(),
-        source: AlignmentSource::Prepared,
+        source: AlignmentSource::Prepared(frontier_at_zero()),
         activation: SessionFrame::new(0),
         intent,
     }
@@ -134,7 +134,7 @@ fn group_enforces_grid_successors() {
         .checked_next()
         .expect("invariant: fixture grid revision can advance");
     let published = session_grid(initial.id(), published_revision, SessionEpoch::new(0), 2.0);
-    group
+    let _ = group
         .publish_grid(published.clone())
         .expect("invariant: newer fixture publication is valid");
     let stale = session_grid(initial.id(), initial.revision(), SessionEpoch::new(0), 1.5);
@@ -405,6 +405,24 @@ fn free_leaves_the_beat_timeline() {
 }
 
 #[kithara::test]
+fn align_now_enters_host_sync() {
+    let mut group = synced_deck();
+
+    let admission = group
+        .transact(sync(group.id(), SyncIntent::AlignNow))
+        .expect("one-shot alignment is admitted");
+
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
+    let rejected = group
+        .transact(tempo(group.id(), 126.0))
+        .expect_err("aligned deck inherits the Host tempo");
+    assert_eq!(
+        *rejected.error(),
+        SyncError::TempoInherited { owner: group.id() }
+    );
+}
+
+#[kithara::test]
 fn a_root_built_local_sync_takes_its_first_tempo_from_the_host() {
     let mut root = GroupState::<PlayerMember>::unavailable(
         BeatGridId::allocate().expect("grid id"),
@@ -457,6 +475,15 @@ fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
 }
 
 fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
+    asset_grid_with_meter(id, frames, beat_frames, None)
+}
+
+fn asset_grid_with_meter(
+    id: BeatGridId,
+    frames: u64,
+    beat_frames: u64,
+    meter: Option<MeterFacts>,
+) -> BeatGridSnapshot {
     let sample_rate = NonZeroU32::new(48_000).expect("sample rate");
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
     let marker = |ordinal: u64, frame: u64| {
@@ -474,7 +501,7 @@ fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot
             MapSegment::new(
                 marker(beat, beat * beat_frames),
                 marker(beat + 1, (beat + 1) * beat_frames),
-                SegmentFacts::new(BeatEvidence::Observed, exact, None),
+                SegmentFacts::new(BeatEvidence::Observed, exact, meter),
             )
             .expect("fixture segment advances on both axes")
         })
@@ -552,7 +579,7 @@ fn reconcile_at(
             load,
             transport,
             cause,
-            frontier,
+            source: AlignmentSource::Prepared(frontier),
         })
         .expect("reconcile is admitted")
 }
@@ -573,6 +600,229 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
     assert!(matches!(admission, SyncAdmission::Prepared { .. }));
     assert_eq!(prepared.source, 24_000);
     assert_eq!(prepared.activation, SessionFrame::new(24_000));
+}
+
+#[kithara::test]
+fn audible_exact_beat_selects_a_reachable_future_cue() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let frontier = frontier_at_zero();
+    let (load, transport) = group.generations();
+
+    let _ = group
+        .transact(SyncOperation::Reconcile {
+            target: track,
+            load,
+            transport,
+            cause: ReconcileCause::AlignmentRequested,
+            source: AlignmentSource::Audible {
+                presentation: frontier,
+                preparation_source: frontier.source(),
+                playback_rate: kithara_warp::RateTarget::default(),
+            },
+        })
+        .expect("audible alignment is admitted");
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 24_000);
+    assert_eq!(prepared.activation, SessionFrame::new(24_000));
+}
+
+#[kithara::test]
+fn audible_alignment_waits_for_a_host_downbeat_reachable_by_the_live_mapping() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(4).expect("fixture meter is valid");
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(
+            track,
+            960_000,
+            24_000,
+            Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+        ),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(383_872)
+        .output(SessionFrame::new(60_768))
+        .build();
+    let (load, transport) = group.generations();
+
+    let _ = group
+        .transact(SyncOperation::Reconcile {
+            target: track,
+            load,
+            transport,
+            cause: ReconcileCause::GridAvailable,
+            source: AlignmentSource::Audible {
+                presentation: frontier,
+                preparation_source: 384_320,
+                playback_rate: kithara_warp::RateTarget::default(),
+            },
+        })
+        .expect("audible alignment is admitted");
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 480_000);
+    assert_eq!(prepared.activation, SessionFrame::new(192_000));
+}
+
+#[kithara::test]
+#[case::source_has_farther_to_travel(6_000, 18_000, 18_000, 6_000)]
+#[case::host_has_farther_to_travel(18_000, 6_000, 6_000, 18_000)]
+fn preparation_preserves_both_phase_error_directions(
+    #[case] source_frontier: u64,
+    #[case] output_frontier: i64,
+    #[case] expected_source_distance: u64,
+    #[case] expected_output_distance: i64,
+) {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let frontier = PresentationFrontier::builder()
+        .source(source_frontier)
+        .output(SessionFrame::new(output_frontier))
+        .build();
+
+    let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 24_000);
+    assert_eq!(prepared.activation, SessionFrame::new(24_000));
+    assert_eq!(prepared.source - source_frontier, expected_source_distance);
+    assert_eq!(
+        i64::from(prepared.activation) - output_frontier,
+        expected_output_distance
+    );
+}
+
+#[kithara::test]
+fn preparation_aligns_a_known_track_downbeat_to_the_session_origin_phase() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(4).expect("fixture meter is valid");
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(
+            track,
+            480_000,
+            24_000,
+            Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+        ),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(100_000)
+        .output(SessionFrame::new(100_000))
+        .build();
+
+    let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 192_000);
+    assert_eq!(prepared.activation, SessionFrame::new(192_000));
+}
+
+#[kithara::test]
+fn preparation_preserves_non_four_four_downbeat_phase() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(3)
+        .expect("fixture meter is valid")
+        .with_downbeat(BeatOrdinal::new(1));
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(
+            track,
+            480_000,
+            24_000,
+            Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+        ),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(50_000)
+        .output(SessionFrame::new(50_000))
+        .build();
+
+    let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(
+        prepared.source, 96_000,
+        "source beat 4 is the next 3/4 downbeat"
+    );
+    assert_eq!(
+        prepared.activation,
+        SessionFrame::new(72_000),
+        "Host beat 3 is the nearest 3/4 downbeat"
+    );
+}
+
+#[kithara::test]
+fn preparation_keeps_the_nearest_host_downbeat_for_a_large_source_jump() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(4).expect("fixture meter is valid");
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(
+            track,
+            480_000,
+            24_000,
+            Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+        ),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(252_000)
+        .output(SessionFrame::new(191_999))
+        .build();
+
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::TransportChanged,
+        frontier,
+    );
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 288_000);
+    assert_eq!(prepared.activation, SessionFrame::new(192_000));
+}
+
+#[kithara::test]
+fn explicit_alignment_uses_the_next_beat_instead_of_waiting_for_a_bar() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
+    let meter = Meter::new(4).expect("fixture meter is valid");
+    attach_grid(
+        &mut group,
+        asset_grid_with_meter(
+            track,
+            480_000,
+            24_000,
+            Some(MeterFacts::new(meter, BeatEvidence::Observed, exact)),
+        ),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(252_000)
+        .output(SessionFrame::new(191_999))
+        .build();
+
+    let _ = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::AlignmentRequested,
+        frontier,
+    );
+    let prepared = group.prepared().expect("prepared relation");
+
+    assert_eq!(prepared.source, 264_000);
+    assert_eq!(prepared.activation, SessionFrame::new(192_000));
 }
 
 #[kithara::test]

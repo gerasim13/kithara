@@ -200,6 +200,7 @@ fn synchronization_failures_with(
         );
 
         let (markers, downbeats) = rhythm_markers(samples, channel_count, sample_rate);
+        let marker_debug = markers.iter().take(8).copied().collect::<Vec<_>>();
         let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));
             continue;
@@ -224,7 +225,7 @@ fn synchronization_failures_with(
             match tempo.bpm {
                 Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
                 Some(actual) => failures.push(format!(
-                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 )),
                 None => failures.push(format!("{label}: track {index} has no detected tempo")),
             }
@@ -238,7 +239,7 @@ fn synchronization_failures_with(
             let actual = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
             if (actual - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
                 failures.push(format!(
-                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+                    "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 ));
             }
         }
@@ -303,15 +304,11 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
             continue;
         }
         match active {
-            Some((best_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
-                active = Some(if peak > best_peak {
-                    (frame, peak, frame)
-                } else {
-                    (best_frame, best_peak, frame)
-                });
+            Some((first_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
+                active = Some((first_frame, best_peak.max(peak), frame));
             }
-            Some((best_frame, best_peak, _)) => {
-                markers.push((best_frame, best_peak));
+            Some((first_frame, best_peak, _)) => {
+                markers.push((first_frame, best_peak));
                 active = Some((frame, peak, frame));
             }
             None => active = Some((frame, peak, frame)),
@@ -370,7 +367,13 @@ fn cochlea_failures(
         ));
     }
     if candidate.true_peak_over_0dbtp && !control.true_peak_over_0dbtp {
-        failures.push(format!("{label}: candidate-only true peak over 0 dBTP"));
+        failures.push(format!(
+            "{label}: candidate-only true peak over 0 dBTP: candidate={:?} dBTP/{:?} dBFS, control={:?} dBTP/{:?} dBFS",
+            candidate.true_peak_dbtp,
+            candidate.sample_peak_dbfs,
+            control.true_peak_dbtp,
+            control.sample_peak_dbfs
+        ));
     }
     if candidate.leading_silence_ms > control.leading_silence_ms + WINDOW_MS {
         failures.push(format!(

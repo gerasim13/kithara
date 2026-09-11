@@ -27,7 +27,7 @@ kithara = { workspace = true, features = [
     "fdk-aac",
     "ffmpeg",
     "platform",
-    "probe",
+    "usdt",
     "resample-rubato",
     "resampler",
     "signal",
@@ -36,7 +36,7 @@ kithara = { workspace = true, features = [
 kithara-integration-tests = { workspace = true }
 kithara-test-fixtures = { workspace = true }
 
-kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "usdt"] }
 
 [lints]
 workspace = true
