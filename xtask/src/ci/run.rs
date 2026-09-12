@@ -1243,7 +1243,7 @@ mod tests {
     /// name alone and says so with empty membership, which is a declaration
     /// rather than an oversight - and naming them here is what keeps a lane
     /// that merely forgot its membership from hiding among them.
-    const BY_NAME_ONLY: [&str; 1] = ["deep-ui"];
+    const BY_NAME_ONLY: [&str; 2] = ["deep-ui", "deep-warp"];
 
     #[test]
     fn a_pipeline_job_only_ever_runs_a_declared_lane() {
