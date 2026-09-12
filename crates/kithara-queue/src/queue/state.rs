@@ -383,8 +383,8 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionDuckingMode,
-        SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
+        PlayerConfig, Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq,
+        SlotId, bridge::slot_channels,
     };
     use kithara_test_utils::kithara;
 
@@ -439,7 +439,6 @@ pub(crate) mod tests {
                 }
                 Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
                 Cmd::QueryStreamShape => Reply::StreamShape(None),
-                Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
                 _ => Reply::Ok,
             };
             Ok(reply)

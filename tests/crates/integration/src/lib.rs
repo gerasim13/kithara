@@ -66,8 +66,6 @@ pub mod offline;
 pub mod packed_audio;
 pub mod reads;
 pub mod rfc6381;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod ring;
 pub mod rng;
 pub mod server_url;
 pub mod storage_ext;

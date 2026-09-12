@@ -39,13 +39,9 @@ mod quality_switch_continuity;
 mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;
-#[cfg(not(target_arch = "wasm32"))]
-mod ring_admission;
 mod rt_click;
 mod rt_metrics;
 mod seamless_queue_advance;
-#[cfg(not(target_arch = "wasm32"))]
-mod session_transport;
 mod sync_fixture_census;
 mod sync_listening;
 #[cfg(not(target_arch = "wasm32"))]

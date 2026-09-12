@@ -7,7 +7,7 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionBeat, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SharedEq, SlotControl},
         effects::eq::EqBandConfig,
         rt::StreamShape,
@@ -130,10 +130,6 @@ mod wire {
             writer: MixTapWriter,
         },
         DisableMixTap,
-        SetSessionDucking {
-            mode: SessionDuckingMode,
-        },
-        SessionDucking,
         SetSessionTempo {
             tempo: Tempo,
         },
@@ -172,7 +168,6 @@ mod wire {
     pub enum Reply {
         Ok,
         PlayerRegistered(RegisteredPlayer),
-        SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),

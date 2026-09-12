@@ -20,7 +20,7 @@ default = [
 ]
 backend-cpal = ["firewheel/cpal"]
 offline = ["dep:kithara-worker"]
-test-utils = ["kithara-bufpool/test-utils"]
+no-block = ["kithara-platform/no-block"]
 client-reqwest = ["kithara-play/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq"]
 tls-rustls = ["kithara-play/tls-rustls"]
