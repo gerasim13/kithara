@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 use tempfile::NamedTempFile;
 
 const RECORD_PREFIX: &str = "KITHARA_USDT";

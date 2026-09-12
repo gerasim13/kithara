@@ -132,6 +132,11 @@ pub mod ui {
     pub use kithara_ui::*;
 }
 
+#[cfg(feature = "usdt")]
+pub mod usdt {
+    pub use kithara_test_utils::probe::operation_id;
+}
+
 #[cfg(feature = "warp")]
 pub mod warp {
     pub use kithara_warp::*;

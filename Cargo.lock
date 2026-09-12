@@ -5371,7 +5371,6 @@ dependencies = [
  "kithara-app",
  "kithara-devtools",
  "kithara-events",
- "kithara-platform",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "memory-stats",

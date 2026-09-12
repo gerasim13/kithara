@@ -1,8 +1,8 @@
-use kithara_platform::time::Duration;
+use kithara::{platform::time::Duration, usdt::operation_id};
 
 use crate::usdt_observer::ProbeRecord;
 
-const WRITE_PLAYHEAD: u64 = kithara_test_utils::probe::operation_id("write_playhead");
+const WRITE_PLAYHEAD: u64 = operation_id("write_playhead");
 
 pub fn assert_committed_reached(records: &[ProbeRecord], min: Duration) {
     let reached = records

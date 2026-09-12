@@ -2,8 +2,8 @@
 
 use std::ffi::OsString;
 
+use kithara::platform::time::Duration;
 use kithara_integration_tests::{kithara, usdt_observer};
-use kithara_platform::time::Duration;
 
 #[kithara::test(native, flash(false))]
 fn dtrace_can_attach_to_a_same_user_child() {

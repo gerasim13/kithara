@@ -115,12 +115,11 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
 # External DTrace acceptance for the real USDT provider.
-usdt-observer = ["dep:kithara", "kithara/usdt"]
+usdt-observer = ["dep:kithara", "kithara/platform", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)
