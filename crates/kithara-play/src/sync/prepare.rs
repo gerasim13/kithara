@@ -63,10 +63,7 @@ pub(super) fn align_member(
         return Err(MapRegion::point(source));
     }
     let member_origin = MapPoint::new(member.stamp(), source);
-    let BeatGridQuery::Resolved(_) = member.tempo_at(member_origin) else {
-        return Err(MapRegion::point(source));
-    };
-    let BeatGridQuery::Resolved(member_beat) = member.beat_at(member_origin) else {
+    let BeatGridQuery::Resolved(member_beat) = member.beat_at_or_next(member_origin) else {
         return Err(MapRegion::point(source));
     };
     let member_frontier_beat = *member_beat.value().value();

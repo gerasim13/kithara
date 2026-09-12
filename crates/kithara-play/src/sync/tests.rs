@@ -5,10 +5,10 @@ use kithara_warp::{
     AlignmentSource, AssetAxis, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
     BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker, BeatOrdinal, BeatsPerMinute,
     FrameUncertainty, LoadGeneration, MapAxis, MapSegment, Meter, MeterFacts, PresentationFrontier,
-    ReconcileCause, SegmentFacts, SegmentSet, SessionAnchor, SessionAxis, SessionBeat,
-    SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
-    TopologyOperation, TransportRevision,
+    RateTarget, ReconcileCause, RenderContext, SegmentFacts, SegmentSet, SessionAnchor,
+    SessionAxis, SessionBeat, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied,
+    SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, SyncStatusSnapshot, TopologyOperation, TransportRevision,
 };
 
 use super::GroupState;
@@ -478,12 +478,16 @@ fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot
     asset_grid_with_meter(id, frames, beat_frames, None)
 }
 
-fn asset_grid_with_meter(
-    id: BeatGridId,
+fn asset_segments(frames: u64, beat_frames: u64, meter: Option<MeterFacts>) -> SegmentSet {
+    asset_segments_from(frames, beat_frames, 0, meter)
+}
+
+fn asset_segments_from(
     frames: u64,
     beat_frames: u64,
+    first_beat_frame: u64,
     meter: Option<MeterFacts>,
-) -> BeatGridSnapshot {
+) -> SegmentSet {
     let sample_rate = NonZeroU32::new(48_000).expect("sample rate");
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
     let marker = |ordinal: u64, frame: u64| {
@@ -496,25 +500,34 @@ fn asset_grid_with_meter(
             exact,
         )
     };
-    let segments = (0..frames / beat_frames)
+    let segments = (0..(frames - first_beat_frame) / beat_frames)
         .map(|beat| {
             MapSegment::new(
-                marker(beat, beat * beat_frames),
-                marker(beat + 1, (beat + 1) * beat_frames),
+                marker(beat, first_beat_frame + beat * beat_frames),
+                marker(beat + 1, first_beat_frame + (beat + 1) * beat_frames),
                 SegmentFacts::new(BeatEvidence::Observed, exact, meter),
             )
             .expect("fixture segment advances on both axes")
         })
         .collect();
+    SegmentSet::new(
+        MapAxis::Asset(AssetAxis::new(sample_rate, frames)),
+        segments,
+    )
+    .expect("fixture segment set is contiguous")
+}
+
+fn asset_grid_with_meter(
+    id: BeatGridId,
+    frames: u64,
+    beat_frames: u64,
+    meter: Option<MeterFacts>,
+) -> BeatGridSnapshot {
     BeatGridSnapshot::segments(
         id,
         BeatGridRevision::first(),
         BeatGridState::Complete,
-        SegmentSet::new(
-            MapAxis::Asset(AssetAxis::new(sample_rate, frames)),
-            segments,
-        )
-        .expect("fixture segment set is contiguous"),
+        asset_segments(frames, beat_frames, meter),
     )
     .expect("fixture asset grid is valid")
 }
@@ -603,6 +616,40 @@ fn preparation_carries_the_next_source_beat_to_the_next_deck_beat() {
 }
 
 #[kithara::test]
+fn preparation_before_the_first_grid_beat_cues_that_first_beat() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    attach_grid(
+        &mut group,
+        BeatGridSnapshot::segments(
+            track,
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            asset_segments_from(480_000, 30_000, 30_000, None),
+        )
+        .expect("fixture asset grid is valid"),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(6_000)
+        .output(SessionFrame::new(6_000))
+        .build();
+
+    let admission = reconcile_at(
+        &mut group,
+        track,
+        ReconcileCause::AlignmentRequested,
+        frontier,
+    );
+
+    assert!(
+        matches!(admission, SyncAdmission::Prepared { .. }),
+        "{admission:?}"
+    );
+    let prepared = group.prepared().expect("prepared relation");
+    assert_eq!(prepared.source, 30_000);
+}
+
+#[kithara::test]
 fn audible_exact_beat_selects_a_reachable_future_cue() {
     let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
@@ -619,7 +666,7 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
             source: AlignmentSource::Audible {
                 presentation: frontier,
                 preparation_source: frontier.source(),
-                playback_rate: kithara_warp::RateTarget::default(),
+                playback_rate: RateTarget::default(),
             },
         })
         .expect("audible alignment is admitted");
@@ -659,7 +706,7 @@ fn audible_alignment_waits_for_a_host_downbeat_reachable_by_the_live_mapping() {
             source: AlignmentSource::Audible {
                 presentation: frontier,
                 preparation_source: 384_320,
-                playback_rate: kithara_warp::RateTarget::default(),
+                playback_rate: RateTarget::default(),
             },
         })
         .expect("audible alignment is admitted");
@@ -696,6 +743,49 @@ fn preparation_preserves_both_phase_error_directions(
         i64::from(prepared.activation) - output_frontier,
         expected_output_distance
     );
+}
+
+#[kithara::test]
+fn different_bpm_grids_produce_one_coherent_phase_and_rate_decision() {
+    let mut group = synced_deck();
+    let track = BeatGridId::allocate().expect("grid id");
+    let segments = asset_segments(480_000, 30_000, None);
+    attach_grid(
+        &mut group,
+        BeatGridSnapshot::segments(
+            track,
+            BeatGridRevision::first(),
+            BeatGridState::Complete,
+            segments.clone(),
+        )
+        .expect("fixture asset grid is valid"),
+    );
+    let frontier = PresentationFrontier::builder()
+        .source(6_000)
+        .output(SessionFrame::new(6_000))
+        .build();
+
+    let _ = reconcile_at(&mut group, track, ReconcileCause::GridAvailable, frontier);
+    let prepared = group.prepared().expect("prepared relation");
+    assert_eq!(prepared.source, 30_000);
+    assert_eq!(prepared.activation, SessionFrame::new(24_000));
+    assert_eq!(
+        prepared.activation_beat,
+        SessionBeat::new(1.0).expect("beat")
+    );
+
+    let context = RenderContext::new(
+        SessionFrame::new(24_000)..SessionFrame::new(24_480),
+        NonZeroU32::new(48_000).expect("sample rate"),
+        Some(SessionBeat::new(1.0).expect("beat")..SessionBeat::new(1.02).expect("beat")),
+        SessionEpoch::new(0),
+        Some(TransportRevision::first()),
+    )
+    .expect("render context")
+    .with_rate(SyncMode::HostSync, RateTarget::default());
+    let plan = segments.region_plan().expect("track tempo plan");
+    let rate = context.rate_for(plan.region_at(prepared.source));
+    assert!((rate - 1.25).abs() < 1e-9, "{rate}");
 }
 
 #[kithara::test]

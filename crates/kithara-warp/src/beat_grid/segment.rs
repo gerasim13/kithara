@@ -111,6 +111,31 @@ impl BeatGridView for SegmentGridView {
         ))
     }
 
+    fn beat_at_or_next(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        if let Some(stale) = self.stale(position.stamp()) {
+            return stale;
+        }
+        if position.value().kind() != self.axis().kind() {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        }
+        if self.outside_asset_extent(*position.value()) {
+            return BeatGridQuery::OutsideDomain;
+        }
+        let Some((beat, evidence, uncertainty)) = self.segments.beat_at_or_next(*position.value())
+        else {
+            return self.missing_position(*position.value());
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            MapPoint::new(self.stamp(), beat),
+            evidence,
+            uncertainty,
+            self.stamp(),
+        ))
+    }
+
     fn id(&self) -> BeatGridId {
         self.id
     }

@@ -373,6 +373,24 @@ impl SegmentSet {
             .filter(|segment| segment.contains_position(position))
     }
 
+    pub(crate) fn beat_at_or_next(
+        &self,
+        position: MapPosition,
+    ) -> Option<(Beat, BeatEvidence, FrameUncertainty)> {
+        let segment = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.end_position() < position),
+        )?;
+        if position <= segment.start_position() {
+            return Some((
+                segment.start_beat(),
+                segment.start_evidence,
+                segment.start_uncertainty,
+            ));
+        }
+        segment.beat_at(position)
+    }
+
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {
         let upper = self
             .segments
