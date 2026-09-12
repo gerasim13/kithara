@@ -23,6 +23,10 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
+    pub(crate) fn mode(&self) -> SyncMode {
+        self.owned.as_ref().map_or(SyncMode::Off, GroupState::mode)
+    }
+
     pub(crate) fn generations(&self) -> (LoadGeneration, TransportRevision) {
         self.owned
             .as_ref()

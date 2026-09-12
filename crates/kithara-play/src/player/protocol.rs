@@ -6,7 +6,7 @@ use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, ReconcileCause, SegmentSet,
     SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncOperation, SyncRejected, SyncStatusSnapshot,
+    SyncOperation, SyncRejected, SyncStatusSnapshot, TransportOperation,
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
@@ -144,8 +144,20 @@ where
         );
         let alignment_source = match &operation {
             SyncOperation::Sync { source, .. } => Some(*source),
+            SyncOperation::Transport {
+                operation: TransportOperation::Seek { source_frame },
+                ..
+            } => Some(kithara_warp::AlignmentSource::Prepared(
+                kithara_warp::PresentationFrontier::builder()
+                    .source(*source_frame)
+                    .output(self.runtime.presentation_frontier().output())
+                    .build(),
+            )),
             _ => None,
         };
+        let reconcile_transport = alignment_source.is_some()
+            && matches!(&operation, SyncOperation::Transport { .. })
+            && self.sync.mode() == kithara_warp::SyncMode::HostSync;
         let now = self.runtime.presentation_frontier().output();
         let (admission, projection) = self.sync.transact_at(operation, now)?;
         let reconcile_cause = if align_now {
@@ -153,7 +165,9 @@ where
         } else {
             ReconcileCause::TransportChanged
         };
-        if (align_now || matches!(admission, SyncAdmission::StateChanged { .. }))
+        if (align_now
+            || reconcile_transport
+            || matches!(admission, SyncAdmission::StateChanged { .. }))
             && let Some(reconciled) =
                 self.reconcile_current_grid(reconcile_cause, alignment_source)?
         {

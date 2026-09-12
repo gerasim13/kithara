@@ -2,18 +2,12 @@
 
 use std::path::PathBuf;
 
-use kithara::{
-    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
-    platform::time::Duration,
-    warp::{AssetAxis, BeatGridState, SegmentSet},
-};
+use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactSet, audio_artifact_path},
     cochlea::{CochleaReport, mix_loudness_failures, synchronization_failures},
-    grid::segment_set,
     kithara,
 };
-use kithara_test_fixtures::assets::by_name;
 
 use super::sync_product_matrix::{
     AMBIENT_TRIP_HOP_PROVIDER, AMBIENT_TRIP_HOP_SYNC, BLOCK_FRAMES, CHANNELS, CROSS_STYLE_PROVIDER,
@@ -21,7 +15,7 @@ use super::sync_product_matrix::{
     PreparedSources, ProductHarness, Provider, SEQUENTIAL_SYNC, STRAIGHT_LIBRARY,
     STRAIGHT_LIBRARY_ALT, STRAIGHT_LIBRARY_ALT_SYNC, STRAIGHT_LIBRARY_SYNC, SyncCase,
     TECHNO_BREAKBEAT_PROVIDER, TECHNO_BREAKBEAT_SYNC, TECHNO_LIBRARY, TECHNO_LIBRARY_SYNC,
-    listening_sources, prepared_sources,
+    listening_sources, prepare_fixture_grids, prepared_sources,
 };
 
 const CAPTURE_FRAMES: usize = 48_000 * 6;
@@ -83,68 +77,6 @@ async fn render_mix(
     Capture {
         pcm,
         failures: harness.failures,
-    }
-}
-
-fn analysis_name(source: &str) -> Option<String> {
-    source
-        .strip_prefix("rhythm_wav_")
-        .map(|case| format!("rhythm_expected_analysis_{case}"))
-        .or_else(|| {
-            source
-                .strip_prefix("library_flac_")
-                .map(|case| format!("library_analysis_{case}"))
-        })
-}
-
-fn fixture_grid(source: &str) -> SegmentSet {
-    const FINGERPRINT: &str = "rhythm-fixture:v1";
-
-    let analysis_name = analysis_name(source)
-        .unwrap_or_else(|| panic!("`{source}` has no analysis-sidecar naming contract"));
-    let asset = by_name(&analysis_name)
-        .unwrap_or_else(|| panic!("missing analysis fixture `{analysis_name}`"));
-    let file = AnalysisFile::parse(
-        asset.bytes(),
-        &AnalysisFingerprint::new(Some(FINGERPRINT), None),
-    )
-    .unwrap_or_else(|error| panic!("decode `{analysis_name}`: {error}"));
-    let analysis = file.latest().analysis();
-    let beat = analysis
-        .beat()
-        .unwrap_or_else(|| panic!("`{analysis_name}` has no beat analysis"));
-    let artifact: &BeatArtifact = beat.artifact();
-    let extent = analysis
-        .extent()
-        .unwrap_or_else(|| panic!("`{analysis_name}` has no source extent"));
-    let axis = AssetAxis::new(analysis.source_sample_rate(), extent);
-    let grid = segment_set(artifact, axis)
-        .unwrap_or_else(|error| panic!("`{analysis_name}` has no usable beat grid: {error}"));
-
-    grid
-}
-
-async fn prepare_fixture_grids(
-    harness: &mut ProductHarness,
-    case: SyncCase,
-    provider: &PreparedSources,
-) {
-    let sources = match provider.0 {
-        Provider::Rhythm(sources) | Provider::Library(sources) => sources,
-        _ => return,
-    };
-    for deck in 0..harness.decks.len() {
-        let source = sources[deck % sources.len()];
-        let grid = fixture_grid(source);
-        let _ = harness
-            .publish_track_grid(deck, harness.ids[deck][0], grid, BeatGridState::Complete)
-            .await
-            .unwrap_or_else(|error| {
-                panic!("{}: publish deck {deck} fixture grid: {error}", case.id())
-            });
-    }
-    if matches!(provider.0, Provider::Library(_)) {
-        harness.seek_staggered(case).await;
     }
 }
 

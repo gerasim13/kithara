@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara::{
-    analysis::BeatArtifact,
+    analysis::{AnalysisFile, AnalysisFingerprint, BeatArtifact},
     assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
     encode::EncodeConfig,
     events::TrackId,
@@ -463,6 +463,7 @@ pub(super) struct ProductHarness {
     pub(super) host: OfflineHostHarness<TestPools>,
     pub(super) rendered_frames: u64,
     host_grid: Option<BeatGridSnapshot>,
+    sync_requested: bool,
     sync_activation: Option<u64>,
     tap: Option<AudioArtifactTap>,
     server: Option<TestServerHelper>,
@@ -658,6 +659,7 @@ impl ProductHarness {
             host,
             rendered_frames: 0,
             host_grid: None,
+            sync_requested: false,
             sync_activation: None,
             tap: AudioArtifactTap::from_env(
                 &format!("{}-{}", artifact_label(), case.id),
@@ -893,7 +895,8 @@ impl ProductHarness {
     pub(super) async fn seek_staggered(&mut self, case: SyncCase) {
         self.mark("seek");
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
-        for (index, deck) in self.decks.iter().enumerate() {
+        for index in 0..self.decks.len() {
+            let deck = &self.decks[index];
             let seconds = case.start_seconds.map_or_else(
                 || 5.25 + index as f64 * stagger_seconds,
                 |starts| {
@@ -913,8 +916,39 @@ impl ProductHarness {
                     Some((source, source)),
                 );
             }
-            deck.seek(seconds)
-                .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
+            if self.sync_requested {
+                let target = deck.id();
+                let source_frame = (seconds * f64::from(case.sample_rate)).round() as u64;
+                let _ = deck;
+                let transport = self.transport_revision(case).await;
+                let admission = self
+                    .host
+                    .with(move |host| {
+                        host.transact(SyncOperation::Transport {
+                            target,
+                            load: LoadGeneration::first(),
+                            transport,
+                            operation: kithara::warp::TransportOperation::Seek { source_frame },
+                        })
+                    })
+                    .await
+                    .unwrap_or_else(|rejected| {
+                        panic!("{}: synchronized seek deck {index}: {rejected}", case.id)
+                    });
+                if let SyncAdmission::Prepared { activation, .. } = admission {
+                    let activation = u64::try_from(i64::from(activation)).unwrap_or(0);
+                    self.sync_activation = Some(
+                        self.sync_activation
+                            .map_or(activation, |current| current.max(activation)),
+                    );
+                }
+            } else {
+                deck.seek(seconds)
+                    .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
+            }
+        }
+        if self.sync_requested {
+            self.settle_sync_activation(case).await;
         }
         self.settle(case, 96).await;
     }
@@ -953,6 +987,7 @@ impl ProductHarness {
 
     pub(super) async fn request_sync(&mut self, case: SyncCase) {
         self.request_sync_intent(case, SyncIntent::Enable).await;
+        self.sync_requested = true;
     }
 
     pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
@@ -1359,6 +1394,66 @@ fn asset_path(asset: Asset) -> String {
         .to_owned()
 }
 
+fn analysis_name(source: &str) -> Option<String> {
+    source
+        .strip_prefix("rhythm_wav_")
+        .map(|case| format!("rhythm_expected_analysis_{case}"))
+        .or_else(|| {
+            source
+                .strip_prefix("library_flac_")
+                .map(|case| format!("library_analysis_{case}"))
+        })
+}
+
+fn fixture_grid(source: &str) -> SegmentSet {
+    const FINGERPRINT: &str = "rhythm-fixture:v1";
+
+    let analysis_name = analysis_name(source)
+        .unwrap_or_else(|| panic!("`{source}` has no analysis-sidecar naming contract"));
+    let asset = by_name(&analysis_name)
+        .unwrap_or_else(|| panic!("missing analysis fixture `{analysis_name}`"));
+    let file = AnalysisFile::parse(
+        asset.bytes(),
+        &AnalysisFingerprint::new(Some(FINGERPRINT), None),
+    )
+    .unwrap_or_else(|error| panic!("decode `{analysis_name}`: {error}"));
+    let analysis = file.latest().analysis();
+    let beat = analysis
+        .beat()
+        .unwrap_or_else(|| panic!("`{analysis_name}` has no beat analysis"));
+    let artifact: &BeatArtifact = beat.artifact();
+    let extent = analysis
+        .extent()
+        .unwrap_or_else(|| panic!("`{analysis_name}` has no source extent"));
+    let axis = AssetAxis::new(analysis.source_sample_rate(), extent);
+    segment_set(artifact, axis)
+        .unwrap_or_else(|error| panic!("`{analysis_name}` has no usable beat grid: {error}"))
+}
+
+pub(super) async fn prepare_fixture_grids(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    provider: &PreparedSources,
+) {
+    let sources = match provider.0 {
+        Provider::Rhythm(sources) | Provider::Library(sources) => sources,
+        _ => return,
+    };
+    for deck in 0..harness.decks.len() {
+        let source = sources[deck % sources.len()];
+        let grid = fixture_grid(source);
+        let _ = harness
+            .publish_track_grid(deck, harness.ids[deck][0], grid, BeatGridState::Complete)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{}: publish deck {deck} fixture grid: {error}", case.id())
+            });
+    }
+    if matches!(provider.0, Provider::Library(_)) {
+        harness.seek_staggered(case).await;
+    }
+}
+
 async fn hls(
     server: &TestServerHelper,
     init: Asset,
@@ -1397,6 +1492,7 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
     for audible_deck in 0..case.decks {
         let mut harness =
             ProductHarness::new_for_block(case, &prepared, audible_deck, BLOCK_FRAMES).await;
+        prepare_fixture_grids(&mut harness, case, &prepared).await;
         harness.run_operations(case).await;
         harness.ride_tempo(case).await;
         let pcm = harness.capture(case).await;

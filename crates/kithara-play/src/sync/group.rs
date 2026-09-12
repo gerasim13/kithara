@@ -71,6 +71,12 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.generations
     }
 
+    /// Returns this group's current synchronization mode.
+    #[must_use]
+    pub(crate) const fn mode(&self) -> SyncMode {
+        self.mode
+    }
+
     /// Every directly nested group, for the owner to push committed state into.
     pub fn nested_groups_mut(&mut self) -> impl Iterator<Item = &mut G> {
         self.members.iter_mut().filter_map(|member| match member {
