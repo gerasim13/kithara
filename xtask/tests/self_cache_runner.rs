@@ -237,6 +237,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env_remove("KITHARA_CI_CACHE_ROOT")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("PATH", self.fake_path()?)
