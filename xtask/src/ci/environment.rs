@@ -1002,6 +1002,7 @@ mod tests {
             .env("CI_JOB_ID", "29")
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
@@ -1047,6 +1048,7 @@ mod tests {
             .env("CI_JOB_ID", "30")
             .env("HOME", directory.path().join("invalid:home"))
             .env_remove("CI")
+            .env_remove("CI_PROJECT_DIR")
             .output()
             .unwrap();
 
