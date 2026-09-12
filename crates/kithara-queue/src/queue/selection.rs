@@ -1,6 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::SelectTransition;
+use kithara_warp::AssetFrame;
 
 #[cfg(test)]
 use super::types::SelectPhase;
@@ -22,6 +23,18 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    pub(in crate::queue) fn select_player_item(
+        &self,
+        index: usize,
+        transition: SelectTransition,
+    ) -> Result<(), QueueError> {
+        let source_cue = matches!(self.cue_in, crate::CueIn::TrackStart)
+            .then(|| AssetFrame::new(0.0).expect("asset start is valid"));
+        self.player
+            .select_item_with_crossfade_from_source_cue(index, transition, source_cue)
+            .map_err(QueueError::from)
+    }
+
     /// Select a track by id, applying the given [`Transition`]. If the
     /// track is still loading or pending, both the id and the
     /// transition are stashed and applied when loading finishes.
@@ -70,10 +83,10 @@ where
                         duration_seconds: crossfade,
                     });
                 }
-                self.player.select_item_with_crossfade(
+                self.select_player_item(
                     index,
                     SelectTransition {
-                        autoplay: true,
+                        autoplay: was_playing || self.should_autoplay,
                         crossfade_seconds: crossfade,
                     },
                 )?;

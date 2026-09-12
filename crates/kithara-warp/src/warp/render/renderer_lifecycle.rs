@@ -3,6 +3,7 @@ use std::mem;
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
@@ -440,6 +441,7 @@ where
         }
         let snapshot = self.prepared_context.take();
         let rate_revision = prepared.rate.revision();
+        let target_rate_bits = prepared.speed.to_bits();
         chunk.meta.render_revision = kithara_signal::pack_render_revision(
             rate_revision,
             self.applied_warp_map.map_or(0, u64::from),
@@ -453,6 +455,14 @@ where
             output.meta.render_revision =
                 kithara_signal::pack_render_revision(rate_revision, u64::from(revision))
                     .unwrap_or(rate_revision);
+            kithara::probe_event!(
+                prepared_render_revision_selected,
+                rate_revision,
+                target_rate_bits,
+                warp_map_revision = u64::from(revision),
+                render_revision = output.meta.render_revision,
+                source_frame_offset = output.meta.frame_offset
+            );
         }
         Some(output)
     }

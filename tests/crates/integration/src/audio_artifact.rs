@@ -107,6 +107,22 @@ impl AudioArtifactTap {
     pub fn evidence(&mut self, key: &str, value: Value) {
         self.evidence.insert(key.to_owned(), value);
     }
+
+    /// Publish a separately labeled test reference without altering the raw tap output.
+    pub fn write_reference(&self, label: &str, pcm: &[f32]) -> io::Result<PathBuf> {
+        if !pcm.len().is_multiple_of(usize::from(self.channels)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "reference samples must contain complete interleaved frames",
+            ));
+        }
+        let frames = u64::try_from(pcm.len() / usize::from(self.channels))
+            .map_err(|_| io::Error::other("reference frame count overflow"))?;
+        let mut recording = self.set.recording(label, Some(frames))?;
+        recording.push(pcm).map_err(io::Error::other)?;
+        let reader = AudioArtifactSet::finish(recording)?;
+        audio_artifact_path(&reader)
+    }
 }
 
 impl Drop for AudioArtifactTap {

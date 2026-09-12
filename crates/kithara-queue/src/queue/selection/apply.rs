@@ -103,10 +103,10 @@ where
                 duration_seconds: crossfade,
             });
         }
-        if let Err(error) = self.player.select_item_with_crossfade(
+        if let Err(error) = self.select_player_item(
             index,
             SelectTransition {
-                autoplay: true,
+                autoplay: was_playing || self.should_autoplay,
                 crossfade_seconds: crossfade,
             },
         ) {

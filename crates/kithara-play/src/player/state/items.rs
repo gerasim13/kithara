@@ -4,7 +4,7 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_warp::RegionPlan;
+use kithara_warp::{AssetFrame, RegionPlan};
 use tracing::debug;
 
 use super::{
@@ -67,6 +67,40 @@ impl ItemQueue {
     pub(crate) fn current_item_id(&self) -> Option<TrackId> {
         let playlist = self.playlist.lock();
         playlist.item_id(playlist.current())
+    }
+
+    pub(crate) fn set_initial_source_cue(&self, item: TrackId, cue: Option<AssetFrame>) {
+        self.playlist.lock().set_initial_source_cue(item, cue);
+    }
+
+    pub(crate) fn initial_source_cue(&self, item: TrackId) -> Option<AssetFrame> {
+        self.playlist.lock().initial_source_cue(item)
+    }
+
+    pub(crate) fn clear_initial_source_cue(&self, item: TrackId) {
+        self.playlist.lock().clear_initial_source_cue(item);
+    }
+
+    pub(crate) fn await_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist.lock().await_initial_source_cue(item)
+    }
+
+    pub(crate) fn await_initial_source_cue_if(&self, item: TrackId, resolved: bool) -> bool {
+        self.playlist
+            .lock()
+            .await_initial_source_cue_if(item, resolved)
+    }
+
+    pub(crate) fn hold_or_consume_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist
+            .lock()
+            .hold_or_consume_initial_source_cue(item)
+    }
+
+    pub(crate) fn consume_awaiting_initial_source_cue(&self, item: TrackId) -> bool {
+        self.playlist
+            .lock()
+            .consume_awaiting_initial_source_cue(item)
     }
 
     pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {

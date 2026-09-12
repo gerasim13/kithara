@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_warp::{BeatGridId, BeatGridRevision, RegionPlan, RegionPlanSlot, SegmentSet};
+use kithara_warp::{
+    AssetFrame, BeatGridId, BeatGridRevision, BeatGridSnapshot, RegionPlan, RegionPlanSlot,
+    SegmentSet,
+};
 
 use crate::resource::Resource;
 
@@ -10,6 +13,7 @@ use crate::resource::Resource;
 pub(crate) struct TrackGrid {
     pub(crate) id: BeatGridId,
     pub(crate) revision: BeatGridRevision,
+    pub(crate) snapshot: BeatGridSnapshot,
     pub(crate) segments: SegmentSet,
 }
 
@@ -18,6 +22,15 @@ struct TrackState {
     slot: Option<Arc<RegionPlanSlot>>,
     plan: Option<Arc<RegionPlan>>,
     grid: Option<TrackGrid>,
+    initial_source_cue: InitialSourceCue,
+}
+
+#[derive(Default)]
+enum InitialSourceCue {
+    #[default]
+    None,
+    Selected(AssetFrame),
+    AwaitingPreparation(AssetFrame),
 }
 
 /// A queued resource plus the queue's identity for it.
@@ -100,6 +113,92 @@ impl Playlist {
 
     pub(crate) fn publish_track_grid(&mut self, item: TrackId, grid: TrackGrid) {
         self.tracks.entry(item).or_default().grid = Some(grid);
+    }
+
+    pub(crate) fn set_initial_source_cue(&mut self, item: TrackId, cue: Option<AssetFrame>) {
+        self.tracks.entry(item).or_default().initial_source_cue =
+            cue.map_or(InitialSourceCue::None, InitialSourceCue::Selected);
+    }
+
+    pub(crate) fn initial_source_cue(&self, item: TrackId) -> Option<AssetFrame> {
+        match self.tracks.get(&item)?.initial_source_cue {
+            InitialSourceCue::Selected(cue) | InitialSourceCue::AwaitingPreparation(cue) => {
+                Some(cue)
+            }
+            InitialSourceCue::None => None,
+        }
+    }
+
+    pub(crate) fn clear_initial_source_cue(&mut self, item: TrackId) {
+        if let Some(track) = self.tracks.get_mut(&item) {
+            track.initial_source_cue = InitialSourceCue::None;
+        }
+    }
+
+    /// Retain this source cue until its grid can prepare a synchronized launch.
+    ///
+    /// Returns whether the selected cue entered the waiting state.
+    pub(crate) fn await_initial_source_cue(&mut self, item: TrackId) -> bool {
+        self.await_initial_source_cue_if(item, true)
+    }
+
+    /// Retain a source cue only when the published grid resolved it to a beat.
+    ///
+    /// An unresolved cue cannot prepare a launch. Releasing it lets ordinary
+    /// playback continue instead of leaving the transport paused indefinitely.
+    pub(crate) fn await_initial_source_cue_if(&mut self, item: TrackId, resolved: bool) -> bool {
+        let Some(track) = self.tracks.get_mut(&item) else {
+            return false;
+        };
+        if !resolved {
+            return match track.initial_source_cue {
+                InitialSourceCue::None => false,
+                InitialSourceCue::Selected(_) | InitialSourceCue::AwaitingPreparation(_) => {
+                    track.initial_source_cue = InitialSourceCue::None;
+                    false
+                }
+            };
+        }
+        match track.initial_source_cue {
+            InitialSourceCue::Selected(cue) => {
+                track.initial_source_cue = InitialSourceCue::AwaitingPreparation(cue);
+                true
+            }
+            InitialSourceCue::AwaitingPreparation(_) => true,
+            InitialSourceCue::None => false,
+        }
+    }
+
+    /// Consume a selected source cue before ordinary playback, or report that
+    /// synchronized preparation still owns it.
+    pub(crate) fn hold_or_consume_initial_source_cue(&mut self, item: TrackId) -> bool {
+        let Some(track) = self.tracks.get_mut(&item) else {
+            return false;
+        };
+        match track.initial_source_cue {
+            InitialSourceCue::AwaitingPreparation(_) => true,
+            InitialSourceCue::Selected(_) => {
+                track.initial_source_cue = InitialSourceCue::None;
+                false
+            }
+            InitialSourceCue::None => false,
+        }
+    }
+
+    /// Consume a prepared source cue once the engine owns its scheduled launch.
+    pub(crate) fn consume_awaiting_initial_source_cue(&mut self, item: TrackId) -> bool {
+        let Some(track) = self.tracks.get_mut(&item) else {
+            return false;
+        };
+        if matches!(
+            track.initial_source_cue,
+            InitialSourceCue::AwaitingPreparation(_)
+        ) {
+            track.initial_source_cue = InitialSourceCue::None;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn set_track_plan(&mut self, item: TrackId, plan: Option<Arc<RegionPlan>>) {
@@ -193,7 +292,7 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use kithara_warp::{GridSegment, RegionPlan, RegionPlanSlot};
+    use kithara_warp::{AssetFrame, GridSegment, RegionPlan, RegionPlanSlot};
 
     use super::Playlist;
 
@@ -245,6 +344,36 @@ mod tests {
         assert!(playlist.mark_announced(0));
         assert!(!playlist.mark_announced(0));
         assert!(playlist.mark_announced(1));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn awaiting_source_cue_remains_preparable_for_a_late_grid() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let cue = AssetFrame::new(0.0).expect("asset origin is valid");
+
+        playlist.set_initial_source_cue(item, Some(cue));
+        assert!(playlist.await_initial_source_cue(item));
+        assert!(playlist.await_initial_source_cue(item));
+        assert_eq!(playlist.initial_source_cue(item), Some(cue));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn unresolved_source_cue_releases_selected_and_awaiting_playback() {
+        let mut playlist = Playlist::default();
+        let item = TrackId(7);
+        let cue = AssetFrame::new(99.0).expect("positive asset frame is valid");
+
+        playlist.set_initial_source_cue(item, Some(cue));
+        assert!(!playlist.await_initial_source_cue_if(item, false));
+        assert_eq!(playlist.initial_source_cue(item), None);
+        assert!(!playlist.hold_or_consume_initial_source_cue(item));
+
+        playlist.set_initial_source_cue(item, Some(cue));
+        assert!(playlist.await_initial_source_cue(item));
+        assert!(!playlist.await_initial_source_cue_if(item, false));
+        assert_eq!(playlist.initial_source_cue(item), None);
+        assert!(!playlist.hold_or_consume_initial_source_cue(item));
     }
 
     #[kithara::test(native, flash(false))]

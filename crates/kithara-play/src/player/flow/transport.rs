@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
+use kithara_warp::AssetFrame;
 use tracing::{debug, warn};
 
 use super::super::core::PlayerRuntime;
@@ -28,10 +29,12 @@ where
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
-            let _ = self.send_to_slot(PlayerCmd::SetPaused {
-                paused: false,
-                item_id: self.core.items.current_item_id(),
-            });
+            if !self.arm_prepared_launch_or_hold_source_cue() {
+                let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                    paused: false,
+                    item_id: self.core.items.current_item_id(),
+                });
+            }
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
@@ -121,13 +124,7 @@ where
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let prepared = self
-            .slot()
-            .zip(self.core.items.current_item_id())
-            .is_some_and(|(slot, item)| {
-                self.core.engine.set_prepared_launch_armed(slot, item, true)
-            });
-        if !prepared {
+        if !self.arm_prepared_launch_or_hold_source_cue() {
             let _ = self.send_to_slot(PlayerCmd::SetPaused {
                 paused: false,
                 item_id: self.core.items.current_item_id(),
@@ -143,6 +140,24 @@ where
             self.announce_current_item(self.current_index());
         }
         debug!(rate, phase = ?self.phase_kind(), "play");
+    }
+
+    /// Arm a scheduled launch when present. If a synchronized source cue is
+    /// awaiting its grid, retain the requested playing phase without releasing
+    /// ordinary PCM.
+    fn arm_prepared_launch_or_hold_source_cue(&self) -> bool {
+        let Some(item) = self.core.items.current_item_id() else {
+            return false;
+        };
+        let prepared = self
+            .slot()
+            .is_some_and(|slot| self.core.engine.set_prepared_launch_armed(slot, item, true));
+        if prepared {
+            self.core.items.consume_awaiting_initial_source_cue(item);
+            true
+        } else {
+            self.core.items.hold_or_consume_initial_source_cue(item)
+        }
     }
 
     /// Seek active tracks to position in seconds.
@@ -166,6 +181,10 @@ where
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
+
+        if let Some(item) = self.core.items.current_item_id() {
+            self.core.items.clear_initial_source_cue(item);
+        }
 
         let Some(slot_id) = self.slot() else {
             // No slot means no processor to carry the re-base, and refusing
@@ -243,6 +262,15 @@ where
         index: usize,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
+        self.select_item_with_crossfade_from_source_cue(index, transition, None)
+    }
+
+    pub(crate) fn select_item_with_crossfade_from_source_cue(
+        &self,
+        index: usize,
+        transition: SelectTransition,
+        initial_source_cue: Option<AssetFrame>,
+    ) -> Result<(), PlayError> {
         let SelectTransition {
             autoplay,
             crossfade_seconds,
@@ -291,11 +319,33 @@ where
             self.announce_current_item(index);
         }
 
+        if let Some(item) = self.core.items.current_item_id() {
+            self.core
+                .items
+                .set_initial_source_cue(item, initial_source_cue);
+        }
+
         self.apply_autoplay(autoplay);
         Ok(())
     }
 
     pub(crate) fn start_playback(&self, item_id: TrackId) {
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
+    }
+}
+
+impl<S> PlayerRuntime<S> {
+    pub(crate) fn release_awaiting_source_cue(&self) {
+        let Some(item) = self.core.items.current_item_id() else {
+            return;
+        };
+        if self.core.items.consume_awaiting_initial_source_cue(item)
+            && self.phase_kind() == crate::player::state::phase::PlayerPhaseKind::Playing
+        {
+            let _ = self.send_to_slot(PlayerCmd::SetPaused {
+                paused: false,
+                item_id: Some(item),
+            });
+        }
     }
 }

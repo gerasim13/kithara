@@ -136,6 +136,8 @@ pub enum SyncOperation<G: SyncGroup> {
         cause: ReconcileCause,
         /// Playback state and exact source/output boundary being reconciled.
         source: AlignmentSource,
+        /// Optional already-resolved source beat for a one-shot initial launch cue.
+        source_cue: Option<Beat>,
     },
 }
 

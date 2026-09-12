@@ -244,6 +244,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
         target,
         source,
         cause,
+        source_cue,
         ..
     } = &operation
     else {
@@ -280,6 +281,7 @@ fn reconcile<G: SyncGroup<NestedGroup = G>>(
             playback_rate: source.playback_rate(),
             align_downbeat: *cause != kithara_warp::ReconcileCause::AlignmentRequested,
             require_future_source: source.requires_future_cue(),
+            source_cue: *source_cue,
         },
     ) {
         Ok(aligned) => aligned,

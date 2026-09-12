@@ -19,7 +19,7 @@ use super::{
     types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
 };
 use crate::{
-    config::QueueConfig,
+    config::{CueIn, QueueConfig},
     loader::Loader,
     navigation::NavigationState,
     track::{TrackRecord, Tracks},
@@ -43,6 +43,8 @@ pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Queue-owned policy for the selected item's first synchronized launch.
+    pub(super) cue_in: CueIn,
     /// Serializes every state-changing command against terminal close.
     pub(super) admission: Mutex<()>,
     /// Authoritative playback position updated on every `tick`. Filters
@@ -183,6 +185,7 @@ where
             max_concurrent_loads,
             max_history_size,
             prefetch_duration,
+            cue_in,
             #[cfg(any(test, feature = "usdt"))]
             should_autoplay,
             #[cfg(not(any(test, feature = "usdt")))]
@@ -209,6 +212,7 @@ where
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
+            cue_in,
             loader,
             tracks,
             bus,

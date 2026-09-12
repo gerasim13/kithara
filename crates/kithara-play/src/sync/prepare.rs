@@ -32,6 +32,7 @@ pub(super) struct AlignmentPolicy {
     pub(super) playback_rate: Option<kithara_warp::RateTarget>,
     pub(super) align_downbeat: bool,
     pub(super) require_future_source: bool,
+    pub(super) source_cue: Option<Beat>,
 }
 
 /// Aligns the member's beat under the frontier's source frame onto the next
@@ -51,6 +52,7 @@ pub(super) fn align_member(
         playback_rate,
         align_downbeat,
         require_future_source,
+        source_cue,
     } = policy;
     let source = MapPosition::Asset(
         preparation_source
@@ -67,15 +69,19 @@ pub(super) fn align_member(
         return Err(MapRegion::point(source));
     };
     let member_frontier_beat = *member_beat.value().value();
-    let mut member_beat = whole_beat(member_frontier_beat, require_future_source)
-        .ok_or_else(|| MapRegion::point(source))?;
-    let member_meter = align_downbeat
+    let mut member_beat = source_cue.unwrap_or(
+        whole_beat(member_frontier_beat, require_future_source)
+            .ok_or_else(|| MapRegion::point(source))?,
+    );
+    let member_meter = (align_downbeat || source_cue.is_some())
         .then(|| member.meter_at(MapPoint::new(member.stamp(), member_beat)))
         .and_then(|query| match query {
             BeatGridQuery::Resolved(meter) => Some(*meter.value()),
             _ => None,
         });
-    if let Some(meter) = member_meter {
+    if source_cue.is_none()
+        && let Some(meter) = member_meter
+    {
         member_beat =
             next_downbeat(member_beat, meter, false).ok_or_else(|| MapRegion::point(source))?;
     }
@@ -112,8 +118,12 @@ pub(super) fn align_member(
             BeatGridQuery::Resolved(owner_meter) => *owner_meter.value(),
             _ => Meter::new(member_meter.beats_per_bar()).map_err(|_| MapRegion::point(output))?,
         };
-        owner_beat = next_downbeat(owner_beat, owner_meter, false)
-            .ok_or_else(|| MapRegion::point(output))?;
+        owner_beat = if source_cue.is_some() {
+            matching_phase(owner_beat, owner_meter, member_beat, member_meter)
+        } else {
+            next_downbeat(owner_beat, owner_meter, false)
+        }
+        .ok_or_else(|| MapRegion::point(output))?;
     }
     let target = MapPoint::new(owner.stamp(), owner_beat);
     let BeatGridQuery::Resolved(position) = owner.position_at(target) else {
@@ -189,4 +199,58 @@ fn next_downbeat(beat: Beat, meter: Meter, strictly_after: bool) -> Option<Beat>
     }
     let ordinal = ordinal.checked_add(distance)?;
     Beat::try_from(kithara_warp::BeatOrdinal::new(ordinal)).ok()
+}
+
+fn matching_phase(
+    owner_beat: Beat,
+    owner_meter: Meter,
+    member_beat: Beat,
+    member_meter: Meter,
+) -> Option<Beat> {
+    let member_downbeat = Beat::try_from(member_meter.downbeat()).ok()?;
+    let owner_downbeat = Beat::try_from(owner_meter.downbeat()).ok()?;
+    let member_phase = (f64::from(member_beat) - f64::from(member_downbeat))
+        .rem_euclid(f64::from(member_meter.beats_per_bar()));
+    let owner_phase = (f64::from(owner_beat) - f64::from(owner_downbeat))
+        .rem_euclid(f64::from(owner_meter.beats_per_bar()));
+    let distance = (member_phase - owner_phase).rem_euclid(f64::from(owner_meter.beats_per_bar()));
+    Beat::new(f64::from(owner_beat) + distance).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_warp::{Beat, BeatOrdinal, Meter};
+
+    use super::matching_phase;
+
+    #[kithara::test]
+    fn pickup_track_start_keeps_its_weak_beat_phase() {
+        let source_meter = Meter::new(4)
+            .expect("four beats per bar")
+            .with_downbeat(BeatOrdinal::new(1));
+        let host_meter = Meter::new(4).expect("four beats per bar");
+        let source = Beat::new(0.0).expect("source beat zero");
+        let host_frontier = Beat::new(1.0).expect("first eligible host beat");
+
+        let target = matching_phase(host_frontier, host_meter, source, source_meter)
+            .expect("pickup phase resolves");
+
+        assert_eq!(f64::from(target), 3.0);
+    }
+
+    #[kithara::test]
+    fn pickup_track_start_preserves_fractional_beat_phase() {
+        let source_meter = Meter::new(4)
+            .expect("four beats per bar")
+            .with_downbeat(BeatOrdinal::new(1));
+        let host_meter = Meter::new(4).expect("four beats per bar");
+        let source = Beat::new(0.5).expect("fractional source beat");
+        let host_frontier = Beat::new(1.0).expect("first eligible host beat");
+
+        let target = matching_phase(host_frontier, host_meter, source, source_meter)
+            .expect("pickup phase resolves");
+
+        assert_eq!(f64::from(target), 3.5);
+    }
 }

@@ -593,6 +593,7 @@ fn reconcile_at(
             transport,
             cause,
             source: AlignmentSource::Prepared(frontier),
+            source_cue: None,
         })
         .expect("reconcile is admitted")
 }
@@ -668,6 +669,7 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
                 preparation_source: frontier.source(),
                 playback_rate: RateTarget::default(),
             },
+            source_cue: None,
         })
         .expect("audible alignment is admitted");
     let prepared = group.prepared().expect("prepared relation");
@@ -708,6 +710,7 @@ fn audible_alignment_waits_for_a_host_downbeat_reachable_by_the_live_mapping() {
                 preparation_source: 384_320,
                 playback_rate: RateTarget::default(),
             },
+            source_cue: None,
         })
         .expect("audible alignment is admitted");
     let prepared = group.prepared().expect("prepared relation");

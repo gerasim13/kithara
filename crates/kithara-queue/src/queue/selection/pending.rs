@@ -128,14 +128,14 @@ where
                 duration_seconds: crossfade,
             });
         }
-        if let Err(error) = self.player.select_item_with_crossfade(
+        if let Err(error) = self.select_player_item(
             index,
             SelectTransition {
-                autoplay: true,
+                autoplay: was_playing || self.should_autoplay,
                 crossfade_seconds: crossfade,
             },
         ) {
-            return Some(Err(error.into()));
+            return Some(Err(error));
         }
         self.lock_navigation_mut().select(index);
         self.bus.publish(QueueEvent::CurrentTrackAdvance {

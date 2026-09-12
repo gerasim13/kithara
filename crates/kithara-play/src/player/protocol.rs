@@ -5,8 +5,8 @@ use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, ReconcileCause, SegmentSet,
-    SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncOperation, SyncRejected, SyncStatusSnapshot, TransportOperation,
+    SessionAnchor, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent,
+    SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot, TransportOperation,
 };
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
@@ -138,15 +138,29 @@ where
         let align_now = matches!(
             &operation,
             SyncOperation::Sync {
-                intent: kithara_warp::SyncIntent::AlignNow,
+                intent: SyncIntent::AlignNow,
                 ..
             }
         );
         let prepared_launch = matches!(
             &operation,
             SyncOperation::Sync {
-                intent: kithara_warp::SyncIntent::Enable,
+                intent: SyncIntent::Enable,
                 source: kithara_warp::AlignmentSource::Prepared(_),
+                ..
+            }
+        );
+        let sync_enable = matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: SyncIntent::Enable,
+                ..
+            }
+        );
+        let sync_release = matches!(
+            &operation,
+            SyncOperation::Sync {
+                intent: SyncIntent::Disable | SyncIntent::Free,
                 ..
             }
         );
@@ -165,9 +179,21 @@ where
         };
         let reconcile_transport = alignment_source.is_some()
             && matches!(&operation, SyncOperation::Transport { .. })
-            && self.sync.mode() == kithara_warp::SyncMode::HostSync;
+            && self.sync.mode() == SyncMode::HostSync;
         let now = self.runtime.presentation_frontier().output();
         let (admission, projection) = self.sync.transact_at(operation, now)?;
+        // The mode transition has committed even when reconciliation must wait
+        // for a grid, so retain the selected cue before public play can release
+        // ordinary PCM.
+        if sync_enable
+            && self.sync.mode() == SyncMode::HostSync
+            && let Some(item) = self.runtime.core.items.current_item_id()
+        {
+            self.runtime.core.items.await_initial_source_cue(item);
+        }
+        if sync_release && self.sync.mode() != SyncMode::HostSync {
+            self.runtime.release_awaiting_source_cue();
+        }
         let reconcile_cause = if align_now {
             ReconcileCause::AlignmentRequested
         } else {

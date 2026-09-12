@@ -23,7 +23,7 @@ use kithara::{
         ResourceSrc, Tempo,
         player::{PlayerControl, PlayerControlSource},
     },
-    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
+    queue::{CueIn, Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     record::{RecordingConfig, RecordingCore, RecordingSink},
     signal::AudioSpec,
     warp::{
@@ -566,7 +566,15 @@ impl ProductHarness {
         prepared: &PreparedSources,
         audible_deck: usize,
     ) -> Self {
-        Self::build(case, prepared, audible_deck, BLOCK_FRAMES, false).await
+        Self::build(
+            case,
+            prepared,
+            audible_deck,
+            BLOCK_FRAMES,
+            false,
+            CueIn::FirstDownbeat,
+        )
+        .await
     }
 
     pub(super) async fn new_for_provider(
@@ -575,7 +583,15 @@ impl ProductHarness {
         audible_deck: usize,
     ) -> Self {
         let prepared = prepared_sources(provider).await;
-        let mut harness = Self::build(case, &prepared, audible_deck, BLOCK_FRAMES, true).await;
+        let mut harness = Self::build(
+            case,
+            &prepared,
+            audible_deck,
+            BLOCK_FRAMES,
+            true,
+            CueIn::FirstDownbeat,
+        )
+        .await;
         let (_, server, _) = prepared;
         harness.server = Some(server);
         harness
@@ -587,7 +603,31 @@ impl ProductHarness {
         audible_deck: usize,
         block_frames: usize,
     ) -> Self {
-        Self::build(case, prepared, audible_deck, block_frames, true).await
+        Self::build(
+            case,
+            prepared,
+            audible_deck,
+            block_frames,
+            true,
+            CueIn::FirstDownbeat,
+        )
+        .await
+    }
+
+    pub(super) async fn new_track_start(
+        case: SyncCase,
+        prepared: &PreparedSources,
+        audible_deck: usize,
+    ) -> Self {
+        Self::build(
+            case,
+            prepared,
+            audible_deck,
+            BLOCK_FRAMES,
+            true,
+            CueIn::TrackStart,
+        )
+        .await
     }
 
     async fn build(
@@ -596,6 +636,7 @@ impl ProductHarness {
         audible_deck: usize,
         block_frames: usize,
         paced: bool,
+        cue_in: CueIn,
     ) -> Self {
         let provider = prepared.0;
         let sources: Vec<_> = prepared
@@ -651,6 +692,7 @@ impl ProductHarness {
             let queue = Queue::new(
                 QueueConfig::builder()
                     .player(player)
+                    .cue_in(cue_in)
                     .should_autoplay(false)
                     .build(),
             );
@@ -1515,6 +1557,10 @@ const PICKUP_HOUSE_124: &[&str] =
     &["rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only"];
 const PICKUP_DOWNTEMPO_96: &[&str] =
     &["rhythm_wav_scenario_1_origin_zero_pickup_long_downtempo_96_left_only"];
+const LISTENING_ALIGNED_DOWNTEMPO_96: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s"];
+const LISTENING_PICKUP_DOWNTEMPO_96: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s"];
 
 #[ignore = "ignored-red: origin-zero single-deck prepared launch baseline, 2026-09-12"]
 #[kithara::test(
@@ -1677,7 +1723,6 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     const NEXT_OUTPUT_FRAME: u64 = 116_129;
     const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
     const EXPECTED_WARP_MAP_REVISION: u64 = 2;
-    const EXPECTED_RENDER_REVISION: u64 = 8_589_934_596;
 
     let code_identity =
         env::var("KITHARA_SCENARIO_CODE_IDENTITY").expect("scenario code identity is required");
@@ -1710,14 +1755,10 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         },
         query => panic!("origin-zero source grid did not resolve source beat: {query:?}"),
     };
-    assert_eq!(
-        source_frame(control.selected_source_beat),
-        control.selected_source_frame
-    );
-    assert_eq!(
-        source_frame(control.selected_source_beat + 1),
-        control.next_source_frame
-    );
+    let selected_source_frame = source_frame(control.selected_source_beat);
+    let next_source_frame = source_frame(control.selected_source_beat + 1);
+    assert_eq!(selected_source_frame, control.selected_source_frame);
+    assert_eq!(next_source_frame, control.next_source_frame);
 
     prepare_fixture_grids(&mut harness, case, &sources).await;
     let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
@@ -1791,6 +1832,10 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
             .zip(actual)
             .all(|(expected, actual)| expected.to_bits() == actual.to_bits())
     });
+    let continuous_host_beat_frames = f64::from(case.sample_rate) * 60.0 / 124.0;
+    let expected_target_rate_bits =
+        ((next_source_frame - selected_source_frame) as f64 / continuous_host_beat_frames) as f32;
+    let expected_target_rate_bits = expected_target_rate_bits.to_bits();
     let probe_events = recorder
         .snapshot()
         .into_iter()
@@ -1802,6 +1847,7 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
                         | "prepared_launch_command_admitted"
                         | "prepared_launch_seek_begun"
                         | "prepared_launch_readiness_checked"
+                        | "prepared_render_revision_selected"
                         | "decoder_seek_epoch_observed"
                         | "producer_pcm_admitted"
                         | "scheduled_seek_activated"
@@ -1891,9 +1937,56 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         "{}: warp map revision",
         control.id
     );
+    let admitted_launch = probe_events
+        .iter()
+        .find(|event| {
+            event["probe"] == "prepared_launch_command_admitted"
+                && event["fields"]["activation_output"].as_i64()
+                    == Some(ASSIGNED_OUTPUT_FRAME as i64)
+                && event["fields"]["warp_map_revision"].as_u64() == Some(EXPECTED_WARP_MAP_REVISION)
+                && event["fields"]["armed"].as_u64() == Some(1)
+        })
+        .expect("prepared launch command is admitted for the selected map and host phase");
+    let launch_epoch = admitted_launch["fields"]["seek_epoch"]
+        .as_u64()
+        .expect("admitted prepared launch carries its decoder epoch");
+    assert!(
+        probe_events.iter().any(|event| {
+            event["probe"] == "decoder_seek_epoch_observed"
+                && event["fields"]["current_epoch"].as_u64() == Some(launch_epoch)
+                && event["fields"]["adopted"].as_u64() == Some(1)
+        }),
+        "{}: decoder must adopt the admitted prepared-launch epoch {launch_epoch}",
+        control.id
+    );
+    let selected_render = probe_events
+        .iter()
+        .find(|event| {
+            event["probe"] == "prepared_render_revision_selected"
+                && event["fields"]["warp_map_revision"].as_u64() == Some(EXPECTED_WARP_MAP_REVISION)
+                && event["fields"]["source_frame_offset"].as_u64()
+                    == Some(control.selected_source_frame)
+                && event["fields"]["target_rate_bits"].as_u64()
+                    == Some(u64::from(expected_target_rate_bits))
+        })
+        .expect("renderer selects the admitted launch segment at its expected physical rate");
+    let admitted_pcm = probe_events
+        .iter()
+        .find(|event| {
+            event["probe"] == "producer_pcm_admitted"
+                && event["fields"]["seek_epoch"].as_u64() == Some(launch_epoch)
+                && event["fields"]["source_start"].as_u64() == Some(control.selected_source_frame)
+                && event["fields"]["render_revision"].as_u64()
+                    == selected_render["fields"]["render_revision"].as_u64()
+        })
+        .expect("the selected renderer segment is admitted for the launch decoder epoch");
     let first_pcm = probe_events
         .iter()
-        .find(|event| event["probe"] == "pcm_consumed")
+        .find(|event| {
+            event["probe"] == "pcm_consumed"
+                && event["fields"]["source_start"].as_u64() == Some(control.selected_source_frame)
+                && event["fields"]["output_start"].as_u64() == Some(ASSIGNED_OUTPUT_FRAME)
+        })
         .expect("prepared launch consumes PCM");
     assert_eq!(
         first_pcm["fields"]["source_start"].as_u64(),
@@ -1909,8 +2002,8 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
     );
     assert_eq!(
         first_pcm["fields"]["render_revision"].as_u64(),
-        Some(EXPECTED_RENDER_REVISION),
-        "{}: first consumed PCM revision",
+        admitted_pcm["fields"]["render_revision"].as_u64(),
+        "{}: first consumed PCM uses the admitted renderer-selected launch revision",
         control.id
     );
     assert_eq!(
@@ -1945,6 +2038,396 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         "{}: rate-1 PCM differs from source after the configured gate settles",
         control.id
     );
+}
+
+#[derive(Clone, Copy)]
+struct TrackStartPickup {
+    id: &'static str,
+    provider: Provider,
+    source_downbeat_frame: u64,
+    seek_seconds: Option<f64>,
+    expected_source_frame: u64,
+    expected_host_onset: u64,
+    expected_next_host_marker: u64,
+}
+
+#[ignore = "ignored-red: TrackStart pickup launch requires real PCM proof, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::house_124(TrackStartPickup { id: "track-start-pickup-124", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: None, expected_source_frame: 0, expected_host_onset: 69_677, expected_next_host_marker: 92_903 })]
+#[case::downtempo_96(TrackStartPickup { id: "track-start-pickup-96", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: None, expected_source_frame: 0, expected_host_onset: 69_677, expected_next_host_marker: 92_903 })]
+#[case::house_124_seek_zero(TrackStartPickup { id: "track-start-pickup-124-seek-zero", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: Some(0.0), expected_source_frame: 23_226, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
+#[case::downtempo_96_seek_zero(TrackStartPickup { id: "track-start-pickup-96-seek-zero", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: Some(0.0), expected_source_frame: 30_000, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
+#[case::house_124_seek_ten(TrackStartPickup { id: "track-start-pickup-124-seek-ten", provider: Provider::Rhythm(PICKUP_HOUSE_124), source_downbeat_frame: 23_226, seek_seconds: Some(10.0), expected_source_frame: 487_746, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
+#[case::downtempo_96_seek_ten(TrackStartPickup { id: "track-start-pickup-96-seek-ten", provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96), source_downbeat_frame: 30_000, seek_seconds: Some(10.0), expected_source_frame: 510_000, expected_host_onset: 92_903, expected_next_host_marker: 116_129 })]
+async fn track_start_pickup_reaches_real_pcm_at_its_host_phase(#[case] pickup: TrackStartPickup) {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(pickup.id, 1, 48_000, OperationOrder::PlaySyncSeek)
+        .paused()
+        .hold(124.0);
+    let sources = prepared_sources(pickup.provider).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    prepare_fixture_grids(&mut harness, case, &sources).await;
+    let _ = harness.render(case, BLOCK_FRAMES * 8).await;
+    if let Some(seconds) = pickup.seek_seconds {
+        harness.decks[0]
+            .seek(seconds)
+            .expect("public seek cancels the pending TrackStart cue");
+    }
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    let capture_start = harness.rendered_frames;
+    let capture = harness
+        .capture_frames(case, 120_000, harness.block_frames)
+        .await;
+    let left = lane_samples(&capture, 0);
+    let (markers, _) = lane_score_markers(&capture, 0, capture_start, case.sample_rate);
+    let first = left
+        .iter()
+        .position(|sample| *sample != 0.0)
+        .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits u64"));
+    let equal_rate_waveform = (pickup.source_downbeat_frame == 23_226).then(|| {
+        let gate = kithara::play::DEFAULT_GATE_SMOOTHING;
+        let settled = (f64::from(case.sample_rate)
+            * f64::from(gate.smooth_seconds)
+            * (1.0 / (2.0 * f64::from(gate.settle_epsilon))).ln())
+        .ceil() as usize
+            + harness.block_frames;
+        let source = by_name("rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only")
+            .expect("pickup fixture is registered")
+            .bytes()
+            .get(44..)
+            .expect("pickup WAV has PCM");
+        let span = 23_226_usize.saturating_sub(settled);
+        assert!(span > 0, "post-gate comparison must be nonempty");
+        let output = usize::try_from(pickup.expected_host_onset - capture_start)
+            .expect("onset is in capture");
+        source
+            .chunks_exact(4)
+            .skip(pickup.expected_source_frame as usize + settled)
+            .take(span)
+            .map(|frame| f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32_768.0)
+            .zip(
+                left[output + settled..output + settled + span]
+                    .iter()
+                    .copied(),
+            )
+            .all(|(expected, actual)| expected.to_bits() == actual.to_bits())
+    });
+    let underruns = harness.underrun_failures();
+    let events = recorder.snapshot();
+    harness
+        .tap
+        .as_mut()
+        .expect("TrackStart product proof requires KITHARA_AUDIO_ARTIFACT_DIR")
+        .evidence(
+            "track_start_pickup_124",
+            serde_json::json!({
+                "verdict": "capture-complete-before-assertions",
+                "source": { "frame": pickup.expected_source_frame, "downbeat": 1 },
+                "seek_seconds": pickup.seek_seconds,
+                "source_downbeat_frame": pickup.source_downbeat_frame,
+                "host": { "onset": first, "expected_onset": pickup.expected_host_onset, "next_marker": pickup.expected_next_host_marker },
+                "capture_origin": capture_start,
+                "markers": markers,
+                "underruns": underruns,
+            }),
+        );
+    drop(harness);
+    assert_eq!(first, Some(pickup.expected_host_onset));
+    assert!(markers.contains(&pickup.expected_next_host_marker));
+    assert!(underruns.is_empty());
+    assert!(equal_rate_waveform.unwrap_or(true));
+    let plan = events
+        .iter()
+        .find(|event| event.probe_name() == Some("warp_plan_published"))
+        .expect("prepared launch publishes a warp plan");
+    assert_eq!(
+        plan.fields["activation_source"],
+        pickup.expected_source_frame
+    );
+    assert_eq!(plan.fields["activation_output"], pickup.expected_host_onset);
+}
+
+#[ignore = "ignored-red: late grid must arm an already-requested prepared launch, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::grid_before_play(true)]
+#[case::grid_after_play(false)]
+async fn late_grid_preserves_requested_playback(#[case] grid_before_play: bool) {
+    let recorder = probe_capture::install();
+    let case = SyncCase::running(
+        "late-grid-track-start-124",
+        1,
+        48_000,
+        OperationOrder::PlaySyncSeek,
+    )
+    .paused()
+    .hold(124.0);
+    let sources = prepared_sources(Provider::Rhythm(PICKUP_HOUSE_124)).await;
+    let mut harness = ProductHarness::new_track_start(case, &sources, 0).await;
+    let _ = harness.render(case, BLOCK_FRAMES * 8).await;
+    if grid_before_play {
+        prepare_fixture_grids(&mut harness, case, &sources).await;
+    }
+    harness.request_sync(case).await;
+    harness.play_all().await;
+    if !grid_before_play {
+        let grid = fixture_grid(PICKUP_HOUSE_124[0]);
+        let admission = harness
+            .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+            .await
+            .expect("late grid publication is admitted");
+        assert!(
+            matches!(admission, SyncAdmission::Prepared { .. }),
+            "late grid must prepare the requested TrackStart launch, got {admission:?}"
+        );
+    }
+    let capture_start = harness.rendered_frames;
+    let capture = harness
+        .capture_frames(case, 100_000, harness.block_frames)
+        .await;
+    let left = lane_samples(&capture, 0);
+    let first = left
+        .iter()
+        .position(|sample| *sample != 0.0)
+        .map(|frame| capture_start + u64::try_from(frame).expect("capture frame fits"));
+    let probe_events = recorder
+        .snapshot()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.probe_name(),
+                Some(
+                    "warp_plan_published"
+                        | "prepared_launch_command_admitted"
+                        | "prepared_launch_seek_begun"
+                        | "prepared_launch_readiness_checked"
+                        | "decoder_seek_epoch_observed"
+                        | "producer_pcm_admitted"
+                        | "scheduled_seek_activated"
+                        | "pcm_consumed"
+                        | "pcm_underrun"
+                )
+            )
+        })
+        .map(|event| {
+            serde_json::json!({
+                "probe": event.probe_name(),
+                "seq": event.seq(),
+                "fields": event.fields,
+                "strings": event.string_fields,
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(tap) = harness.tap.as_mut() {
+        tap.evidence(
+            "late_grid_lifecycle",
+            serde_json::json!({
+                "grid_before_play": grid_before_play,
+                "first_pcm": first,
+                "probe_events": probe_events,
+            }),
+        );
+    }
+    assert_eq!(first, Some(69_677));
+}
+
+#[derive(Clone, Copy)]
+struct ListeningScenario {
+    id: &'static str,
+    source: &'static str,
+    cue_in: CueIn,
+    seek_seconds: Option<f64>,
+    publish_grid_after_play: bool,
+    expected_activation: u64,
+}
+
+#[ignore = "writes 30-second one-deck Host-metronome previews, 2026-09-12"]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(300))
+)]
+#[case::first_downbeat_96_start_10(ListeningScenario {
+    id: "listening-first-downbeat-96-start-10",
+    source: "rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: Some(10.0),
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::first_downbeat_pickup_96(ListeningScenario {
+    id: "listening-first-downbeat-pickup-96",
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
+    cue_in: CueIn::FirstDownbeat,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 92_903,
+})]
+#[case::track_start_pickup_96(ListeningScenario {
+    id: "listening-track-start-pickup-96",
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
+    cue_in: CueIn::TrackStart,
+    seek_seconds: None,
+    publish_grid_after_play: false,
+    expected_activation: 69_677,
+})]
+#[case::late_grid_track_start_96(ListeningScenario {
+    id: "listening-late-grid-track-start-96",
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s",
+    cue_in: CueIn::TrackStart,
+    seek_seconds: None,
+    publish_grid_after_play: true,
+    expected_activation: 69_677,
+})]
+async fn listening_single_deck_host_metronome_preview(#[case] scenario: ListeningScenario) {
+    const PRELAUNCH_FRAMES: usize = BLOCK_FRAMES * 8;
+    const AUDIBLE_CAPTURE_FRAMES: usize = 48_000 * 30;
+    let case = SyncCase::running(scenario.id, 1, 48_000, OperationOrder::PlaySyncSeek)
+        .paused()
+        .hold(124.0);
+    let provider = match scenario.source {
+        "rhythm_wav_scenario_1_origin_zero_listening_long_downtempo_96_stereo_55s" => {
+            Provider::Rhythm(LISTENING_ALIGNED_DOWNTEMPO_96)
+        }
+        "rhythm_wav_scenario_1_origin_zero_pickup_listening_downtempo_96_stereo_45s" => {
+            Provider::Rhythm(LISTENING_PICKUP_DOWNTEMPO_96)
+        }
+        _ => panic!("{}: unregistered listening source", scenario.id),
+    };
+    let sources = prepared_sources(provider).await;
+    let mut harness = match scenario.cue_in {
+        CueIn::FirstDownbeat => {
+            ProductHarness::new_for_block(case, &sources, 0, BLOCK_FRAMES).await
+        }
+        CueIn::TrackStart => ProductHarness::new_track_start(case, &sources, 0).await,
+        _ => panic!("{}: unsupported CueIn preview", scenario.id),
+    };
+    if !scenario.publish_grid_after_play {
+        prepare_fixture_grids(&mut harness, case, &sources).await;
+    }
+    let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
+    assert!(prelaunch.iter().all(|sample| *sample == 0.0));
+    if let Some(seconds) = scenario.seek_seconds {
+        harness.decks[0]
+            .seek(seconds)
+            .unwrap_or_else(|error| panic!("{}: source seek: {error}", scenario.id));
+    }
+    harness.mark("listening-enable");
+    harness.request_sync(case).await;
+    harness.mark("listening-play");
+    harness.play_all().await;
+    if scenario.publish_grid_after_play {
+        let grid = fixture_grid(scenario.source);
+        let admission = harness
+            .publish_track_grid(0, harness.ids[0][0], grid, BeatGridState::Complete)
+            .await
+            .unwrap_or_else(|error| panic!("{}: late grid: {error}", scenario.id));
+        assert!(matches!(admission, SyncAdmission::Prepared { .. }));
+    }
+    if !scenario.publish_grid_after_play {
+        harness.settle_sync_activation(case).await;
+        assert_eq!(
+            harness.sync_activation,
+            Some(scenario.expected_activation),
+            "{}: prepared activation",
+            scenario.id
+        );
+    }
+    let audible_start = harness.rendered_frames;
+    let raw = harness
+        .capture_frames(case, AUDIBLE_CAPTURE_FRAMES, harness.block_frames)
+        .await;
+    let raw_before_reference = raw.clone();
+    let host_grid = harness
+        .host_grid
+        .as_ref()
+        .expect("sync request retains Host grid");
+    let total_output_frames = harness.rendered_frames;
+    let (reference, _host_markers) = host_grid_reference(host_grid, total_output_frames);
+    let activation = harness.sync_activation;
+    if !scenario.publish_grid_after_play {
+        assert_eq!(activation, Some(scenario.expected_activation));
+    }
+    let reference_offset =
+        usize::try_from(audible_start).expect("capture start fits usize") * usize::from(CHANNELS);
+    let reference_capture = &reference[reference_offset..reference_offset + raw.len()];
+    let (preview, preview_clips) = host_grid_preview(&raw, reference_capture);
+    assert_eq!(
+        preview_clips, 0,
+        "derived listening preview must have headroom"
+    );
+    let underruns = harness.underrun_failures();
+    if let Some(tap) = harness.tap.as_mut() {
+        let reference_path = tap
+            .write_reference("host-grid-reference", &reference)
+            .expect("publish Host-grid metronome WAV");
+        let preview_path = tap
+            .write_reference("track-host-grid-preview", &preview)
+            .expect("publish track and Host-grid preview WAV");
+        tap.evidence(
+            "single_deck_listening_preview",
+            serde_json::json!({
+                "verdict": "listening-preview-only",
+                "scenario": scenario.id,
+                "cue_in": format!("{:?}", scenario.cue_in),
+                "source": scenario.source,
+                "requested_source_seconds": scenario.seek_seconds,
+                "grid_published_after_play": scenario.publish_grid_after_play,
+                "expected_host_activation": scenario.expected_activation,
+                "prepared_host_activation": activation,
+                "audible_capture_start": audible_start,
+                "audible_capture_frames": AUDIBLE_CAPTURE_FRAMES,
+                "host_grid_reference": reference_path,
+                "track_host_grid_preview": preview_path,
+                "mix": {"track_gain": 0.8, "metronome_gain": 0.2, "preview_clipped_samples": preview_clips},
+                "underruns": underruns,
+                "raw_note": "output.wav is unmodified Host PCM; this artifact does not prove synchronization",
+            }),
+        );
+    }
+    assert_eq!(
+        raw, raw_before_reference,
+        "reference export must not alter raw Host PCM"
+    );
+    assert!(
+        underruns.is_empty(),
+        "listening capture underruns: {underruns:?}"
+    );
+}
+
+fn host_grid_preview(raw: &[f32], reference: &[f32]) -> (Vec<f32>, usize) {
+    let mut clipped = 0;
+    let preview = raw
+        .iter()
+        .zip(reference)
+        .map(|(track, click)| {
+            let sample = *track * 0.8 + *click * 0.2;
+            if sample.abs() > 1.0 {
+                clipped += 1;
+                sample.clamp(-1.0, 1.0)
+            } else {
+                sample
+            }
+        })
+        .collect();
+    (preview, clipped)
 }
 
 #[ignore = "ignored-red: real single-deck prepared launch currently produces no post-activation PCM, 2026-09-12"]
@@ -2440,6 +2923,75 @@ fn lane_samples(interleaved: &[f32], channel: usize) -> Vec<f32> {
         .chunks_exact(usize::from(CHANNELS))
         .map(|frame| frame[channel])
         .collect()
+}
+
+fn host_grid_reference(grid: &BeatGridSnapshot, frames: u64) -> (Vec<f32>, Vec<(u64, bool)>) {
+    let ordinal_at = |frame: u64| {
+        let query = grid.beat_at(MapPoint::new(
+            grid.stamp(),
+            MapPosition::Session(SessionFrame::new(
+                i64::try_from(frame).expect("reference frame fits i64"),
+            )),
+        ));
+        let BeatGridQuery::Resolved(beat) = query else {
+            panic!("Host grid must resolve the listening reference bounds");
+        };
+        f64::from(*beat.value().value())
+            .round()
+            .to_i64()
+            .expect("Host beat ordinal fits i64")
+    };
+    let first = ordinal_at(0);
+    let last = ordinal_at(frames.saturating_sub(1));
+    let mut pcm = vec![0.0; usize::try_from(frames).expect("reference frames fit usize") * 2];
+    let mut markers = Vec::new();
+    for ordinal in first..=last {
+        let beat = Beat::try_from(kithara::warp::BeatOrdinal::new(ordinal))
+            .expect("Host beat ordinal is valid");
+        let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
+        else {
+            continue;
+        };
+        let MapPosition::Session(position) = *position.value().value() else {
+            continue;
+        };
+        let Ok(frame) = u64::try_from(i64::from(position)) else {
+            continue;
+        };
+        if frame >= frames {
+            continue;
+        }
+        let downbeat = matches!(
+            grid.meter_at(MapPoint::new(grid.stamp(), beat)),
+            BeatGridQuery::Resolved(meter)
+                if (ordinal - i64::from(meter.value().downbeat()))
+                    .rem_euclid(i64::from(meter.value().beats_per_bar())) == 0
+        );
+        const BURST_FRAMES: usize = 480;
+        const BEAT_HZ: f32 = 1_760.0;
+        const DOWNBEAT_HZ: f32 = 2_200.0;
+        let (amplitude, frequency) = if downbeat {
+            (0.72, DOWNBEAT_HZ)
+        } else {
+            (0.45, BEAT_HZ)
+        };
+        let start = usize::try_from(frame).expect("reference frame fits usize");
+        for offset in 0..BURST_FRAMES {
+            let Some(index) = start
+                .checked_add(offset)
+                .filter(|index| *index < frames as usize)
+            else {
+                break;
+            };
+            let phase = (offset as f32 * frequency / 48_000.0).fract();
+            let envelope = 1.0 - offset as f32 / BURST_FRAMES as f32;
+            let sample = amplitude * (phase.mul_add(2.0, -1.0)) * envelope;
+            pcm[index * 2] = sample;
+            pcm[index * 2 + 1] = sample;
+        }
+        markers.push((frame, downbeat));
+    }
+    (pcm, markers)
 }
 
 async fn hls(

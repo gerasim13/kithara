@@ -1,9 +1,10 @@
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use kithara_warp::{
-    AlignmentSource, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState,
-    ReconcileCause, SegmentSet, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember,
-    SyncOperation, SyncRejected, SyncStatusSnapshot, TopologyOperation, WarpMap,
+    AlignmentSource, AssetFrame, Beat, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
+    BeatGridSnapshot, BeatGridState, MapPoint, MapPosition, ReconcileCause, SegmentSet,
+    SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncMember, SyncOperation, SyncRejected,
+    SyncStatusSnapshot, TopologyOperation, WarpMap,
 };
 use tracing::warn;
 
@@ -65,7 +66,7 @@ where
         let base = self.sync.topology()?.stamp();
         let member = SyncMember::Grid {
             alignment: None,
-            grid: Box::new(TrackGridMember(snapshot)),
+            grid: Box::new(TrackGridMember(snapshot.clone())),
         };
         let operation = if previous.is_some() {
             TopologyOperation::Replace {
@@ -84,11 +85,24 @@ where
             TrackGrid {
                 id,
                 revision,
+                snapshot: snapshot.clone(),
                 segments,
             },
         );
         self.replan_track(item);
-        self.reconcile_item_grid(item, cause, None, false)
+        let source_cue = self
+            .runtime
+            .core
+            .items
+            .initial_source_cue(item)
+            .and_then(|cue| source_cue_beat(&snapshot, cue));
+        let prepared_launch = self.sync.mode() == kithara_warp::SyncMode::HostSync
+            && self
+                .runtime
+                .core
+                .items
+                .await_initial_source_cue_if(item, source_cue.is_some());
+        self.reconcile_item_grid(item, cause, None, prepared_launch)
             .map_err(|rejected| {
                 let (error, _) = rejected.into();
                 error
@@ -146,13 +160,21 @@ where
                 },
             )
         });
+        let source_cue = prepared_launch
+            .then(|| self.runtime.core.items.initial_source_cue(item))
+            .flatten()
+            .and_then(|cue| source_cue_beat(&grid.snapshot, cue));
         let admission = self.sync.transact(SyncOperation::Reconcile {
             target: grid.id,
             load,
             transport,
             cause,
             source,
+            source_cue,
         })?;
+        let prepared_source_cue = prepared_launch
+            && source_cue.is_some()
+            && matches!(admission, SyncAdmission::Prepared { .. });
         let prepared = {
             let sync = &self.sync;
             sync.prepared()
@@ -206,6 +228,20 @@ where
                         }
                     },
                 );
+                if prepared_source_cue
+                    && self.runtime.phase_kind()
+                        == crate::player::state::phase::PlayerPhaseKind::Playing
+                    && self
+                        .runtime
+                        .core
+                        .engine
+                        .set_prepared_launch_armed(slot, item, true)
+                {
+                    self.runtime
+                        .core
+                        .items
+                        .consume_awaiting_initial_source_cue(item);
+                }
             }
         }
         Ok(Some(admission))
@@ -263,6 +299,14 @@ where
             error
         })
     }
+}
+
+fn source_cue_beat(grid: &BeatGridSnapshot, cue: AssetFrame) -> Option<Beat> {
+    let point = MapPoint::new(grid.stamp(), MapPosition::Asset(cue));
+    let BeatGridQuery::Resolved(beat) = grid.beat_at_or_next(point) else {
+        return None;
+    };
+    Some(*beat.value().value())
 }
 
 fn prepared_is_presented(

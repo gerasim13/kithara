@@ -13,6 +13,8 @@ struct Consts;
 impl Consts {
     const RHYTHM_FRAMES: u64 = 48_000 * 12;
     const RHYTHM_LONG_FRAMES: u64 = 48_000 * 15;
+    const RHYTHM_LISTENING_FRAMES: u64 = 48_000 * 45;
+    const RHYTHM_LISTENING_LONG_FRAMES: u64 = 48_000 * 55;
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
@@ -73,6 +75,42 @@ fn rhythm_wav_scenario_1_origin_zero_long(style: Style) -> Vec<u8> {
         ChannelLayout::LeftOnly,
         Origin::Zero,
         Consts::RHYTHM_LONG_FRAMES,
+    )
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::downtempo_96_stereo_45s(Style::Downtempo)]
+fn rhythm_wav_scenario_1_origin_zero_listening(style: Style) -> Vec<u8> {
+    score::wav_with_layout_at_origin_for_frames(
+        style,
+        Control::Aligned,
+        ChannelLayout::Stereo,
+        Origin::Zero,
+        Consts::RHYTHM_LISTENING_FRAMES,
+    )
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::downtempo_96_stereo_55s(Style::Downtempo)]
+fn rhythm_wav_scenario_1_origin_zero_listening_long(style: Style) -> Vec<u8> {
+    score::wav_with_layout_at_origin_for_frames(
+        style,
+        Control::Aligned,
+        ChannelLayout::Stereo,
+        Origin::Zero,
+        Consts::RHYTHM_LISTENING_LONG_FRAMES,
+    )
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::downtempo_96_stereo_45s(Style::Downtempo)]
+fn rhythm_wav_scenario_1_origin_zero_pickup_listening(style: Style) -> Vec<u8> {
+    score::wav_with_layout_at_origin_for_frames(
+        style,
+        Control::OneBeatBarLate,
+        ChannelLayout::Stereo,
+        Origin::Zero,
+        Consts::RHYTHM_LISTENING_FRAMES,
     )
 }
 
@@ -176,6 +214,69 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_long(
             Consts::RHYTHM_LONG_FRAMES,
         )),
         Consts::RHYTHM_LONG_FRAMES,
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["rhythm_wav_scenario_1_origin_zero_listening_{case}"]
+)]
+#[case::downtempo_96_stereo_45s(Style::Downtempo)]
+fn rhythm_expected_analysis_scenario_1_origin_zero_listening(
+    _inputs: &[&[u8]],
+    style: Style,
+) -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth_at_origin_for_frames(
+            style,
+            Control::Aligned,
+            Origin::Zero,
+            Consts::RHYTHM_LISTENING_FRAMES,
+        )),
+        Consts::RHYTHM_LISTENING_FRAMES,
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["rhythm_wav_scenario_1_origin_zero_listening_long_{case}"]
+)]
+#[case::downtempo_96_stereo_55s(Style::Downtempo)]
+fn rhythm_expected_analysis_scenario_1_origin_zero_listening_long(
+    _inputs: &[&[u8]],
+    style: Style,
+) -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth_at_origin_for_frames(
+            style,
+            Control::Aligned,
+            Origin::Zero,
+            Consts::RHYTHM_LISTENING_LONG_FRAMES,
+        )),
+        Consts::RHYTHM_LISTENING_LONG_FRAMES,
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    depends_on = ["rhythm_wav_scenario_1_origin_zero_pickup_listening_{case}"]
+)]
+#[case::downtempo_96_stereo_45s(Style::Downtempo)]
+fn rhythm_expected_analysis_scenario_1_origin_zero_pickup_listening(
+    _inputs: &[&[u8]],
+    style: Style,
+) -> Vec<u8> {
+    analysis_file(
+        BeatArtifact::from(score::truth_at_origin_for_frames(
+            style,
+            Control::OneBeatBarLate,
+            Origin::Zero,
+            Consts::RHYTHM_LISTENING_FRAMES,
+        )),
+        Consts::RHYTHM_LISTENING_FRAMES,
     )
 }
 
