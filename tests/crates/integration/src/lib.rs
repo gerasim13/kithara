@@ -72,7 +72,7 @@ pub mod server_url;
 pub mod storage_ext;
 #[cfg(feature = "usdt-observer")]
 pub mod swallow_detector;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod test_defaults;
 pub mod test_server;
 pub mod token_store;
