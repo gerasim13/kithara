@@ -1866,6 +1866,9 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
     let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
         .as_str()
         .expect("the executor names where the fixtures are read from");
+    let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
+        .as_str()
+        .expect("the executor names where xtask is bootstrapped");
 
     let cache_root = Path::new(fixtures)
         .parent()
@@ -1879,6 +1882,11 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
     assert!(
         target.contains(&format!("'{cache_root}/target/jobs/")),
         "snapshot lanes need an empty job target: {target}"
+    );
+    assert_eq!(
+        bootstrap,
+        format!("{cache_root}/target/.kithara-ci"),
+        "xtask bootstrap must outlive the checkout"
     );
 }
 
@@ -2049,6 +2057,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         mapping_field(workflow_env, "CARGO_TARGET_DIR").as_str(),
         Some("/cache/target"),
         "matrix selection reuses the fleet build cache"
+    );
+    assert_eq!(
+        mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
+        Some("/cache/target/.kithara-ci"),
+        "matrix selection reuses its xtask bootstrap"
     );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(

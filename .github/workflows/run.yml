@@ -34,6 +34,7 @@ env:
   CARGO_TERM_COLOR: always
   # Matrix selection compiles xtask, so keep that build across ephemeral jobs.
   CARGO_TARGET_DIR: /cache/target
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
   RUST_BACKTRACE: 1
 
 jobs:
