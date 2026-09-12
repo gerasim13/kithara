@@ -11,5 +11,5 @@ pub use config::{DEFAULT_RATE_SMOOTHING, WarpConfig, WarpConfigPatch};
 pub use cursor::WarpCursor;
 pub use map::WarpMap;
 #[cfg(feature = "render")]
-pub use render::WarpRenderer;
+pub use render::{ScheduledActivationProgress, WarpRenderer};
 pub use support::supports_playback_rate;

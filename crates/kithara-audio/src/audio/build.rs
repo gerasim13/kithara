@@ -31,6 +31,7 @@ use super::{
         decoder_resampler_event, playback_resampler_event,
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
+    seek::{ScheduledSeekActivator, SeekHandleParts},
 };
 use crate::{DecoderChangeCause, FrameDomain};
 
@@ -301,6 +302,17 @@ where
             variant_control,
         );
         let source = StreamAudioSource::new(shared_stream, parts).with_emit(Arc::clone(&emit));
+        let scheduled_seek = ScheduledSeekActivator::new(&SeekHandleParts {
+            bus: bus.clone(),
+            peer_wake: peer_wake.clone(),
+            seek_prepare: seek_prepare.clone(),
+            playhead: Arc::clone(&playhead),
+            preload_gate: Arc::clone(&preload_gate),
+            seek: Arc::clone(&seek),
+            wake: Arc::clone(&wake),
+        });
+        let mut port = port;
+        port.install_scheduled_seek(scheduled_seek);
         let lane = PreparedAudioLane {
             source,
             port,
@@ -589,6 +601,7 @@ mod tests {
         let (port, ring) =
             prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
         let preload_gate = Arc::new(super::super::PreloadGate::default());
+        let playhead = Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>;
         let source: Box<dyn AudioSource<Chunk = AudioChunk>> = Box::new(Unimock::new(()));
         let lane = PreparedAudioLane {
             source,
@@ -596,7 +609,7 @@ mod tests {
             emit,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: 1,
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
+            playhead,
         };
 
         let registration =

@@ -1,4 +1,6 @@
-use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
+use kithara_audio::{
+    AudioSource, Fetch, ScheduledSeekPreparation, SourceDiscontinuity, SourceEnd, TrackStep,
+};
 use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -536,6 +538,18 @@ where
         self.sync_discontinuity();
         self.prepare_renderers(spec.unwrap_or(self.spec));
         spec
+    }
+
+    fn prepare_scheduled_seek(&mut self) -> ScheduledSeekPreparation {
+        match self.warp.scheduled_activation_progress() {
+            kithara_warp::ScheduledActivationProgress::AwaitingActivation => {
+                ScheduledSeekPreparation::AwaitingActivation
+            }
+            kithara_warp::ScheduledActivationProgress::ProducingOldPcm => {
+                ScheduledSeekPreparation::ProducingOldPcm
+            }
+            kithara_warp::ScheduledActivationProgress::Ready => ScheduledSeekPreparation::Ready,
+        }
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {

@@ -5,7 +5,9 @@ use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RegionPlanSlot, RenderReader, RenderSnapshot, WarpConfig};
+use crate::{
+    RegionPlanSlot, RenderReader, RenderSnapshot, ScheduledActivationProgress, WarpConfig,
+};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -51,6 +53,11 @@ where
 
     /// Prepare deferred renderer state for the current source format.
     pub const fn prepare(&mut self, _spec: AudioSpec) {}
+
+    /// Identity targets do not install elastic discontinuities.
+    pub const fn scheduled_activation_progress(&mut self) -> ScheduledActivationProgress {
+        ScheduledActivationProgress::AwaitingActivation
+    }
 
     /// Select the next source span that fits the output quantum.
     pub fn prepare_quantum(

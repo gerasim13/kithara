@@ -406,6 +406,8 @@ impl<S> AudioControl for Audio<S> {
             revision,
             required_frames,
             presented_source,
+            (self.session.seek_obs.epoch() != self.ring.validator.epoch)
+                .then(|| self.session.seek_obs.epoch()),
             &mut self.cursor,
             recv_ctx(&self.session, &self.runtime),
         )
@@ -572,6 +574,12 @@ mod tests {
         fixture.audio.sync_seek();
         assert_eq!(fixture.audio.ring.validator.epoch, 0);
         assert_eq!(
+            fixture.audio.session.seek.activate_scheduled(),
+            kithara_stream::ScheduledSeekActivation::Activated {
+                epoch: scheduled.epoch,
+            }
+        );
+        assert_eq!(
             AudioControl::present_seek(&mut fixture.audio, scheduled.epoch),
             SeekPresentation::Presented
         );
@@ -593,6 +601,12 @@ mod tests {
             .audio
             .seek_handle()
             .begin_scheduled(Duration::from_millis(500));
+        assert_eq!(
+            fixture.audio.session.seek.activate_scheduled(),
+            kithara_stream::ScheduledSeekActivation::Activated {
+                epoch: second.epoch,
+            }
+        );
 
         assert_eq!(
             AudioControl::present_seek(&mut fixture.audio, first.epoch),

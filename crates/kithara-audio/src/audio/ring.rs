@@ -151,6 +151,7 @@ impl RingConsumer {
         revision: u64,
         required_frames: NonZeroUsize,
         presented_source: Option<SourceEnd>,
+        replacement_epoch: Option<u64>,
         cursor: &mut ChunkCursor,
         ctx: RecvCtx<'_>,
     ) -> RevisionFloorStatus {
@@ -165,8 +166,23 @@ impl RingConsumer {
                 0
             }
         });
-        let prepared_frames = self.audio_rx.fold(current_frames, |frames, fetch| {
-            let eligible = self.validator.is_valid(fetch)
+        let future_frames = self.future_fetch.as_ref().map_or(0, |fetch| {
+            let eligible = replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch)
+                && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
+            if eligible {
+                let Fetch::Data { data, .. } = fetch else {
+                    unreachable!();
+                };
+                usize::try_from(data.meta.frames).unwrap_or(usize::MAX)
+            } else {
+                0
+            }
+        });
+        let prepared_frames = self
+            .audio_rx
+            .fold(current_frames.saturating_add(future_frames), |frames, fetch| {
+            let eligible = (self.validator.is_valid(fetch)
+                || replacement_epoch.is_some_and(|epoch| fetch.epoch() == epoch))
                 && matches!(fetch, Fetch::Data { data, .. } if data.meta.render_revision >= revision);
             if eligible {
                 let Fetch::Data { data, .. } = fetch else {
@@ -178,9 +194,12 @@ impl RingConsumer {
             } else {
                 frames
             }
-        });
+            });
         if prepared_frames < required_frames.get() {
             return RevisionFloorStatus::WaitingForReplacement;
+        }
+        if replacement_epoch.is_some_and(|epoch| epoch != self.validator.epoch) {
+            return RevisionFloorStatus::ReadyForSeekPresentation;
         }
         if self.current_chunk.is_some() && !stale {
             return RevisionFloorStatus::Current;
@@ -751,6 +770,7 @@ mod tests {
                 10,
                 NonZeroUsize::new(1).expect("fixture interval is non-zero"),
                 None,
+                None,
                 &mut fixture.cursor,
                 empty_ctx(),
             ),
@@ -800,6 +820,7 @@ mod tests {
                 10,
                 NonZeroUsize::new(1).expect("fixture interval is non-zero"),
                 None,
+                None,
                 &mut fixture.cursor,
                 empty_ctx(),
             ),
@@ -839,6 +860,7 @@ mod tests {
                 10,
                 required,
                 None,
+                None,
                 &mut fixture.cursor,
                 empty_ctx(),
             ),
@@ -864,6 +886,7 @@ mod tests {
                 10,
                 required,
                 None,
+                None,
                 &mut fixture.cursor,
                 empty_ctx(),
             ),
@@ -887,6 +910,7 @@ mod tests {
             fixture.ring.set_render_revision_floor(
                 10,
                 NonZeroUsize::new(2).expect("fixture interval is non-zero"),
+                None,
                 None,
                 &mut fixture.cursor,
                 empty_ctx(),
@@ -950,6 +974,17 @@ mod tests {
 
         assert!(fixture.recv().is_none());
         assert!(fixture.trash_rx.try_pop().is_none());
+        assert_eq!(
+            fixture.ring.set_render_revision_floor(
+                0,
+                NonZeroUsize::new(2).expect("replacement length is non-zero"),
+                None,
+                Some(1),
+                &mut fixture.cursor,
+                empty_ctx(),
+            ),
+            RevisionFloorStatus::ReadyForSeekPresentation
+        );
         assert!(fixture.ring.begin_seek_epoch(1, &mut fixture.cursor));
 
         let mut output = [0.0; 2];

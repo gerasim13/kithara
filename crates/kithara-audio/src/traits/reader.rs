@@ -168,6 +168,8 @@ pub enum RevisionFloorStatus {
     Current,
     /// The reader replaced older PCM with a prepared revision.
     Switched,
+    /// A future seek epoch has enough PCM and can now be presented.
+    ReadyForSeekPresentation,
     /// The requested replacement is not prepared yet; existing PCM is intact.
     WaitingForReplacement,
 }

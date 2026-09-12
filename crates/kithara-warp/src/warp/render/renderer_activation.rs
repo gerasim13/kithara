@@ -5,12 +5,38 @@ use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::renderer::{PreparedActivation, PreparedQuantum, WarpRenderer};
+use super::{
+    ScheduledActivationProgress,
+    renderer::{PreparedActivation, PreparedQuantum, WarpRenderer},
+};
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Report whether producer output has reached the installed discontinuity.
+    pub fn scheduled_activation_progress(&mut self) -> ScheduledActivationProgress {
+        self.sync_plan();
+        let Some(activation) = self.plan.as_ref().and_then(|plan| plan.activation()) else {
+            return ScheduledActivationProgress::AwaitingActivation;
+        };
+        if let Some(producer_output) = self
+            .committed
+            .as_ref()
+            .map(|snapshot| snapshot.frontier().output())
+            && producer_output >= activation.output()
+        {
+            kithara::probe_event!(
+                scheduled_seek_activation_ready,
+                producer_output = i64::from(producer_output),
+                activation_output = i64::from(activation.output())
+            );
+            ScheduledActivationProgress::Ready
+        } else {
+            ScheduledActivationProgress::ProducingOldPcm
+        }
+    }
+
     pub(super) fn activate_prepared_quantum(
         &mut self,
         chunk: &mut AudioChunk,

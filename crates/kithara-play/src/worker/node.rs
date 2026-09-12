@@ -1,6 +1,6 @@
 use kithara_audio::{
     AudioEvent, AudioLaneEvent, AudioSource, Fetch, PreloadGate, PreparedAudioLane, ProducerPort,
-    TrackStep, WaitingReason,
+    ScheduledSeekPreparation, TrackStep, WaitingReason,
 };
 use kithara_events::DeferredBus;
 use kithara_platform::{
@@ -174,6 +174,18 @@ where
         self.port.recycle();
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
+        if self
+            .port
+            .scheduled_seek()
+            .and_then(kithara_audio::ScheduledSeekActivator::registered_epoch)
+            .is_some()
+            && self.source.prepare_scheduled_seek() == ScheduledSeekPreparation::Ready
+        {
+            let _ = self
+                .port
+                .scheduled_seek()
+                .map(kithara_audio::ScheduledSeekActivator::activate);
+        }
         self.port.flush_wake();
     }
 

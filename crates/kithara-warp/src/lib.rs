@@ -44,9 +44,9 @@ pub use temporal::{
     ActiveRegion, GridSegment, RateTarget, RegionPlan, RegionPlanError, RegionPlanSlot,
     RenderContext, RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
 };
-#[cfg(feature = "render")]
-pub use warp::WarpRenderer;
 pub use warp::{
     DEFAULT_RATE_SMOOTHING, Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap,
     supports_playback_rate,
 };
+#[cfg(feature = "render")]
+pub use warp::{ScheduledActivationProgress, WarpRenderer};

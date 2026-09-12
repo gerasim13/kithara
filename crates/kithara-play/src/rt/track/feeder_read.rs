@@ -7,6 +7,7 @@ use kithara_audio::RevisionFloorStatus;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::FrameCount;
+use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 use num_traits::ToPrimitive;
 
@@ -59,17 +60,33 @@ impl PlayerResource {
             return self.read_current(Some(context), track_id, output, range, metrics);
         }
         let Some(prefix_frames) = activation_prefix(context, activation) else {
+            self.fill_scratch(self.channel_buffers[0].len(), metrics);
             return self.read_current(Some(context), track_id, output, range, metrics);
         };
         let frames_to_read = range.end - range.start;
         if prefix_frames == 0 {
             let tail = self.prepare_activation_tail(metrics);
-            self.present_scheduled_seek();
-            if let Some(required) = NonZeroUsize::new(frames_to_read)
-                && self.sync_render_revision(activation, required)
-                    == RevisionFloorStatus::WaitingForReplacement
-            {
-                return self.read_current(Some(context), track_id, output, range, metrics);
+            if let Some(required) = NonZeroUsize::new(frames_to_read) {
+                match self.sync_render_revision(activation, required) {
+                    RevisionFloorStatus::WaitingForReplacement => {
+                        return self.read_current(Some(context), track_id, output, range, metrics);
+                    }
+                    RevisionFloorStatus::ReadyForSeekPresentation => {
+                        self.present_scheduled_seek();
+                        if self.sync_render_revision(activation, required)
+                            == RevisionFloorStatus::WaitingForReplacement
+                        {
+                            return self.read_current(
+                                Some(context),
+                                track_id,
+                                output,
+                                range,
+                                metrics,
+                            );
+                        }
+                    }
+                    RevisionFloorStatus::Current | RevisionFloorStatus::Switched => {}
+                }
             }
             self.arm_activation_blend(tail);
             return self.read_current(Some(context), track_id, output, range, metrics);
@@ -98,12 +115,20 @@ impl PlayerResource {
 
         let suffix_frames = frames_to_read - prefix_frames;
         let tail = self.prepare_activation_tail(metrics);
-        self.present_scheduled_seek();
         let required = NonZeroUsize::new(suffix_frames).expect("activation suffix is non-zero");
-        if self.sync_render_revision(activation, required)
-            == RevisionFloorStatus::WaitingForReplacement
-        {
-            return self.read_current(Some(context), track_id, output, range, metrics);
+        match self.sync_render_revision(activation, required) {
+            RevisionFloorStatus::WaitingForReplacement => {
+                return self.read_current(Some(context), track_id, output, range, metrics);
+            }
+            RevisionFloorStatus::ReadyForSeekPresentation => {
+                self.present_scheduled_seek();
+                if self.sync_render_revision(activation, required)
+                    == RevisionFloorStatus::WaitingForReplacement
+                {
+                    return self.read_current(Some(context), track_id, output, range, metrics);
+                }
+            }
+            RevisionFloorStatus::Current | RevisionFloorStatus::Switched => {}
         }
         self.arm_activation_blend(tail);
         let Some(suffix_context) = context.for_output_range(prefix_frames..frames_to_read) else {
@@ -185,6 +210,13 @@ impl PlayerResource {
                 }
             } else {
                 metrics.record_underrun();
+                kithara::probe_event!(
+                    pcm_underrun,
+                    output_start =
+                        context.map_or(0, |context| i64::from(context.output_frames().start)),
+                    requested_frames = frames_to_read,
+                    available_frames = frames_to_write
+                );
                 for ch in output.iter_mut() {
                     ch[range.start + frames_to_write..range.end].fill(0.0);
                 }
@@ -197,6 +229,13 @@ impl PlayerResource {
             (ReadOutcome::Eof, 0)
         } else {
             metrics.record_underrun();
+            kithara::probe_event!(
+                pcm_underrun,
+                output_start =
+                    context.map_or(0, |context| i64::from(context.output_frames().start)),
+                requested_frames = frames_to_read,
+                available_frames = 0_usize
+            );
             let range_len = range.len();
             for ch in output.iter_mut() {
                 ch[range.start..range.start + range_len].fill(0.0);
@@ -276,7 +315,11 @@ impl PlayerResource {
             required_frames,
             self.last_source_end,
         );
-        if status == RevisionFloorStatus::WaitingForReplacement {
+        if matches!(
+            status,
+            RevisionFloorStatus::WaitingForReplacement
+                | RevisionFloorStatus::ReadyForSeekPresentation
+        ) {
             return status;
         }
         self.render_revision_floor = revision;

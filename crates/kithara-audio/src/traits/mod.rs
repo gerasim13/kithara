@@ -18,4 +18,4 @@ pub use reader::{AudioControlMock, AudioReadMock, AudioSessionMock};
 pub(crate) use source::AudioSourceExt;
 #[cfg(any(test, feature = "mock"))]
 pub use source::AudioSourceMock;
-pub use source::{AudioSource, SourceDiscontinuity};
+pub use source::{AudioSource, ScheduledSeekPreparation, SourceDiscontinuity};

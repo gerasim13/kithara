@@ -19,7 +19,7 @@ mod runtime;
 pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 
-pub use audio::{Audio, PreparedAudio, SeekHandle};
+pub use audio::{Audio, PreparedAudio, ScheduledSeekActivator, SeekHandle};
 pub use event::{
     AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
     DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
@@ -46,6 +46,6 @@ pub use producer::{AudioLaneEvent, PreparedAudioLane, ProducerPort};
 pub use traits::{
     AudioControl, AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot,
     AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
-    PendingReason, ReadOutcome, RevisionFloorStatus, ScheduledSeek, SeekBegin, SeekOutcome,
-    SeekPresentation, SourceDiscontinuity,
+    PendingReason, ReadOutcome, RevisionFloorStatus, ScheduledSeek, ScheduledSeekPreparation,
+    SeekBegin, SeekOutcome, SeekPresentation, SourceDiscontinuity,
 };
