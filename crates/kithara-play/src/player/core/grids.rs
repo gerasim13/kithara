@@ -121,8 +121,6 @@ where
         };
         let (load, transport) = {
             let sync = &self.sync;
-            #[cfg(target_arch = "wasm32")]
-            let sync = sync.owned()?;
             sync.generations()
         };
         let frontier = self.runtime.presentation_frontier();
@@ -155,8 +153,6 @@ where
         })?;
         let prepared = {
             let sync = &self.sync;
-            #[cfg(target_arch = "wasm32")]
-            let sync = sync.owned()?;
             sync.prepared()
         };
         if let Some(prepared) = prepared.filter(|prepared| prepared.target == grid.id)
@@ -211,8 +207,6 @@ where
     /// Returns the group's acknowledgement error.
     pub(crate) fn acknowledge_prepared(&mut self) -> Result<Option<SyncStatusSnapshot>, SyncError> {
         let sync = &self.sync;
-        #[cfg(target_arch = "wasm32")]
-        let sync = sync.owned()?;
         let Some(prepared) = sync.prepared() else {
             return Ok(None);
         };

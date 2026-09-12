@@ -1,15 +1,16 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, SegmentSet, SessionAnchor, SessionEpoch,
-    SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMemberKind, SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridState, LoadGeneration, SegmentSet,
+    SessionAnchor, SessionEpoch, SessionFrame, SyncAdmission, SyncApplied, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    TransportRevision,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
 use crate::{
     api::TrackId,
-    sync::{DeckGrid, GroupState},
+    sync::{DeckGrid, GroupState, PreparedSync},
 };
 
 pub(crate) struct PlayerSync {
@@ -17,11 +18,21 @@ pub(crate) struct PlayerSync {
     owned: Option<GroupState<PlayerMember>>,
     topology: Result<SyncGroupSnapshot, SyncError>,
     status: SyncStatusSnapshot,
+    generations: (LoadGeneration, TransportRevision),
+    prepared: Option<PreparedSync>,
 }
 
 impl PlayerSync {
-    pub(crate) fn owned(&self) -> Result<&GroupState<PlayerMember>, SyncError> {
-        self.owned.as_ref().ok_or(SyncError::OwnerUnavailable)
+    pub(crate) fn generations(&self) -> (LoadGeneration, TransportRevision) {
+        self.owned
+            .as_ref()
+            .map_or(self.generations, GroupState::generations)
+    }
+
+    pub(crate) fn prepared(&self) -> Option<PreparedSync> {
+        self.owned
+            .as_ref()
+            .map_or(self.prepared, GroupState::prepared)
     }
 
     delegate::delegate! {
@@ -46,6 +57,8 @@ impl PlayerSync {
         self.grid = owned.snapshot();
         self.topology = owned.topology();
         self.status = owned.status();
+        self.generations = owned.generations();
+        self.prepared = owned.prepared();
         Some(owned)
     }
     pub(crate) fn unavailable(
@@ -60,6 +73,8 @@ impl PlayerSync {
             grid: owned.snapshot(),
             topology: owned.topology(),
             status: owned.status(),
+            generations: owned.generations(),
+            prepared: owned.prepared(),
             owned: Some(owned),
         }
     }
