@@ -112,10 +112,15 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
 apple-fused-src = ["kithara/apple-fused-src"]
+# External DTrace acceptance for the real USDT provider. This is deliberately
+# separate from the ordinary integration closure: it requires a macOS runner
+# where the CI account has passwordless DTrace entitlement.
+usdt-observer = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -291,6 +296,11 @@ path = "tests/suite_stress.rs"
 name = "suite_integration_regressions"
 path = "tests/suite_integration_regressions.rs"
 required-features = ["integration-regressions"]
+
+[[test]]
+name = "usdt_observer"
+path = "tests/usdt_observer.rs"
+required-features = ["usdt-observer"]
 
 [[test]]
 name = "suite_perf"

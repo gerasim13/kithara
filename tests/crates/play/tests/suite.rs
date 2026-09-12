@@ -36,6 +36,8 @@ mod player_queue_api_regressions;
 mod player_resource_internal;
 mod player_track_internal;
 mod quality_switch_continuity;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
+mod rate_response;
 mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;

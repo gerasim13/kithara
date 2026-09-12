@@ -583,6 +583,106 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / branch
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / main
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# apple-usdt / weekly
+  refused: weekly pipelines do not run the Apple USDT observer
+# apple-usdt / release
+  <require os> macos
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen sudo dtrace
+  /usr/bin/xcodebuild -version
+  just test run --lane=usdt-observer --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-play --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-hls-stress --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --lane=usdt-queue --profile ci
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen

@@ -197,19 +197,86 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::DEFAULT_EVENT_BUS_CAPACITY;
-    use kithara_play::PlayerEvent;
+    use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
+    use kithara_platform::sync::Arc;
+    use kithara_play::{ItemRole, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
     use crate::{
-        event::QueueEvent,
+        QueueControl,
+        event::{QueueEvent, TrackStatus},
         queue::state::tests::{make_queue, wait_for_queue_event},
+        test_pools::TestPools,
     };
+
+    fn selected_second(queue: &QueueControl<TestPools>) -> (TrackId, TrackId) {
+        let first = queue
+            .append("https://example.com/repeated.mp3")
+            .expect("open queue accepts first repeated source");
+        let second = queue
+            .append("https://example.com/repeated.mp3")
+            .expect("open queue accepts second repeated source");
+        queue.lock_navigation_mut().select(1);
+        queue.player.set_rate(1.0);
+        (first, second)
+    }
+
+    #[kithara::test(tokio)]
+    async fn leading_failure_marks_the_played_entry_when_sources_repeat() {
+        let queue = make_queue();
+        let (first, second) = selected_second(&queue);
+
+        queue.handle_item_did_fail(&ItemRole::Leading(TrackRef::new(
+            second,
+            SlotId::new(0),
+            Arc::from("https://example.com/repeated.mp3"),
+        )));
+
+        assert!(
+            !matches!(
+                queue.track(first).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "an event for the second repeated source must not fail the first entry"
+        );
+        assert!(
+            matches!(
+                queue.track(second).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "the entry named by the player event must be failed"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn background_end_and_failure_leave_the_current_entry_untouched() {
+        let queue = make_queue();
+        let (background, current) = selected_second(&queue);
+        let item = ItemRole::Background(TrackRef::new(
+            background,
+            SlotId::new(1),
+            Arc::from("https://example.com/repeated.mp3"),
+        ));
+
+        queue.handle_item_did_play_to_end(&item);
+        queue.handle_item_did_fail(&item);
+
+        assert_eq!(queue.current().map(|entry| entry.id), Some(current));
+        assert!(
+            !matches!(
+                queue.track(background).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "a background failure must not fail its queue entry"
+        );
+    }
 
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
         let queue = make_queue();
-        let id = queue.probe_register();
+        let id = queue
+            .append("https://example.com/lagged-events.mp3")
+            .expect("open queue accepts a track");
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue

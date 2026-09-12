@@ -74,10 +74,10 @@ fn wire_fields(
         ));
     }
     let total = args.len() + computed.len();
-    if total > 6 {
+    if total > 5 {
         return Err(Error::new_spanned(
             owner,
-            "probe supports at most 6 wire arguments (USDT provider arity ceiling)",
+            "probe supports at most 5 payload arguments (one of the 6 USDT provider slots is reserved for the operation id)",
         ));
     }
 
@@ -153,7 +153,9 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             #[cfg(feature = "usdt")]
             {
                 ::kithara_test_utils::probe::register_probes();
-                ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
+                const __KITHARA_USDT_OPERATION: u64 =
+                    ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
+                ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, __KITHARA_USDT_OPERATION);
             }
             __probe_ret
         }
@@ -222,7 +224,9 @@ fn build_emit_entry_event(
         #[cfg(feature = "usdt")]
         {
             ::kithara_test_utils::probe::register_probes();
-            ::kithara_test_utils::probe::#fire_fn(#fn_name_str, #(#probe_idents),*);
+            const __KITHARA_USDT_OPERATION: u64 =
+                ::kithara_test_utils::probe::operation_id(concat!(module_path!(), "::", #fn_name_str));
+            ::kithara_test_utils::probe::#fire_fn(__KITHARA_USDT_OPERATION, #(#probe_idents),*);
         }
     }
 }

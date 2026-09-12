@@ -8,10 +8,27 @@ use url::Url;
 
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.
 pub trait Probe {
-    /// Fire the probe associated with this value. `name` becomes the
-    /// `probe` field on the tracing event so call-site granularity
-    /// survives even though the USDT probe name is fixed.
-    fn record_probe(&self, name: &'static str);
+    /// Fire the probe associated with this value.
+    fn record_probe(&self, operation: u64);
+}
+
+/// Stable, allocation-free USDT operation identifier.
+///
+/// The provider has room for six `u64` values. Every firing reserves the
+/// first one for this FNV-1a hash; the remaining five are operation payload.
+/// Callers pass a `concat!(module_path!(), "::", operation)` literal, so the
+/// hash is evaluated at compile time and does not touch the RT path.
+#[must_use]
+pub const fn operation_id(name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut index = 0;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
+    }
+    hash
 }
 
 /// Convert a value of arbitrary type into the `u64` USDT wire format.

@@ -60,12 +60,12 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         field_idents.push(ident);
     }
 
-    if field_idents.len() > 6 {
+    if field_idents.len() > 5 {
         return Err(Error::new_spanned(
             struct_name,
-            "#[derive(Probe)] supports at most 6 wire fields (USDT \
-             provider arity ceiling). Mark extra fields with `#[probe(skip)]` \
-             or split the struct.",
+            "#[derive(Probe)] supports at most 5 payload fields (one of the \
+             6 USDT provider slots is reserved for the operation id). Mark \
+             extra fields with `#[probe(skip)]` or split the struct.",
         ));
     }
     let fire_fn = format_ident!("fire_{}", field_idents.len());
@@ -94,14 +94,14 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #impl_generics ::kithara_test_utils::probe::Probe for #struct_name #ty_generics #where_clause {
             #[inline]
-            fn record_probe(&self, name: &'static str) {
-                let _ = name;
+            fn record_probe(&self, operation: u64) {
+                let _ = operation;
                 #(#field_consume)*
                 #[cfg(feature = "usdt")]
                 {
                     ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
-                    ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
+                    ::kithara_test_utils::probe::#fire_fn(operation, #(#slot_idents),*);
                 }
             }
         }
