@@ -13,8 +13,10 @@ mod source_helper;
 pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 #[cfg(not(target_arch = "wasm32"))]
 mod loader_fixture;
+#[cfg(all(feature = "usdt", target_os = "macos"))]
+pub(crate) use loader_fixture::wait_loaded;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use loader_fixture::{LocalWav, append_loaded, append_source_loaded, wait_loaded};
+pub(crate) use loader_fixture::{LocalWav, append_loaded};
 
 mod advance_boundary_provenance;
 mod app_fixture_ticks;

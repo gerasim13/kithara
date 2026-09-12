@@ -378,28 +378,32 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::Write,
-        sync::{Condvar, Mutex as StdMutex, PoisonError},
-    };
+    #[cfg(not(target_os = "linux"))]
+    use std::io::Write;
+    use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
     use kithara::{
         events::{EventBus, SlotId, TrackId},
-        platform::{
-            sync::{Arc, Mutex},
-            tokio::task::spawn_blocking,
-        },
-        play::{ItemRole, PlayWorkerConfig, PlayerConfig, PlayerImpl, TrackRef},
-        queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
+        platform::sync::{Arc, Mutex},
+        play::{ItemRole, TrackRef},
+        queue::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackStatus},
+    };
+    #[cfg(not(target_os = "linux"))]
+    use kithara::{
+        platform::tokio::task::spawn_blocking,
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        queue::{QueueConfig, Transition},
     };
     use kithara_file::{FileError, FileEvent};
     use kithara_hls::{HlsEvent, HlsFailure};
 
     use super::*;
+    #[cfg(not(target_os = "linux"))]
+    use crate::pools::{FfiQueue, FfiWorker};
     use crate::{
         core::event_set::ItemBusEvent,
         observer::ItemObserver,
-        pools::{self, FfiQueue, FfiWorker},
+        pools,
         types::{FfiItemConfig, FfiItemEvent},
     };
 
@@ -903,6 +907,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     async fn wait_for_status(
         events: &mut EventReceiver<QueueBusEvent>,
         id: TrackId,
@@ -926,6 +931,7 @@ mod tests {
             .unwrap_or(false)
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn short_wav() -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new()
             .suffix(".wav")
@@ -955,6 +961,7 @@ mod tests {
     /// — async work that panics without an ambient runtime. The thread is
     /// a plain OS thread, so it only has one if it enters `FFI_RUNTIME`
     /// itself.
+    #[cfg(not(target_os = "linux"))]
     #[kithara::test(tokio)]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
         let worker = FfiWorker::new(

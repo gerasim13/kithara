@@ -11,7 +11,10 @@ use super::{
     QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
-use crate::event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus};
+use crate::{
+    attempts::LoadClass,
+    event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus},
+};
 
 impl<S> QueueControl<S>
 where
@@ -35,6 +38,20 @@ where
         if self.player.current_index() != before_index {
             self.write_armed_for(CrossfadeArm::armed(current_id));
         }
+    }
+
+    fn handle_prefetch_requested(&self) {
+        let Some(next) = self.next_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Consumed) {
+            return;
+        }
+        let Some(source) = self.tracks.source(next.id) else {
+            return;
+        };
+        self.set_status(next.id, TrackStatus::Pending);
+        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
     }
 
     /// If an advance was already armed from `tick()`, consume it and
@@ -180,6 +197,9 @@ where
             }
             PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
+            }
+            PlayerBusEvent::Player(PlayerEvent::PrefetchRequested) => {
+                self.handle_prefetch_requested();
             }
             PlayerBusEvent::Player(PlayerEvent::HandoverRequested { item }) => {
                 self.handle_handover_requested(item);

@@ -106,7 +106,7 @@ async fn play_queue(
         SAMPLE_RATE,
     )
     .await;
-    let mut config = QueueConfig::builder().player(harness.take_player()).build();
+    let config = QueueConfig::builder().player(harness.take_player()).build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut receiver = queue.subscribe();

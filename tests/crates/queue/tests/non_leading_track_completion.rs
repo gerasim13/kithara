@@ -5,7 +5,7 @@
 //! the queue for a second time or cut the successor.
 
 use kithara::{
-    events::{EventReceiver, TrackId},
+    events::EventReceiver,
     queue::{AdvanceReason, QueueControl, QueueEvent, Transition},
 };
 use kithara_integration_tests::{
@@ -46,7 +46,7 @@ async fn render_loop(
 ///
 /// `ItemRole::Outgoing` is produced by the player from the crossfade's actual
 /// terminal notification; this test never publishes or injects a player event.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn outgoing_eof_does_not_advance_the_promoted_successor(
     constant_quiet: &'static [u8],
     constant_loud: &'static [u8],
@@ -81,6 +81,9 @@ async fn outgoing_eof_does_not_advance_the_promoted_successor(
         .await
         .expect("select the outgoing track");
     let _ = render_loop(&queue, &harness, 16).await;
+    // The initial select is setup; only the subsequent user advance belongs
+    // to the outgoing-EOF assertion.
+    while events.try_recv().is_ok() {}
 
     harness
         .run(&queue, move |q| {

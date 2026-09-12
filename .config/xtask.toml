@@ -525,6 +525,9 @@ features = [
 [test.net_backends.apple]
 features = ["kithara/apple-net"]
 
+[test.net_backends.none]
+features = []
+
 # The default product suite is one Cargo graph. Domain tests remain separate
 # packages, so Cargo can reuse every unchanged test binary while compiling the
 # shared product closure only once. Browser-only packages have their own lane.
@@ -1171,6 +1174,7 @@ default_flash = true
 # and consumes only the provider's raw `u64` wire records.
 [test.lanes.usdt-observer]
 program = "cargo"
+net_backend = "none"
 prefix_args = [
   "nextest",
   "run",

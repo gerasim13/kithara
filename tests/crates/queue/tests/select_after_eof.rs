@@ -16,7 +16,7 @@ use kithara_test_fixtures::{
 
 use crate::{
     bufpool_ext::TestPools,
-    loader_fixture::{LocalWav, append_loaded},
+    loader_fixture::{LocalWav, append_loaded, wait_loaded},
 };
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -85,7 +85,7 @@ async fn seek_updates_cached_position_optimistically(constant_quiet: &'static [u
 
 /// Track A reaches real EOF while B is a real HTTP load that stalls. Selecting
 /// A again must reload the retained product source and restart playback.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads(
     constant_three: &'static [u8],
 ) {
@@ -112,10 +112,12 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
         first_onset_frame(&first_pcm, 0.005).is_some(),
         "track A must play through on the first pass"
     );
+    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
+    wait_loaded(&mut reload_events, id_a).await;
 
     let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
     assert!(
@@ -129,7 +131,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads(
 
 /// Switching back to a consumed track must switch the audio, not merely the
 /// selection bookkeeping.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(
@@ -168,10 +170,12 @@ async fn switch_back_to_consumed_track_switches_audio(
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
+    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("switch back to track A");
+    wait_loaded(&mut reload_events, id_a).await;
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
     assert!(

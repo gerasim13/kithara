@@ -127,7 +127,18 @@ pub fn observe_for(pid: u32, window: Duration) -> Result<Observer> {
     let mut command = observer_command_for(pid, window)?;
     command.args[4] = OsString::from(dtrace_program_to_file(window, output.path())?);
     let mut child = command.spawn()?;
-    wait_until_ready(&mut child, window)?;
+    if let Err(readiness) = wait_until_ready(&mut child, window) {
+        return Err(match cleanup_observer(child) {
+            Ok(output) => readiness.context(format!(
+                "DTrace observer exited after readiness failure: status={} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(cleanup) => readiness.context(format!(
+                "DTrace observer cleanup failed after readiness failure: {cleanup:#}"
+            )),
+        });
+    }
     Ok(Observer { child, output })
 }
 
@@ -217,8 +228,11 @@ fn wait_until_ready(child: &mut Child, window: Duration) -> Result<()> {
         let _ = sender.send(line);
     });
     match receiver.recv_timeout(window) {
-        Ok(Ok(line)) if line == READY_MARKER => Ok(()),
-        Ok(Ok(line)) => bail!("DTrace observer emitted unexpected readiness line: {line}"),
+        Ok(Ok(Some(line))) if line == READY_MARKER => Ok(()),
+        Ok(Ok(Some(line))) => {
+            bail!("DTrace observer emitted unexpected readiness line: {line}")
+        }
+        Ok(Ok(None)) => bail!("DTrace observer readiness stream closed before BEGIN"),
         Ok(Err(error)) => Err(error).context("read DTrace observer readiness stream"),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             bail!("DTrace observer did not become ready within {window:?}")
@@ -227,6 +241,27 @@ fn wait_until_ready(child: &mut Child, window: Duration) -> Result<()> {
             bail!("DTrace observer readiness stream closed before BEGIN")
         }
     }
+}
+
+fn cleanup_observer(mut child: Child) -> Result<Output> {
+    let kill_error = match child
+        .try_wait()
+        .context("poll DTrace observer after readiness failure")?
+    {
+        Some(_) => None,
+        None => child.kill().err(),
+    };
+    let output = child
+        .wait_with_output()
+        .context("reap DTrace observer after readiness failure")?;
+    if let Some(kill_error) = kill_error {
+        return Err(anyhow::Error::new(kill_error).context(format!(
+            "stop DTrace observer after readiness failure: status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output)
 }
 
 fn dtrace_program_to_file(window: Duration, output: &std::path::Path) -> Result<String> {
@@ -289,6 +324,20 @@ mod tests {
         assert!(!program.contains("printf(\"KITHARA_USDT|probe_"));
         assert_eq!(program.matches("BEGIN {").count(), 1);
         assert!(program.contains("BEGIN { printf(\"KITHARA_USDT_READY\\n\"); }"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn cleanup_observer_reaps_a_running_child() {
+        let child = Command::new("/bin/sh")
+            .args(["-c", "sleep 60"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start child");
+
+        let output = cleanup_observer(child).expect("cleanup child");
+
+        assert!(!output.status.success());
     }
 }
 

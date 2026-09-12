@@ -1,4 +1,7 @@
-#[cfg(all(feature = "backend-cpal", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "backend-cpal",
+    not(any(target_arch = "wasm32", target_os = "linux"))
+))]
 mod engine_cpal;
 mod engine_session_contract;
 pub(crate) mod graph;

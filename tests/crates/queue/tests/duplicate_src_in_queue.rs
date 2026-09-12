@@ -27,7 +27,7 @@ async fn render_to_eof(queue: &QueueControl<TestPools>, harness: &OfflinePlayerH
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'static [u8]) {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = LocalWav::constant(
@@ -56,7 +56,10 @@ async fn second_entry_with_the_same_source_owns_its_real_eof(constant_loud: &'st
         Some(TrackStatus::Loaded),
         "the non-playing duplicate must remain loaded"
     );
-    assert_eq!(queue.current().map(|entry| entry.id), Some(second));
+    assert!(
+        queue.current().is_none(),
+        "queue must be inactive after its terminal EOF"
+    );
 
     drop(queue);
     harness.close().await;

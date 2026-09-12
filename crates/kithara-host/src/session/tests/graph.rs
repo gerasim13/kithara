@@ -19,7 +19,6 @@ use kithara_warp::{
 
 use super::super::{
     dispatch::run_cmd,
-    graph::tap,
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };

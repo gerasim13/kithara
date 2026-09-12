@@ -221,7 +221,7 @@ where
         .expect("test playback task must register")
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_delivers_chunks() {
     let pools = pools();
     let handle = test_scheduler();
@@ -232,7 +232,7 @@ async fn worker_delivers_chunks() {
     assert!(received >= 5, "expected at least 5 chunks, got {received}");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_multi_track_round_robin() {
     let pools = pools();
     let handle = test_scheduler();
@@ -247,7 +247,7 @@ async fn worker_multi_track_round_robin() {
     assert!(b >= 3, "track B expected at least 3 chunks, got {b}");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_skips_not_ready_tracks() {
     let pools = pools();
     let handle = test_scheduler();
@@ -264,7 +264,7 @@ async fn worker_skips_not_ready_tracks() {
     assert_eq!(b, 0, "not-ready track should receive nothing");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_overflow_on_full_ringbuf() {
     let pools = pools();
     let handle = test_scheduler();
@@ -273,11 +273,15 @@ async fn worker_overflow_on_full_ringbuf() {
 
     thread_sleep(Duration::from_millis(50));
     assert!(pop().is_some(), "should have at least one chunk");
-    thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "overflow slot should have been flushed");
+    handle.wake_handle().wake();
+    assert_eq!(
+        wait_for_chunks(&mut pop, 1, Duration::from_secs(1)),
+        1,
+        "consumer wake must flush the next queued chunk"
+    );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_panic_isolation() {
     let pools = pools();
     let handle = test_scheduler();
@@ -290,7 +294,7 @@ async fn worker_panic_isolation() {
     assert!(b >= 3, "sibling should survive a node panic, got {b}");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_seek_enters_pending_reset() {
     let pools = pools();
     let handle = test_scheduler();
@@ -360,7 +364,7 @@ async fn worker_preload_gate_reopens_after_seek() {
         .expect("post-seek gate must reopen");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn worker_unregister_removes_track() {
     let pools = pools();
     let handle = test_scheduler();
@@ -375,7 +379,7 @@ async fn worker_unregister_removes_track() {
     assert!(pop().is_none(), "no chunks should arrive after unregister");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     let pools = pools();
     let handle = scheduler_with_capacity(2);
@@ -405,7 +409,7 @@ async fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     handle.unregister(id_c);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn shared_worker_blocking_track_does_not_starve_producing_track() {
     let pools = pools();
     struct BlockingSource {
@@ -453,7 +457,7 @@ async fn shared_worker_blocking_track_does_not_starve_producing_track() {
     blocking.store(false, Ordering::Relaxed);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn shared_worker_sync_blocking_step_starves_other_tracks() {
     let pools = pools();
     const SOURCE_CHUNKS: u32 = 1000;
@@ -499,12 +503,14 @@ async fn shared_worker_sync_blocking_step_starves_other_tracks() {
     let mut delivered = 0u32;
     let mut polls = 0u32;
     let mut deepest_poll = 0u32;
+    let wake = handle.wake_handle();
 
     while delivered < SOURCE_CHUNKS && polls < POLL_BUDGET {
         let mut this_poll = 0u32;
         while pop_a().is_some() {
             delivered += 1;
             this_poll += 1;
+            wake.wake();
         }
         deepest_poll = deepest_poll.max(this_poll);
         while pop_b().is_some() {}

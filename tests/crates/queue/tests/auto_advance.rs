@@ -13,7 +13,7 @@ use kithara_test_fixtures::integration_fixtures::{
     constant_four, constant_loud, constant_quiet, constant_three, constant_two,
 };
 
-use crate::{LocalWav, append_loaded, bufpool_ext::TestPools};
+use crate::{LocalWav, append_loaded, bufpool_ext::TestPools, loader_fixture::wait_loaded};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -480,7 +480,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus(
 /// for `Consumed` track B which my fix re-spawns. We pre-supply fresh
 /// `Resource`s to the loader so spawn completes synthetically, mirroring
 /// what a real network loader would deliver on a replay.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, flash(false))]
 async fn cf_zero_replay_after_full_playthrough_still_advances(
     constant_loud: &'static [u8],
     constant_quiet: &'static [u8],
@@ -516,10 +516,12 @@ async fn cf_zero_replay_after_full_playthrough_still_advances(
         "first playthrough must reach track B"
     );
 
+    let mut reload_events = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("second select track A");
+    wait_loaded(&mut reload_events, id_a).await;
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
