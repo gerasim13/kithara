@@ -33,6 +33,8 @@ fn guard() -> MutexGuard<'static, ()> {
 }
 
 const NANOS_PER_SEC: u64 = 1_000_000_000;
+const STARVED_BACKOFF_STEP_MS: u64 = 1;
+const STARVED_BACKOFF_RETRIES: usize = 16;
 #[cfg(feature = "no-block")]
 const NO_BLOCK_BRIDGED_BUDGET_MS: u64 = 10_000;
 #[cfg(feature = "no-block")]
@@ -1125,6 +1127,44 @@ fn ambient_blocking_closure_pins_virtual_clock() {
         waited >= Duration::from_millis(40),
         "virtual clock advanced past a 10ms deadline while an ambient blocking \
          closure was still running (park returned after {waited:?} real)"
+    );
+}
+
+/// A starved poll loop must not buy virtual time with its own backoff. A dated
+/// backoff registers a free `Timed` deadline that the engine services in
+/// isolation: each wake re-polls and re-sleeps, so a consumer whose producer is
+/// waiting on real work walks the clock forward by itself until it has expired
+/// the producer's own deadlines - the `phase_continuity` wall timeout, where an
+/// async pull raced the clock 1060 virtual seconds inside a 25s budget while
+/// every producer sat parked. Routed through `spawn_blocking` the same backoff
+/// is real work in flight: it dates nothing and leaves the clock where it found
+/// it. Distinct from `ambient_blocking_closure_pins_virtual_clock`, which pins
+/// the other half - that a sibling's deadline is HELD while such a closure runs.
+#[kithara::test(native, flash(false))]
+fn a_starved_backoff_loop_does_not_advance_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let _f = enter_dynamic(true);
+    let t0 = Instant::now();
+    rt.block_on(async {
+        for _ in 0..STARVED_BACKOFF_RETRIES {
+            crate::tokio::task::spawn_blocking(|| {
+                crate::thread::paced_backoff(Duration::from_millis(STARVED_BACKOFF_STEP_MS))
+            })
+            .await
+            .expect("backoff closure joined");
+        }
+    });
+    assert_eq!(
+        Instant::now().duration_since(t0),
+        Duration::ZERO,
+        "{STARVED_BACKOFF_RETRIES} starved retries moved the virtual clock: the backoff dated \
+         its own wakes instead of spending real time"
     );
 }
 
