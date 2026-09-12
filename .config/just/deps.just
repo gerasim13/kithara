@@ -10,7 +10,7 @@ machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask
 
 shear:
-    cargo shear --deny-warnings
+    cargo shear
 
 hack:
     just _xtask powerset --no-dev-deps

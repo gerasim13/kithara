@@ -829,6 +829,7 @@ prefix_args = [
 [test.lanes.tooling]
 program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
+net_backend = "none"
 prefix_args = [
   "nextest",
   "run",
@@ -875,6 +876,7 @@ default_features = [
   "kithara-test-utils/client-reqwest",
   "kithara-test-utils/tls-rustls",
   "kithara-platform/flash",
+  "kithara-platform/tokio-rt-multi-thread",
   "kithara-test-utils/flash",
 ]
 prefix_args = [
@@ -906,7 +908,8 @@ owns = [
   "tests/crates/harness/tests/flash_lexical.rs",
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
-default_features = ["harness", "kithara-test-fixtures/generate"]
+net_backend = "none"
+default_features = ["harness"]
 prefix_args = [
   "nextest",
   "run",
