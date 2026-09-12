@@ -962,6 +962,8 @@ prefix_args = [
   "kithara-ui",
   "--cargo-profile",
   "test-release",
+  "--test-threads",
+  "1",
   "--ignore-default-filter",
 ]
 suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
