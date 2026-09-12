@@ -1499,13 +1499,22 @@ struct SingleDeckTempoControl {
     provider: Provider,
     source: &'static str,
     source_bpm: u32,
-    next_source_beat: u64,
+    requested_source_seconds: f64,
+    requested_source_frame: u64,
+    selected_source_beat: i64,
+    selected_source_frame: u64,
+    next_source_frame: u64,
     rate: &'static str,
 }
 
-const ORIGIN_ZERO_HOUSE_124: &[&str] = &["rhythm_wav_scenario_1_origin_zero_house_124_left_only"];
+const ORIGIN_ZERO_HOUSE_124: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_long_house_124_left_only"];
 const ORIGIN_ZERO_DOWNTEMPO_96: &[&str] =
-    &["rhythm_wav_scenario_1_origin_zero_downtempo_96_left_only"];
+    &["rhythm_wav_scenario_1_origin_zero_long_downtempo_96_left_only"];
+const PICKUP_HOUSE_124: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only"];
+const PICKUP_DOWNTEMPO_96: &[&str] =
+    &["rhythm_wav_scenario_1_origin_zero_pickup_long_downtempo_96_left_only"];
 
 #[ignore = "ignored-red: origin-zero single-deck prepared launch baseline, 2026-09-12"]
 #[kithara::test(
@@ -1519,17 +1528,145 @@ const ORIGIN_ZERO_DOWNTEMPO_96: &[&str] =
 #[case::equal_124(SingleDeckTempoControl {
     id: "origin-zero-equal-124",
     provider: Provider::Rhythm(ORIGIN_ZERO_HOUSE_124),
-    source: "rhythm_wav_scenario_1_origin_zero_house_124_left_only",
+    source: "rhythm_wav_scenario_1_origin_zero_long_house_124_left_only",
     source_bpm: 124,
-    next_source_beat: 23_226,
+    requested_source_seconds: 0.0,
+    requested_source_frame: 0,
+    selected_source_beat: 0,
+    selected_source_frame: 0,
+    next_source_frame: 23_226,
+    rate: "1",
+})]
+#[case::equal_124_start_10(SingleDeckTempoControl {
+    id: "origin-zero-equal-124-start-10",
+    provider: Provider::Rhythm(ORIGIN_ZERO_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_long_house_124_left_only",
+    source_bpm: 124,
+    requested_source_seconds: 10.0,
+    requested_source_frame: 480_000,
+    selected_source_beat: 24,
+    selected_source_frame: 557_424,
+    next_source_frame: 580_650,
+    rate: "1",
+})]
+#[case::equal_124_start_10_1(SingleDeckTempoControl {
+    id: "origin-zero-equal-124-start-10-1",
+    provider: Provider::Rhythm(ORIGIN_ZERO_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_long_house_124_left_only",
+    source_bpm: 124,
+    requested_source_seconds: 10.1,
+    requested_source_frame: 484_800,
+    selected_source_beat: 24,
+    selected_source_frame: 557_424,
+    next_source_frame: 580_650,
     rate: "1",
 })]
 #[case::different_96(SingleDeckTempoControl {
     id: "origin-zero-different-96",
     provider: Provider::Rhythm(ORIGIN_ZERO_DOWNTEMPO_96),
-    source: "rhythm_wav_scenario_1_origin_zero_downtempo_96_left_only",
+    source: "rhythm_wav_scenario_1_origin_zero_long_downtempo_96_left_only",
     source_bpm: 96,
-    next_source_beat: 30_000,
+    requested_source_seconds: 0.0,
+    requested_source_frame: 0,
+    selected_source_beat: 0,
+    selected_source_frame: 0,
+    next_source_frame: 30_000,
+    rate: "31/24",
+})]
+#[case::different_96_start_10(SingleDeckTempoControl {
+    id: "origin-zero-different-96-start-10",
+    provider: Provider::Rhythm(ORIGIN_ZERO_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_long_downtempo_96_left_only",
+    source_bpm: 96,
+    requested_source_seconds: 10.0,
+    requested_source_frame: 480_000,
+    selected_source_beat: 16,
+    selected_source_frame: 480_000,
+    next_source_frame: 510_000,
+    rate: "31/24",
+})]
+#[case::different_96_start_10_1(SingleDeckTempoControl {
+    id: "origin-zero-different-96-start-10-1",
+    provider: Provider::Rhythm(ORIGIN_ZERO_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_long_downtempo_96_left_only",
+    source_bpm: 96,
+    requested_source_seconds: 10.1,
+    requested_source_frame: 484_800,
+    selected_source_beat: 20,
+    selected_source_frame: 600_000,
+    next_source_frame: 630_000,
+    rate: "31/24",
+})]
+#[case::pickup_equal_124(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-124",
+    provider: Provider::Rhythm(PICKUP_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only",
+    source_bpm: 124,
+    requested_source_seconds: 0.0,
+    requested_source_frame: 0,
+    selected_source_beat: 1,
+    selected_source_frame: 23_226,
+    next_source_frame: 46_452,
+    rate: "1",
+})]
+#[case::pickup_equal_124_start_10(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-124-start-10",
+    provider: Provider::Rhythm(PICKUP_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only",
+    source_bpm: 124,
+    requested_source_seconds: 10.0,
+    requested_source_frame: 480_000,
+    selected_source_beat: 21,
+    selected_source_frame: 487_746,
+    next_source_frame: 510_972,
+    rate: "1",
+})]
+#[case::pickup_equal_124_start_10_1(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-124-start-10-1",
+    provider: Provider::Rhythm(PICKUP_HOUSE_124),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_house_124_left_only",
+    source_bpm: 124,
+    requested_source_seconds: 10.1,
+    requested_source_frame: 484_800,
+    selected_source_beat: 21,
+    selected_source_frame: 487_746,
+    next_source_frame: 510_972,
+    rate: "1",
+})]
+#[case::pickup_different_96(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-96",
+    provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_downtempo_96_left_only",
+    source_bpm: 96,
+    requested_source_seconds: 0.0,
+    requested_source_frame: 0,
+    selected_source_beat: 1,
+    selected_source_frame: 30_000,
+    next_source_frame: 60_000,
+    rate: "31/24",
+})]
+#[case::pickup_different_96_start_10(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-96-start-10",
+    provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_downtempo_96_left_only",
+    source_bpm: 96,
+    requested_source_seconds: 10.0,
+    requested_source_frame: 480_000,
+    selected_source_beat: 17,
+    selected_source_frame: 510_000,
+    next_source_frame: 540_000,
+    rate: "31/24",
+})]
+#[case::pickup_different_96_start_10_1(SingleDeckTempoControl {
+    id: "pickup-first-downbeat-96-start-10-1",
+    provider: Provider::Rhythm(PICKUP_DOWNTEMPO_96),
+    source: "rhythm_wav_scenario_1_origin_zero_pickup_long_downtempo_96_left_only",
+    source_bpm: 96,
+    requested_source_seconds: 10.1,
+    requested_source_frame: 484_800,
+    selected_source_beat: 17,
+    selected_source_frame: 510_000,
+    next_source_frame: 540_000,
     rate: "31/24",
 })]
 async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
@@ -1573,13 +1710,25 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         },
         query => panic!("origin-zero source grid did not resolve source beat: {query:?}"),
     };
-    assert_eq!(source_frame(0), 0);
-    assert_eq!(source_frame(1), control.next_source_beat);
+    assert_eq!(
+        source_frame(control.selected_source_beat),
+        control.selected_source_frame
+    );
+    assert_eq!(
+        source_frame(control.selected_source_beat + 1),
+        control.next_source_frame
+    );
 
     prepare_fixture_grids(&mut harness, case, &sources).await;
     let prelaunch = harness.render(case, PRELAUNCH_FRAMES).await;
     assert!(prelaunch.iter().all(|sample| *sample == 0.0));
     assert_eq!(harness.rendered_frames, REQUEST_OUTPUT_FRONTIER);
+    if control.requested_source_frame != 0 {
+        harness.mark("origin-zero-single-deck-source-start");
+        harness.decks[0]
+            .seek(control.requested_source_seconds)
+            .unwrap_or_else(|error| panic!("{}: source start: {error}", control.id));
+    }
     harness.mark("origin-zero-single-deck-enable");
     harness.request_sync(case).await;
     harness.mark("origin-zero-single-deck-play");
@@ -1626,11 +1775,16 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
             .expect("origin-zero WAV has its PCM payload");
         let expected = source
             .chunks_exact(4)
-            .skip(gate_settled_frames)
-            .take(control.next_source_beat as usize - gate_settled_frames)
+            .skip(control.selected_source_frame as usize + gate_settled_frames)
+            .take(
+                control.next_source_frame as usize
+                    - control.selected_source_frame as usize
+                    - gate_settled_frames,
+            )
             .map(|frame| f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32_768.0_f32);
         let actual = left[activation_offset + gate_settled_frames
-            ..activation_offset + control.next_source_beat as usize]
+            ..activation_offset + control.next_source_frame as usize
+                - control.selected_source_frame as usize]
             .iter()
             .copied();
         expected
@@ -1674,7 +1828,15 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
                 "fixture_generation": "generated rhythm score with source origin 0",
                 "source": control.source,
                 "source_bpm": control.source_bpm,
-                "source_beat_frames": { "beat_0": 0, "beat_1": control.next_source_beat },
+                "requested_source": {
+                    "seconds": control.requested_source_seconds,
+                    "frame": control.requested_source_frame,
+                },
+                "selected_source": {
+                    "beat": control.selected_source_beat,
+                    "frame": control.selected_source_frame,
+                    "next_beat_frame": control.next_source_frame,
+                },
                 "host": { "bpm": 124, "beat_4": ASSIGNED_OUTPUT_FRAME, "beat_5": NEXT_OUTPUT_FRAME },
                 "rate": control.rate,
                 "capture": {
@@ -1701,19 +1863,19 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         .expect("prepared launch publishes a warp plan");
     assert_eq!(
         warp_plan["fields"]["activation_source"].as_u64(),
-        Some(0),
+        Some(control.selected_source_frame),
         "{}: warp activation source",
         control.id
     );
     assert_eq!(
         warp_plan["fields"]["presentation_source"].as_u64(),
-        Some(0),
+        Some(control.requested_source_frame),
         "{}: warp presentation source",
         control.id
     );
     assert_eq!(
         warp_plan["fields"]["preparation_source"].as_u64(),
-        Some(0),
+        Some(control.requested_source_frame),
         "{}: warp preparation source",
         control.id
     );
@@ -1735,7 +1897,7 @@ async fn single_deck_origin_zero_tempo_controls_reach_real_pcm(
         .expect("prepared launch consumes PCM");
     assert_eq!(
         first_pcm["fields"]["source_start"].as_u64(),
-        Some(0),
+        Some(control.selected_source_frame),
         "{}: first consumed PCM source",
         control.id
     );
