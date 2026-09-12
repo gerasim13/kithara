@@ -7,16 +7,16 @@ use kithara::{
     abr::AbrMode,
     audio::AudioEvent,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant, timeout},
+        CancelToken, time,
+        time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,

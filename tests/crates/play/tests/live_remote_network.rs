@@ -14,18 +14,18 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ReadOutcome,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::TrackId,
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{self, Duration, Instant},
+        CancelToken, time,
+        time::{Duration, Instant},
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc, SelectTransition,
     },
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
 use tracing::debug;

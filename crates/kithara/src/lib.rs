@@ -112,6 +112,11 @@ pub mod queue {
     pub use kithara_queue::*;
 }
 
+#[cfg(feature = "download")]
+pub mod download {
+    pub use kithara_download::*;
+}
+
 #[cfg(feature = "stream")]
 pub mod stream {
     pub use kithara_stream::*;

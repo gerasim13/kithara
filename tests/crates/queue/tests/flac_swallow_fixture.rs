@@ -5,18 +5,17 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         flash::real_io,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::{
-        AudioCodec,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

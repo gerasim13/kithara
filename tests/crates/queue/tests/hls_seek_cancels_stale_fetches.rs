@@ -8,6 +8,7 @@ use kithara::{
     assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestId},
     hls::HlsEvent,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -19,10 +20,6 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
-    stream::{
-        DownloaderEvent, RequestId,
-        dl::{Downloader, DownloaderConfig},
-    },
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

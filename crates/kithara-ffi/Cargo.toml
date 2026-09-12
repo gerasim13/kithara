@@ -73,6 +73,7 @@ test = ["kithara/probe", "dep:cpal"]
 
 [dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "download",
     "assets",
     "bufpool",
     "events",
@@ -105,7 +106,7 @@ tracing-subscriber = { workspace = true }
 # `symphonia`, which would leak into apple/android device builds (compiled
 # with `--no-default-features`). symphonia is re-added explicitly via the
 # crate-local `symphonia` feature (in the default set, off on device).
-kithara = { workspace = true, default-features = false, features = ["backend-cpal", "file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["download", "backend-cpal", "file", "hls"] }
 
 bytes = { workspace = true }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
@@ -121,6 +122,7 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "download",
     "analysis-waveform",
     "audio",
     "beat-dsp",
@@ -162,7 +164,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["net", "probe", "signal"] }
+kithara = { workspace = true, features = ["download", "net", "probe", "signal"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }

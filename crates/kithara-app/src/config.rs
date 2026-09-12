@@ -6,6 +6,7 @@ use kithara::ui::source::UiConfig;
 use kithara::{
     analysis::BeatAnalysisConfig,
     audio::AudioConfigPatch,
+    download::Downloader,
     drm::KeyProcessorRegistry,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
@@ -14,7 +15,6 @@ use kithara::{
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
-    stream::dl::Downloader,
     worker::{DispatcherConfigPatch, Worker},
 };
 use kithara_derive::Patch;

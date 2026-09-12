@@ -7,23 +7,20 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::EventReceiver,
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope, CancelToken,
         time::{Duration, Instant, sleep, timeout},
-        tokio::{
-            sync::broadcast::error::RecvError,
-            task::{self, yield_now},
-        },
+        tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
         ResourceConfig, ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper,

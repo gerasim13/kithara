@@ -4,15 +4,12 @@ use std::path::Path;
 
 use kithara::{
     assets::{AssetEvent, AssetStore, StorageBackend},
+    download::{Downloader, DownloaderConfig, DownloaderEvent},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    stream::{
-        DownloaderEvent,
-        dl::{Downloader, DownloaderConfig},
-    },
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,

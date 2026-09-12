@@ -13,6 +13,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
+    download::{DownloaderEvent, RequestId},
     hls::{Hls, HlsConfig, HlsEvent},
     platform::{
         sync::Arc,
@@ -22,7 +23,7 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     signal::AudioChunk,
-    stream::{DownloaderEvent, RequestId, Stream},
+    stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,

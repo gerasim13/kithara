@@ -254,7 +254,7 @@ impl<S> EngineImpl<S> {
     /// Runtime handle captured at engine creation.
     ///
     /// Use when building a shared
-    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// [`Downloader`](kithara_download::Downloader) so its async tasks
     /// land on the same runtime the audio engine observes, then pass the
     /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
     #[must_use]

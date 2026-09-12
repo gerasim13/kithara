@@ -15,7 +15,7 @@ wasm MODE="check" *ARGS:
         # `parking_lot_core` needs its nightly-only feature to compile a wasm
         # parker that does not panic. The target is nightly-only either way.
         toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
+        for c in kithara-storage kithara-net kithara-download kithara-stream kithara-assets kithara-hls; do
           cargo "+$toolchain" check -p "$c" --target wasm32-unknown-unknown
         done
         cargo "+$toolchain" check -p kithara-beat --target wasm32-unknown-unknown --features dsp

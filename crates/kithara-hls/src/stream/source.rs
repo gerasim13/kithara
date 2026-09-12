@@ -5,13 +5,14 @@ use std::ops::Range;
 use delegate::delegate;
 use kithara_assets::EvictionSubscription;
 use kithara_bufpool::HasPool;
+use kithara_download::PeerHandle;
 use kithara_events::DeferredBus;
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
     ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, SourceProbe,
-    StreamResult, dl::PeerHandle,
+    StreamResult,
 };
 
 use super::coord::{HlsCoord, HlsProbe};
