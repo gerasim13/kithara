@@ -96,6 +96,7 @@ wasm = [
     "kithara/tls-rustls",
 ]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
+client-wreq = ["kithara/client-wreq"]
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
 # passed and stay as the contract that keeps them passing, and as the alibi
