@@ -13,3 +13,21 @@ mod wire;
 
 pub use usdt_wire::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5, fire_6};
 pub use wire::{IntoProbeArg, Probe, register_probes};
+
+#[cfg(test)]
+mod tests {
+    use super::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5, fire_6, register_probes};
+
+    #[test]
+    fn usdt_registration_and_firing_are_callable() {
+        register_probes();
+        register_probes();
+        fire_0("zero");
+        fire_1("one", 1);
+        fire_2("two", 1, 2);
+        fire_3("three", 1, 2, 3);
+        fire_4("four", 1, 2, 3, 4);
+        fire_5("five", 1, 2, 3, 4, 5);
+        fire_6("six", 1, 2, 3, 4, 5, 6);
+    }
+}
