@@ -107,7 +107,7 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
     if args.only.is_empty() {
         membership.iter().any(|entry| entry == kind)
     } else {
-        args.only.iter().any(|only| only == name)
+        args.only.iter().any(|only| only == "all" || only == name)
     }
 }
 
@@ -122,7 +122,7 @@ pub(crate) fn render(
             LANE_ROLES.join(", ")
         );
     }
-    for name in &args.only {
+    for name in args.only.iter().filter(|name| name.as_str() != "all") {
         if !lanes.contains_key(name) {
             bail!(
                 "`{name}` is not a CI lane; this repository has {}",
@@ -199,6 +199,7 @@ pub(crate) fn render(
         .only
         .iter()
         .map(String::as_str)
+        .filter(|name| *name != "all")
         .filter(|name| !landed.contains(name))
         .filter(|name| lanes[*name].role == args.role)
         .filter(|name| !membership(&lanes[*name], args.fleet).is_empty())
@@ -390,6 +391,22 @@ mod tests {
             error.to_string().contains("deep-stress"),
             "the error must list the lanes: {error}"
         );
+    }
+
+    #[test]
+    fn all_selects_every_reachable_lane_the_role_owns() {
+        let mut lanes = catalog();
+        lanes.insert("linux-extra".to_owned(), lane("gate", &["weekly"], &[]));
+        lanes.insert("deep-extra".to_owned(), lane("deep", &["weekly"], &[]));
+
+        let selection = render(&lanes, &args("gate", PipelineKind::Branch, &["all"]))
+            .expect("all gate lanes render regardless of kind");
+        let names: Vec<&str> = selection
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["linux-extra", "linux-lint"]);
     }
 
     #[test]

@@ -72,11 +72,14 @@ import os
 import sys
 
 results = json.loads(os.environ["RESULTS"])
-ui_required = os.environ["UI_REQUIRED"] == "true"
+required_lanes = set(os.environ["REQUIRED_LANES"].split())
+optional_required = bool(required_lanes)
+ui_required = "all" in required_lanes or "deep-ui" in required_lanes
 incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
+    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
     and not (name == "ui" and job["result"] == "skipped" and not ui_required)
 }
 if incomplete:
@@ -338,6 +341,35 @@ fn assert_hosted_authorization(job: &Mapping) {
 #[test]
 fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let workflow = github_workflow("ci.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    for trigger in ["workflow_call", "workflow_dispatch"] {
+        let inputs = mapping_field(
+            mapping_field(triggers, trigger)
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
+            "inputs",
+        )
+        .as_mapping()
+        .expect("workflow inputs are a mapping");
+        assert_eq!(
+            inputs
+                .keys()
+                .map(|name| name.as_str().expect("input name is a string"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["required_lanes"])
+        );
+        let required_lanes = mapping_field(inputs, "required_lanes")
+            .as_mapping()
+            .expect("required_lanes is a mapping");
+        assert_eq!(
+            mapping_field(required_lanes, "type").as_str(),
+            Some("string")
+        );
+        assert_eq!(mapping_field(required_lanes, "default").as_str(), Some(""));
+    }
     let concurrency = workflow_concurrency(&workflow);
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
@@ -401,6 +433,29 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         .as_mapping()
         .expect("the gate call passes inputs");
     assert_eq!(mapping_field(with, "role").as_str(), Some("gate"));
+    assert!(
+        mapping_field(with, "only")
+            .as_str()
+            .expect("gate passes the selector")
+            .contains("inputs.required_lanes")
+    );
+    for (name, role) in [
+        ("deep", "deep"),
+        ("platforms", "platforms"),
+        ("quality", "quality"),
+    ] {
+        let job = workflow_job(jobs, name);
+        let with = mapping_field(job, "with")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("{name} passes inputs"));
+        assert_eq!(mapping_field(with, "role").as_str(), Some(role));
+        assert!(
+            mapping_field(with, "only")
+                .as_str()
+                .unwrap_or_else(|| panic!("{name} passes the selector"))
+                .contains("inputs.required_lanes")
+        );
+    }
     for name in workflow_job_names(jobs) {
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "strategy");
@@ -433,9 +488,9 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some("${{ toJSON(needs) }}")
     );
     assert_eq!(
-        mapping_field(env, "UI_REQUIRED").as_str(),
+        mapping_field(env, "REQUIRED_LANES").as_str(),
         Some(
-            "${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || inputs.ui) }}"
+            "${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}"
         )
     );
     assert_eq!(
@@ -1759,7 +1814,7 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
         .as_str()
         .expect("the UI call is conditional");
     assert!(condition.contains("github.event.repository.default_branch"));
-    assert!(condition.contains("inputs.ui"));
+    assert!(condition.contains("inputs.required_lanes"));
 
     let text = github_workflow_text("ui.yml");
     assert!(
