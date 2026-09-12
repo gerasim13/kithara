@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::AbrMode,
+    download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -12,7 +13,6 @@ use kithara::{
         tokio::task::yield_now,
     },
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
-    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, fixture_protocol::DelayRule, offline::OfflinePlayer,

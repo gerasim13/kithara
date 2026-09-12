@@ -5,17 +5,12 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{self, Duration},
-    },
+    platform::{CancelToken, time, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
-    stream::{
-        Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::Stream,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,

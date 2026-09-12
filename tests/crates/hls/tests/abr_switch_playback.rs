@@ -5,6 +5,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     events::{EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -13,14 +14,12 @@ use kithara::{
     platform::{
         CancelToken,
         thread::paced_backoff,
-        time::{self, Duration, Instant},
+        time,
+        time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
-    stream::{
-        AudioCodec, Stream,
-        dl::{Downloader, DownloaderConfig},
-    },
+    stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, auto,

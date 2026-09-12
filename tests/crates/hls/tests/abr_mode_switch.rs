@@ -10,6 +10,7 @@ use kithara::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
     },
     decode::DecoderBackend,
+    download::{DownloaderEvent, RequestId},
     events::{EventBus, EventReceiver},
     hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
@@ -20,9 +21,7 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
-    stream::{
-        AudioCodec, ContainerFormat, DownloaderEvent, MediaInfo, RequestId, Stream, StreamType,
-    },
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::SegmentGateHandle;

@@ -9,6 +9,7 @@ use kithara::{
         BeatState, Coverage, FrameRange, Waveform,
     },
     assets::StorageBackend,
+    download::{Downloader, DownloaderConfig},
     events::TrackId,
     host::HostConfig,
     net::{HttpClient, NetOptions},
@@ -24,7 +25,6 @@ use kithara::{
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::QueueConfig,
-    stream::dl::{Downloader, DownloaderConfig},
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_test_fixtures::{asset::Asset, assets};

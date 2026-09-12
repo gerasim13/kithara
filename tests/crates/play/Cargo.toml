@@ -24,7 +24,7 @@ network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
+kithara = { workspace = true, features = ["download", "full", "queue", "probe", "mock", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith", "backend-cpal"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
@@ -45,7 +45,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 
 [lints]
 workspace = true

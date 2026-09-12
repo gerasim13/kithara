@@ -1,8 +1,8 @@
 use kithara::{
     assets::AssetEvent,
+    download::DownloaderEvent,
     play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
     queue::QueueEvent,
-    stream::DownloaderEvent,
 };
 use kithara_audio::{AudioEvent, DecoderEvent};
 use kithara_file::FileEvent;
@@ -589,6 +589,7 @@ mod tests {
             DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
             TrackFailureKind,
         },
+        download::{CancelReason, DownloaderEvent, RequestId},
         events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
         play::{
@@ -598,7 +599,7 @@ mod tests {
         },
         queue::{QueueEvent, QueueRepeatMode, TrackStatus},
         signal::AudioSpec,
-        stream::{AudioCodec, CancelReason, ContainerFormat, DownloaderEvent, RequestId},
+        stream::{AudioCodec, ContainerFormat},
     };
     use kithara_file::{FileEvent, TotalBytesSource};
     use kithara_hls::{DrmEvent, HlsEvent, KeyFailureStage, KeySource};

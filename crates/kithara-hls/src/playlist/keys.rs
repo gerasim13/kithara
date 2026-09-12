@@ -7,11 +7,11 @@ use dashmap::DashMap;
 use futures::future::try_join_all;
 use kithara_assets::{AssetResource, AssetScope, ReadSide, ResourceKey};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_download::{FetchCmd, PeerHandle};
 use kithara_drm::{DecryptContext, KeyProcessor, KeyProcessorRegistry, PreparedKeyRequest};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{sync::Arc, time::Instant};
-use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
 use crate::{
@@ -637,6 +637,7 @@ mod tests {
         AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
         WriteSide,
     };
+    use kithara_download::{Downloader, DownloaderConfig, Peer};
     use kithara_drm::{
         DrmError, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
         KeyRequestResolver, PreparedKeyRequest,
@@ -648,7 +649,6 @@ mod tests {
         sync::{Arc, Notify},
         tokio::{join, net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
     };
-    use kithara_stream::dl::{Downloader, DownloaderConfig, Peer};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 

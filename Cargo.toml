@@ -14,6 +14,7 @@ members = [
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
+    "crates/kithara-download",
     "crates/kithara-drm",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -71,6 +72,7 @@ default-members = [
     "crates/kithara-resampler",
     "crates/kithara-signal",
     "crates/kithara-storage",
+    "crates/kithara-download",
     "crates/kithara-stream",
     "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
@@ -216,6 +218,7 @@ kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha4" }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha4" }
+kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha4", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4", default-features = false }
