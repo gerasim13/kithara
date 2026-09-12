@@ -65,7 +65,7 @@ impl ArtifactTimeline {
             match probe.probe_name() {
                 Some("render") => self.record_render(probe),
                 Some("pcm_consumed") => self.record_pcm(probe),
-                Some("warp_plan_swapped") => self.record_warp_plan(probe),
+                Some("warp_plan_published") => self.record_warp_plan(probe),
                 _ => {}
             }
         }
@@ -264,26 +264,19 @@ impl ArtifactTimeline {
     }
 
     fn record_warp_plan(&mut self, probe: &ProbeEvent) {
-        let (Some(output_start), Some(output_end), Some(source_start), Some(source_end)) = (
-            probe.u64("current_output"),
+        let (Some(output), Some(source)) = (
             probe.u64("activation_output"),
-            probe.u64("current_source"),
             probe.u64("activation_source"),
         ) else {
             return;
         };
-        let kind = if output_end <= output_start && source_end > source_start {
-            "error"
-        } else {
-            "planned"
-        };
         self.span(
             "warp-plan",
-            output_start,
-            output_end,
-            kind,
+            output,
+            output,
+            "planned",
             "map activation",
-            Some((source_start, source_end)),
+            Some((source, source)),
         );
     }
 

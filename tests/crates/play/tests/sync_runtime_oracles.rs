@@ -73,10 +73,13 @@ async fn tempo_retarget_run(
             .and_then(|output| output.checked_sub(capture_start))
             .and_then(|frames| usize::try_from(frames).ok())
     });
+    let underruns = harness.underrun_failures();
+    let mut failures = harness.failures;
+    failures.extend(underruns);
     CommandRun {
         activation_index,
         command_index,
-        failures: harness.failures,
+        failures,
         samples,
     }
 }
@@ -117,7 +120,7 @@ async fn running_sync_run(
         recorder
             .snapshot()
             .iter()
-            .filter(|event| event.probe_name() == Some("warp_plan_swapped"))
+            .filter(|event| event.probe_name() == Some("warp_plan_published"))
             .filter_map(|event| event.u64("activation_output"))
             .min()
             .and_then(|output| output.checked_sub(capture_start))
@@ -128,40 +131,13 @@ async fn running_sync_run(
             .capture_frames(ONE_DECK, pre_frames * 4 - block_frames * 2, block_frames)
             .await,
     );
-    if let Some(recorder) = recorder {
-        for event in recorder
-            .snapshot()
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.probe_name(),
-                    Some(
-                        "warp_plan_published"
-                            | "warp_plan_swapped"
-                            | "warp_activation_planned"
-                            | "prime_activation"
-                            | "warp_transition_primed"
-                            | "pcm_revision_discarded"
-                            | "warp_staging_resized"
-                    )
-                ) || (event.probe_name() == Some("warp_activation_near")
-                    && event.u64("output").is_some_and(|frame| frame >= 190_000))
-                    || event
-                        .u64("output_end")
-                        .is_some_and(|frame| frame >= 190_000)
-                    || event
-                        .u64("session_frame")
-                        .is_some_and(|frame| frame >= 190_000)
-            })
-            .take(160)
-        {
-            eprintln!("SYNC_DIAGNOSTIC command_output={command_output} {event:?}");
-        }
-    }
+    let underruns = harness.underrun_failures();
+    let mut failures = harness.failures;
+    failures.extend(underruns);
     CommandRun {
         activation_index,
         command_index,
-        failures: harness.failures,
+        failures,
         samples,
     }
 }
@@ -340,7 +316,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-#[ignore = "ignored-red: running Warp alignment changes PCM before scheduled activation"]
+#[ignore = "ignored-red: running Warp alignment can underrun before scheduled activation"]
 async fn running_sync_command_changes_audible_pcm_at_planned_activation(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
@@ -350,7 +326,8 @@ async fn running_sync_command_changes_audible_pcm_at_planned_activation(
         let aligned = align_runs(&candidate, &control);
         let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
         let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
-        let mut failures = continuity_failures("running SYNC", &candidate_report, &control_report);
+        let mut failures =
+            time_stretch_failures("running SYNC", &candidate_report, &control_report);
         append_run_failures("control", &control, &mut failures);
         append_run_failures("candidate", &candidate, &mut failures);
         if let Some(frame) = first_sustained_delta(

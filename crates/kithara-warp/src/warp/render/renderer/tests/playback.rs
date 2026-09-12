@@ -237,6 +237,14 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(warp_sine: Vec<f32>) {
         "one transition quantum requested {frames} frames; limit is {}",
         renderer.source_block_frames
     );
+    let expected = &warp_sine[initial_frames * 2..(initial_frames + frames) * 2];
+    let mut input = chunk(&pools, expected);
+    input.meta = meta;
+    input.meta.frames = u32::try_from(frames).expect("source span fits u32");
+    let output = renderer
+        .render_quantum(input)
+        .expect("pre-activation PCM remains available");
+    assert_eq!(&output.samples[..], expected);
 }
 
 #[kithara::test]

@@ -431,7 +431,9 @@ where
 
     pub(super) fn select_context(&mut self, frame: u64) -> Option<RenderSnapshot> {
         let snapshot = self.context.load();
-        if let Some(snapshot) = &snapshot {
+        if let Some(snapshot) = &snapshot
+            && !self.awaiting_activation_before(frame)
+        {
             let context = snapshot.context();
             let region = self.region_for(frame);
             self.rate = context.rate().with_speed(context.rate_for(region).as_());
@@ -501,14 +503,25 @@ where
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        (self
-            .plan
+        (self.plan.as_ref().is_none_or(|plan| {
+            plan.segments().is_empty()
+                || plan
+                    .activation()
+                    .is_some_and(|activation| self.applied_warp_map != Some(activation.revision()))
+        }) || self
+            .rate_context
             .as_ref()
-            .is_none_or(|plan| plan.segments().is_empty())
-            || self
-                .rate_context
-                .as_ref()
-                .is_none_or(|context| context.mode() == SyncMode::Off))
+            .is_none_or(|context| context.mode() == SyncMode::Off))
             && (speed - 1.0).abs() <= f32::EPSILON
+    }
+
+    fn awaiting_activation_before(&self, source: u64) -> bool {
+        self.plan
+            .as_ref()
+            .and_then(|plan| plan.activation())
+            .is_some_and(|activation| {
+                self.applied_warp_map != Some(activation.revision())
+                    && source != activation.source()
+            })
     }
 }

@@ -398,7 +398,10 @@ where
             return None;
         }
 
-        let output = if self.unity_passthrough(speed) {
+        let activates = prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.activation.is_some());
+        let output = if !activates && self.unity_passthrough(speed) {
             self.process_unity(chunk)
         } else {
             let mut chunk = chunk;
