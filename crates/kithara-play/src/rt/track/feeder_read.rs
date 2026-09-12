@@ -158,7 +158,7 @@ impl PlayerResource {
         metrics: &RtMetrics,
     ) -> (ReadOutcome, u64) {
         let frames_to_read = range.len();
-        let eof_reached = self.fill_scratch(frames_to_read, metrics);
+        let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
         if self.write_len == 0 && self.failed && !self.eof_seen {
             for ch in output.iter_mut() {
@@ -199,6 +199,11 @@ impl PlayerResource {
 
             self.write_len -= frames_to_write;
             self.write_pos = tail_size;
+
+            if frames_to_write == frames_to_read {
+                let target = self.prefetch_target(frames_to_read);
+                eof_reached |= self.fill_scratch(target, metrics);
+            }
 
             let outcome = if frames_to_write == frames_to_read {
                 ReadOutcome::Full {

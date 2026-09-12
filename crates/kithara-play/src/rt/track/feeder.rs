@@ -348,6 +348,12 @@ impl PlayerResource {
         eof_reached
     }
 
+    pub(super) fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
+    }
+
     /// Remaining buffered frames when the wrapped reader has reached EOF.
     ///
     /// `Some(0)` means the current read drained the last buffered frame exactly;
