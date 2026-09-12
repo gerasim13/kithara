@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use fs4::TryLockError;
 use kithara_devtools::{Ctx, lease, lock::FileLock};
 use serde::{Deserialize, Serialize};
@@ -509,17 +509,14 @@ fn build_target_dir(
     target_scope: &str,
     target_is_windows: bool,
     gitlab: bool,
-    job_id: Option<&str>,
+    concurrent_id: Option<&str>,
+    slots: usize,
 ) -> Result<PathBuf> {
     if gitlab && !target_is_windows {
-        let job_id = job_id.context("CI_JOB_ID must identify the GitLab job")?;
-        ensure!(
-            !job_id.is_empty() && job_id.bytes().all(|byte| byte.is_ascii_digit()),
-            "CI_JOB_ID must be decimal digits"
-        );
+        let slot = disposable_slot(concurrent_id, slots)?;
         return Ok(shared_root
             .join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
-            .join(format!("{target_scope}-job-{job_id}"))
+            .join(format!("{target_scope}-slot-{slot}"))
             .join("cargo"));
     }
     Ok(project_root.join("target"))
@@ -529,16 +526,17 @@ fn prepare_build_target(
     project_root: &Path,
     shared_root: &Path,
     target_scope: &str,
-    _config: &CiConfig,
+    config: &CiConfig,
 ) -> Result<(PathBuf, Option<lease::Lease>)> {
-    let job_id = env::var("CI_JOB_ID").ok();
+    let concurrent_id = env::var("CI_CONCURRENT_ID").ok();
     let backing = build_target_dir(
         project_root,
         shared_root,
         target_scope,
         cfg!(windows),
         is_gitlab(),
-        job_id.as_deref(),
+        concurrent_id.as_deref(),
+        config.host.job_concurrency,
     )?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
@@ -955,6 +953,23 @@ mod tests {
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            assert_eq!(
+                fs::canonicalize(
+                    vars.get(OsStr::new("CARGO_TARGET_DIR"))
+                        .expect("prepared environment names its Cargo target")
+                )
+                .unwrap(),
+                fs::canonicalize(
+                    root.join(build_cache::TARGET_SLOT_CACHE_NAMESPACE)
+                        .join(format!(
+                            "review-{}-{}-slot-1",
+                            env::consts::OS,
+                            env::consts::ARCH
+                        ))
+                        .join("cargo")
+                )
+                .unwrap()
+            );
 
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
@@ -1158,20 +1173,21 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_targets_are_private_to_one_job() {
+    fn gitlab_targets_are_persistent_and_private_to_one_slot() {
         let target = build_target_dir(
             Path::new("/builds/disrupt/kithara"),
             Path::new("/cache"),
             "review-linux-aarch64",
             false,
             true,
-            Some("4711"),
+            Some("0"),
+            2,
         )
         .unwrap();
 
         assert_eq!(
             target,
-            Path::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
+            Path::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
         );
         assert_ne!(
             target,
@@ -1181,7 +1197,8 @@ mod tests {
                 "review-linux-aarch64",
                 false,
                 true,
-                Some("4712"),
+                Some("1"),
+                2,
             )
             .unwrap()
         );
@@ -1193,6 +1210,7 @@ mod tests {
                 false,
                 true,
                 Some("../trusted"),
+                2,
             )
             .is_err()
         );
@@ -1240,6 +1258,7 @@ mod tests {
             false,
             false,
             None,
+            2,
         )
         .unwrap();
 
