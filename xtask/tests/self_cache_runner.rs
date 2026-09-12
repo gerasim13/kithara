@@ -440,6 +440,7 @@ fn ci_bootstrap_ignores_the_lane_target() -> Result<()> {
     let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
     let output = fixture
         .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
+        .env("CI_CONCURRENT_ID", "1")
         .env("KITHARA_CACHE_TRUST", "review")
         .env("KITHARA_CI_CACHE_ROOT", &cache)
         .output()?;
@@ -449,7 +450,7 @@ fn ci_bootstrap_ignores_the_lane_target() -> Result<()> {
             "target={}\n",
             cache
                 .join(format!(
-                    "bootstrap/review/target-{}-{}",
+                    "bootstrap/review/target-{}-{}-1",
                     system.trim(),
                     arch.trim()
                 ))
