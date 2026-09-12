@@ -314,6 +314,7 @@ async fn playing_queue(
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
+            .block_on_underrun(true)
             .warp(warp)
             .output_block_frames(
                 NonZeroU32::new(
@@ -359,6 +360,39 @@ async fn playing_queue(
         .await
         .expect("select live-rate fixture");
     (harness, queue)
+}
+
+/// Output frames in `[from, to)` that no span covers.
+fn unrendered_frames(spans: &[(u64, u64)], from: u64, to: u64) -> u64 {
+    let mut ordered = spans.to_vec();
+    ordered.sort_unstable();
+    let mut cursor = from;
+    let mut missing = 0;
+    for (start, end) in ordered {
+        if cursor >= to || start >= to {
+            break;
+        }
+        if end <= cursor {
+            continue;
+        }
+        missing += start.saturating_sub(cursor);
+        cursor = end.min(to).max(cursor);
+    }
+    missing + to.saturating_sub(cursor)
+}
+
+/// The output ranges the feeder filled from rendered source.
+///
+/// A read that outruns the producer is zero-filled rather than refused, and a
+/// zero-filled range carries no span: the transport advances over frames the
+/// renderer never produced. An onset search that crosses them measures how
+/// fast the host decoded, not how fast the engine answered the rate.
+fn consumed_spans(events: &[ProbeEvent]) -> Vec<(u64, u64)> {
+    events
+        .iter()
+        .filter(|event| event.probe_name() == Some("pcm_consumed"))
+        .filter_map(|event| Some((event.u64("output_start")?, event.u64("output_end")?)))
+        .collect()
 }
 
 fn revision_probe<'a>(
@@ -426,6 +460,16 @@ fn assert_response(
         "rate response: {backend} smooth={} audible={audible} queued={queued} \
          responded={responded} primed={primed:?}",
         case.smooth_frames
+    );
+    let observed_end = new_rate_start.saturating_add(
+        u64::try_from(responded.saturating_add(TARGET_WINDOW_FRAMES))
+            .expect("observed output frames fit u64"),
+    );
+    assert_eq!(
+        unrendered_frames(&consumed_spans(events), consumed_at_apply, observed_end),
+        0,
+        "{backend} read output frames the renderer never produced between the apply boundary \
+         at {consumed_at_apply} and the onset window ending at {observed_end}"
     );
     assert!(
         responded <= case.smooth_frames + TARGET_WINDOW_FRAMES,
@@ -498,6 +542,18 @@ async fn run_case(
     );
     drop(queue);
     harness.close().await;
+}
+
+/// The gap arithmetic must name every frame no span covers and must invent
+/// none where consecutive spans meet, or the precondition it backs would
+/// either pass over zero-fill or reject a continuous capture.
+#[kithara::test]
+fn unrendered_frames_counts_exactly_the_output_no_span_covers() {
+    assert_eq!(unrendered_frames(&[(0, 32), (32, 64)], 0, 64), 0);
+    assert_eq!(unrendered_frames(&[(0, 32), (64, 96)], 0, 96), 32);
+    assert_eq!(unrendered_frames(&[(32, 64)], 0, 96), 64);
+    assert_eq!(unrendered_frames(&[], 10, 20), 10);
+    assert_eq!(unrendered_frames(&[(0, 200)], 10, 20), 0);
 }
 
 /// A live rate change becomes audible as soon as the PCM already rendered at the
